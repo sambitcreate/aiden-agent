@@ -344,6 +344,75 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(roundTripped.toolCallCount, 1)
     }
 
+    func testStaleLiveActivityKeepsWaitingForApprovalAskAndOtherStatusesShowLatestStatus() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        for status in AgentRunActivityStatus.allCases {
+            let fresh = AgentRunActivityAttributes.ContentState(
+                sessionID: "chat-1",
+                sessionTitle: "Chat",
+                status: status,
+                currentActivity: "Running bash",
+                responseExcerpt: "Earlier reply",
+                startedAt: start,
+                updatedAt: start + 5,
+                errorSummary: status == .failed ? "Provider error" : nil
+            )
+            // A fresh run, whichever way it is checked, has no stale override.
+            XCTAssertNil(AgentRunStalePresentation.copy(for: fresh, systemMarkedStale: false), "\(status)")
+
+            let reducerStale = AgentRunActivityStateReducer.stale(state: fresh)
+            for (label, state, systemMarkedStale) in [
+                ("reducer", reducerStale, false),
+                ("system", fresh, true),
+            ] {
+                let copy = AgentRunStalePresentation.copy(for: state, systemMarkedStale: systemMarkedStale)
+                if status == .waitingForApproval {
+                    XCTAssertEqual(copy?.lead, "Waiting for approval", label)
+                    XCTAssertEqual(copy?.action, "Open to answer", label)
+                    // Stale styling still applies to the waiting state.
+                    XCTAssertTrue(AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale), label)
+                } else {
+                    XCTAssertEqual(copy?.lead, "Latest status shown", "\(status) \(label)")
+                    XCTAssertNil(copy?.action, "\(status) \(label)")
+                }
+            }
+        }
+    }
+
+    func testFinishedLiveActivityIsNeverPresentedAsStaleWaiting() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let waiting = AgentRunActivityStateReducer.waitingForApproval(
+            state: AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start),
+            now: start + 1
+        )
+        let done = AgentRunActivityStateReducer.final(
+            status: .cancelled,
+            activity: "Cancelled",
+            state: AgentRunActivityStateReducer.stale(state: waiting),
+            now: start + 2
+        )
+        XCTAssertNil(AgentRunStalePresentation.copy(for: done, systemMarkedStale: true))
+    }
+
+    func testStaleWaitingStateWithoutActivityLineFallsBackToWaitingTitle() throws {
+        // State persisted by an older build: no `toolCallCount`, empty activity line.
+        let legacy = Data("""
+        {"sessionID":"chat-1","sessionTitle":"Chat","status":"waitingForApproval",
+         "currentActivity":"","responseExcerpt":"","startedAt":0,
+         "updatedAt":12,"isStale":true,"isFinal":false}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AgentRunActivityAttributes.ContentState.self, from: legacy)
+        XCTAssertEqual(
+            AgentRunStalePresentation.copy(for: decoded, systemMarkedStale: false),
+            AgentRunStalePresentation.Copy(lead: "Waiting for approval", action: "Open to answer")
+        )
+
+        XCTAssertEqual(AgentRunActivityStateReducer.stale(state: decoded).currentActivity, "Waiting for approval")
+        var thinking = decoded
+        thinking.status = .thinking
+        XCTAssertEqual(AgentRunActivityStateReducer.stale(state: thinking).currentActivity, "Latest status shown")
+    }
+
     @MainActor
     func testLiveActivityStateIsBoundedAndResponseExcerptDefaultsOff() throws {
         let longTitle = String(repeating: "Title ", count: 30)
@@ -800,6 +869,87 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: Int16.self) }, 0)
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: Int16.self) }, 16_383)
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: Int16.self) }, 32_767)
+    }
+
+    func testWaitingStatusDistinguishesApprovalFromAnswerFromPendingPrompts() {
+        XCTAssertEqual(
+            AgentRunBlockingStatus.status(hasPendingApproval: false, hasPendingQuestion: true),
+            .waitingForAnswer
+        )
+        XCTAssertEqual(
+            AgentRunBlockingStatus.status(hasPendingApproval: true, hasPendingQuestion: false),
+            .waitingForApproval
+        )
+        // The approval gates the tool call, so it wins when both are pending.
+        XCTAssertEqual(
+            AgentRunBlockingStatus.status(hasPendingApproval: true, hasPendingQuestion: true),
+            .waitingForApproval
+        )
+
+        let start = Date(timeIntervalSince1970: 1_000)
+        let running = AgentRunActivityStateReducer.toolStarted(
+            name: "bash",
+            state: AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start),
+            now: start + 1
+        )
+        let answer = AgentRunActivityStateReducer.waitingForAnswer(state: running, now: start + 2)
+        let approval = AgentRunActivityStateReducer.waitingForApproval(state: running, now: start + 2)
+        XCTAssertEqual(answer.status, .waitingForAnswer)
+        XCTAssertEqual(answer.currentActivity, "Needs your answer")
+        XCTAssertEqual(approval.status, .waitingForApproval)
+        XCTAssertEqual(approval.currentActivity, "Needs your approval")
+        XCTAssertNotEqual(answer.status.title, approval.status.title)
+        XCTAssertEqual(answer.toolCallCount, 1)
+        XCTAssertTrue(answer.status.isAwaitingUser)
+        XCTAssertTrue(approval.status.isAwaitingUser)
+        XCTAssertFalse(running.status.isAwaitingUser)
+    }
+
+    func testServerWaitingSnapshotAndStaleMarkingKeepAQuestionWait() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let initial = AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start)
+        let answer = AgentRunActivityStateReducer.waitingForAnswer(state: initial, now: start + 3)
+
+        // A reconcile reports only `waiting_for_approval`; it must not flip a
+        // known question back to approval or claim new progress.
+        let refreshed = AgentRunActivityStateReducer.refreshedWaiting(state: answer)
+        XCTAssertEqual(refreshed.status, .waitingForAnswer)
+        XCTAssertEqual(refreshed.currentActivity, "Needs your answer")
+        XCTAssertEqual(refreshed.updatedAt, start + 3)
+
+        // Without a known question, the snapshot reads as an approval wait.
+        let refreshedRunning = AgentRunActivityStateReducer.refreshedWaiting(state: initial)
+        XCTAssertEqual(refreshedRunning.status, .waitingForApproval)
+        XCTAssertEqual(refreshedRunning.currentActivity, "Needs your approval")
+
+        let stale = AgentRunActivityStateReducer.stale(state: answer)
+        XCTAssertTrue(stale.isStale)
+        XCTAssertEqual(stale.status, .waitingForAnswer)
+        XCTAssertEqual(stale.currentActivity, "Needs your answer")
+        XCTAssertTrue(stale.status.isAwaitingUser)
+    }
+
+    func testQuestionWaitRoundTripsAndOlderApprovalStateStillDecodes() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let answer = AgentRunActivityStateReducer.waitingForAnswer(
+            state: AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start),
+            now: start + 1
+        )
+        let roundTripped = try JSONDecoder().decode(
+            AgentRunActivityAttributes.ContentState.self,
+            from: JSONEncoder().encode(answer)
+        )
+        XCTAssertEqual(roundTripped, answer)
+
+        // State persisted by a build that predates the question status.
+        let legacy = Data("""
+        {"sessionID":"chat-1","sessionTitle":"Chat","status":"waitingForApproval",
+         "currentActivity":"Waiting for approval","responseExcerpt":"","startedAt":0,
+         "updatedAt":12,"isStale":false,"isFinal":false}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AgentRunActivityAttributes.ContentState.self, from: legacy)
+        XCTAssertEqual(decoded.status, .waitingForApproval)
+        XCTAssertEqual(AgentRunActivityStateReducer.refreshedWaiting(state: decoded).status, .waitingForApproval)
     }
 }
 

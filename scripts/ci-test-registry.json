@@ -387,6 +387,7 @@
         "main/services/peer-operation.test.ts",
         "main/services/peer-pairing-client.test.ts",
         "main/services/peer-remote-chat-control.test.ts",
+        "main/services/peer-remote-chat-fork.test.ts",
         "main/services/peer-remote-chat-view.test.ts",
         "main/services/peer-remote-new-chat.test.ts",
         "main/services/peer-run-subscriptions.test.ts",

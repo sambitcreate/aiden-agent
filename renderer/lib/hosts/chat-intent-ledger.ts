@@ -27,6 +27,17 @@ export interface ChatIntent {
   replay(adapter: HostChatAdapter, idempotencyKey: string): Promise<unknown>;
 }
 
+/**
+ * A fork whose answer was lost: what it asked for and the key it was sent
+ * under. Forks don't block the chat the way an unresolved intent does; the
+ * key is only reused when the same fork is asked for again.
+ */
+export interface ChatForkIntent {
+  /** The request the host fingerprints with the key: message, position, summary and revision. */
+  signature: string;
+  idempotencyKey: string;
+}
+
 export interface ChatIntentUnresolved {
   intent: ChatIntent;
   retrying: boolean;
@@ -42,6 +53,7 @@ interface PendingIntent {
 interface Entry {
   pending: Map<string, PendingIntent>;
   unresolved: ChatIntentUnresolved | null;
+  fork: ChatForkIntent | null;
 }
 
 const refKey = ({ hostId, chatId }: ChatIntentRef) => `${hostId}\u0000${chatId}`;
@@ -121,6 +133,25 @@ export class ChatIntentLedger {
     this.changed(ref);
   }
 
+  /** The key of this chat's fork with `signature` whose outcome is still unknown, if any. */
+  forkKey(ref: ChatIntentRef, signature: string): string | null {
+    const fork = this.entries.get(refKey(ref))?.fork;
+    return fork?.signature === signature ? fork.idempotencyKey : null;
+  }
+
+  /** Remembers the fork now being sent, replacing any earlier one for this chat. */
+  beginFork(ref: ChatIntentRef, fork: ChatForkIntent): void {
+    this.entry(ref).fork = fork;
+  }
+
+  /** Forgets the fork sent under `idempotencyKey` once its outcome is known; ignored if it was replaced. */
+  settleFork(ref: ChatIntentRef, idempotencyKey: string): void {
+    const entry = this.entries.get(refKey(ref));
+    if (entry?.fork?.idempotencyKey !== idempotencyKey) return;
+    entry.fork = null;
+    this.prune(ref, entry);
+  }
+
   subscribe(ref: ChatIntentRef, listener: () => void): () => void {
     const key = refKey(ref);
     const set = this.listeners.get(key) ?? new Set();
@@ -136,14 +167,14 @@ export class ChatIntentLedger {
     const key = refKey(ref);
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { pending: new Map(), unresolved: null };
+      entry = { pending: new Map(), unresolved: null, fork: null };
       this.entries.set(key, entry);
     }
     return entry;
   }
 
   private prune(ref: ChatIntentRef, entry: Entry): void {
-    if (entry.pending.size === 0 && !entry.unresolved) this.entries.delete(refKey(ref));
+    if (entry.pending.size === 0 && !entry.unresolved && !entry.fork) this.entries.delete(refKey(ref));
   }
 
   private changed(ref: ChatIntentRef): void {
