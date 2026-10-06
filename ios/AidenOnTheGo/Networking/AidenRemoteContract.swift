@@ -654,6 +654,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         .questionsRespond, .skillsInvoke,
     ]
 
+    /// Contract revision 24: the pairing vocabulary plus the phone-scoped run
+    /// subset, which a phone can only negotiate (never receive at pairing).
+    static let phoneNegotiable: [Self] = v1Known + [
+        Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
+    ]
+
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
         guard !value.isEmpty, value.unicodeScalars.count <= AidenRemoteProtocol.maxEventTypeLength else {
@@ -2167,7 +2173,7 @@ struct AidenRemoteDeviceCapabilitiesUpdateResponse: Decodable, Equatable, Sendab
         try assertKnownKeys(dynamic, allowed: ["capabilities"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
         capabilities = try values.decode([AidenRemoteCapability].self, forKey: .capabilities)
-        let known = Set(AidenRemoteCapability.v1Known)
+        let known = Set(AidenRemoteCapability.phoneNegotiable)
         guard capabilities.count <= known.count,
               Set(capabilities).count == capabilities.count,
               Set(capabilities).isSubset(of: known),
@@ -2877,9 +2883,11 @@ struct AidenRemoteContractFixture: Decodable {
     let speechTranscription: AidenSpeechTranscription
     let scheduleRunNotification: AidenScheduledRunNotification
     let error: AidenRemoteErrorEnvelope
-    /// Revision 19: a desktop run-control loser's error. Phones never call run routes,
-    /// but the shared envelope decoder must accept every published code.
+    /// Revision 19: a run-control loser's error. Since revision 24 a phone that
+    /// negotiated `phone-run-control-v1` may receive it too.
     let runControlError: AidenRemoteErrorEnvelope?
+    /// Revision 24: a foreign run as a phone holding the phone-scoped run subset sees it.
+    let phoneRunEvents: [AidenRemoteRunEvent]
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -2960,6 +2968,7 @@ struct AidenRemoteContractFixture: Decodable {
         )
         error = try values.decode(AidenRemoteErrorEnvelope.self, forKey: .error)
         runControlError = try values.decodeIfPresent(AidenRemoteErrorEnvelope.self, forKey: .runControlError)
+        phoneRunEvents = try values.decodeIfPresent([AidenRemoteRunEvent].self, forKey: .phoneRunEvents) ?? []
 
         let botSummaryTimestamps = try values.decode(
             BotTimestampProjection.self,
@@ -3164,7 +3173,7 @@ struct AidenRemoteContractFixture: Decodable {
         case legacyNonNegotiating
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
-        case scheduleRunNotification, error, runControlError
+        case scheduleRunNotification, error, runControlError, phoneRunEvents
     }
 }
 
@@ -3944,5 +3953,369 @@ private extension JSONDecoder.DateDecodingStrategy {
             in: container,
             debugDescription: "Expected a strict RFC 3339 timestamp."
         )
+    }
+}
+
+// MARK: - Contract revision 24: phone run observation and control
+
+extension AidenRemoteCapability {
+    /// Phone-scoped run observation, negotiated only behind `phone-run-control-v1`.
+    static let runsObserve = Self(rawValue: "runs:observe")
+    /// Phone-scoped run control (Stop, approvals, questions, Steer/Queue).
+    static let runsControl = Self(rawValue: "runs:control")
+}
+
+enum AidenRemoteRunEndState: String, Codable, Equatable, Sendable {
+    case done
+    case failed
+    case cancelled
+}
+
+/// The phone projection of a run approval (contract revision 24). It never
+/// carries tool details; `canAllow` is false for approvals only the desktop may
+/// allow, and `scopes` appears only when the phone may allow.
+struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
+    let approvalId: String
+    let summary: String
+    let toolCallId: String?
+    let toolName: String
+    let canAllow: Bool
+    let scopes: [AidenApprovalScope]?
+
+    init(
+        approvalId: String,
+        summary: String,
+        toolCallId: String?,
+        toolName: String,
+        canAllow: Bool,
+        scopes: [AidenApprovalScope]?
+    ) {
+        self.approvalId = approvalId
+        self.summary = summary
+        self.toolCallId = toolCallId
+        self.toolName = toolName
+        self.canAllow = canAllow
+        self.scopes = scopes
+    }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        approvalId = try boundedString(
+            values, forKey: .approvalId, maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "approvalId", required: true
+        )!
+        summary = try boundedString(
+            values, forKey: .summary, maxLength: AidenRemoteProtocol.maxApprovalSummaryLength,
+            field: "summary", required: true, allowEmpty: true
+        )!
+        toolCallId = try boundedString(
+            values, forKey: .toolCallId, maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "toolCallId", allowEmpty: true
+        )
+        toolName = try boundedString(
+            values, forKey: .toolName, maxLength: AidenRemoteProtocol.maxToolNameLength,
+            field: "toolName", required: true
+        )!
+        canAllow = try values.decode(Bool.self, forKey: .canAllow)
+        if values.contains(.scopes) {
+            guard canAllow else { throw AidenRemoteContractError.unsafePayloadField("scopes") }
+            let raw = try values.decode([String].self, forKey: .scopes)
+            let parsed = raw.compactMap(AidenApprovalScope.init(rawValue:))
+            guard !parsed.isEmpty, parsed.count == raw.count, Set(parsed).count == parsed.count else {
+                throw AidenRemoteContractError.unsafePayloadField("scopes")
+            }
+            scopes = parsed
+        } else {
+            scopes = nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case approvalId, summary, toolCallId, toolName, canAllow, scopes
+    }
+}
+
+/// A run question prompt. Unlike a phone-owned stream prompt, `expiresAt` is
+/// present only when the host set one.
+struct AidenRemoteRunQuestion: Decodable, Equatable, Sendable {
+    let promptId: String
+    let questions: [AidenRemoteQuestion]
+    let toolCallId: String
+    let expiresAt: Date?
+
+    init(promptId: String, questions: [AidenRemoteQuestion], toolCallId: String, expiresAt: Date?) {
+        self.promptId = promptId
+        self.questions = questions
+        self.toolCallId = toolCallId
+        self.expiresAt = expiresAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        promptId = try boundedString(
+            values, forKey: .promptId, maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "promptId", required: true
+        )!
+        questions = try values.decode([AidenRemoteQuestion].self, forKey: .questions)
+        try AidenRemoteQuestionGrammar.validate(questions)
+        toolCallId = try boundedString(
+            values, forKey: .toolCallId, maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "toolCallId", required: true
+        )!
+        expiresAt = values.contains(.expiresAt) ? try values.decode(Date.self, forKey: .expiresAt) : nil
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case promptId, questions, toolCallId, expiresAt
+    }
+}
+
+/// A run snapshot. `reason: "gap"` means the observer missed retained events:
+/// the run's pending prompts are restated and its transcript must be
+/// reconciled from the chat. `reason: "reset"` restarts the live projection.
+/// The gap frame's sequence is `nextSequence - 1`, which is 0 when nothing
+/// earlier was retained.
+struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
+    let runId: String
+    let chatId: String
+    let reason: String
+    let state: String?
+    let approvals: [AidenRemoteRunApproval]
+    let questions: [AidenRemoteRunQuestion]
+    let nextSequence: Int
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        runId = try values.decode(String.self, forKey: .runId)
+        chatId = try values.decode(String.self, forKey: .chatId)
+        reason = try boundedString(values, forKey: .reason, maxLength: 32, field: "reason", required: true)!
+        state = try boundedString(values, forKey: .state, maxLength: 32, field: "state")
+        if values.contains(.pendingApprovalIds) {
+            _ = try values.decode([String].self, forKey: .pendingApprovalIds)
+        }
+        if values.contains(.pendingQuestionIds) {
+            _ = try values.decode([String].self, forKey: .pendingQuestionIds)
+        }
+        approvals = values.contains(.approvals)
+            ? try values.decode([AidenRemoteRunApproval].self, forKey: .approvals)
+            : []
+        questions = values.contains(.questions)
+            ? try values.decode([AidenRemoteRunQuestion].self, forKey: .questions)
+            : []
+        nextSequence = try values.decode(Int.self, forKey: .nextSequence)
+        if values.contains(.epoch) { _ = try values.decode(AidenUnknownJSONValue.self, forKey: .epoch) }
+        guard (1...AidenRemoteProtocol.maxSafeInteger).contains(nextSequence) else {
+            throw AidenRemoteContractError.unsafePayloadField("nextSequence")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case runId, chatId, reason, epoch, state, pendingApprovalIds, pendingQuestionIds
+        case approvals, questions, nextSequence
+    }
+}
+
+/// One frame of `/chats/{id}/runs/current/events` or `/runs/{id}/events`, as a
+/// phone holding the phone-scoped run subset receives it. Content events reuse
+/// the strict `/streams` decoder unchanged; run-only events (lifecycle,
+/// resolutions and the phone approval projection) are decoded here.
+/// `run.ended` repeats the last event's sequence.
+struct AidenRemoteRunEvent: Decodable, Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case started(chatId: String, origin: String)
+        case content(AidenRemoteStreamEvent)
+        case approvalRequired(AidenRemoteRunApproval)
+        case approvalResolved(approvalId: String, decision: AidenApprovalDecision?)
+        case questionRequired(AidenRemoteRunQuestion)
+        case questionResolved(promptId: String, outcome: String?)
+        case snapshot(AidenRemoteRunSnapshot)
+        case ended(chatId: String, state: AidenRemoteRunEndState)
+    }
+
+    let streamId: String
+    let sequence: Int
+    let timestamp: Date
+    let terminal: Bool
+    let kind: Kind
+
+    var runId: String { streamId }
+
+    static let runOnlyTypes: Set<String> = [
+        "run.started", "run.ended", "snapshot", "approval_required", "approval_resolved",
+        "question_required", "question_resolved",
+    ]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case protocolVersion, streamId, sequence, timestamp, type, terminal, payload
+    }
+
+    private struct LifecyclePayload: Decodable {
+        let runId: String
+        let chatId: String
+        let origin: String?
+        let state: AidenRemoteRunEndState?
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: ["runId", "chatId", "origin", "state"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            runId = try values.decode(String.self, forKey: .runId)
+            chatId = try values.decode(String.self, forKey: .chatId)
+            origin = try boundedString(values, forKey: .origin, maxLength: 64, field: "origin")
+            state = values.contains(.state) ? try values.decode(AidenRemoteRunEndState.self, forKey: .state) : nil
+        }
+
+        private enum CodingKeys: String, CodingKey { case runId, chatId, origin, state }
+    }
+
+    private struct ApprovalResolvedPayload: Decodable {
+        let approvalId: String
+        let decision: AidenApprovalDecision?
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: ["approvalId", "decision"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            approvalId = try boundedString(
+                values, forKey: .approvalId, maxLength: AidenRemoteProtocol.maxIdentifierLength,
+                field: "approvalId", required: true
+            )!
+            decision = try boundedString(values, forKey: .decision, maxLength: 16, field: "decision")
+                .map { raw in
+                    guard let decision = AidenApprovalDecision(rawValue: raw) else {
+                        throw AidenRemoteContractError.unsafePayloadField("decision")
+                    }
+                    return decision
+                }
+        }
+
+        private enum CodingKeys: String, CodingKey { case approvalId, decision }
+    }
+
+    private struct QuestionResolvedPayload: Decodable {
+        let promptId: String
+        let outcome: String?
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: ["promptId", "outcome"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            promptId = try boundedString(
+                values, forKey: .promptId, maxLength: AidenRemoteProtocol.maxIdentifierLength,
+                field: "promptId", required: true
+            )!
+            outcome = try boundedString(values, forKey: .outcome, maxLength: 32, field: "outcome")
+        }
+
+        private enum CodingKeys: String, CodingKey { case promptId, outcome }
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try values.decode(String.self, forKey: .type)
+        guard Self.runOnlyTypes.contains(type) else {
+            let content = try AidenRemoteStreamEvent(from: decoder)
+            guard content.type != .taskUpdate, content.type != .agentsUpdate else {
+                throw AidenRemoteContractError.unsafePayloadField("type")
+            }
+            streamId = content.streamId
+            sequence = content.sequence
+            timestamp = content.timestamp
+            terminal = content.terminal
+            kind = .content(content)
+            return
+        }
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        guard try values.decode(Int.self, forKey: .protocolVersion) == AidenRemoteProtocol.version else {
+            throw AidenRemoteContractError.invalidProtocolVersion
+        }
+        streamId = try values.decode(String.self, forKey: .streamId)
+        guard !streamId.isEmpty, streamId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength else {
+            throw AidenRemoteContractError.invalidStreamIdentity
+        }
+        sequence = try values.decode(Int.self, forKey: .sequence)
+        let minimumSequence = type == "snapshot" ? 0 : 1
+        guard (minimumSequence...AidenRemoteProtocol.maxSafeInteger).contains(sequence) else {
+            throw AidenRemoteContractError.invalidSequence
+        }
+        timestamp = try values.decode(Date.self, forKey: .timestamp)
+        terminal = try values.decode(Bool.self, forKey: .terminal)
+        guard terminal == (type == "run.ended") else {
+            throw AidenRemoteContractError.invalidTerminalClassification
+        }
+        switch type {
+        case "run.started":
+            let payload = try values.decode(LifecyclePayload.self, forKey: .payload)
+            guard payload.runId == streamId else { throw AidenRemoteContractError.invalidStreamIdentity }
+            guard let origin = payload.origin, payload.state == nil else {
+                throw AidenRemoteContractError.unsafePayloadField("origin")
+            }
+            kind = .started(chatId: payload.chatId, origin: origin)
+        case "run.ended":
+            let payload = try values.decode(LifecyclePayload.self, forKey: .payload)
+            guard payload.runId == streamId else { throw AidenRemoteContractError.invalidStreamIdentity }
+            guard let state = payload.state, payload.origin == nil else {
+                throw AidenRemoteContractError.unsafePayloadField("state")
+            }
+            kind = .ended(chatId: payload.chatId, state: state)
+        case "snapshot":
+            let snapshot = try values.decode(AidenRemoteRunSnapshot.self, forKey: .payload)
+            guard snapshot.runId == streamId else { throw AidenRemoteContractError.invalidStreamIdentity }
+            kind = .snapshot(snapshot)
+        case "approval_required":
+            kind = .approvalRequired(try values.decode(AidenRemoteRunApproval.self, forKey: .payload))
+        case "approval_resolved":
+            let payload = try values.decode(ApprovalResolvedPayload.self, forKey: .payload)
+            kind = .approvalResolved(approvalId: payload.approvalId, decision: payload.decision)
+        case "question_required":
+            kind = .questionRequired(try values.decode(AidenRemoteRunQuestion.self, forKey: .payload))
+        default:
+            let payload = try values.decode(QuestionResolvedPayload.self, forKey: .payload)
+            kind = .questionResolved(promptId: payload.promptId, outcome: payload.outcome)
+        }
+    }
+}
+
+struct AidenRemoteRunCancelResult: Decodable, Equatable, Sendable {
+    let runId: String
+    let chatId: String
+    let state: String
+    let cancelRequested: Bool
+}
+
+struct AidenRemoteRunApprovalResult: Decodable, Equatable, Sendable {
+    let runId: String
+    let approvalId: String
+    let decision: AidenApprovalDecision
+    let scope: AidenApprovalScope?
+    let resolvedAt: Date
+}
+
+struct AidenRemoteRunQuestionResult: Decodable, Equatable, Sendable {
+    let runId: String
+    let promptId: String
+    let outcome: String
+    let resolvedAt: Date
+}
+
+extension JSONDecoder {
+    func decodeAidenRemoteRunEvent(from data: Data) throws -> AidenRemoteRunEvent {
+        guard data.count <= AidenRemoteProtocol.maxSSEFrameBytes else {
+            throw AidenRemoteContractError.payloadTooLarge
+        }
+        return try decodeAidenRemote(AidenRemoteRunEvent.self, from: data)
+    }
+}
+
+extension AidenRemoteJSONDecoder {
+    static func decodeRunSSEEvent(from data: Data) throws -> AidenRemoteRunEvent {
+        try JSONDecoder.aidenRemote().decodeAidenRemoteRunEvent(from: data)
     }
 }

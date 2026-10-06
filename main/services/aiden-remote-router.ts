@@ -16,6 +16,8 @@ import {
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
+  AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
+  AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
@@ -746,7 +748,8 @@ function negotiatedDeviceCapabilities(
         device.acceptsProgressCapabilities === true) &&
       (capability !== "simulators:control" &&
         !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability) ||
-        device.type === "mac" || device.type === "linux"),
+        device.type === "mac" || device.type === "linux" ||
+        (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)),
     ),
   );
 }
@@ -1278,6 +1281,23 @@ function isDesktopDevice(device: Pick<AidenRemoteRouterAuthenticatedDevice, "typ
   return device.type === "mac" || device.type === "linux";
 }
 
+/**
+ * A phone's run grants never widen what it may already do in a chat (contract
+ * revision 24): each run route also requires the phone's own per-chat grant.
+ * Desktops keep the host-wide authority their run grant carries.
+ */
+function requirePhoneRunGrant(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  capability: AidenRemoteCapability,
+): void {
+  if (isDesktopDevice(device) || device.capabilities.has(capability)) return;
+  throw new AidenRemoteServiceError(
+    "capability_denied",
+    "This device does not have access to that Aiden capability.",
+    403,
+  );
+}
+
 /** `/health` takes no query, or exactly `detail=host` for the desktop descriptor. */
 function healthDetailQuery(query: string): boolean {
   if (!query) return false;
@@ -1373,6 +1393,12 @@ function advertisedServerCapabilities(
       : []),
     ...(isDesktopDevice(device) && device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_HOST_CAPABILITIES.filter((capability) =>
+          hostCapabilitySupported(dependencies, capability),
+        )
+      : []),
+    // Phones are offered only the phone-scoped run subset (contract revision 24).
+    ...(!isDesktopDevice(device)
+      ? AIDEN_REMOTE_PHONE_RUN_CAPABILITIES.filter((capability) =>
           hostCapabilitySupported(dependencies, capability),
         )
       : []),
@@ -1689,6 +1715,10 @@ export function createAidenRemoteRequestHandler(
             ...(isDesktopDevice(device) && dependencies.pairingRequests
               ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE]
               : []),
+            // Phones get only the phone-scoped run subset (contract revision 24).
+            ...(!isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
+              ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE]
+              : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
         };
@@ -1754,8 +1784,12 @@ export function createAidenRemoteRequestHandler(
             }
             if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
           } else if ((AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Refuse non-desktops first so they never learn whether host control exists.
-            if (!isDesktopDevice(device)) {
+            // Refuse non-desktops first so they never learn whether host control
+            // exists; phones may hold only the phone-scoped run subset.
+            if (
+              !isDesktopDevice(device) &&
+              !(AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)
+            ) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
                 "Only paired desktops may observe or control this host's runs.",
@@ -3347,6 +3381,7 @@ export function createAidenRemoteRequestHandler(
         const after = streamAfter(request, query);
         const device = await authenticate(request, dependencies.devices, "runs:observe");
         deviceIdSuffix = device.id.slice(-8);
+        requirePhoneRunGrant(device, "chat:read");
         if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
         if (after !== 0) {
           // A cursor names a run; resume it through /runs/{runId}/events.
@@ -3367,6 +3402,7 @@ export function createAidenRemoteRequestHandler(
         const after = streamAfter(request, query);
         const device = await authenticate(request, dependencies.devices, "runs:observe");
         deviceIdSuffix = device.id.slice(-8);
+        requirePhoneRunGrant(device, "chat:read");
         if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
         const chatId = dependencies.hostRuns.chatIdForRun(runEventsMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
@@ -3390,6 +3426,14 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "runs:control");
         deviceIdSuffix = device.id.slice(-8);
+        requirePhoneRunGrant(
+          device,
+          route === "runApprovalRespond"
+            ? "approval:respond"
+            : route === "runQuestionRespond"
+              ? "questions:respond"
+              : "chat:write",
+        );
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         const hostRuns = dependencies.hostRuns;
         const chats = dependencies.chats;
@@ -3422,6 +3466,7 @@ export function createAidenRemoteRequestHandler(
               body,
               key,
               access("approval"),
+              { phoneScoped: !isDesktopDevice(device), capabilities: device.capabilities },
             ),
           );
         } else {

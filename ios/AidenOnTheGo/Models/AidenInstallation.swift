@@ -309,7 +309,7 @@ final class AidenInstallationStore {
         connectedAt: Date = Date()
     ) throws {
         guard let index = installations.firstIndex(where: { $0.id == server.instanceId }) else { return }
-        let known = Set(AidenRemoteCapability.v1Known)
+        let known = Set(AidenRemoteCapability.phoneNegotiable)
         guard Set(capabilities).count == capabilities.count,
               Set(capabilities).isSubset(of: known),
               let supported = server.serverCapabilities,
@@ -320,6 +320,7 @@ final class AidenInstallationStore {
         }
         let progress = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+            .runsObserve, .runsControl,
         ])
         let existingNonProgress = Set(installations[index].deviceCapabilities).subtracting(progress)
         guard existingNonProgress == Set(capabilities).subtracting(progress) else {

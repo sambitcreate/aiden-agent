@@ -633,6 +633,9 @@ class AidenChatViewModel(
     fun startProgressObservation() {
         progressForeground = true
         reconcileProgressAccess()
+        // Contract revision 24: follow a run started elsewhere. It outlives the
+        // foreground so the live notification keeps updating until it ends.
+        startForeignRunObservation()
         if (progressObservationJob?.isActive == true) return
         progressObservationToken += 1
         if (coordinator.serverInfo.value != null && !canReadTaskProgress && !canReadAgentRoster) {
@@ -840,6 +843,8 @@ class AidenChatViewModel(
         // retried after the server confirms the grant again.
         taskCapabilityDeniedObservationToken = null
         agentCapabilityDeniedObservationToken = null
+        // Run observation depends on the negotiated run grants, not progress.
+        retryForeignRunObservation()
         val keepTasks = canReadTaskProgress
         val keepAgents = canReadAgentRoster
         if (!keepTasks && !keepAgents) {
@@ -992,6 +997,7 @@ class AidenChatViewModel(
         progressForeground = false
         progressObservationToken += 1
         progressObservationJob?.cancel()
+        foreignRunJob?.cancel()
         streamJob?.cancel()
         titleRefreshJob?.cancel()
         terminalReconciliationJob?.cancel()
@@ -1149,7 +1155,9 @@ class AidenChatViewModel(
                 val writeToken = chatCache.reserveChatWrite()
                 val latest = fetchLatestTranscript(client)
                 if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return@launch
-                acceptLatestTranscript(latest, writeToken)
+                // An uncached chat was unknown when the detail came to the
+                // foreground, so run observation could not be admitted then.
+                if (acceptLatestTranscript(latest, writeToken)) retryForeignRunObservation()
             } catch (e: Exception) {
                 if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                     _presentedError.value = e.localizedMessage
@@ -1806,6 +1814,10 @@ class AidenChatViewModel(
         }
 
     fun cancelTurn() {
+        if (activeStreamId == null && foreignRunId != null) {
+            cancelForeignRun()
+            return
+        }
         if (!canControlCurrentRun || _isStopping.value) return
         val client = activeClient() ?: return
         val streamId = activeStreamId ?: return
@@ -2146,6 +2158,368 @@ class AidenChatViewModel(
         }
     }
 
+    // --- Contract revision 24: runs started on the Mac, in Telegram or by the scheduler ---
+
+    private class ForeignRunSuperseded : Exception()
+
+    private var foreignRunId: String? = null
+    private var foreignProjection: AidenForeignRunProjection? = null
+    private var foreignRunJob: Job? = null
+    private var foreignSettleJob: Job? = null
+    /** When the attach replay of [foreignSettleRunId] is presented even if it never goes quiet. */
+    private var foreignSettleDeadlineNanos: Long? = null
+    private var foreignSettleRunId: String? = null
+    /** Bounded transcript recovery after a foreign run ended but its re-read failed. */
+    private var foreignReconcileJob: Job? = null
+
+    private fun foreignRunAccess(capability: AidenRemoteCapability): Boolean {
+        val installation = installationForProgress() ?: return false
+        val currentChat = _chat.value ?: return false
+        if (coordinator.serverInfo.value?.supportsPhoneRunControl != true) return false
+        if (!installation.hasNegotiatedAccess(capability)) return false
+        if (currentChat.botId == null) return true
+        // Bot chats also need Bot read access, and Bot write access to control.
+        return installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_READ) &&
+            (capability == AidenRemoteCapability.RUNS_OBSERVE ||
+                installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_WRITE))
+    }
+
+    /** A run this phone did not start is on screen and may be stopped or answered. */
+    private val canControlForeignRun: Boolean
+        get() = foreignRunId != null && activeStreamId == null &&
+            coordinator.connectionState.value == AidenConnectionState.CONNECTED &&
+            _streamState.value?.isTerminal == false &&
+            foreignRunAccess(AidenRemoteCapability.RUNS_CONTROL)
+
+    /** Stop is offered for this phone's own run and for a foreign run it may control. */
+    val canStopCurrentRun: Boolean
+        get() = canControlCurrentRun || canControlForeignRun
+
+    /** Attaches to the chat's current run when this phone is not running its own. */
+    private fun startForeignRunObservation() {
+        if (foreignRunJob?.isActive == true || activeStreamId != null || _isStarting.value) return
+        if (!foreignRunAccess(AidenRemoteCapability.RUNS_OBSERVE)) return
+        val client = activeClient() ?: return
+        foreignSettleDeadlineNanos = null
+        foreignRunJob = viewModelScope.launch { observeForeignRun(client) }
+    }
+
+    /** The detail is open and run access or the chat just became known: attach if a run is live. */
+    private fun retryForeignRunObservation() {
+        if (progressForeground) startForeignRunObservation()
+    }
+
+    private suspend fun observeForeignRun(client: AidenRemoteClient) {
+        var projection: AidenForeignRunProjection? = null
+        var reconnects = 0
+        try {
+            while (coroutineContext.isActive) {
+                val attached = projection
+                val feed = if (attached == null) client.currentRunEvents(chatId)
+                else client.runEvents(attached.runId, after = attached.lastSequence)
+                try {
+                    feed.collect { event ->
+                        // This phone's own run (or a new send) owns the live state.
+                        if (activeClient() !== client || activeStreamId != null || _isStarting.value) {
+                            throw ForeignRunSuperseded()
+                        }
+                        val current = projection ?: AidenForeignRunProjection(event.runId).also { projection = it }
+                        handleForeignRunEffects(current, current.apply(event))
+                    }
+                } catch (error: ForeignRunSuperseded) {
+                    foreignSettleJob?.cancel()
+                    foreignRunId = null
+                    foreignProjection = null
+                    return
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (isProgressCredentialRevoked(error)) {
+                        // Revoking the device closes its feeds and forgets the Mac.
+                        clearForeignRunPresentation()
+                        if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+                            coordinator.removeInstallation(instanceId)
+                        }
+                        return
+                    }
+                    val server = error as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server
+                    if (server != null && server.statusCode in setOf(403, 404, 410)) {
+                        // No current run, the run is gone, or access was withdrawn.
+                        finishForeignRun()
+                        return
+                    }
+                }
+                val current = projection ?: return
+                if (current.isEnded) return
+                reconnects += 1
+                if (reconnects > MAX_FOREIGN_RUN_RECONNECTS) {
+                    finishForeignRun()
+                    return
+                }
+                delay(progressRetryDelay(reconnects))
+            }
+        } finally {
+            if (foreignRunJob?.isActive != true) foreignRunJob = null
+        }
+    }
+
+    private suspend fun handleForeignRunEffects(
+        projection: AidenForeignRunProjection,
+        effects: List<AidenForeignRunProjection.Effect>
+    ) {
+        if (foreignRunId == null) {
+            // Settle first: attaching replays the run's retained journal. Only a
+            // run still open once the replay goes quiet is shown as live; one
+            // that already ended is history, and its replayed resolutions are
+            // not news. A run that keeps generating never goes quiet, so the
+            // settle is also bounded from the first event it sees.
+            foreignSettleJob?.cancel()
+            if (projection.isEnded) {
+                foreignSettleDeadlineNanos = null
+                return
+            }
+            val now = System.nanoTime()
+            val deadline = foreignSettleDeadlineNanos?.takeIf { foreignSettleRunId == projection.runId }
+                ?: (now + FOREIGN_RUN_MAX_SETTLE_MILLIS * 1_000_000).also {
+                    foreignSettleDeadlineNanos = it
+                    foreignSettleRunId = projection.runId
+                }
+            val wait = minOf(FOREIGN_RUN_SETTLE_MILLIS, ((deadline - now) / 1_000_000).coerceAtLeast(0))
+            foreignSettleJob = viewModelScope.launch {
+                delay(wait)
+                if (projection.isEnded || foreignRunId != null || activeStreamId != null || _isStarting.value) {
+                    return@launch
+                }
+                foreignSettleDeadlineNanos = null
+                foreignReconcileJob?.cancel()
+                foreignReconcileJob = null
+                foreignRunId = projection.runId
+                foreignProjection = projection
+                presentForeignRun(projection)
+            }
+            return
+        }
+        presentForeignRun(projection)
+        for (effect in effects) {
+            when (effect) {
+                is AidenForeignRunProjection.Effect.AnsweredElsewhere -> showRunInputReceipt(effect.resolution.notice)
+                AidenForeignRunProjection.Effect.Reconcile -> reconcileChat()
+                is AidenForeignRunProjection.Effect.Ended -> finishForeignRun()
+                else -> Unit
+            }
+        }
+    }
+
+    private fun presentForeignRun(projection: AidenForeignRunProjection) {
+        val canControl = foreignRunAccess(AidenRemoteCapability.RUNS_CONTROL)
+        val capabilities = approvalCapabilities()
+        _streamState.value = projection.state
+        _liveText.value = projection.liveText
+        _reasoning.value = projection.reasoning
+        _tools.value = projection.tools
+        _pendingApproval.value = projection.pendingApproval?.let { approval ->
+            val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
+            val hasWrite = !isAutomation || capabilities.canWriteSchedules
+            AidenPendingApproval(
+                id = approval.approvalId,
+                summary = approval.summary,
+                toolName = approval.toolName,
+                // Run approvals carry no expiry; the Mac resolves or cancels them.
+                expiresAt = FOREIGN_PROMPT_EXPIRY,
+                canRespond = canControl,
+                hasRequiredWriteCapability = hasWrite,
+                hostCanAllow = approval.canAllow,
+                canAllow = canControl && approval.canAllow && hasWrite,
+                scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE)
+            )
+        }
+        _pendingQuestion.value = projection.pendingQuestion?.let { question ->
+            AidenPendingQuestion(
+                id = question.promptId,
+                questions = question.questions,
+                expiresAt = question.expiresAt ?: FOREIGN_PROMPT_EXPIRY,
+                canRespond = canControl
+            )
+        }
+    }
+
+    /** The run ended (or can no longer be followed): re-read the transcript and
+     * leave the terminal state for the live notification. */
+    private suspend fun finishForeignRun() {
+        foreignSettleJob?.cancel()
+        val projection = foreignProjection ?: return
+        foreignRunId = null
+        foreignProjection = null
+        val client = activeClient()
+        val reconciled = reconcileChat()
+        if (activeStreamId != null || _isStarting.value) return
+        _pendingApproval.value = null
+        _pendingQuestion.value = null
+        _streamState.value = if (projection.state.isTerminal) projection.state else AidenStreamState.INTERRUPTED
+        if (reconciled) {
+            clearForeignLiveOutput()
+        } else if (client != null) {
+            // Keep the response the user was watching until the transcript that
+            // holds it is accepted. Only the chat is re-read; nothing is resent.
+            scheduleForeignRunReconciliation(client)
+        }
+    }
+
+    private fun clearForeignLiveOutput() {
+        _liveText.value = ""
+        _reasoning.value = ""
+        _tools.value = emptyList()
+    }
+
+    private fun scheduleForeignRunReconciliation(client: AidenRemoteClient) {
+        if (foreignReconcileJob?.isActive == true) return
+        foreignReconcileJob = viewModelScope.launch {
+            // A send, this phone's own stream, a newly presented foreign run or a
+            // removed pairing owns the live state from then on.
+            fun fenced() = activeClient() !== client || activeStreamId != null || _isStarting.value ||
+                foreignRunId != null
+            for (attempt in 0 until MAX_FOREIGN_RUN_RECONCILE_ATTEMPTS) {
+                delay(AidenTerminalReconciliation.retryDelayMilliseconds(attempt))
+                if (fenced()) return@launch
+                transcriptGeneration++
+                if (reconcileChat()) {
+                    if (!fenced()) clearForeignLiveOutput()
+                    return@launch
+                }
+            }
+        }
+    }
+
+    private fun clearForeignRunPresentation() {
+        foreignSettleJob?.cancel()
+        // An ended run still awaiting its transcript is presented too.
+        val wasPresented = foreignRunId != null || foreignReconcileJob?.isActive == true
+        foreignReconcileJob?.cancel()
+        foreignReconcileJob = null
+        foreignRunId = null
+        foreignProjection = null
+        if (!wasPresented || activeStreamId != null) return
+        _liveText.value = ""
+        _reasoning.value = ""
+        _tools.value = emptyList()
+        _pendingApproval.value = null
+        _pendingQuestion.value = null
+        _streamState.value = null
+    }
+
+    private fun handleForeignControlFailure(error: Exception, fallback: String) {
+        if (isProgressCredentialRevoked(error)) {
+            clearForeignRunPresentation()
+            if (coordinator.installationStore.activeInstallation?.instanceId == instanceId) {
+                coordinator.removeInstallation(instanceId)
+            }
+            return
+        }
+        val loser = AidenForeignRunResolution.loser(error)
+        if (loser != null) {
+            // First responder wins: say who answered instead of an error.
+            showRunInputReceipt(loser.notice)
+        } else {
+            _presentedError.value = fallback
+        }
+    }
+
+    private fun cancelForeignRun() {
+        if (!canControlForeignRun || _isStopping.value) return
+        val client = activeClient() ?: return
+        val runId = foreignRunId ?: return
+        _isStopping.value = true
+        viewModelScope.launch {
+            try {
+                val result = client.cancelRun(runId)
+                if (result.chatId != chatId) {
+                    _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
+                }
+                // The run feed delivers `run.ended` once the Mac stops it.
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                handleForeignControlFailure(error, "Stop was not confirmed. Check the current run before trying again.")
+            } finally {
+                _isStopping.value = false
+            }
+        }
+    }
+
+    private fun respondToForeignApproval(
+        decision: AidenApprovalDecision,
+        approvalId: String,
+        scope: AidenApprovalScope
+    ) {
+        if (!canControlForeignRun || _isRespondingToApproval.value || _isStopping.value) return
+        val runId = foreignRunId ?: return
+        val projection = foreignProjection ?: return
+        val approval = _pendingApproval.value?.takeIf { it.id == approvalId } ?: return
+        if (!approval.canRespond) {
+            _presentedError.value = "This paired device can review approvals but cannot respond."
+            return
+        }
+        if (decision == AidenApprovalDecision.ALLOW && !approval.canAllow) {
+            _presentedError.value = if (!approval.hasRequiredWriteCapability) {
+                "Schedule write access is required to approve this task."
+            } else {
+                "This action must be confirmed in the Aiden desktop app."
+            }
+            return
+        }
+        val client = activeClient() ?: return
+        _isRespondingToApproval.value = true
+        projection.markAnsweredLocally(approvalId)
+        presentForeignRun(projection)
+        viewModelScope.launch {
+            try {
+                // Only a scope the Mac offered for this exact approval is sent.
+                val requestedScope = scope.takeIf {
+                    decision == AidenApprovalDecision.ALLOW && it != AidenApprovalScope.ONCE &&
+                        approval.scopes.contains(it)
+                }
+                client.respondToRunApproval(runId, approvalId, decision, requestedScope)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                projection.answerUnconfirmed(approvalId)
+                handleForeignControlFailure(
+                    error,
+                    "The approval response was not confirmed. Check the request on your Mac."
+                )
+            } finally {
+                _isRespondingToApproval.value = false
+            }
+        }
+    }
+
+    private fun respondToForeignQuestion(
+        request: AidenQuestionRespondRequest,
+        promptId: String,
+        idempotencyKey: UUID
+    ) {
+        if (!canControlForeignRun || _isRespondingToQuestion.value || _isStopping.value) return
+        val runId = foreignRunId ?: return
+        val projection = foreignProjection ?: return
+        val question = _pendingQuestion.value?.takeIf { it.id == promptId && it.canRespond } ?: return
+        val client = activeClient() ?: return
+        _isRespondingToQuestion.value = true
+        projection.markAnsweredLocally(question.id)
+        presentForeignRun(projection)
+        viewModelScope.launch {
+            try {
+                client.respondToRunQuestion(runId, question.id, request, idempotencyKey)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                projection.answerUnconfirmed(question.id)
+                handleForeignControlFailure(
+                    error,
+                    "The question response was not confirmed. Check the prompt on your Mac."
+                )
+            } finally {
+                _isRespondingToQuestion.value = false
+            }
+        }
+    }
+
     fun stop() {
         cancelTurn()
     }
@@ -2155,6 +2529,10 @@ class AidenChatViewModel(
         approvalId: String,
         scope: AidenApprovalScope = AidenApprovalScope.ONCE
     ) {
+        if (activeStreamId == null && foreignRunId != null) {
+            respondToForeignApproval(decision, approvalId, scope)
+            return
+        }
         if (isReadOnlyPresentation || coordinator.connectionState.value != AidenConnectionState.CONNECTED ||
             _isRespondingToApproval.value || _isStopping.value) return
         val approval = _pendingApproval.value ?: return
@@ -2225,6 +2603,10 @@ class AidenChatViewModel(
         promptId: String,
         idempotencyKey: UUID = UUID.randomUUID()
     ) {
+        if (activeStreamId == null && foreignRunId != null) {
+            respondToForeignQuestion(request, promptId, idempotencyKey)
+            return
+        }
         if (isReadOnlyPresentation || coordinator.connectionState.value != AidenConnectionState.CONNECTED ||
             _isRespondingToQuestion.value || _isStopping.value) return
         val question = _pendingQuestion.value ?: return
@@ -2588,6 +2970,16 @@ class AidenChatViewModel(
 
     companion object {
         private const val MAX_AGENT_ROSTER_HISTORY = 8
+        /** A foreign run feed is resumed at most this many times in a row. */
+        private const val MAX_FOREIGN_RUN_RECONNECTS = 3
+        /** Quiet period that ends the attach replay before a run is shown live. */
+        private const val FOREIGN_RUN_SETTLE_MILLIS = 400L
+        /** Upper bound on the settle, so a run that keeps generating is still shown live. */
+        private const val FOREIGN_RUN_MAX_SETTLE_MILLIS = 1_200L
+        /** Transcript re-reads after a foreign run ended but its first re-read failed. */
+        private const val MAX_FOREIGN_RUN_RECONCILE_ATTEMPTS = 6
+        /** Run approvals and most run questions carry no expiry on the wire. */
+        private val FOREIGN_PROMPT_EXPIRY: Instant = Instant.parse("9999-12-31T23:59:59Z")
         /** Ongoing-notification cadence; terminal and approval states skip it. */
         private const val LIVE_NOTIFICATION_PERIOD_MILLIS = 1_000L
         /** Backoff while a fork summary is pending; the last step repeats. */

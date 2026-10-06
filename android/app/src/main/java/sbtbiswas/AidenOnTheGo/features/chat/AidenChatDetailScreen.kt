@@ -204,7 +204,6 @@ fun AidenChatDetailScreen(
     var pendingVoiceStart by remember { mutableStateOf(false) }
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     var selectTextFor by remember { mutableStateOf<String?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
@@ -262,7 +261,6 @@ fun AidenChatDetailScreen(
     LaunchedEffect(serverInfo) {
         viewModel.reconcileProgressAccess()
         if (progressSheet == "tasks" && !viewModel.canReadTaskProgress) progressSheet = null
-        if (progressSheet == "agents" && !viewModel.canReadAgentRoster) progressSheet = null
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
             (viewModel.canReadTaskProgress || viewModel.canReadAgentRoster)
         ) {
@@ -448,7 +446,7 @@ fun AidenChatDetailScreen(
                     if (isStreaming) {
                         IconButton(
                             onClick = { viewModel.cancelTurn() },
-                            enabled = viewModel.canControlCurrentRun && !isStopping
+                            enabled = viewModel.canStopCurrentRun && !isStopping
                         ) {
                             Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
                         }
@@ -670,7 +668,7 @@ fun AidenChatDetailScreen(
                         viewModel.send()
                     },
                     onStop = { viewModel.cancelTurn() },
-                    canStop = viewModel.canControlCurrentRun && !isStopping,
+                    canStop = viewModel.canStopCurrentRun && !isStopping,
                     canSend = viewModel.canSend && !hasActiveStream &&
                         preparingAttachmentBatches == 0 && !isUploadingAttachment,
                     isStreaming = isStreaming,
@@ -970,42 +968,30 @@ fun AidenChatDetailScreen(
             ?.let { progress ->
                 AidenTaskProgressSheet(progress = progress, onDismiss = { progressSheet = null })
             }
-        "agents" -> {
-            // The sheet stays reachable for an unavailable current roster so
-            // retained earlier turns remain inspectable, and for retained
-            // history when no current roster was ever accepted.
-            val selected = selectedAgentRoster ?: currentAgentRoster
-                ?: agentRosterHistory.firstOrNull()
-            if (canReadAgentRoster && selected != null) {
-                AidenAgentRosterSheet(
-                    currentRoster = currentAgentRoster ?: selected,
-                    selectedRoster = selected,
-                    history = agentRosterHistory,
-                    onSelectTurn = { turnId ->
-                        viewModel.selectAgentRosterTurn(turnId)
-                    },
-                    onAgentClick = { agent -> selectedAgent = agent },
-                    onDismiss = { progressSheet = null }
-                )
-            }
-        }
     }
-    selectedAgent?.let { opened ->
-        // Follow the live current-turn roster so a confirmed stop (or any other
-        // update) replaces the snapshot the sheet was opened with.
-        val agent = currentAgentRoster?.agents?.firstOrNull { it.agentId == opened.agentId } ?: opened
-        val isStopping = agent.agentId in interruptingAgentIds
-        AidenAgentDetailSheet(
-            agent = agent,
-            stopControl = when {
-                isStopping -> AidenAgentStopControl.STOPPING
+    // Keep the restoration owner mounted before negotiation/roster hydration.
+    // It withholds agent content until read access is authoritatively granted.
+    val selected = selectedAgentRoster ?: currentAgentRoster ?: agentRosterHistory.firstOrNull()
+    AidenAgentRosterSheet(
+        requested = progressSheet == "agents",
+        canRead = if (serverInfo == null) null else canReadAgentRoster,
+        chatId = chatId,
+        currentRoster = currentAgentRoster ?: selected,
+        selectedRoster = selected,
+        history = agentRosterHistory,
+        onSelectTurn = { viewModel.selectAgentRosterTurn(it) },
+        instanceId = coordinator.activeInstanceId,
+        deviceId = coordinator.installationStore.activeInstallation?.deviceId,
+        stopControl = { agent ->
+            when {
+                agent.agentId in interruptingAgentIds -> AidenAgentStopControl.STOPPING
                 viewModel.canInterrupt(agent) -> AidenAgentStopControl.AVAILABLE
                 else -> AidenAgentStopControl.HIDDEN
-            },
-            onStop = { viewModel.interruptAgent(agent) },
-            onDismiss = { selectedAgent = null }
-        )
-    }
+            }
+        },
+        onStop = { viewModel.interruptAgent(it) },
+        onDismiss = { progressSheet = null }
+    )
     selectTextFor?.let { text ->
         AidenSelectTextDialog(
             text = text,

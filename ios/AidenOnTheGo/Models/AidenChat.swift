@@ -2368,6 +2368,217 @@ enum AidenQuietOpenChat {
     }
 }
 
+// MARK: - Contract revision 24: foreign runs
+
+/// How a prompt on a foreign run was resolved by another surface (the Mac,
+/// Telegram, or another device) before this phone answered it.
+struct AidenForeignRunResolution: Equatable, Sendable {
+    enum Prompt: Equatable, Sendable {
+        case approval(AidenApprovalDecision?)
+        case question(String?)
+    }
+
+    let prompt: Prompt
+    let resolvedAt: Date?
+
+    /// The transient caption the losing phone shows under the composer.
+    var notice: String {
+        switch prompt {
+        case .approval(.allow?):
+            String(localized: "Answered on Mac: allowed")
+        case .approval(.deny?):
+            String(localized: "Answered on Mac: denied")
+        case .question("expired"):
+            String(localized: "Question expired on Mac")
+        case .approval(nil), .question:
+            String(localized: "Answered on Mac")
+        }
+    }
+
+    /// A first-responder-wins loser envelope (`409 approval_resolved` or
+    /// `409 question_already_resolved`), or nil for any other failure.
+    static func loser(from error: Error) -> Self? {
+        guard case let .server(statusCode, body) = error as? AidenRemoteClientError,
+              statusCode == 409 else { return nil }
+        switch body.code.rawValue {
+        case "approval_resolved":
+            return Self(
+                prompt: .approval(body.details?.decision.flatMap(AidenApprovalDecision.init(rawValue:))),
+                resolvedAt: body.details?.resolvedAt
+            )
+        case "question_already_resolved":
+            return Self(prompt: .question(body.details?.outcome), resolvedAt: body.details?.resolvedAt)
+        default:
+            return nil
+        }
+    }
+}
+
+/// Contract revision 24: the phone's live projection of a run it did not
+/// start (on the Mac, in Telegram or from the scheduler). It is a pure reducer
+/// over `AidenRemoteRunEvent`, so attaching mid-run, gap snapshots, and
+/// first-responder-wins resolutions are testable without a network.
+struct AidenForeignRunProjection: Equatable, Sendable {
+    enum Effect: Equatable, Sendable {
+        case textAppended(String)
+        case reasoning
+        case toolStarted(String)
+        case toolFinished
+        case approvalRequired(String)
+        case questionRequired(String)
+        case answeredElsewhere(AidenForeignRunResolution)
+        /// The transcript must be re-read from the chat (gap or reset).
+        case reconcile
+        case ended(AidenRemoteRunEndState)
+    }
+
+    let runId: String
+    private(set) var lastSequence = 0
+    private(set) var liveText = ""
+    private(set) var reasoning = ""
+    private(set) var tools: [AidenLiveTool] = []
+    private(set) var state: AidenStreamState = .running
+    private(set) var approvals: [AidenRemoteRunApproval] = []
+    private(set) var questions: [AidenRemoteRunQuestion] = []
+    private(set) var endState: AidenRemoteRunEndState?
+    private var locallyAnswered: Set<String> = []
+
+    init(runId: String) {
+        self.runId = runId
+    }
+
+    var isEnded: Bool { endState != nil }
+    var pendingApproval: AidenRemoteRunApproval? { approvals.first }
+    var pendingQuestion: AidenRemoteRunQuestion? { questions.first }
+
+    /// This phone answered `promptId`; its later resolution is not "elsewhere".
+    mutating func markAnsweredLocally(_ promptId: String) {
+        locallyAnswered.insert(promptId)
+        approvals.removeAll { $0.approvalId == promptId }
+        questions.removeAll { $0.promptId == promptId }
+        refreshWaitingState()
+    }
+
+    /// This phone's answer to `promptId` was not confirmed. Nothing is resent,
+    /// but a later authoritative snapshot that still lists the prompt restores it.
+    mutating func answerUnconfirmed(_ promptId: String) {
+        locallyAnswered.remove(promptId)
+    }
+
+    /// Drops a prompt another surface resolved first (a 409 loser).
+    mutating func dropPrompt(_ promptId: String) {
+        approvals.removeAll { $0.approvalId == promptId }
+        questions.removeAll { $0.promptId == promptId }
+        refreshWaitingState()
+    }
+
+    mutating func apply(_ event: AidenRemoteRunEvent) -> [Effect] {
+        guard event.runId == runId, !isEnded else { return [] }
+        if case .snapshot = event.kind {
+            // A gap snapshot rewinds the cursor to nextSequence - 1.
+        } else if case .ended = event.kind {
+            guard event.sequence >= lastSequence else { return [] }
+        } else {
+            guard event.sequence > lastSequence else { return [] }
+        }
+        lastSequence = event.sequence
+        switch event.kind {
+        case .started:
+            state = .running
+            return []
+        case let .content(content):
+            return applyContent(content)
+        case let .approvalRequired(approval):
+            guard !approvals.contains(where: { $0.approvalId == approval.approvalId }) else { return [] }
+            approvals.append(approval)
+            state = .waitingForApproval
+            return [.approvalRequired(approval.approvalId)]
+        case let .approvalResolved(approvalId, decision):
+            let wasPending = approvals.contains { $0.approvalId == approvalId }
+            approvals.removeAll { $0.approvalId == approvalId }
+            refreshWaitingState()
+            guard wasPending, !locallyAnswered.contains(approvalId) else { return [] }
+            return [.answeredElsewhere(.init(prompt: .approval(decision), resolvedAt: event.timestamp))]
+        case let .questionRequired(question):
+            guard !questions.contains(where: { $0.promptId == question.promptId }) else { return [] }
+            questions.append(question)
+            state = .waitingForApproval
+            return [.questionRequired(question.promptId)]
+        case let .questionResolved(promptId, outcome):
+            let wasPending = questions.contains { $0.promptId == promptId }
+            questions.removeAll { $0.promptId == promptId }
+            refreshWaitingState()
+            guard wasPending, !locallyAnswered.contains(promptId) else { return [] }
+            return [.answeredElsewhere(.init(prompt: .question(outcome), resolvedAt: event.timestamp))]
+        case let .snapshot(snapshot):
+            liveText = ""
+            reasoning = ""
+            tools = []
+            approvals = snapshot.approvals.filter { !locallyAnswered.contains($0.approvalId) }
+            questions = snapshot.questions.filter { !locallyAnswered.contains($0.promptId) }
+            state = .reconciling
+            refreshWaitingState()
+            return [.reconcile]
+        case let .ended(_, endState):
+            self.endState = endState
+            approvals = []
+            questions = []
+            state = switch endState {
+            case .done: .done
+            case .failed: .error
+            case .cancelled: .cancelled
+            }
+            return [.ended(endState)]
+        }
+    }
+
+    private mutating func applyContent(_ event: AidenRemoteStreamEvent) -> [Effect] {
+        guard event.shouldApply, let payload = event.payload else { return [] }
+        switch event.type {
+        case .status:
+            if let raw = payload.state, let next = AidenStreamState(rawValue: raw), !next.isTerminal {
+                state = next == .waitingForApproval || approvals.isEmpty && questions.isEmpty
+                    ? next : .waitingForApproval
+            }
+            return []
+        case .textDelta:
+            let text = payload.text ?? ""
+            liveText += text
+            if approvals.isEmpty, questions.isEmpty { state = .running }
+            return [.textAppended(text)]
+        case .reasoningDelta:
+            reasoning += payload.text ?? ""
+            return [.reasoning]
+        case .toolStarted:
+            guard let id = payload.toolId, let name = payload.name else { return [] }
+            tools.append(AidenLiveTool(id: id, name: name, status: nil))
+            return [.toolStarted(name)]
+        case .toolFinished:
+            if let id = payload.toolId, let index = tools.firstIndex(where: { $0.id == id }) {
+                tools[index].status = payload.status
+            }
+            return [.toolFinished]
+        case .done, .error, .cancelled:
+            // `run.ended` follows with the same sequence and closes the run;
+            // the content terminal only settles the visible state early.
+            approvals = []
+            questions = []
+            state = event.type == .done ? .done : event.type == .cancelled ? .cancelled : .error
+            return []
+        default:
+            return []
+        }
+    }
+
+    private mutating func refreshWaitingState() {
+        if !approvals.isEmpty || !questions.isEmpty {
+            state = .waitingForApproval
+        } else if state == .waitingForApproval {
+            state = .running
+        }
+    }
+}
+
 /// Client-side transcript windowing over `chat-messages-window-v1`. The chat
 /// screen holds the newest page plus any earlier pages the reader asked for;
 /// these rules decide how a fetched page combines with what is on screen.

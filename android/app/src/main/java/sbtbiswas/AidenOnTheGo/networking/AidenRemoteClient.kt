@@ -15,6 +15,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -487,7 +492,7 @@ class AidenRemoteClient(
     suspend fun updateDeviceCapabilities(
         accepts: List<AidenRemoteCapability>
     ): List<AidenRemoteCapability> {
-        val allowed = AidenRemoteCapability.PROGRESS.toSet()
+        val allowed = AidenRemoteCapability.NEGOTIABLE.toSet()
         if (accepts.isEmpty() || accepts.toSet().size != accepts.size || accepts.any { it !in allowed }) {
             throw AidenRemoteClientException.InvalidResponse("Invalid progress capability request.")
         }
@@ -499,10 +504,10 @@ class AidenRemoteClient(
             maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
         ) { bytes ->
             val response = strictJsonParser.decodeFromString<DeviceCapabilitiesUpdateResponse>(String(bytes, Charsets.UTF_8))
-            if (response.capabilities.size > AidenRemoteCapability.V1_KNOWN.size ||
+            if (response.capabilities.size > AidenRemoteCapability.PHONE_KNOWN.size ||
                 response.capabilities.toSet().size != response.capabilities.size ||
                 response.capabilities.any { capability ->
-                    AidenRemoteCapability.V1_KNOWN.none { it == capability }
+                    AidenRemoteCapability.PHONE_KNOWN.none { it == capability }
                 } ||
                 (response.capabilities.contains(AidenRemoteCapability.BOT_WRITE) &&
                     !response.capabilities.contains(AidenRemoteCapability.BOT_READ)) ||
@@ -1131,12 +1136,134 @@ class AidenRemoteClient(
         expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS
     )
 
+    // --- Contract revision 24: runs started on the Mac, in Telegram or by the scheduler ---
+
+    /** The chat's newest run, possibly already ended. The first frame fixes
+     * the run identity; a frame naming any other run ends the feed. */
+    fun currentRunEvents(chatId: String): Flow<AidenRemoteRunEvent> = rawSseEvents(
+        path = "/chats/$chatId/runs/current/events",
+        after = 0
+    ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = null) }
+
+    /** One run's feed, resumed after [after] with `?after` and `Last-Event-ID`. */
+    fun runEvents(runId: String, after: Int = 0): Flow<AidenRemoteRunEvent> = rawSseEvents(
+        path = "/runs/$runId/events",
+        after = after
+    ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = runId) }
+
+    /** Stop a run this phone did not start. Control writes never auto-retry. */
+    suspend fun cancelRun(
+        runId: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenRemoteRunCancelResult = executeRequest(
+        "/runs/$runId/cancel",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = "{}",
+        idempotencyKey = idempotencyKey,
+        acceptedStatus = setOf(202)
+    ) { bytes ->
+        val obj = runResponseObject(bytes)
+        val result = AidenRemoteRunCancelResult(
+            runId = obj.requiredString("runId"),
+            chatId = obj.requiredString("chatId"),
+            state = obj.requiredString("state"),
+            cancelRequested = (obj["cancelRequested"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+                ?: throw AidenRemoteClientException.InvalidResponse()
+        )
+        if (result.runId != runId) throw AidenRemoteClientException.InvalidResponse()
+        result
+    }
+
+    /** First responder wins: a loser receives `409 approval_resolved` naming
+     * the winning decision. A deny never carries a remembered scope. */
+    suspend fun respondToRunApproval(
+        runId: String,
+        approvalId: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope? = null,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenRemoteRunApprovalResult {
+        val decisionWire = if (decision == AidenApprovalDecision.ALLOW) "allow" else "deny"
+        val body = buildJsonObject {
+            put("decision", decisionWire)
+            if (decision == AidenApprovalDecision.ALLOW && scope != null) put("scope", scope.wireName)
+        }
+        return executeRequest(
+            "/runs/$runId/approvals/$approvalId/respond",
+            method = "POST",
+            retryConnectionFailure = false,
+            bodyJson = body.toString(),
+            idempotencyKey = idempotencyKey
+        ) { bytes ->
+            val obj = runResponseObject(bytes)
+            if (obj.requiredString("runId") != runId || obj.requiredString("approvalId") != approvalId) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            val echoed = when (obj.requiredString("decision")) {
+                "allow" -> AidenApprovalDecision.ALLOW
+                "deny" -> AidenApprovalDecision.DENY
+                else -> throw AidenRemoteClientException.InvalidResponse()
+            }
+            val echoedScope = (obj["scope"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { raw ->
+                AidenApprovalScope.entries.firstOrNull { it.wireName == raw }
+                    ?: throw AidenRemoteClientException.InvalidResponse()
+            }
+            AidenRemoteRunApprovalResult(runId, approvalId, echoed, echoedScope, obj.requiredInstant("resolvedAt"))
+        }
+    }
+
+    /** First responder wins: a loser receives `409 question_already_resolved`. */
+    suspend fun respondToRunQuestion(
+        runId: String,
+        promptId: String,
+        response: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ): AidenRemoteRunQuestionResult = executeRequest(
+        "/runs/$runId/questions/$promptId/respond",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = response.toJson().toString(),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        val obj = runResponseObject(bytes)
+        if (obj.requiredString("runId") != runId || obj.requiredString("promptId") != promptId) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        AidenRemoteRunQuestionResult(runId, promptId, obj.requiredString("outcome"), obj.requiredInstant("resolvedAt"))
+    }
+
+    private fun runResponseObject(bytes: ByteArray): JsonObject =
+        runCatching { json.parseToJsonElement(String(bytes, Charsets.UTF_8)) }.getOrNull() as? JsonObject
+            ?: throw AidenRemoteClientException.InvalidResponse()
+
+    private fun JsonObject.requiredString(key: String): String =
+        (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
+            ?: throw AidenRemoteClientException.InvalidResponse()
+
+    private fun JsonObject.requiredInstant(key: String): Instant =
+        runCatching { Instant.parse(requiredString(key)) }.getOrNull()
+            ?: throw AidenRemoteClientException.InvalidResponse()
+
     private fun sseEvents(
         path: String,
         expectedStreamId: String,
         after: Int,
         expectedChannel: AidenSSEParser.ExpectedChannel
-    ): Flow<AidenRemoteStreamEvent> = callbackFlow {
+    ): Flow<AidenRemoteStreamEvent> = rawSseEvents(path, after) { stream ->
+        AidenSSEParser.parseStream(
+            stream,
+            expectedStreamId = expectedStreamId,
+            startSequence = after,
+            expectedChannel = expectedChannel
+        )
+    }
+
+    private fun <T> rawSseEvents(
+        path: String,
+        after: Int,
+        parse: (java.io.InputStream) -> Flow<T>
+    ): Flow<T> = callbackFlow {
         if (credential.isNullOrEmpty()) {
             AidenDiagnostics.record(AidenDiagnosticArea.AUTHENTICATION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
             close(AidenRemoteClientException.MissingCredential)
@@ -1167,13 +1294,7 @@ class AidenRemoteClient(
                     }
                     val stream = response.body?.byteStream()
                         ?: throw AidenRemoteClientException.InvalidResponse()
-                    AidenSSEParser.parseStream(
-                        stream,
-                        expectedStreamId = expectedStreamId,
-                        startSequence = after,
-                        expectedChannel = expectedChannel
-                    )
-                        .collect { event -> send(event) }
+                    parse(stream).collect { event -> send(event) }
                 }
                 close()
             } catch (error: Exception) {

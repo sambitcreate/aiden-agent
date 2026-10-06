@@ -5,6 +5,18 @@
 
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import sbtbiswas.AidenOnTheGo.models.AidenAgentNavigation
+import sbtbiswas.AidenOnTheGo.models.AidenAgentNavigationScope
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -41,6 +53,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -348,20 +361,71 @@ private fun AidenTaskRow(task: AidenChatTask) {
 
 @Composable
 fun AidenAgentRosterSheet(
-    currentRoster: AidenChatAgentRoster,
-    selectedRoster: AidenChatAgentRoster,
+    currentRoster: AidenChatAgentRoster?,
+    selectedRoster: AidenChatAgentRoster?,
     history: List<AidenChatAgentRoster>,
     onSelectTurn: (String?) -> Unit,
-    onAgentClick: (AidenChatAgent) -> Unit,
-    onDismiss: () -> Unit
+    onAgentClick: (AidenChatAgent) -> Unit = {},
+    onDismiss: () -> Unit,
+    instanceId: String? = "",
+    deviceId: String? = "",
+    requested: Boolean = true,
+    // Null means negotiation is still loading, not an authoritative denial.
+    canRead: Boolean? = true,
+    chatId: String = selectedRoster?.chatId.orEmpty(),
+    stopControl: (AidenChatAgent) -> AidenAgentStopControl = { AidenAgentStopControl.HIDDEN },
+    onStop: (AidenChatAgent) -> Unit = {}
 ) {
+    // This owner is always composed by the chat screen, even while the sheet
+    // is hidden for negotiation or roster loading. Save intent independently
+    // of the conditional ModalBottomSheet so process restoration can wait.
+    var savedNavigation by rememberSaveable { mutableStateOf<String?>(null) }
+    val navigation = remember(savedNavigation) {
+        savedNavigation?.let { runCatching { Json.decodeFromString<AidenAgentNavigation>(it) }.getOrNull() }
+    }
+    val identityChanged = navigation != null && (
+        navigation.scope.instanceId != instanceId || navigation.scope.deviceId != deviceId ||
+            navigation.scope.chatId != chatId
+    )
+    val invalidated = instanceId == null || deviceId == null || identityChanged || canRead == false
+    LaunchedEffect(requested, invalidated) {
+        if (!requested || invalidated) savedNavigation = null
+        if (requested && invalidated) onDismiss()
+    }
+    if (!requested || invalidated || canRead != true || selectedRoster == null || currentRoster == null) return
+
+    val navigationScope = AidenAgentNavigationScope(requireNotNull(instanceId), requireNotNull(deviceId), chatId, selectedRoster.epoch, selectedRoster.turnId)
+    val current = (navigation ?: AidenAgentNavigation(navigationScope)).reconcile(navigationScope, selectedRoster.agents)
+    val save: (AidenAgentNavigation) -> Unit = { savedNavigation = Json.encodeToString(it) }
+    LaunchedEffect(current) { save(current) }
+    val agent = selectedRoster.agents.firstOrNull { it.agentId == current.path.lastOrNull() }
+    val openAgent: (AidenChatAgent) -> Unit = {
+        save(current.open(it.agentId, selectedRoster.agents))
+        onAgentClick(it)
+    }
+    val back = { save(current.back() ?: current) }
+    val dismiss = { savedNavigation = null; onDismiss() }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = dismiss,
         sheetState = sheetState,
         containerColor = AidenTheme.palette.raised
     ) {
-        AidenAgentRosterContent(currentRoster, selectedRoster, history, onSelectTurn, onAgentClick)
+        // The sheet is a ComponentDialog with its own back dispatcher. Bind
+        // inside that window so system Back pops details, while scrim/drag dismiss.
+        CompositionLocalProvider(LocalOnBackPressedDispatcherOwner provides requireNotNull(LocalView.current.findViewTreeOnBackPressedDispatcherOwner())) {
+            BackHandler(enabled = agent != null) { back() }
+            if (agent == null) {
+                AidenAgentRosterContent(currentRoster, selectedRoster, history, { turnId ->
+                    savedNavigation = null
+                    onSelectTurn(turnId)
+                }, openAgent)
+            } else {
+                key(agent.agentId) {
+                    AidenAgentDetailContent(agent, selectedRoster.agents, openAgent, back, stopControl(agent)) { onStop(agent) }
+                }
+            }
+        }
     }
 }
 
@@ -547,54 +611,60 @@ private fun AidenAgentRow(agent: AidenChatAgent, onClick: (AidenChatAgent) -> Un
 enum class AidenAgentStopControl { HIDDEN, AVAILABLE, STOPPING }
 
 @Composable
-fun AidenAgentDetailSheet(
+private fun AidenAgentDetailContent(
     agent: AidenChatAgent,
-    onDismiss: () -> Unit,
-    stopControl: AidenAgentStopControl = AidenAgentStopControl.HIDDEN,
-    onStop: () -> Unit = {}
+    agents: List<AidenChatAgent>,
+    openAgent: (AidenChatAgent) -> Unit,
+    onBack: () -> Unit,
+    stopControl: AidenAgentStopControl,
+    onStop: () -> Unit
 ) {
-    var confirmsStop by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = AidenTheme.palette.raised
-    ) {
-        val palette = AidenTheme.palette
-        Column(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
-            Text(agent.label, style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text("${roleLabel(agent.role)} · ${agentStateLabel(agent.state)}", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
-            agent.activity?.let {
-                Spacer(modifier = Modifier.height(14.dp))
-                Text(it, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
+    var confirmsStop by remember(agent.agentId) { mutableStateOf(false) }
+    val palette = AidenTheme.palette
+    Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
+        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onBack) { Text("Back", color = palette.foreground) }
+        agents.firstOrNull { it.agentId == agent.parentAgentId }?.let { parent ->
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { openAgent(parent) }, modifier = Modifier.semantics { contentDescription = "Open parent agent ${parent.label}" }) {
+                Text("Started by ${parent.label}", color = palette.foreground)
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            Text("${agent.turns} turns · ${agent.tools} tools · ${agent.tokens} tokens", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text("Updated ${agent.updatedAt}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-            if (agent.notices?.contains(sbtbiswas.AidenOnTheGo.models.AidenChatAgentNotice.DISPLAY_FILTERED) == true) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text("Some details are hidden for privacy.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-            }
-            if (stopControl != AidenAgentStopControl.HIDDEN) {
-                Spacer(modifier = Modifier.height(20.dp))
-                TextButton(
-                    contentPadding = AidenButtonDefaults.TextContentPadding,
-                    onClick = { confirmsStop = true },
-                    enabled = stopControl == AidenAgentStopControl.AVAILABLE
-                ) {
-                    Text(
-                        if (stopControl == AidenAgentStopControl.STOPPING) "Stopping…" else "Stop agent",
-                        color = if (stopControl == AidenAgentStopControl.AVAILABLE) palette.danger else palette.secondary
-                    )
-                }
+        }
+        Text(agent.label, style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(6.dp))
+        Text("${roleLabel(agent.role)} · ${agentStateLabel(agent.state)}", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+        agent.activity?.let {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(it, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("${agent.turns} turns · ${agent.tools} tools · ${agent.tokens} tokens", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        Spacer(modifier = Modifier.height(6.dp))
+        Text("Updated ${agent.updatedAt}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        if (agent.notices?.contains(sbtbiswas.AidenOnTheGo.models.AidenChatAgentNotice.DISPLAY_FILTERED) == true) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("Some details are hidden for privacy.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        }
+        val children = AidenAgentNavigation.children(agent.agentId, agents)
+        if (children.isNotEmpty()) {
+            Text("Sub-agents", style = MaterialTheme.typography.titleMedium, color = palette.foreground)
+            children.forEach { child -> AidenAgentRow(child, openAgent) }
+        }
+        if (stopControl != AidenAgentStopControl.HIDDEN) {
+            Spacer(modifier = Modifier.height(20.dp))
+            TextButton(
+                contentPadding = AidenButtonDefaults.TextContentPadding,
+                onClick = { confirmsStop = true },
+                enabled = stopControl == AidenAgentStopControl.AVAILABLE
+            ) {
                 Text(
-                    "The Mac stops only this agent. The main run and other agents keep going.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.secondary
+                    if (stopControl == AidenAgentStopControl.STOPPING) "Stopping…" else "Stop agent",
+                    color = if (stopControl == AidenAgentStopControl.AVAILABLE) palette.danger else palette.secondary
                 )
             }
+            Text(
+                "The Mac stops only this agent. The main run and other agents keep going.",
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.secondary
+            )
         }
     }
     if (confirmsStop) {

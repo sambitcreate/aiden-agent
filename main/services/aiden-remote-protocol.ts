@@ -31,7 +31,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 23 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 24 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -114,6 +114,22 @@ export const AIDEN_REMOTE_HOST_CAPABILITIES = [
 
 export type AidenRemoteHostCapability =
   (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number];
+
+/**
+ * Phone-scoped subset of the host run authority (contract revision 24). A
+ * phone (`iphone`/`ipad`) may negotiate these through
+ * `POST /device/capabilities` only while the server advertises
+ * `phone-run-control-v1`. Unlike a desktop, a phone's run grants never widen
+ * chat visibility: every run route still applies the phone's own per-chat
+ * checks (`chat:read`/`chat:write`, `bot:read`/`bot:write` for Bot chats,
+ * `approval:respond`, `questions:respond`), and the phone receives the
+ * observer projection (no approval details, tool arguments or results).
+ * `host:events` stays desktop-only.
+ */
+export const AIDEN_REMOTE_PHONE_RUN_CAPABILITIES = [
+  "runs:observe",
+  "runs:control",
+] as const satisfies readonly AidenRemoteHostCapability[];
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
 export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
@@ -204,6 +220,13 @@ export const AIDEN_REMOTE_HOST_EVENTS_FEATURE = "host-events-v1" as const;
 export const AIDEN_REMOTE_RUN_STREAMS_FEATURE = "run-streams-v1" as const;
 /** Server feature token for the `/runs/{runId}/*` control routes (`runs:control`). */
 export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
+/**
+ * Server feature token for phone observation and control of runs started
+ * elsewhere (desktop, Telegram, scheduler), contract revision 24. Advertised
+ * to phones only, and only while the host run registry is wired; it gates the
+ * phone-scoped `runs:observe`/`runs:control` negotiation.
+ */
+export const AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1" as const;
 /**
  * Server feature token for unauthenticated desktop connection requests
  * (`/pairing/requests*`, contract revision 20). A requester without a
@@ -1075,6 +1098,11 @@ export interface AidenRemoteContractFixture {
   runControlError?: AidenRemoteErrorEnvelope;
   /** Revision 20, `pairing-requests-v1`: desktop connection request shapes and match-code vectors. */
   pairingRequests?: AidenRemotePairingRequestsFixture;
+  /**
+   * Revision 24, `phone-run-control-v1`: a foreign run as a phone holding the
+   * phone-scoped run subset sees it (phone approval projection, no details).
+   */
+  phoneRunEvents?: AidenRemoteHostFeedFixtureEvent[];
   /** Revision 21, `chat-fork-v1` and `chat-fork-summary-v1`: fork requests, responses and a summary cancel. */
   chatFork?: AidenRemoteChatForkFixture;
 }
@@ -5380,6 +5408,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     if (contractRevision < 20) throw new Error("Pairing request fixtures require contract revision 20.");
     parsePairingRequestsFixture(value.pairingRequests);
   }
+  if (value.phoneRunEvents !== undefined) {
+    if (contractRevision < 24) throw new Error("Phone run fixtures require contract revision 24.");
+    parseRunEventSequence(value.phoneRunEvents, "Fixture phone run events", "phone");
+  }
   if (value.chatFork !== undefined) {
     if (contractRevision < 21) throw new Error("Chat fork fixtures require contract revision 21.");
     parseChatForkFixture(value.chatFork);
@@ -5771,6 +5803,75 @@ function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequests
   return { ...(section as unknown as AidenRemotePairingRequestsFixture), error };
 }
 
+/**
+ * One complete run stream: contiguous sequences, with `run.ended` repeating
+ * the last event's sequence. The `phone` projection (contract revision 24) is
+ * what a phone holding the phone-scoped run subset receives: approvals carry a
+ * summary, `canAllow` and offered scopes but never tool details.
+ */
+function parseRunEventSequence(value: unknown, label: string, projection: "host" | "phone"): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty array.`);
+  }
+  let runStream: string | undefined;
+  let runSequence = 0;
+  let runEnded = false;
+  value.forEach((entry, index) => {
+    const event = parseHostEnvelope(entry, `Run event ${index}`, AIDEN_REMOTE_RUN_EVENT_TYPES);
+    if (runEnded) throw new Error("A run stream carries nothing after run.ended.");
+    runStream ??= event.streamId;
+    if (event.streamId !== runStream) throw new Error("A run stream fixture names one run.");
+    // run.ended repeats the last event's sequence so a resumed cursor stays valid.
+    const expected = event.type === "run.ended" ? runSequence : runSequence + 1;
+    if (event.sequence !== expected) throw new Error(`Run event ${index} must use sequence ${expected}.`);
+    runSequence = event.sequence;
+    if (event.type === "run.started") {
+      assertExactKeys(event.payload, ["runId", "chatId", "origin"], "Run started");
+      if (event.payload.runId !== runStream) throw new Error("run.started names another run.");
+    } else if (event.type === "run.ended") {
+      assertExactKeys(event.payload, ["runId", "chatId", "state"], "Run ended");
+      if (!event.terminal || event.payload.runId !== runStream) throw new Error("run.ended must be terminal for its run.");
+      if (!["done", "failed", "cancelled"].includes(event.payload.state as string)) {
+        throw new Error("run.ended must carry a terminal run state.");
+      }
+      runEnded = true;
+    } else if (event.type === "approval_resolved") {
+      assertExactKeys(event.payload, ["approvalId", "decision"], "Approval resolved");
+      boundedText(event.payload.approvalId, "Approval resolved approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    } else if (event.type === "question_resolved") {
+      assertExactKeys(event.payload, ["promptId", "outcome"], "Question resolved");
+      boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    } else if (projection === "phone" && event.type === "approval_required") {
+      const payload = event.payload;
+      assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes"], "Phone run approval");
+      assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      assertBoundedString(payload, "summary", 2_000);
+      assertBoundedString(payload, "toolCallId", 128, true);
+      assertBoundedString(payload, "toolName", 120);
+      if (typeof payload.canAllow !== "boolean") throw new Error("Phone run approval canAllow must be boolean.");
+      if (payload.scopes !== undefined) {
+        if (!payload.canAllow) throw new Error("A deny-only phone run approval offers no scopes.");
+        if (
+          !Array.isArray(payload.scopes) ||
+          payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
+        ) {
+          throw new Error("Phone run approval scopes are invalid.");
+        }
+      }
+    } else if (projection === "phone" && event.type === "question_required") {
+      const payload = event.payload;
+      assertExactKeys(payload, ["promptId", "questions", "toolCallId", "expiresAt"], "Phone run question");
+      assertBoundedString(payload, "promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      assertBoundedString(payload, "toolCallId", 128);
+      if (!parseAskUserQuestions(payload.questions)) throw new Error("Phone run question questions are invalid.");
+      if (payload.expiresAt !== undefined) parseStrictRfc3339(requiredString(payload, "expiresAt"), "Question expiry");
+    } else if (event.type !== "snapshot") {
+      // Content events reuse the `/streams` envelope and validation unchanged.
+      parseAidenRemoteStreamEvent(entry);
+    }
+  });
+  if (!runEnded) throw new Error("A run stream fixture ends with run.ended.");
+}
 const AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS = [
   "workspaceId", "botId", "title", "providerId", "modelId", "createdAt", "updatedAt", "titlePending",
 ] as const;
@@ -5836,43 +5937,7 @@ function parseRevision19Fixture(
     }
   });
 
-  if (!Array.isArray(value.runEvents) || value.runEvents.length === 0) {
-    throw new Error("Fixture run events must be a non-empty array.");
-  }
-  let runStream: string | undefined;
-  let runSequence = 0;
-  let runEnded = false;
-  value.runEvents.forEach((entry, index) => {
-    const event = parseHostEnvelope(entry, `Run event ${index}`, AIDEN_REMOTE_RUN_EVENT_TYPES);
-    if (runEnded) throw new Error("A run stream carries nothing after run.ended.");
-    runStream ??= event.streamId;
-    if (event.streamId !== runStream) throw new Error("A run stream fixture names one run.");
-    // run.ended repeats the last event's sequence so a resumed cursor stays valid.
-    const expected = event.type === "run.ended" ? runSequence : runSequence + 1;
-    if (event.sequence !== expected) throw new Error(`Run event ${index} must use sequence ${expected}.`);
-    runSequence = event.sequence;
-    if (event.type === "run.started") {
-      assertExactKeys(event.payload, ["runId", "chatId", "origin"], "Run started");
-      if (event.payload.runId !== runStream) throw new Error("run.started names another run.");
-    } else if (event.type === "run.ended") {
-      assertExactKeys(event.payload, ["runId", "chatId", "state"], "Run ended");
-      if (!event.terminal || event.payload.runId !== runStream) throw new Error("run.ended must be terminal for its run.");
-      if (!["done", "failed", "cancelled"].includes(event.payload.state as string)) {
-        throw new Error("run.ended must carry a terminal run state.");
-      }
-      runEnded = true;
-    } else if (event.type === "approval_resolved") {
-      assertExactKeys(event.payload, ["approvalId", "decision"], "Approval resolved");
-      boundedText(event.payload.approvalId, "Approval resolved approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
-    } else if (event.type === "question_resolved") {
-      assertExactKeys(event.payload, ["promptId", "outcome"], "Question resolved");
-      boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
-    } else if (event.type !== "snapshot") {
-      // Content events reuse the `/streams` envelope and validation unchanged.
-      parseAidenRemoteStreamEvent(entry);
-    }
-  });
-  if (!runEnded) throw new Error("A run stream fixture ends with run.ended.");
+  parseRunEventSequence(value.runEvents, "Fixture run events", "host");
 
   const window = value.messagesWindow;
   if (!isRecord(window)) throw new Error("Fixture messages window is invalid.");

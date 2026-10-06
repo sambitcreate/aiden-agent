@@ -524,12 +524,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci-timings.mjs
 
+  # Always expand the matrix so required contexts exist for scoped PRs too.
+  # Both contexts fail closed if detection or any selected Linux build fails.
+  linux-required:
+    name: Linux ${{ matrix.arch }}
+    if: ${{ always() }}
+    needs: [changes, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require selected Linux builds
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          LINUX_SELECTED: ${{ needs.changes.outputs.linux }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: |
+          case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT" in
+            success:true:success|success:false:skipped) exit 0 ;;
+            *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT"; exit 1 ;;
+          esac
+
   # Linux packaging and its E2E gate run for Linux-relevant changes and on
   # every main push. The matrix job always starts and skips its steps
   # otherwise, because a skipped matrix job reports under the unexpanded
   # name and never satisfies the required "Linux x64"/"Linux arm64" checks.
   linux:
-    name: Linux ${{ matrix.arch }}
+    name: Linux build ${{ matrix.arch }}
     needs: changes
     strategy:
       fail-fast: false

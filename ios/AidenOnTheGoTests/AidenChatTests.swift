@@ -8,6 +8,119 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    private var agentNavigationScope: AidenAgentNavigationScope {
+        .init(instanceId: "mac-a", deviceId: "device-a", chatId: "chat-a", epoch: "epoch-a", turnId: "turn-a")
+    }
+
+    private func navigationAgent(_ id: String, parent: String? = nil) throws -> AidenRemoteChatAgent {
+        var value: [String: Any] = [
+            "agentId": id, "depth": parent == nil ? 1 : 2, "revision": 1,
+            "role": "scout", "label": id, "taskPreview": "Inspect workspace",
+            "state": "running", "startedAt": "2026-10-05T12:00:00Z",
+            "updatedAt": "2026-10-05T12:00:00Z", "modelId": "model-a",
+            "turns": 1, "tools": 0, "tokens": 10,
+        ]
+        if let parent { value["parentAgentId"] = parent }
+        return try JSONDecoder().decode(AidenRemoteChatAgent.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+
+    func testAgentInspectionKeepsHistoricalPathButClearsDisplayedTurnChanges() throws {
+        func roster(turn: String, revision: Int) throws -> AidenRemoteChatAgentRoster {
+            let json = """
+            {"version":1,"chatId":"chat-a","turnId":"\(turn)","previousTurns":[],
+             "availability":"ready","epoch":"epoch-a","revision":\(revision),
+             "updatedAt":"2026-10-05T12:00:00Z","agents":[
+             {"agentId":"root","depth":1,"revision":1,"role":"scout","label":"Root",
+              "taskPreview":"Inspect","state":"running","startedAt":"2026-10-05T12:00:00Z",
+              "updatedAt":"2026-10-05T12:00:00Z","modelId":"model-a","turns":1,"tools":0,"tokens":10}]}
+            """
+            return try JSONDecoder().decode(AidenRemoteChatAgentRoster.self, from: Data(json.utf8))
+        }
+        let historical = try roster(turn: "earlier", revision: 1)
+        let refreshedHistory = try roster(turn: "earlier", revision: 2)
+        XCTAssertEqual(AidenAgentNavigation.reconciledPath(["root"], from: historical, to: refreshedHistory), ["root"])
+        // IDs can be reused: changing the displayed turn must still clear inspection.
+        let nextTurn = try roster(turn: "latest", revision: 3)
+        XCTAssertEqual(AidenAgentNavigation.reconciledPath(["root"], from: historical, to: nextTurn), [])
+        XCTAssertEqual(AidenAgentNavigation.reconciledPath(["root"], from: historical, to: nil), [])
+    }
+
+    func testAgentNavigationDirectChildEntryBackAndParentLink() throws {
+        let agents = try [navigationAgent("root"), navigationAgent("child", parent: "root"),
+                          navigationAgent("leaf", parent: "child"), navigationAgent("sibling", parent: "root")]
+        var navigation = AidenAgentNavigation(scope: agentNavigationScope)
+        navigation.open("leaf", in: agents)
+        XCTAssertEqual(navigation.path, ["root", "child", "leaf"])
+        XCTAssertTrue(navigation.back())
+        XCTAssertEqual(navigation.path, ["root", "child"])
+        navigation.open("root", in: agents)
+        XCTAssertEqual(navigation.path, ["root"])
+        XCTAssertTrue(navigation.back())
+        XCTAssertEqual(navigation.path, [])
+        XCTAssertFalse(navigation.back())
+        XCTAssertEqual(AidenAgentNavigation.children(of: "root", in: agents).map(\.agentId), ["child", "sibling"])
+        XCTAssertEqual(AidenAgentNavigation.children(of: "missing", in: agents), [])
+    }
+
+    func testAgentNavigationHandlesMissingParentsCyclesAndExcessiveDepth() throws {
+        let orphan = try navigationAgent("orphan", parent: "missing")
+        XCTAssertEqual(AidenAgentNavigation.ancestorPath(for: "orphan", in: [orphan]), ["orphan"])
+        XCTAssertEqual(AidenAgentNavigation.ancestorPath(for: "missing", in: [orphan]), [])
+        let cycle = try [navigationAgent("a", parent: "b"), navigationAgent("b", parent: "a")]
+        XCTAssertEqual(AidenAgentNavigation.ancestorPath(for: "a", in: cycle), ["a"])
+        let chain = try (0..<20).map { try navigationAgent("node-\($0)", parent: $0 == 0 ? nil : "node-\($0 - 1)") }
+        let path = AidenAgentNavigation.ancestorPath(for: "node-19", in: chain)
+        XCTAssertEqual(path.count, 16)
+        XCTAssertEqual(path.first, "node-4")
+        XCTAssertEqual(path.last, "node-19")
+    }
+
+    func testAgentNavigationPopsToSurvivingAncestorAndIgnoresStaleClick() throws {
+        let root = try navigationAgent("root")
+        let child = try navigationAgent("child", parent: "root")
+        let leaf = try navigationAgent("leaf", parent: "child")
+        var navigation = AidenAgentNavigation(scope: agentNavigationScope)
+        navigation.open("leaf", in: [root, child, leaf])
+        navigation.open("gone", in: [root, child, leaf])
+        XCTAssertEqual(navigation.path, ["root", "child", "leaf"])
+        navigation.reconcile(scope: agentNavigationScope, agents: [root, leaf])
+        XCTAssertEqual(navigation.path, ["root"])
+        navigation.reconcile(scope: agentNavigationScope, agents: [])
+        XCTAssertEqual(navigation.path, [])
+    }
+
+    func testAgentNavigationRestorationIsFencedByEveryScopeComponent() throws {
+        let agents = try [navigationAgent("root"), navigationAgent("child", parent: "root")]
+        var navigation = AidenAgentNavigation(scope: agentNavigationScope)
+        navigation.open("child", in: agents)
+        let data = try JSONEncoder().encode(navigation)
+        var restored = try JSONDecoder().decode(AidenAgentNavigation.self, from: data)
+        restored.reconcile(scope: agentNavigationScope, agents: agents)
+        XCTAssertEqual(restored.path, ["root", "child"])
+        let differentScopes: [AidenAgentNavigationScope] = [
+            .init(instanceId: "mac-b", deviceId: "device-a", chatId: "chat-a", epoch: "epoch-a", turnId: "turn-a"),
+            .init(instanceId: "mac-a", deviceId: "device-b", chatId: "chat-a", epoch: "epoch-a", turnId: "turn-a"),
+            .init(instanceId: "mac-a", deviceId: "device-a", chatId: "chat-b", epoch: "epoch-a", turnId: "turn-a"),
+            .init(instanceId: "mac-a", deviceId: "device-a", chatId: "chat-a", epoch: "epoch-b", turnId: "turn-a"),
+            .init(instanceId: "mac-a", deviceId: "device-a", chatId: "chat-a", epoch: "epoch-a", turnId: "turn-b"),
+            .init(instanceId: "mac-a", deviceId: "device-a", chatId: "chat-a", epoch: "epoch-a", turnId: nil),
+        ]
+        for scope in differentScopes {
+            var candidate = restored
+            candidate.reconcile(scope: scope, agents: agents)
+            XCTAssertEqual(candidate.path, [])
+            XCTAssertEqual(candidate.scope, scope)
+        }
+    }
+
+    func testAgentNavigationReparentingRebuildsAncestryWithoutStaleDetails() throws {
+        var navigation = AidenAgentNavigation(scope: agentNavigationScope)
+        let roots = try [navigationAgent("old-root"), navigationAgent("new-root")]
+        navigation.open("child", in: roots + [try navigationAgent("child", parent: "old-root")])
+        navigation.reconcile(scope: agentNavigationScope, agents: roots + [try navigationAgent("child", parent: "new-root")])
+        XCTAssertEqual(navigation.path, ["new-root", "child"])
+    }
+
     func testWorkspaceCodemodeActivityKeepsParentAndNestedToolIdentitiesDistinct() throws {
         let data = Data(#"{"version":3,"generationId":"generation-codemode","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"codemode","label":"Codemode","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":0}]}"#.utf8)
         let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: data)
@@ -832,6 +945,7 @@ final class AidenChatTests: XCTestCase {
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         initialChat: AidenChat? = nil,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
+        extraCapabilities: [AidenRemoteCapability] = [],
         networkPath: AidenNetworkPathSource? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
@@ -847,7 +961,8 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle",
             deviceId: "device-progress-lifecycle",
             credential: "credential-progress-lifecycle",
-            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond],
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond]
+                + extraCapabilities,
             endpoint: endpoint,
             serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         )
@@ -1255,6 +1370,41 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(model.chat.messages.isEmpty)
         XCTAssertEqual(model.selectedModelId, "gpt-5.6")
         XCTAssertNotNil(model.catalog)
+    }
+
+    @MainActor
+    func testForeignRunResponseStaysVisibleUntilAFailedTranscriptReadRecovers() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-foreign-run-recovery-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenForeignRunRecoveryFixture()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        await model.load(observeProgress: false)
+
+        func waitUntil(_ label: String, _ condition: () -> Bool) async throws {
+            for _ in 0..<500 {
+                if condition() { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Timed out waiting for \(label)")
+        }
+        // The attach replay settles and is shown live before the run ends.
+        try await waitUntil("live foreign output") { model.liveText == "Visible answer" }
+        // The run ends and the transcript read that follows it fails.
+        try await waitUntil("failed transcript read") { fixture.failedReads > 0 && model.presentedError != nil }
+        XCTAssertEqual(model.streamState, .done)
+        XCTAssertEqual(model.liveText, "Visible answer", "The answer stays until the transcript holding it is read.")
+        XCTAssertFalse(model.chat.messages.contains { $0.id == "reply-mac" })
+
+        // Recovery re-reads the chat on its own; the answer moves into the transcript.
+        fixture.allowReads = true
+        try await waitUntil("recovered transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
+        try await waitUntil("cleared live output") { model.liveText.isEmpty }
     }
 
     @MainActor
@@ -9522,6 +9672,63 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":\(sequence),\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// A Mac whose chat has a run started elsewhere: the phone attaches mid-run,
+/// the run ends on the reconnect, and transcript reads then fail until allowed.
+private final class AidenForeignRunRecoveryFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ended = false
+    private var reads = true
+    private var failures = 0
+    var allowReads: Bool {
+        get { lock.withLock { reads } }
+        set { lock.withLock { reads = newValue } }
+    }
+    var failedReads: Int { lock.withLock { failures } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            let path = request.url!.path
+            switch path {
+            case "/api/aiden/v1/server":
+                let grants = #"["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read","approval:respond","runs:observe","runs:control"]"#
+                return (200, "application/json", Data("""
+                {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}
+                """.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle":
+                guard reads else {
+                    failures += 1
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"#.utf8))
+                }
+                // The answer is in the transcript only once the run has ended.
+                let messages = ended
+                    ? #"[{"id":"reply-mac","role":"assistant","text":"Visible answer","createdAt":"2026-10-05T10:00:03Z"}]"#
+                    : "[]"
+                return (200, "application/json", Data("""
+                {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":\(messages),"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-\(ended ? 2 : 1)"}
+                """.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
+                return (200, "text/event-stream", Data((
+                    event(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                        + event(2, "text_delta", #"{"text":"Visible answer"}"#)
+                ).utf8))
+            case "/api/aiden/v1/runs/run-mac/events":
+                ended = true
+                reads = false
+                return (200, "text/event-stream", Data((
+                    event(3, "done", #"{"messageId":"reply-mac"}"#, terminal: true)
+                        + event(3, "run.ended", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true)
+                ).utf8))
+            default:
+                return nil
+            }
+        }
+    }
+
+    private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
     }
 }
 
