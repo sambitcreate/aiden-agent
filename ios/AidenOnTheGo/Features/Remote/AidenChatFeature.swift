@@ -1155,6 +1155,8 @@ final class AidenChatViewModel {
     @ObservationIgnored private var foreignRunTask: Task<Void, Never>?
     @ObservationIgnored private var foreignRunSettleTask: Task<Void, Never>?
     @ObservationIgnored private var foreignRunGeneration: UInt64 = 0
+    /// Bounded transcript recovery after a foreign run ended but its re-read failed.
+    @ObservationIgnored private var foreignRunReconcileTask: Task<Void, Never>?
     private var isRestoringStream = false
     @ObservationIgnored private var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
@@ -1351,6 +1353,7 @@ final class AidenChatViewModel {
         uploadTask?.cancel()
         foreignRunTask?.cancel()
         foreignRunSettleTask?.cancel()
+        foreignRunReconcileTask?.cancel()
     }
 
     private func handleRemoval() {
@@ -7678,6 +7681,7 @@ extension AidenChatViewModel {
     /// a finished run as if it were live.
     static let foreignRunSettleInterval: Duration = .milliseconds(400)
     static let foreignRunMaxReconnects = 3
+    static let foreignRunMaxReconcileAttempts = 6
 
     var isObservingForeignRun: Bool { foreignRun != nil && foreignRunIsLive }
 
@@ -7697,13 +7701,21 @@ extension AidenChatViewModel {
         }
     }
 
-    func stopForeignRunObservation() {
+    /// `preservingRecovery` keeps a finished run's response, still awaiting its
+    /// transcript, on screen while a later attach finds nothing live.
+    func stopForeignRunObservation(preservingRecovery: Bool = false) {
         foreignRunGeneration &+= 1
         foreignRunTask?.cancel()
         foreignRunTask = nil
         foreignRunSettleTask?.cancel()
         foreignRunSettleTask = nil
-        let wasLive = foreignRunIsLive
+        // An ended run still awaiting its transcript is presented too.
+        var wasLive = foreignRunIsLive
+        if !preservingRecovery, let recovery = foreignRunReconcileTask {
+            recovery.cancel()
+            foreignRunReconcileTask = nil
+            wasLive = true
+        }
         foreignRun = nil
         foreignRunIsLive = false
         if wasLive, activeStreamID == nil {
@@ -7766,7 +7778,7 @@ extension AidenChatViewModel {
             await liveActivities.markStale(instanceID: instanceId, streamID: runId)
             await endForeignRunQuietly(context: context, reconcile: true)
         } else {
-            stopForeignRunObservation()
+            stopForeignRunObservation(preservingRecovery: true)
         }
     }
 
@@ -7786,7 +7798,7 @@ extension AidenChatViewModel {
         guard foreignRunIsLive else {
             if projection.isEnded {
                 // A finished run replayed on attach: nothing to show live.
-                stopForeignRunObservation()
+                stopForeignRunObservation(preservingRecovery: true)
                 return true
             }
             return false
@@ -7814,6 +7826,9 @@ extension AidenChatViewModel {
         _ projection: AidenForeignRunProjection,
         context: AidenRemoteRequestContext
     ) async {
+        // A newly live run owns the live output from here on.
+        foreignRunReconcileTask?.cancel()
+        foreignRunReconcileTask = nil
         foreignRunIsLive = true
         publishForeignRun(context: context)
         await liveActivities.start(
@@ -7957,8 +7972,9 @@ extension AidenChatViewModel {
 
     private func endForeignRunQuietly(context: AidenRemoteRequestContext, reconcile: Bool) async {
         let generation = foreignRunGeneration
+        var reconciled = true
         if reconcile, foreignRunIsLive {
-            await reconcileChat(context: context)
+            reconciled = await reconcileChat(context: context)
         }
         guard generation == foreignRunGeneration else { return }
         foreignRunGeneration &+= 1
@@ -7970,12 +7986,52 @@ extension AidenChatViewModel {
         foreignRun = nil
         foreignRunIsLive = false
         guard wasLive, activeStreamID == nil else { return }
-        liveText = ""
-        reasoning = ""
-        tools = []
         pendingApproval = nil
         pendingQuestion = nil
         if finalState == nil, streamState?.isTerminal != true { streamState = nil }
+        if reconciled {
+            clearForeignLiveOutput()
+        } else {
+            // Keep the response the user was watching until the transcript that
+            // holds it is accepted. Only the chat is re-read; nothing is resent.
+            scheduleForeignRunReconciliation(context: context)
+        }
+    }
+
+    private func clearForeignLiveOutput() {
+        liveText = ""
+        reasoning = ""
+        tools = []
+    }
+
+    private func scheduleForeignRunReconciliation(context: AidenRemoteRequestContext) {
+        guard foreignRunReconcileTask == nil else { return }
+        foreignRunReconcileTask = Task { [weak self] in
+            for attempt in 0..<Self.foreignRunMaxReconcileAttempts {
+                let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: attempt)
+                do {
+                    try await Task.sleep(for: .milliseconds(delay))
+                } catch {
+                    return
+                }
+                guard let self, !self.isForeignRunRecoveryFenced(context: context) else { return }
+                self.transcriptGeneration &+= 1
+                if await self.reconcileChat(context: context) {
+                    guard !self.isForeignRunRecoveryFenced(context: context) else { return }
+                    self.foreignRunReconcileTask = nil
+                    self.clearForeignLiveOutput()
+                    return
+                }
+            }
+            self?.foreignRunReconcileTask = nil
+        }
+    }
+
+    /// A send, this phone's own stream, a newly live foreign run or a removed
+    /// pairing owns the live state from then on.
+    private func isForeignRunRecoveryFenced(context: AidenRemoteRequestContext) -> Bool {
+        Task.isCancelled || isRemoved || !coordinator.isCurrent(context) || activeStreamID != nil
+            || isStarting || foreignRunIsLive
     }
 
     func stopForeignRun() async -> Bool {
@@ -8049,6 +8105,7 @@ extension AidenChatViewModel {
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
+            foreignRun?.answerUnconfirmed(approval.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)
                 return
@@ -8084,6 +8141,7 @@ extension AidenChatViewModel {
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
+            foreignRun?.answerUnconfirmed(question.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)
                 return

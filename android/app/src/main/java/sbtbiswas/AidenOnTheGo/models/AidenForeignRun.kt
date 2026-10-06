@@ -104,6 +104,12 @@ class AidenForeignRunProjection(val runId: String) {
         dropPrompt(promptId)
     }
 
+    /** This phone's answer to [promptId] was not confirmed. Nothing is resent,
+     * but a later authoritative snapshot that still lists the prompt restores it. */
+    fun answerUnconfirmed(promptId: String) {
+        locallyAnswered.remove(promptId)
+    }
+
     /** Drops a prompt another surface resolved first (a 409 loser). */
     fun dropPrompt(promptId: String) {
         _approvals.removeAll { it.approvalId == promptId }

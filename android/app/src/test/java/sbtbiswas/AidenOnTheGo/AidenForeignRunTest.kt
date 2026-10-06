@@ -142,6 +142,35 @@ class AidenForeignRunTest {
     }
 
     @Test
+    fun snapshotStillListingAnUnconfirmedLocalAnswerRestoresThePrompt() {
+        fun snapshot(sequence: Int): AidenRemoteRunEvent = AidenRunEventCodec.decode(
+            """{"protocolVersion":1,"streamId":"run-1","sequence":$sequence,"timestamp":"2026-10-05T10:00:00Z","type":"snapshot","terminal":false,"payload":{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"waiting_for_approval","pendingApprovalIds":["approval-1"],"pendingQuestionIds":["q-1"],"approvals":[{"approvalId":"approval-1","summary":"Run the tests?","toolName":"run_command","canAllow":true,"scopes":["once"]}],"questions":[{"promptId":"q-1","questions":[{"question":"Which branch?","header":"Branch","multiSelect":false,"options":[{"label":"main","description":"Default."},{"label":"release","description":"Release."}]}],"toolCallId":"call-q"}],"nextSequence":${sequence + 1}}}"""
+                .toByteArray(Charsets.UTF_8)
+        )
+        val projection = AidenForeignRunProjection("run-1")
+        projection.apply(snapshot(0))
+        assertEquals("approval-1", projection.pendingApproval?.approvalId)
+        assertEquals("q-1", projection.pendingQuestion?.promptId)
+
+        // Marked before the write is sent: a snapshot taken while it is in
+        // flight does not bring the answered cards back.
+        projection.markAnsweredLocally("approval-1")
+        projection.markAnsweredLocally("q-1")
+        projection.apply(snapshot(0))
+        assertNull(projection.pendingApproval)
+        assertNull(projection.pendingQuestion)
+
+        // Both writes failed. The Mac still lists both prompts, so the next
+        // authoritative snapshot makes them actionable again.
+        projection.answerUnconfirmed("approval-1")
+        projection.answerUnconfirmed("q-1")
+        projection.apply(snapshot(0))
+        assertEquals("approval-1", projection.pendingApproval?.approvalId)
+        assertEquals("q-1", projection.pendingQuestion?.promptId)
+        assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, projection.state)
+    }
+
+    @Test
     fun runApprovalProjectionRejectsToolDetailsAndUnearnedScopes() {
         fun frame(payload: String, type: String = "approval_required", terminal: Boolean = false): ByteArray =
             """{"protocolVersion":1,"streamId":"run-1","sequence":3,"timestamp":"2026-10-05T10:00:00Z","type":"$type","terminal":$terminal,"payload":$payload}"""

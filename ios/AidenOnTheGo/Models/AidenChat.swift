@@ -2193,6 +2193,12 @@ struct AidenForeignRunProjection: Equatable, Sendable {
         refreshWaitingState()
     }
 
+    /// This phone's answer to `promptId` was not confirmed. Nothing is resent,
+    /// but a later authoritative snapshot that still lists the prompt restores it.
+    mutating func answerUnconfirmed(_ promptId: String) {
+        locallyAnswered.remove(promptId)
+    }
+
     /// Drops a prompt another surface resolved first (a 409 loser).
     mutating func dropPrompt(_ promptId: String) {
         approvals.removeAll { $0.approvalId == promptId }

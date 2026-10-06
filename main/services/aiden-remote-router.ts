@@ -3381,7 +3381,7 @@ export function createAidenRemoteRequestHandler(
               body,
               key,
               access("approval"),
-              { phoneScoped: !isDesktopDevice(device) },
+              { phoneScoped: !isDesktopDevice(device), capabilities: device.capabilities },
             ),
           );
         } else {

@@ -5,6 +5,10 @@ import {
 } from "../../renderer/shared/tool-approval-scope.js";
 import type { ChatRunInputAdmissionResult } from "../../renderer/shared/chat-run-input.js";
 import {
+  ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
+  ASSISTANT_AUTOMATION_TOOL_NAME,
+} from "../../renderer/shared/assistant.js";
+import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
   type AidenRemoteErrorCode,
@@ -201,6 +205,18 @@ function phoneMayAllow(payload: Record<string, unknown>): boolean {
   if (payload.detailsOmitted === true) return false;
   const details = ownRecord(payload.details);
   return details === undefined || details.kind === "scheduled-task";
+}
+
+/**
+ * The extra device grant allowing this approval needs, matching the phone's
+ * own stream approvals: creating or editing an automation needs
+ * `schedule:write` on top of `approval:respond`.
+ */
+function approvalAllowCapability(payload: Record<string, unknown>): AidenRemoteCapability | undefined {
+  return payload.toolName === ASSISTANT_AUTOMATION_TOOL_NAME ||
+    payload.toolName === ASSISTANT_AUTOMATION_EDIT_TOOL_NAME
+    ? "schedule:write"
+    : undefined;
 }
 
 /**
@@ -431,7 +447,11 @@ export class AidenRemoteHostRunService {
     body: unknown,
     key: string,
     access: AidenRemoteRunChatAccess,
-    options: { phoneScoped?: boolean } = {},
+    options: {
+      phoneScoped?: boolean;
+      /** The phone's grants; a phone-scoped allow must hold any extra grant the tool needs. */
+      capabilities?: ReadonlySet<AidenRemoteCapability>;
+    } = {},
   ): Promise<AidenRemoteRunApprovalResult> {
     const { decision, scope } = parseRunApproval(body);
     return this.control(
@@ -451,6 +471,14 @@ export class AidenRemoteHostRunService {
               throw new AidenRemoteServiceError(
                 "capability_denied",
                 "This approval can only be allowed from the Aiden desktop app.",
+                403,
+              );
+            }
+            const needed = approvalAllowCapability(prompt.payload);
+            if (options.phoneScoped === true && needed && options.capabilities?.has(needed) !== true) {
+              throw new AidenRemoteServiceError(
+                "capability_denied",
+                "This device does not have access to that Aiden capability.",
                 403,
               );
             }

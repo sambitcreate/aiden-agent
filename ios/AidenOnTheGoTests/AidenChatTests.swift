@@ -799,6 +799,7 @@ final class AidenChatTests: XCTestCase {
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         initialChat: AidenChat? = nil,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
+        extraCapabilities: [AidenRemoteCapability] = [],
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
@@ -813,7 +814,8 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle",
             deviceId: "device-progress-lifecycle",
             credential: "credential-progress-lifecycle",
-            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond],
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond]
+                + extraCapabilities,
             endpoint: endpoint,
             serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         )
@@ -971,6 +973,41 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(model.chat.messages.isEmpty)
         XCTAssertEqual(model.selectedModelId, "gpt-5.6")
         XCTAssertNotNil(model.catalog)
+    }
+
+    @MainActor
+    func testForeignRunResponseStaysVisibleUntilAFailedTranscriptReadRecovers() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-foreign-run-recovery-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenForeignRunRecoveryFixture()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        await model.load(observeProgress: false)
+
+        func waitUntil(_ label: String, _ condition: () -> Bool) async throws {
+            for _ in 0..<500 {
+                if condition() { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Timed out waiting for \(label)")
+        }
+        // The attach replay settles and is shown live before the run ends.
+        try await waitUntil("live foreign output") { model.liveText == "Visible answer" }
+        // The run ends and the transcript read that follows it fails.
+        try await waitUntil("failed transcript read") { fixture.failedReads > 0 && model.presentedError != nil }
+        XCTAssertEqual(model.streamState, .done)
+        XCTAssertEqual(model.liveText, "Visible answer", "The answer stays until the transcript holding it is read.")
+        XCTAssertFalse(model.chat.messages.contains { $0.id == "reply-mac" })
+
+        // Recovery re-reads the chat on its own; the answer moves into the transcript.
+        fixture.allowReads = true
+        try await waitUntil("recovered transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
+        try await waitUntil("cleared live output") { model.liveText.isEmpty }
     }
 
     @MainActor
@@ -8761,6 +8798,63 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":\(sequence),\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// A Mac whose chat has a run started elsewhere: the phone attaches mid-run,
+/// the run ends on the reconnect, and transcript reads then fail until allowed.
+private final class AidenForeignRunRecoveryFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ended = false
+    private var reads = true
+    private var failures = 0
+    var allowReads: Bool {
+        get { lock.withLock { reads } }
+        set { lock.withLock { reads = newValue } }
+    }
+    var failedReads: Int { lock.withLock { failures } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            let path = request.url!.path
+            switch path {
+            case "/api/aiden/v1/server":
+                let grants = #"["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read","approval:respond","runs:observe","runs:control"]"#
+                return (200, "application/json", Data("""
+                {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}
+                """.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle":
+                guard reads else {
+                    failures += 1
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Offline transcript","requestId":"r","retryable":true}}"#.utf8))
+                }
+                // The answer is in the transcript only once the run has ended.
+                let messages = ended
+                    ? #"[{"id":"reply-mac","role":"assistant","text":"Visible answer","createdAt":"2026-10-05T10:00:03Z"}]"#
+                    : "[]"
+                return (200, "application/json", Data("""
+                {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":\(messages),"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-\(ended ? 2 : 1)"}
+                """.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
+                return (200, "text/event-stream", Data((
+                    event(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                        + event(2, "text_delta", #"{"text":"Visible answer"}"#)
+                ).utf8))
+            case "/api/aiden/v1/runs/run-mac/events":
+                ended = true
+                reads = false
+                return (200, "text/event-stream", Data((
+                    event(3, "done", #"{"messageId":"reply-mac"}"#, terminal: true)
+                        + event(3, "run.ended", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true)
+                ).utf8))
+            default:
+                return nil
+            }
+        }
+    }
+
+    private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
     }
 }
 

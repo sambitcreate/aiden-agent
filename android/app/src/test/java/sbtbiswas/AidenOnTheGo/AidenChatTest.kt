@@ -131,6 +131,175 @@ class AidenChatTest {
         jobs.forEach { it.join() }
     }
 
+    private fun runFrame(sequence: Int, type: String, payload: String, terminal: Boolean = false): String =
+        "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":$sequence," +
+            "\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
+
+    private fun runFeed(body: String): MockResponse =
+        MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body)
+
+    /** A paired phone with the revision 21 run grants, viewing chat-mac whose run
+     * was started on the Mac. [route] answers every path but /server. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun withForeignRunChat(
+        initial: AidenChat?,
+        route: (String, RecordedRequest) -> MockResponse,
+        body: suspend CoroutineScope.(AidenChatViewModel) -> Unit
+    ) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-foreign-run-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val grants = listOf(
+            AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE,
+            AidenRemoteCapability.APPROVAL_RESPOND, AidenRemoteCapability.RUNS_OBSERVE, AidenRemoteCapability.RUNS_CONTROL
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (val path = request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-run","name":"Run Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
+                else -> route(path.removePrefix("/api/aiden/v1"), request)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-run", deviceId = "device-run", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                val model = AidenChatViewModel("chat-mac", coordinator, cache, drafts, initial)
+                viewModels.put("foreign", model)
+                try {
+                    body(model)
+                } finally {
+                    viewModels.clearAndJoin()
+                }
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun foreignRunChat(messages: List<AidenChatMessage> = emptyList()) = AidenChat(
+        id = "chat-mac", workspaceId = "workspace-run", title = "Started on the Mac", messages = messages,
+        createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r${messages.size + 1}"
+    )
+
+    @Test
+    fun coldOpenedChatAttachesToTheRunStartedElsewhereOnceTheChatLoads() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val chatGate = CountDownLatch(1)
+        val attaches = java.util.concurrent.LinkedBlockingQueue<String>()
+        withForeignRunChat(initial = null, route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> {
+                    chatGate.await(10, TimeUnit.SECONDS)
+                    MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                }
+                "/chats/chat-mac/runs/current/events" -> {
+                    attaches.add(path)
+                    MockResponse().setResponseCode(404)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            // Opened from a notification: nothing cached, the chat is still loading.
+            model.startProgressObservation()
+            assertNull(withContext(Dispatchers.IO) { attaches.poll(300, TimeUnit.MILLISECONDS) })
+            chatGate.countDown()
+            withTimeout(5_000) { model.chat.first { it != null } }
+            assertNotNull(
+                "The run started elsewhere must be followed once the chat is known",
+                withContext(Dispatchers.IO) { attaches.poll(5, TimeUnit.SECONDS) }
+            )
+        }
+    }
+
+    @Test
+    fun runThatKeepsStreamingIsShownLiveWithoutWaitingForAPause() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val started = runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""")
+        val delta = runFrame(2, "text_delta", """{"text":"word "}""")
+        val deltas = (2 until 52).joinToString("") { runFrame(it, "text_delta", """{"text":"word "}""") }
+        withForeignRunChat(initial = foreignRunChat(), route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                // About one token every 100 ms for five seconds: the feed never goes quiet.
+                "/chats/chat-mac/runs/current/events" -> runFeed(started + deltas)
+                    .throttleBody(delta.length.toLong(), 100, TimeUnit.MILLISECONDS)
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            val shown = withTimeout(2_500) { model.liveText.first { it.isNotEmpty() } }
+            assertTrue(shown.startsWith("word "))
+            assertTrue("A live foreign run offers Stop", model.canStopCurrentRun)
+        }
+    }
+
+    @Test
+    fun foreignRunResponseStaysVisibleUntilAFailedTranscriptReadRecovers() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val failReads = java.util.concurrent.atomic.AtomicBoolean(false)
+        val runEnded = java.util.concurrent.atomic.AtomicBoolean(false)
+        val failedRead = CountDownLatch(1)
+        val answer = AidenChatMessage("reply-mac", AidenChatRole.ASSISTANT, "Visible answer", createdAt = Instant.EPOCH)
+        withForeignRunChat(initial = foreignRunChat(), route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> if (failReads.get()) {
+                    failedRead.countDown()
+                    MockResponse().setResponseCode(500).setBody("""{"code":"internal_error","message":"Try again."}""")
+                } else {
+                    // The answer is in the transcript only once the run has ended.
+                    val messages = if (runEnded.get()) listOf(answer) else emptyList()
+                    MockResponse().setBody(wireJson.encodeToString(foreignRunChat(messages)))
+                }
+                // The attach replay settles and is shown live before the run ends.
+                "/chats/chat-mac/runs/current/events" -> runFeed(
+                    runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                        runFrame(2, "text_delta", """{"text":"Visible answer"}""")
+                )
+                "/runs/run-mac/events" -> {
+                    // The transcript read that follows the run's end fails.
+                    runEnded.set(true)
+                    failReads.set(true)
+                    runFeed(
+                        runFrame(3, "done", """{"messageId":"reply-mac"}""", terminal = true) +
+                            runFrame(3, "run.ended", """{"runId":"run-mac","chatId":"chat-mac","state":"done"}""", terminal = true)
+                    )
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.liveText.first { it == "Visible answer" } }
+            assertTrue(withContext(Dispatchers.IO) { failedRead.await(10, TimeUnit.SECONDS) })
+            withTimeout(5_000) { model.presentedError.first { it != null } }
+            assertEquals(AidenStreamState.DONE, model.streamState.value)
+            // The transcript that holds the answer was not read: keep showing it.
+            assertEquals("Visible answer", model.liveText.value)
+            assertTrue(model.chat.value!!.messages.none { it.id == "reply-mac" })
+            failReads.set(false)
+            // Recovery re-reads the chat on its own; the answer moves into the transcript.
+            withTimeout(10_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "reply-mac" } == true } }
+            withTimeout(5_000) { model.liveText.first { it.isEmpty() } }
+        }
+    }
+
     @Test
     fun viewModelCleanupWaitsForSuspendedFinalizerBeforeReleasingMain() = exerciseViewModelCleanup(false)
 

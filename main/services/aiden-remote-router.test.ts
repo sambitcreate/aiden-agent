@@ -23,6 +23,12 @@ import {
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
+import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
+import { HostRunRegistry } from "./host-run-registry.js";
+import {
+  ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
+  ASSISTANT_AUTOMATION_TOOL_NAME,
+} from "../../renderer/shared/assistant.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
@@ -54,7 +60,8 @@ async function fixture(options: {
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
-  hostRuns?: boolean;
+  /** `true` installs a recording fake; an object installs that run service. */
+  hostRuns?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostRuns"]>;
   messagesWindow?: boolean;
   platform?: "mac" | "linux" | "windows";
 } = {}) {
@@ -965,7 +972,8 @@ async function fixture(options: {
           },
         }
       : {}),
-    ...(options.hostRuns
+    ...(typeof options.hostRuns === "object" ? { hostRuns: options.hostRuns } : {}),
+    ...(options.hostRuns === true
       ? {
           hostRuns: {
             chatIdForRun: (runId) => {
@@ -4158,6 +4166,76 @@ test("a phone's run grants reach a foreign run only through its own per-chat gra
     assert.equal(runOnly.calls.some((call) => call.startsWith("run-")), false);
   } finally {
     await runOnly.close();
+  }
+});
+
+test("a phone allowing an automation approval on a foreign run needs schedule:write, as on its own approvals", async () => {
+  const controlHeaders = (key: string) => ({ ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": key });
+  const PHONE_RUN_GRANTS = ["server:read", "chat:read", "chat:write", "approval:respond", "runs:observe", "runs:control"] as AidenRemoteCapability[];
+  const scenario = async (capabilities: AidenRemoteCapability[]) => {
+    const registry = new HostRunRegistry({ now: () => 1_000, epoch: "epoch-router" });
+    const approvals: string[] = [];
+    const service = new AidenRemoteHostRunService({
+      registry,
+      now: () => 1_000,
+      controls: {
+        cancel: () => false,
+        approve: ({ approvalId, decision }) => {
+          if (!registry.pendingPrompt(approvalId)) return false;
+          approvals.push(`${approvalId}:${decision}`);
+          registry.resolveAttention(approvalId, { kind: "approval", decision });
+          return true;
+        },
+        answer: () => "rejected",
+        admitInput: async () => ({ admitted: false, reason: "unavailable" }) as never,
+      },
+    });
+    registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+    for (const [approvalId, toolName] of [
+      ["approval-create", ASSISTANT_AUTOMATION_TOOL_NAME],
+      ["approval-edit", ASSISTANT_AUTOMATION_EDIT_TOOL_NAME],
+    ] as const) {
+      registry.publish("run-1", "chat:approval", {
+        approvalId,
+        summary: "Create a nightly automation",
+        toolCallId: `call-${approvalId}`,
+        toolName,
+        scopes: ["once"],
+      });
+    }
+    const phone = await fixture({ hostRuns: service, deviceType: "iphone", capabilities });
+    const respond = (approvalId: string, decision: "allow" | "deny", key: string) =>
+      fetch(`${phone.base}/runs/run-1/approvals/${approvalId}/respond`, {
+        method: "POST",
+        headers: controlHeaders(key),
+        body: JSON.stringify({ decision }),
+      });
+    return { phone, approvals, respond };
+  };
+
+  const without = await scenario(PHONE_RUN_GRANTS);
+  try {
+    for (const approvalId of ["approval-create", "approval-edit"]) {
+      const refused = await without.respond(approvalId, "allow", `key-allow-${approvalId}`);
+      assert.equal(refused.status, 403, approvalId);
+      assert.equal(await errorCode(refused), "capability_denied", approvalId);
+    }
+    assert.deepEqual(without.approvals, []);
+    // Deny stays available without the automation grant.
+    const denied = await without.respond("approval-create", "deny", "key-deny-approval-create");
+    assert.equal(denied.status, 200);
+    assert.deepEqual(without.approvals, ["approval-create:deny"]);
+  } finally {
+    await without.phone.close();
+  }
+
+  const granted = await scenario([...PHONE_RUN_GRANTS, "schedule:write"]);
+  try {
+    const allowed = await granted.respond("approval-edit", "allow", "key-allow-approval-edit");
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(granted.approvals, ["approval-edit:allow"]);
+  } finally {
+    await granted.phone.close();
   }
 });
 

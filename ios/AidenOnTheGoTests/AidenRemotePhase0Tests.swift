@@ -1330,6 +1330,20 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(projection.state, .waitingForApproval)
         XCTAssertEqual(projection.apply(events[1]), [.textAppended("Still going")])
         XCTAssertEqual(projection.lastSequence, 1)
+        // This phone's answer hides the prompt from the next snapshot, but an
+        // answer whose write was not confirmed comes back when the Mac still
+        // lists the prompt as pending.
+        var answered = AidenForeignRunProjection(runId: "run-1")
+        _ = answered.apply(events[0])
+        answered.markAnsweredLocally("approval-1")
+        XCTAssertNil(answered.pendingApproval)
+        XCTAssertEqual(answered.apply(events[0]), [.reconcile])
+        XCTAssertNil(answered.pendingApproval, "An answer in flight from this phone is not restated.")
+        answered.answerUnconfirmed("approval-1")
+        XCTAssertEqual(answered.apply(events[0]), [.reconcile])
+        XCTAssertEqual(answered.pendingApproval?.approvalId, "approval-1")
+        XCTAssertEqual(answered.state, .waitingForApproval)
+
         // The projection of a different run never absorbs these frames.
         var other = AidenForeignRunProjection(runId: "run-2")
         XCTAssertEqual(other.apply(events[1]), [])

@@ -546,6 +546,8 @@ class AidenChatViewModel(
         // retried after the server confirms the grant again.
         taskCapabilityDeniedObservationToken = null
         agentCapabilityDeniedObservationToken = null
+        // Run observation depends on the negotiated run grants, not progress.
+        retryForeignRunObservation()
         val keepTasks = canReadTaskProgress
         val keepAgents = canReadAgentRoster
         if (!keepTasks && !keepAgents) {
@@ -845,7 +847,9 @@ class AidenChatViewModel(
                 val writeToken = chatCache.reserveChatWrite()
                 val remote = client.chat(chatId)
                 if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return@launch
-                acceptRemoteChat(remote, writeToken)
+                // An uncached chat was unknown when the detail came to the
+                // foreground, so run observation could not be admitted then.
+                if (acceptRemoteChat(remote, writeToken)) retryForeignRunObservation()
             } catch (e: Exception) {
                 if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                     _presentedError.value = e.localizedMessage
@@ -1854,6 +1858,11 @@ class AidenChatViewModel(
     private var foreignProjection: AidenForeignRunProjection? = null
     private var foreignRunJob: Job? = null
     private var foreignSettleJob: Job? = null
+    /** When the attach replay of [foreignSettleRunId] is presented even if it never goes quiet. */
+    private var foreignSettleDeadlineNanos: Long? = null
+    private var foreignSettleRunId: String? = null
+    /** Bounded transcript recovery after a foreign run ended but its re-read failed. */
+    private var foreignReconcileJob: Job? = null
 
     private fun foreignRunAccess(capability: AidenRemoteCapability): Boolean {
         val installation = installationForProgress() ?: return false
@@ -1883,7 +1892,13 @@ class AidenChatViewModel(
         if (foreignRunJob?.isActive == true || activeStreamId != null || _isStarting.value) return
         if (!foreignRunAccess(AidenRemoteCapability.RUNS_OBSERVE)) return
         val client = activeClient() ?: return
+        foreignSettleDeadlineNanos = null
         foreignRunJob = viewModelScope.launch { observeForeignRun(client) }
+    }
+
+    /** The detail is open and run access or the chat just became known: attach if a run is live. */
+    private fun retryForeignRunObservation() {
+        if (progressForeground) startForeignRunObservation()
     }
 
     private suspend fun observeForeignRun(client: AidenRemoteClient) {
@@ -1948,14 +1963,28 @@ class AidenChatViewModel(
             // Settle first: attaching replays the run's retained journal. Only a
             // run still open once the replay goes quiet is shown as live; one
             // that already ended is history, and its replayed resolutions are
-            // not news.
+            // not news. A run that keeps generating never goes quiet, so the
+            // settle is also bounded from the first event it sees.
             foreignSettleJob?.cancel()
-            if (projection.isEnded) return
+            if (projection.isEnded) {
+                foreignSettleDeadlineNanos = null
+                return
+            }
+            val now = System.nanoTime()
+            val deadline = foreignSettleDeadlineNanos?.takeIf { foreignSettleRunId == projection.runId }
+                ?: (now + FOREIGN_RUN_MAX_SETTLE_MILLIS * 1_000_000).also {
+                    foreignSettleDeadlineNanos = it
+                    foreignSettleRunId = projection.runId
+                }
+            val wait = minOf(FOREIGN_RUN_SETTLE_MILLIS, ((deadline - now) / 1_000_000).coerceAtLeast(0))
             foreignSettleJob = viewModelScope.launch {
-                delay(FOREIGN_RUN_SETTLE_MILLIS)
+                delay(wait)
                 if (projection.isEnded || foreignRunId != null || activeStreamId != null || _isStarting.value) {
                     return@launch
                 }
+                foreignSettleDeadlineNanos = null
+                foreignReconcileJob?.cancel()
+                foreignReconcileJob = null
                 foreignRunId = projection.runId
                 foreignProjection = projection
                 presentForeignRun(projection)
@@ -2013,19 +2042,52 @@ class AidenChatViewModel(
         val projection = foreignProjection ?: return
         foreignRunId = null
         foreignProjection = null
-        reconcileChat()
-        if (activeStreamId != null) return
-        _liveText.value = ""
-        _reasoning.value = ""
-        _tools.value = emptyList()
+        val client = activeClient()
+        val reconciled = reconcileChat()
+        if (activeStreamId != null || _isStarting.value) return
         _pendingApproval.value = null
         _pendingQuestion.value = null
         _streamState.value = if (projection.state.isTerminal) projection.state else AidenStreamState.INTERRUPTED
+        if (reconciled) {
+            clearForeignLiveOutput()
+        } else if (client != null) {
+            // Keep the response the user was watching until the transcript that
+            // holds it is accepted. Only the chat is re-read; nothing is resent.
+            scheduleForeignRunReconciliation(client)
+        }
+    }
+
+    private fun clearForeignLiveOutput() {
+        _liveText.value = ""
+        _reasoning.value = ""
+        _tools.value = emptyList()
+    }
+
+    private fun scheduleForeignRunReconciliation(client: AidenRemoteClient) {
+        if (foreignReconcileJob?.isActive == true) return
+        foreignReconcileJob = viewModelScope.launch {
+            // A send, this phone's own stream, a newly presented foreign run or a
+            // removed pairing owns the live state from then on.
+            fun fenced() = activeClient() !== client || activeStreamId != null || _isStarting.value ||
+                foreignRunId != null
+            for (attempt in 0 until MAX_FOREIGN_RUN_RECONCILE_ATTEMPTS) {
+                delay(AidenTerminalReconciliation.retryDelayMilliseconds(attempt))
+                if (fenced()) return@launch
+                transcriptGeneration++
+                if (reconcileChat()) {
+                    if (!fenced()) clearForeignLiveOutput()
+                    return@launch
+                }
+            }
+        }
     }
 
     private fun clearForeignRunPresentation() {
         foreignSettleJob?.cancel()
-        val wasPresented = foreignRunId != null
+        // An ended run still awaiting its transcript is presented too.
+        val wasPresented = foreignRunId != null || foreignReconcileJob?.isActive == true
+        foreignReconcileJob?.cancel()
+        foreignReconcileJob = null
         foreignRunId = null
         foreignProjection = null
         if (!wasPresented || activeStreamId != null) return
@@ -2110,6 +2172,7 @@ class AidenChatViewModel(
                 client.respondToRunApproval(runId, approvalId, decision, requestedScope)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
+                projection.answerUnconfirmed(approvalId)
                 handleForeignControlFailure(
                     error,
                     "The approval response was not confirmed. Check the request on your Mac."
@@ -2138,6 +2201,7 @@ class AidenChatViewModel(
                 client.respondToRunQuestion(runId, question.id, request, idempotencyKey)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
+                projection.answerUnconfirmed(question.id)
                 handleForeignControlFailure(
                     error,
                     "The question response was not confirmed. Check the prompt on your Mac."
@@ -2480,6 +2544,10 @@ class AidenChatViewModel(
         private const val MAX_FOREIGN_RUN_RECONNECTS = 3
         /** Quiet period that ends the attach replay before a run is shown live. */
         private const val FOREIGN_RUN_SETTLE_MILLIS = 400L
+        /** Upper bound on the settle, so a run that keeps generating is still shown live. */
+        private const val FOREIGN_RUN_MAX_SETTLE_MILLIS = 1_200L
+        /** Transcript re-reads after a foreign run ended but its first re-read failed. */
+        private const val MAX_FOREIGN_RUN_RECONCILE_ATTEMPTS = 6
         /** Run approvals and most run questions carry no expiry on the wire. */
         private val FOREIGN_PROMPT_EXPIRY: Instant = Instant.parse("9999-12-31T23:59:59Z")
         /** Ongoing-notification cadence; terminal and approval states skip it. */
