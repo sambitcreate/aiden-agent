@@ -1,8 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -22,9 +25,17 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,7 +65,8 @@ fun AidenComposerView(
     showsRunInputOptions: Boolean = false,
     canSubmitRunInput: Boolean = false,
     onSubmitRunInput: (AidenStreamInputMode) -> Unit = {},
-    onRedirectRequest: () -> Unit = {},
+    runInputMode: AidenStreamInputMode = AidenRunInputPresentation.defaultMode,
+    onRunInputModeChange: (AidenStreamInputMode) -> Unit = {},
     runInputReceipt: String? = null,
     isVoiceListening: Boolean,
     isVoiceBusy: Boolean = false,
@@ -81,9 +93,6 @@ fun AidenComposerView(
     var isFieldFocused by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
-    // Reset when the options cluster leaves composition so a remembered-open
-    // menu cannot reappear unsolicited on the next busy stream.
-    var showRunInputMenu by remember(showsRunInputOptions) { mutableStateOf(false) }
 
     Surface(
         modifier = modifier
@@ -312,230 +321,210 @@ fun AidenComposerView(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Model & Thinking Level Selector Pill (for Workspace Chats)
+                // Model & Thinking Level Selector Pill (for Workspace Chats).
+                // It takes the flexible space and shortens first, so the mic,
+                // the busy Queue/Steer pill and Stop always keep their width.
                 if (availableProviders.isNotEmpty() && onSelectModel != null) {
-                    Box {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier
-                                .heightIn(min = AidenUi.MinimumTouchTarget)
-                                .clickable { showModelMenu = true }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    Box(
+                        contentAlignment = Alignment.CenterStart,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp)
+                    ) {
+                        Box {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                shape = RoundedCornerShape(24.dp),
+                                modifier = Modifier
+                                    .heightIn(min = AidenUi.MinimumTouchTarget)
+                                    .clickable { showModelMenu = true }
                             ) {
-                                if (selectedProvider != null) {
-                                    AidenProviderIcon(
-                                        providerId = selectedProvider.id,
-                                        providerLabel = selectedProvider.label,
-                                        artwork = selectedProvider.artwork,
-                                        size = 14.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(5.dp))
-                                }
-                                Text(
-                                    text = selectedModel?.label ?: "Model",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = palette.secondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                if (selectedThinkingLevel != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    if (selectedProvider != null) {
+                                        AidenProviderIcon(
+                                            providerId = selectedProvider.id,
+                                            providerLabel = selectedProvider.label,
+                                            artwork = selectedProvider.artwork,
+                                            size = 14.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                    }
+                                    // One label so a narrow picker shortens the name and
+                                    // thinking level together, keeping the provider icon
+                                    // and chevron visible.
                                     Text(
-                                        text = " · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}",
+                                        text = buildAnnotatedString {
+                                            append(selectedModel?.label ?: "Model")
+                                            if (selectedThinkingLevel != null) {
+                                                withStyle(SpanStyle(fontWeight = FontWeight.Normal, color = palette.secondary.copy(alpha = 0.8f))) {
+                                                    append(" · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}")
+                                                }
+                                            }
+                                        },
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = palette.secondary.copy(alpha = 0.8f)
+                                        fontWeight = FontWeight.Medium,
+                                        color = palette.secondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
-                                }
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Icon(
-                                    imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = "Select model",
-                                    tint = palette.secondary,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-
-                        DropdownMenu(
-                            expanded = showModelMenu,
-                            onDismissRequest = { showModelMenu = false }
-                        ) {
-                            val thinkingLevels = selectedModel?.thinkingLevels.orEmpty()
-                            if (selectedProvider != null && selectedModel != null && thinkingLevels.isNotEmpty()) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = "THINKING",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.accent
-                                        )
-                                    },
-                                    onClick = {},
-                                    enabled = false
-                                )
-                                thinkingLevels.forEach { level ->
-                                    val isCurrentLevel = selectedThinkingLevel == level
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text(
-                                                    text = selectedModel.thinkingLabel(level),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    fontWeight = if (isCurrentLevel) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (isCurrentLevel) palette.accent else palette.foreground
-                                                )
-                                                if (isCurrentLevel) {
-                                                    Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
-                                                }
-                                            }
-                                        },
-                                        onClick = {
-                                            onSelectModel(selectedProvider, selectedModel, level)
-                                            showModelMenu = false
-                                        }
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = "Select model",
+                                        tint = palette.secondary,
+                                        modifier = Modifier.size(14.dp)
                                     )
                                 }
                             }
-                            availableProviders.forEach { provider ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = provider.label.uppercase(),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.accent
-                                        )
-                                    },
-                                    onClick = {},
-                                    enabled = false
-                                )
-                                provider.models.forEach { model ->
-                                    val isCurrentModel = selectedModel?.id == model.id && selectedProvider?.id == provider.id
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text(
-                                                    text = model.label,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    fontWeight = if (isCurrentModel) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (isCurrentModel) palette.accent else palette.foreground
-                                                )
-                                                if (isCurrentModel) {
-                                                    Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
-                                                }
-                                            }
-                                        },
-                                        onClick = {
-                                            onSelectModel(provider, model, null)
-                                            showModelMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
 
-                Spacer(modifier = Modifier.weight(1f))
-
-                // Voice Mic / Waveform Button
-                IconButton(
-                    onClick = onToggleVoice,
-                    enabled = !isReadOnly && !isStreaming && (!isVoiceBusy || isVoiceListening),
-                    modifier = Modifier
-                        .size(AidenUi.MinimumTouchTarget)
-                        .clip(CircleShape)
-                        .background(
-                            if (isVoiceListening) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
-                        )
-                ) {
-                    if (isVoiceListening) {
-                        AidenHarmonicWaveform(
-                            amplitude = 0.8f,
-                            palette = palette,
-                            modifier = Modifier
-                                .size(24.dp, 16.dp)
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Start voice input",
-                            tint = if (isVoiceListening) palette.accent else palette.secondary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Busy composer: negotiated servers offer Steer | Queue |
-                // Redirect from the submit affordance while Stop stays its own
-                // control; older servers keep the single morphing button.
-                if (isStreaming && showsRunInputOptions) {
-                    Box {
-                        Surface(
-                            onClick = { showRunInputMenu = true },
-                            enabled = canSubmitRunInput && !isReadOnly,
-                            shape = CircleShape,
-                            color = if (canSubmitRunInput) palette.accent else palette.canvas.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .size(AidenUi.MinimumTouchTarget)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxSize()
+                            DropdownMenu(
+                                expanded = showModelMenu,
+                                onDismissRequest = { showModelMenu = false }
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.ArrowUpward,
-                                    contentDescription = "Run input options",
-                                    tint = if (canSubmitRunInput) Color.White else palette.secondary.copy(alpha = 0.4f),
-                                    modifier = Modifier.size(20.dp)
-                                )
+                                val thinkingLevels = selectedModel?.thinkingLevels.orEmpty()
+                                if (selectedProvider != null && selectedModel != null && thinkingLevels.isNotEmpty()) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = "THINKING",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = palette.accent
+                                            )
+                                        },
+                                        onClick = {},
+                                        enabled = false
+                                    )
+                                    thinkingLevels.forEach { level ->
+                                        val isCurrentLevel = selectedThinkingLevel == level
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text(
+                                                        text = selectedModel.thinkingLabel(level),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontWeight = if (isCurrentLevel) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isCurrentLevel) palette.accent else palette.foreground
+                                                    )
+                                                    if (isCurrentLevel) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                onSelectModel(selectedProvider, selectedModel, level)
+                                                showModelMenu = false
+                                            }
+                                        )
+                                    }
+                                }
+                                availableProviders.forEach { provider ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = provider.label.uppercase(),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = palette.accent
+                                            )
+                                        },
+                                        onClick = {},
+                                        enabled = false
+                                    )
+                                    provider.models.forEach { model ->
+                                        val isCurrentModel = selectedModel?.id == model.id && selectedProvider?.id == provider.id
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text(
+                                                        text = model.label,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontWeight = if (isCurrentModel) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isCurrentModel) palette.accent else palette.foreground
+                                                    )
+                                                    if (isCurrentModel) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                onSelectModel(provider, model, null)
+                                                showModelMenu = false
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
-                        DropdownMenu(
-                            expanded = showRunInputMenu,
-                            onDismissRequest = { showRunInputMenu = false },
-                            shape = RoundedCornerShape(18.dp),
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Steer now") },
-                                onClick = {
-                                    showRunInputMenu = false
-                                    onSubmitRunInput(AidenStreamInputMode.STEER)
-                                }
+                    }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+
+                // Voice Mic / Waveform Button. Dictation is off while a response
+                // streams, so the busy Queue/Steer pill takes its place (a
+                // dictation already running keeps its stop control).
+                val showsBusyPill = isStreaming && showsRunInputOptions
+                if (!showsBusyPill || isVoiceListening) {
+                    IconButton(
+                        onClick = onToggleVoice,
+                        enabled = !isReadOnly && !isStreaming && (!isVoiceBusy || isVoiceListening),
+                        modifier = Modifier
+                            .size(AidenUi.MinimumTouchTarget)
+                            .clip(CircleShape)
+                            .background(
+                                if (isVoiceListening) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
                             )
-                            DropdownMenuItem(
-                                text = { Text("Queue to run next") },
-                                onClick = {
-                                    showRunInputMenu = false
-                                    onSubmitRunInput(AidenStreamInputMode.QUEUE)
-                                }
+                    ) {
+                        if (isVoiceListening) {
+                            AidenHarmonicWaveform(
+                                amplitude = 0.8f,
+                                palette = palette,
+                                modifier = Modifier
+                                    .size(24.dp, 16.dp)
                             )
-                            HorizontalDivider(color = palette.secondary.copy(alpha = 0.12f))
-                            DropdownMenuItem(
-                                text = { Text("Redirect…", color = palette.danger) },
-                                onClick = {
-                                    showRunInputMenu = false
-                                    onRedirectRequest()
-                                }
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Start voice input",
+                                tint = if (isVoiceListening) palette.accent else palette.secondary,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
+                // Busy composer: negotiated servers get one Queue/Steer pill
+                // next to its own Stop control; older servers keep the single
+                // morphing button.
+                if (showsBusyPill) {
+                    val canSubmitNow = canSubmitRunInput && !isReadOnly && draft.isNotBlank()
+                    AidenRunInputPill(
+                        mode = runInputMode,
+                        canSubmit = canSubmitNow,
+                        canChooseMode = !isReadOnly,
+                        onSubmit = { onSubmitRunInput(runInputMode) },
+                        onPickMode = { mode ->
+                            // Picking a mode sends the draft in that mode; with
+                            // nothing to send it only switches.
+                            onRunInputModeChange(mode)
+                            if (canSubmitNow) onSubmitRunInput(mode)
+                        }
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         onClick = onStop,
@@ -629,6 +618,163 @@ fun AidenComposerView(
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.danger,
                     modifier = Modifier.padding(start = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+private data class AidenRunInputModeOption(
+    val mode: AidenStreamInputMode,
+    val label: String,
+    val detail: String,
+    val actionLabel: String
+)
+
+// Menu order matches desktop and iOS: Steer first, then Queue.
+private val runInputModeOptions = listOf(
+    AidenRunInputModeOption(AidenStreamInputMode.STEER, "Steer", "Add guidance without stopping", "Steer response"),
+    AidenRunInputModeOption(AidenStreamInputMode.QUEUE, "Queue", "Run after this response", "Queue message")
+)
+
+/**
+ * Send control while a response runs (desktop/iOS parity): one accent pill
+ * whose label sends the draft in the current mode, and a chevron that opens
+ * the Steer / Queue menu. Long-pressing the label opens the same menu. The
+ * pill dims when there is nothing to send but the menu stays usable, so a
+ * mode can be picked before typing.
+ */
+@Composable
+private fun AidenRunInputPill(
+    mode: AidenStreamInputMode,
+    canSubmit: Boolean,
+    canChooseMode: Boolean,
+    onSubmit: () -> Unit,
+    onPickMode: (AidenStreamInputMode) -> Unit
+) {
+    val palette = AidenTheme.palette
+    val reduceMotion = AidenTheme.config.reduceMotion
+    val current = runInputModeOptions.first { it.mode == mode }
+    var showMenu by remember { mutableStateOf(false) }
+    val pillAlpha by animateFloatAsState(
+        targetValue = if (canSubmit) 1f else 0.6f,
+        animationSpec = if (reduceMotion) snap() else AidenMotion.nonSpatialExpressiveSpring(),
+        label = "run_input_pill_alpha"
+    )
+
+    Box {
+        Surface(
+            shape = CircleShape,
+            color = palette.accent,
+            modifier = Modifier
+                .height(AidenUi.MinimumTouchTarget)
+                .graphicsLayer { alpha = pillAlpha }
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .widthIn(min = AidenUi.MinimumTouchTarget)
+                        .combinedClickable(
+                            enabled = canChooseMode,
+                            role = Role.Button,
+                            onLongClickLabel = "Choose message action",
+                            onLongClick = { showMenu = true },
+                            onClick = { if (canSubmit) onSubmit() }
+                        )
+                        .semantics {
+                            contentDescription = current.actionLabel
+                            if (!canSubmit) disabled()
+                        }
+                        .padding(start = 16.dp, end = 2.dp)
+                ) {
+                    AnimatedContent(
+                        targetState = current.label,
+                        transitionSpec = {
+                            if (reduceMotion) {
+                                EnterTransition.None togetherWith ExitTransition.None
+                            } else {
+                                (slideInVertically(AidenMotion.spatialExpressiveSpring()) { it / 2 } +
+                                    fadeIn(AidenMotion.nonSpatialExpressiveSpring()))
+                                    .togetherWith(
+                                        slideOutVertically(AidenMotion.spatialExpressiveSpring()) { -it / 2 } +
+                                            fadeOut(AidenMotion.nonSpatialExpressiveSpring())
+                                    )
+                                    .using(SizeTransform(clip = true))
+                            }
+                        },
+                        label = "run_input_mode_label"
+                    ) { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                            maxLines = 1,
+                            // The label part announces its action instead.
+                            modifier = Modifier.clearAndSetSemantics {}
+                        )
+                    }
+                }
+                Box(
+                    contentAlignment = Alignment.CenterStart,
+                    modifier = Modifier
+                        .size(AidenUi.MinimumTouchTarget)
+                        .clickable(
+                            enabled = canChooseMode,
+                            role = Role.Button,
+                            onClick = { showMenu = true }
+                        )
+                        .semantics { contentDescription = "Choose message action" }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier
+                            .padding(start = 6.dp)
+                            .size(18.dp)
+                    )
+                }
+            }
+        }
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            shape = RoundedCornerShape(18.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ) {
+            runInputModeOptions.forEach { option ->
+                val isCurrent = option.mode == mode
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                color = palette.foreground
+                            )
+                            Text(
+                                text = option.detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.secondary
+                            )
+                        }
+                    },
+                    trailingIcon = {
+                        if (isCurrent) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                        } else {
+                            Spacer(modifier = Modifier.size(18.dp))
+                        }
+                    },
+                    onClick = {
+                        showMenu = false
+                        onPickMode(option.mode)
+                    },
+                    modifier = Modifier.semantics { selected = isCurrent }
                 )
             }
         }

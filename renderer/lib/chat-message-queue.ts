@@ -70,23 +70,6 @@ export class ChatMessageQueue {
       messages: [...this.snapshot.messages, structuredClone(message)],
     });
   }
-  replaceWith(message: QueuedChatMessage, requestStop?: () => boolean) {
-    // Validate before discarding the old queue so an invalid redirect cannot
-    // erase already accepted local follow-ups.
-    new ChatMessageQueue().validate(message);
-    if (this.snapshot.sendingId) {
-      throw new Error("Wait for the queued message to finish saving before redirecting.");
-    }
-    if (requestStop && !requestStop()) {
-      throw new Error("The current response has ended. Send your message normally.");
-    }
-    this.publish({
-      messages: [structuredClone(message)],
-      paused: false,
-      holdReason: this.snapshot.holdReason,
-      forkSummaryHeld: this.snapshot.forkSummaryHeld,
-    });
-  }
   edit(id: string): boolean {
     if (this.snapshot.sendingId || !this.snapshot.messages.some((item) => item.id === id))
       return false;

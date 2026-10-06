@@ -108,13 +108,9 @@ test("FIFO, priority, deleting and keyboard reorder preserve stable identities",
   assert.equal(queue.claim()?.id, "one");
 });
 
-test("redirect replacement is atomic and discarding a deleted chat clears queued work", () => {
+test("discarding a deleted chat clears queued work", () => {
   const queue = new ChatMessageQueue();
   queue.add(message("old"));
-  assert.throws(() => queue.replaceWith({ ...message("invalid"), text: "" }), /Add a message/u);
-  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["old"]);
-  queue.replaceWith(message("replacement"));
-  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["replacement"]);
   queue.discard();
   assert.equal(queue.getSnapshot().messages.length, 0);
   assert.equal(queue.claim(), undefined);

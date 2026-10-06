@@ -1224,11 +1224,12 @@ data class AidenStreamInputResult(
 
 /**
  * Remote Slice 2 busy-composer presentation rules (iOS parity:
- * AidenRunInputPresentation). A run input may only be offered while the
- * displayed stream is controllable, the server negotiated
- * `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
- * when the Mac durably committed the message; every other outcome keeps the
- * draft untouched so a busy→idle race can never become an implicit Send.
+ * AidenRunInputPresentation). The Queue/Steer control is shown while the
+ * displayed stream is controllable and the server negotiated
+ * `chat-run-input-v1`; it only submits when the composer also holds text.
+ * Drafts are consumed only when the Mac durably committed the message; every
+ * other outcome keeps the draft untouched so a busy→idle race can never
+ * become an implicit Send.
  */
 object AidenRunInputPresentation {
     data class Attempt(
@@ -1238,12 +1239,30 @@ object AidenRunInputPresentation {
         val text: String
     )
 
+    /** The mode the busy composer starts in, and returns to once a run ends. */
+    val defaultMode: AidenStreamInputMode = AidenStreamInputMode.QUEUE
+
+    /** Whether the busy composer shows the Queue/Steer control. It stays
+     * visible (dimmed) with an empty draft so a mode can be picked before
+     * typing. */
     fun offersRunInput(
         isStreaming: Boolean,
         canControl: Boolean,
-        supports: Boolean,
-        hasDraft: Boolean
-    ): Boolean = isStreaming && canControl && supports && hasDraft
+        supports: Boolean
+    ): Boolean = isStreaming && canControl && supports
+
+    /** Whether the offered control can submit right now. */
+    fun canSubmitRunInput(
+        offered: Boolean,
+        hasDraft: Boolean,
+        isSubmitting: Boolean,
+        isStopping: Boolean
+    ): Boolean = offered && hasDraft && !isSubmitting && !isStopping
+
+    /** The chosen mode is sticky for the life of a run and resets to
+     * [defaultMode] once the run is no longer streaming. */
+    fun stickyMode(current: AidenStreamInputMode, isStreaming: Boolean): AidenStreamInputMode =
+        if (isStreaming) current else defaultMode
 
     fun consumesDraft(result: AidenStreamInputResult): Boolean =
         result.status == AidenStreamInputStatus.ADMITTED || result.committed

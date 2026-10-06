@@ -1948,6 +1948,33 @@ enum AidenStreamInputMode: String, Codable, Sendable {
     case queue
 }
 
+/// Busy-composer copy, shared with the desktop and Android send pill.
+extension AidenStreamInputMode {
+    /// Menu order.
+    static let busyModes: [AidenStreamInputMode] = [.steer, .queue]
+
+    var busyLabel: String {
+        switch self {
+        case .steer: String(localized: "Steer")
+        case .queue: String(localized: "Queue")
+        }
+    }
+
+    var busyDetail: String {
+        switch self {
+        case .steer: String(localized: "Add guidance without stopping")
+        case .queue: String(localized: "Run after this response")
+        }
+    }
+
+    var busyActionLabel: String {
+        switch self {
+        case .steer: String(localized: "Steer response")
+        case .queue: String(localized: "Queue message")
+        }
+    }
+}
+
 struct AidenStreamInputRequest: Codable, Equatable, Sendable {
     let mode: AidenStreamInputMode
     let text: String
@@ -1982,9 +2009,9 @@ enum AidenStreamInputStatus: String, Codable, Sendable {
     case rejected
 }
 
-/// Remote Slice 2 busy-composer presentation rules. A run input may only be
-/// offered while the displayed stream is controllable, the server negotiated
-/// `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
+/// Remote Slice 2 busy-composer presentation rules. The Steer/Queue control is
+/// offered while the displayed stream is controllable and the server negotiated
+/// `chat-run-input-v1`; it submits only when the composer holds text. Drafts are consumed only
 /// when the Mac durably committed the message (admitted or committed
 /// rejection); every other outcome keeps the draft untouched so a busy→idle
 /// race can never become an implicit Send.
@@ -1999,10 +2026,9 @@ enum AidenRunInputPresentation {
     static func offersRunInput(
         isStreaming: Bool,
         canControl: Bool,
-        supports: Bool,
-        hasDraft: Bool
+        supports: Bool
     ) -> Bool {
-        isStreaming && canControl && supports && hasDraft
+        isStreaming && canControl && supports
     }
 
     static func consumesDraft(_ result: AidenStreamInputResult) -> Bool {
