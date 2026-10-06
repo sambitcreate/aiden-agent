@@ -196,3 +196,9 @@ test("API-key preset fetches cannot follow credential-bearing redirects", async 
   });
   assert.equal(observedRedirect, "error");
 });
+
+
+test("custom OAuth registration names override the default without overriding curated presets", () => {
+  assert.equal(mcpOAuthClientNameForServer({ id: "custom", oauthClientName: "Allowed Client" }), "Allowed Client");
+  assert.throws(() => assertMcpPresetServer({ ...serverFromPreset(MCP_PRESETS.find((preset) => preset.auth.kind === "oauth")!), oauthClientName: "Changed client" }), /OAuth/u);
+});

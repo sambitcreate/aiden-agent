@@ -1,4 +1,5 @@
 import { OPENAI_CODEX_BASE_URL, OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
+import { catalogProviderSlug } from "./models-catalog-core.js";
 import type { ModelCatalogProvider } from "./models-catalog-core.js";
 import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 
@@ -41,8 +42,18 @@ function withProviderFallback(
   modelId: string,
   catalog: ModelInfo,
   metadata: ProviderModelMetadata | undefined,
+  providerId: string,
 ): ModelInfo {
-  const info = catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  const catalogInfo = catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  // A model name in a public catalog is not evidence about a private server.
+  // Keep descriptive enrichment, but show the same connection-bound image and
+  // reasoning capabilities that resolveProviderRuntimeLimits sends to Pi.
+  const info = catalogProviderSlug(providerId) ? catalogInfo : {
+    ...catalogInfo,
+    vision: metadata?.vision ?? false,
+    reasoning: metadata?.reasoning ?? false,
+    inputModalities: metadata?.vision ? ["text", "image"] : ["text"],
+  };
   if (!metadata?.overrides) return info;
   const overrides = metadata.overrides;
   const vision = overrides.maxImages === 0 ? false : overrides.vision ?? info.vision;
@@ -93,7 +104,7 @@ export function createProviderModelInfo(dependencies: ProviderModelInfoDependenc
       if (providerId !== OPENAI_CODEX_PROVIDER_ID) {
         const provider = await dependencies.legacyProvider(providerId);
         const catalog = await dependencies.modelsCatalog.info(provider, modelId);
-        return withProviderFallback(modelId, catalog, provider.modelMetadata?.[modelId]);
+        return withProviderFallback(modelId, catalog, provider.modelMetadata?.[modelId], provider.id);
       }
       const catalog = await dependencies.modelsCatalog.info(CODEX_CATALOG_PROVIDER, modelId);
       return mergeCodexModelInfo(modelId, dependencies.codexModelInfo(modelId), catalog);
@@ -110,6 +121,7 @@ export function createProviderModelInfo(dependencies: ProviderModelInfoDependenc
               modelId,
               catalog[modelId] ?? unmatched(modelId),
               provider.modelMetadata?.[modelId],
+              provider.id,
             ),
           ]),
         );

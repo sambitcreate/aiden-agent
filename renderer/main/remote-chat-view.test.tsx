@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DOMParser } from "@xmldom/xmldom";
+import { DOMImplementation, DOMParser } from "@xmldom/xmldom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../lib/command-system";
 import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger";
@@ -12,6 +12,7 @@ import {
   type HostChatApprovalResult,
   type HostChatCapability,
   type HostChatInput,
+  type HostChatLineage,
   type HostChatStatus,
 } from "../lib/hosts/host-chat-adapter";
 import type { ChatSession } from "../lib/hosts/use-chat-session";
@@ -22,7 +23,15 @@ import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
 import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
-import { RemoteChatPane, RemoteChatRoute, remoteComposerActions, type RemoteChatPaneProps } from "./remote-chat-view";
+import { forkSummaryHoldsSend, type ChatForkLineageV1, type ChatForkSummaryV1 } from "../shared/chat-copy-contract";
+import {
+  RemoteChatPane,
+  RemoteChatRoute,
+  remoteComposerActions,
+  remoteForkErrorMessage,
+  useRemoteForkLineage,
+  type RemoteChatPaneProps,
+} from "./remote-chat-view";
 
 const noop = () => undefined;
 const reconnect = async () => undefined;
@@ -544,4 +553,289 @@ test("a remote chat whose Mac is unpaired, turned off or unreadable says so once
   assert.doesNotMatch(failed, /Loading…/);
   assert.match(failed, /Paired Macs could not be read/);
   assert.match(failed, /Keychain locked/);
+});
+
+const FORKING: HostChatCapability[] = [...RUN_CONTROL, "fork", "forkSummary"];
+
+function forkActions(view: ReturnType<typeof render>, label: string) {
+  return view.buttons.filter((node) => node.getAttribute("aria-label") === label);
+}
+
+test("a listed chat on a Mac that forks offers Fork from here on replies and Edit in fork past the first prompt", () => {
+  const forkable = render({ host: online, snapshot: snapshot(online), chat: session(online, FORKING).chat(), forkable: true });
+  assert.equal(forkActions(forkable, "Fork from here").length, 1, "the settled reply forks after itself");
+  assert.equal(forkActions(forkable, "Edit in fork").length, 0, "the host can't fork before a chat's first prompt");
+
+  // With older messages above, the oldest prompt shown isn't the chat's first.
+  const paged = snapshot(online, { transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: true } });
+  const older = render({ host: online, snapshot: paged, chat: session(online, FORKING).chat(), forkable: true });
+  assert.equal(forkActions(older, "Edit in fork").length, 1);
+  assert.equal(forkActions(older, "Fork from here")[0]?.hasAttribute("aria-disabled"), false);
+
+  // Bot chats are never listed; a host without the feature offers nothing.
+  const unlisted = render({ host: online, snapshot: snapshot(online), chat: session(online, FORKING).chat() });
+  assert.equal(forkActions(unlisted, "Fork from here").length, 0);
+  const plain = render({ host: online, snapshot: snapshot(online), chat: session(online).chat(), forkable: true });
+  assert.equal(forkActions(plain, "Fork from here").length, 0);
+});
+
+test("forking waits while a run on the host is still going", () => {
+  const live = run([event(1, "run.started", { runId: "run-1", chatId: "chat-1", origin: "device" })]);
+  const view = render({
+    host: online,
+    snapshot: snapshot(online, { run: live }),
+    chat: session(online, FORKING).chat(),
+    forkable: true,
+  });
+  const fork = forkActions(view, "Fork from here")[0];
+  assert.equal(fork?.getAttribute("aria-disabled"), "true");
+  assert.equal(fork?.getAttribute("title"), "Finish the current response or approval before forking");
+});
+
+test("a fork shows where it came from, and a pending summary holds the composer", () => {
+  const view = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: session(online, FORKING).chat(),
+    forkable: true,
+    onOpenChat: noop,
+    lineage: {
+      forkedFrom: {
+        chatId: "chat-0",
+        messageId: "m9",
+        position: "after",
+        at: 1,
+        summary: { state: "pending", afterMessageId: "m2", instructions: "the parser" },
+      },
+      sourceTitle: "Release plan",
+    },
+  });
+  assert.ok(view.button(/Forked from “Release plan”/), "the source opens from the lineage row");
+  assert.match(view.text, /Summarizing the original chat…/);
+  assert.ok(view.markup.indexOf('data-fork-summary="pending"') > view.markup.indexOf("Here is the summary so far"));
+  assert.match(view.text, /This fork is waiting for its summary\./);
+  assert.ok(view.button(/Send message/)?.hasAttribute("disabled"));
+
+  const unlistedSource = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: session(online, FORKING).chat(),
+    lineage: { forkedFrom: { chatId: "chat-0", messageId: "m9", position: "after", at: 1 } },
+  });
+  assert.match(unlistedSource.text, /Forked from another chat/);
+  assert.equal(unlistedSource.button(/Forked from/), undefined, "a source the host doesn't list can't be opened");
+  assert.doesNotMatch(unlistedSource.text, /waiting for its summary/);
+});
+
+test("a failed remote fork says what to do next", () => {
+  assert.match(
+    remoteForkErrorMessage(new HostChatControlError({ code: "outcome_unknown", message: "lost" }), "Studio"),
+    /Studio didn't confirm the fork\. Fork again to check; it won't make a second copy\./,
+  );
+  assert.equal(
+    remoteForkErrorMessage(
+      new HostChatControlError({ code: "failed", message: "busy", remoteCode: "operation_in_progress", retryable: true }),
+      "Studio",
+    ),
+    "Finish the current response or approval before copying this chat.",
+  );
+  assert.equal(
+    remoteForkErrorMessage(
+      new HostChatControlError({ code: "failed", message: "Forking is turned off.", remoteCode: "operation_in_progress" }),
+      "Studio",
+    ),
+    "Forking is turned off.",
+    "a fork the host won't make at all isn't blamed on a running response",
+  );
+  assert.match(
+    remoteForkErrorMessage(new HostChatControlError({ code: "failed", message: "x", remoteCode: "revision_conflict" }), "Studio"),
+    /This chat changed on Studio\./,
+  );
+});
+
+/** A minimal document for react-dom; the lineage harness renders nothing itself. */
+function installDocument() {
+  const document = new DOMImplementation().createDocument(null, "html", null) as unknown as Document;
+  const container = document.createElement("div");
+  document.documentElement.appendChild(container);
+  const elementPrototype = Object.getPrototypeOf(container) as Record<string, unknown>;
+  elementPrototype.addEventListener = noop;
+  elementPrototype.removeEventListener = noop;
+  Object.defineProperty(elementPrototype, "style", { configurable: true, get: () => ({}) });
+  const documentPrototype = Object.getPrototypeOf(document) as Record<string, unknown>;
+  documentPrototype.addEventListener = noop;
+  documentPrototype.removeEventListener = noop;
+  const windowValue = {
+    document,
+    event: undefined,
+    HTMLIFrameElement: class HTMLIFrameElement {},
+    addEventListener: noop,
+    removeEventListener: noop,
+  };
+  Object.defineProperty(document, "defaultView", { configurable: true, value: windowValue });
+  const keys = ["window", "document", "navigator", "Node", "Element", "HTMLElement"] as const;
+  const previous = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const ElementConstructor = Object.getPrototypeOf(document.documentElement).constructor;
+  Object.defineProperties(globalThis, {
+    window: { configurable: true, value: windowValue },
+    document: { configurable: true, value: document },
+    navigator: { configurable: true, value: { userAgent: "remote-chat-view-test" } },
+    Node: { configurable: true, value: ElementConstructor },
+    Element: { configurable: true, value: ElementConstructor },
+    HTMLElement: { configurable: true, value: ElementConstructor },
+  });
+  return {
+    container,
+    restore() {
+      for (const key of keys) {
+        const descriptor = previous.get(key);
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else Reflect.deleteProperty(globalThis, key);
+      }
+    },
+  };
+}
+
+/** Lets the read, the query cache's batched notifications and React's renders land. */
+async function settle(): Promise<void> {
+  for (let step = 0; step < 10; step += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+/** Mounts the fork-lineage hook for one chat; `show` renders it at a feed row revision. */
+async function mountForkLineage(host: Parameters<typeof useRemoteForkLineage>[0], listed: ChatForkLineageV1) {
+  let latest: ReturnType<typeof useRemoteForkLineage> = { beginUpdate: () => noop };
+  function Harness({ rowRevision }: { rowRevision: string }) {
+    latest = useRemoteForkLineage(host, "chat-1", listed, rowRevision);
+    return null;
+  }
+  const dom = installDocument();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(dom.container);
+  return {
+    async show(rowRevision: string) {
+      root.render(
+        <QueryClientProvider client={client}>
+          <Harness rowRevision={rowRevision} />
+        </QueryClientProvider>,
+      );
+      await settle();
+      return latest.forkedFrom;
+    },
+    latest: () => latest,
+    async dispose() {
+      flushSync(() => root.unmount());
+      client.clear();
+      await settle();
+      dom.restore();
+    },
+  };
+}
+
+test("a fork's summary changed on another device reaches the open pane when its feed row moves", async () => {
+  const listed: ChatForkLineageV1 = { chatId: "chat-0", messageId: "m9", position: "after", at: 1 };
+  const failed: ChatForkSummaryV1 = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+  // The host's copy of the fork; each read returns its lineage under a content revision.
+  let summary: ChatForkSummaryV1 | undefined = failed;
+  let reads = 0;
+  const host = {
+    hostId: "host-b",
+    capabilities: () => new Set<HostChatCapability>(["messagesWindow"]),
+    async forkLineage(): Promise<{ ok: true; value: HostChatLineage }> {
+      reads += 1;
+      return { ok: true, value: { revision: `content-${reads}`, forkedFrom: { ...listed, ...(summary ? { summary } : {}) } } };
+    },
+  };
+  const mounted = await mountForkLineage(host, listed);
+  const show = mounted.show;
+  const seen: Array<ChatForkLineageV1 | undefined> = [];
+  try {
+    seen.push(await show("rev_1"));
+    assert.equal(reads, 1);
+    assert.equal(seen[0]?.summary?.state, "failed");
+    await show("rev_1");
+    assert.equal(reads, 1, "a render without a feed change reads nothing");
+
+    // Another device retries the summary: the host's row moves.
+    summary = { state: "pending", afterMessageId: "m2" };
+    seen.push(await show("rev_2"));
+    assert.equal(seen[1]?.summary?.state, "pending");
+    assert.equal(reads, 2);
+
+    // The retry fails again, then another device continues without the summary.
+    summary = failed;
+    seen.push(await show("rev_3"));
+    assert.equal(seen[2]?.summary?.state, "failed");
+    summary = undefined;
+    seen.push(await show("rev_4"));
+    assert.equal(seen[3]?.summary, undefined, "the skipped summary is gone from the lineage");
+    assert.equal(reads, 4);
+
+    // With nothing left to settle, later row changes don't read the chat again.
+    await show("rev_5");
+    assert.equal(reads, 4);
+  } finally {
+    await mounted.dispose();
+  }
+
+  const pane = (forkedFrom: ChatForkLineageV1 | undefined) =>
+    render({
+      host: online,
+      snapshot: snapshot(online),
+      chat: session(online, FORKING).chat(),
+      ...(forkedFrom ? { lineage: { forkedFrom } } : {}),
+    });
+  const [stale, retried, , skipped] = seen.map(pane);
+  assert.ok(stale!.button(/^Retry$/), "the failed summary offers Retry");
+  assert.match(stale!.text, /This fork is waiting for its summary\./);
+  assert.match(retried!.text, /Summarizing the original chat…/);
+  assert.equal(retried!.button(/^Retry$/), undefined, "the stale Retry is gone once the summary is pending again");
+  assert.match(retried!.text, /This fork is waiting for its summary\./);
+  assert.doesNotMatch(skipped!.markup, /data-fork-summary/);
+  assert.doesNotMatch(skipped!.text, /waiting for its summary/, "the composer is no longer held");
+});
+
+test("a summary action's late answer does not replace a newer summary the pane already read", async () => {
+  const listed: ChatForkLineageV1 = { chatId: "chat-0", messageId: "m9", position: "after", at: 1 };
+  let summary: ChatForkSummaryV1 = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+  let reads = 0;
+  const host = {
+    hostId: "host-b",
+    capabilities: () => new Set<HostChatCapability>(["messagesWindow"]),
+    async forkLineage(): Promise<{ ok: true; value: HostChatLineage }> {
+      reads += 1;
+      return { ok: true, value: { revision: `content-${reads}`, forkedFrom: { ...listed, summary } } };
+    },
+  };
+  const mounted = await mountForkLineage(host, listed);
+  try {
+    assert.equal((await mounted.show("rev_1"))?.summary?.state, "failed");
+
+    // Retry starts; the host answers "pending", but the answer is delayed.
+    const applyRetry = mounted.latest().beginUpdate();
+    const retryAnswer: HostChatLineage = {
+      revision: "content-retry",
+      forkedFrom: { ...listed, summary: { state: "pending", afterMessageId: "m2" } },
+    };
+    // Meanwhile the summary finishes and the feed brings the pane up to date.
+    summary = { state: "ready", afterMessageId: "m2", text: "Earlier, the user asked about the release." };
+    assert.equal((await mounted.show("rev_3"))?.summary?.state, "ready");
+
+    applyRetry(retryAnswer);
+    const shown = await mounted.show("rev_3");
+    assert.equal(shown?.summary?.state, "ready", "the late pending answer does not bring the summary back");
+    assert.equal(forkSummaryHoldsSend(shown), false, "the composer stays released");
+
+    // An answer whose row has not moved since the action started applies as-is.
+    summary = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+    const applySkip = mounted.latest().beginUpdate();
+    applySkip({ revision: "content-skip", forkedFrom: listed });
+    assert.equal((await mounted.show("rev_3"))?.summary, undefined);
+  } finally {
+    await mounted.dispose();
+  }
 });

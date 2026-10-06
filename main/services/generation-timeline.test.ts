@@ -17,6 +17,20 @@ function toolSteps(timeline: GenerationTimeline): AgentToolStep[] {
   return timeline.steps.filter(isToolStep);
 }
 
+test("codemode and nested raw call IDs project to distinct renderer-safe activity identities", () => {
+  const projector = new GenerationTimelineProjector("generation-codemode", () => {});
+  projector.toolStarted("private-script", "codemode", { code: "private script source" });
+  projector.toolStarted("private-script/1", "read_file", { path: "README.md" });
+  projector.toolFinished("private-script/1", "completed");
+  projector.toolFinished("private-script", "completed");
+  const timeline = projector.finish("completed");
+  assert.deepEqual(toolSteps(timeline).map((step) => [step.id, step.toolCallId, step.toolName]), [
+    ["tool-1", "call-1", "codemode"], ["tool-2", "call-2", "read_file"],
+  ]);
+  assert.ok(parseGenerationTimeline(timeline));
+  assert.doesNotMatch(JSON.stringify(timeline), /private-script|private script source/u);
+});
+
 test("keeps tool order stable when parallel calls finish out of order", () => {
   let now = 100;
   const snapshots: GenerationTimeline[] = [];

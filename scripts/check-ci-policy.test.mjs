@@ -55,9 +55,18 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(filter.env.FORCE_FULL, "${{ github.event_name == 'push' && 'true' || 'false' }}");
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
   assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES].toSorted());
-  // Linux packaging is not required, but it must still follow its own area.
-  assert.equal(jobs.linux.if, "${{ needs.changes.outputs.linux == 'true' }}");
-  assert.equal(jobs["linux-rpm"].needs, "linux");
+  // Linux packaging still follows its own area, but the branch ruleset
+  // requires its per-arch checks. A skipped matrix job reports under the
+  // unexpanded name, so the job always starts and every step carries the gate.
+  const linuxGate = "needs.changes.outputs.linux == 'true'";
+  assert.equal(jobs.linux.if, undefined);
+  assert.ok([jobs.linux.needs].flat().includes("changes"));
+  for (const step of jobs.linux.steps) {
+    if (String(step.if ?? "").includes("failure()")) continue;
+    assert.ok(String(step.if ?? "").includes(linuxGate), step.name);
+  }
+  assert.deepEqual(jobs["linux-rpm"].needs, ["changes", "linux"]);
+  assert.equal(jobs["linux-rpm"].if, `\${{ ${linuxGate} }}`);
   assert.ok(jobs.catalog.steps.some((step) => step.run === "npm run test:model-catalog"));
 });
 
@@ -124,9 +133,9 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
     /- name: Upload baseline-verified RPM for Fedora acceptance\n[\s\S]*?(?=\n {6}- name:|$)/u,
   )?.[0];
   assert.ok(uploadStep, "Baseline RPM upload step is missing");
-  assert.match(uploadStep, /if: matrix\.arch == 'x64'/u);
+  assert.match(uploadStep, /if: \$\{\{ needs\.changes\.outputs\.linux == 'true' && matrix\.arch == 'x64' \}\}/u);
   assert.match(uploadStep, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
-  assert.match(rpmJob, /^ {4}needs: linux$/mu);
+  assert.match(rpmJob, /^ {4}needs: \[changes, linux\]$/mu);
   assert.match(rpmJob, /actions\/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e/u);
   assert.match(
     rpmJob,

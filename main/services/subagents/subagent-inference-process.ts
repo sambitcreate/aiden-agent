@@ -451,7 +451,7 @@ export function ambientProviderEnv(
           "all_proxy",
           "no_proxy",
         ]
-      : providerId === "azure-openai-responses"
+      : providerId === "azure"
         ? [
             "AZURE_OPENAI_BASE_URL",
             "AZURE_OPENAI_RESOURCE_NAME",
