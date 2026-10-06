@@ -56,6 +56,14 @@ android {
         excludes += "/META-INF/{AL2.0,LGPL2.1}"
       }
     }
+
+    testOptions {
+      unitTests.all {
+        // Resolve names from a fixed table so MockWebServer's per-request reverse lookup
+        // of the loopback address never waits on the system resolver.
+        it.systemProperty("jdk.net.hosts.file", file("src/test/jvm-hosts").absolutePath)
+      }
+    }
 }
 
 kotlin {

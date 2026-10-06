@@ -598,6 +598,12 @@ test("Stop after revisiting cancels the detached response and permits a new mess
   await composer.press("Enter");
   await expect(stop()).toBeEnabled();
   await expect(originalChat()).toHaveAttribute("aria-current", "page");
+  // Stop is enabled while provider initialization is still pending. This case
+  // exercises a running, held response, so establish that phase before leaving.
+  // The mock records the request and starts its held SSE response synchronously.
+  await expect.poll(() => lmStudio.requests.filter(
+    (request) => lastUserText(request) === originalMessage,
+  ).length).toBe(1);
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
   // Wait for New Agent's draft route to replace the old chat selection before
   // navigating back; otherwise the two async route changes can overlap.

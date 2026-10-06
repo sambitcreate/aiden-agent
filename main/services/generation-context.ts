@@ -7,14 +7,8 @@ import {
   type ToolResultMessage,
   type UserMessage,
 } from "@earendil-works/pi-ai";
-import {
-  DEFAULT_COMPACTION_SETTINGS,
-  estimateContextTokens,
-  estimateTokens,
-  shouldCompact,
-  type AgentMessage,
-  type AgentTool,
-} from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { DEFAULT_COMPACTION_SETTINGS, estimateContextTokens, estimateTokens, shouldCompact } from "./pi-legacy-harness.js";
 import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 
 const TOOL_RESULT_TEXT_LIMIT_CHARS = 32_000;
@@ -27,6 +21,8 @@ const CONTEXT_FALLBACK_TEXT =
   "[Aiden context notice: The active conversation could not be safely retained within this model's context window. Explain that the user should retry with a larger-context model or fewer/lower-size attachments. Do not call tools for this notice.]";
 
 export interface GenerationContextOptions {
+  /** User budget can reserve more context, but never reduce the response safety floor. */
+  compactionReserveTokens?: number;
   contextWindow: number;
   systemPrompt: string;
   tools: readonly AgentTool[];
@@ -639,7 +635,7 @@ function contextLimits(
   );
   const reserveTokens = Math.min(
     contextWindow - 1,
-    responseReserve + safetyReserve,
+    Math.max(responseReserve + safetyReserve, options.compactionReserveTokens ?? 0),
   );
   return {
     contextWindow,
@@ -669,6 +665,21 @@ export function assertGenerationContextCapacity(
       `The selected model's ${limits.contextWindow.toLocaleString("en-US")}-token context window is too small for Aiden's active system prompt and tools. Choose a larger-context model or disable integrations that add tools.`,
     );
   }
+}
+
+/** Revalidate changed instructions/tools against the same captured model budget. */
+export function updateGenerationContextOptions(
+  options: GenerationContextOptions,
+  context: { messages: AgentMessage[]; tools?: readonly AgentTool[] },
+): void {
+  const next = {
+    ...options,
+    systemPrompt: getCurrentSystemPrompt(context.messages),
+    tools: context.tools ?? [],
+  };
+  assertGenerationContextCapacity(next);
+  options.systemPrompt = next.systemPrompt;
+  options.tools = next.tools;
 }
 
 export function compactGenerationContext(

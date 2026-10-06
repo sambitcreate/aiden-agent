@@ -75,8 +75,8 @@ test("Enter in a dialog text field saves, and Escape still cancels", async ({ ai
   await openProviders(page);
   const configure = page
     .getByText("LM Studio (local)", { exact: true })
-    .locator("xpath=ancestor::div[.//button[normalize-space()='Configure']][1]")
-    .getByRole("button", { name: "Configure", exact: true });
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Manage']][1]")
+    .getByRole("button", { name: "Manage", exact: true });
   await configure.click();
   const dialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
   const name = dialog.getByRole("group", { name: "Name", exact: true }).getByRole("textbox");

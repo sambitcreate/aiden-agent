@@ -33,6 +33,15 @@ export async function unresolvedGuiArtifactMessage(chatId: string): Promise<stri
   return undefined;
 }
 
+/** Explains an unresolved artifact, or names the action that discards one that cannot be recovered. */
+export function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): string {
+  if (unresolved.includes("could not be recovered")) return recoveredMessage;
+  return unresolved.replace(
+    "Open Aiden's developer log to locate",
+    "Open Settings → About → Diagnostics and choose Reveal to locate",
+  );
+}
+
 export async function wrapStoredHtmlArtifact(input: {
   chatId: string;
   mediaId: string;

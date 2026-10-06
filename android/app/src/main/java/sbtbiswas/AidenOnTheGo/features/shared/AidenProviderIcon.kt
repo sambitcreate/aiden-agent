@@ -39,6 +39,7 @@ object AidenProviderIconResolver {
     )
 
     private val aliases = mapOf(
+        "azure" to "azure-openai-responses",
         "gemini" to "google",
         "lm-studio" to "lmstudio",
         "moonshot" to "moonshotai"

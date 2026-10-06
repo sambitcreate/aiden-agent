@@ -45,6 +45,7 @@ export async function resolveBotMcpConnectionIdentities(
 ): Promise<readonly BotMcpConnectionIdentity[]> {
   if (signal.aborted) throw abortReason(signal);
   const servers = [...(await dependencies.listServers())]
+    .filter((server) => !server.authProvider)
     .sort((left, right) => left.id.localeCompare(right.id))
     .slice(0, BOT_CAPABILITY_LIMITS.connections);
   if (signal.aborted) throw abortReason(signal);
@@ -105,6 +106,7 @@ export async function resolveBotMcpInventory(
   try {
     const work = (async () => {
       const servers = [...(await dependencies.listServers())]
+        .filter((server) => !server.authProvider)
         .sort((left, right) => left.id.localeCompare(right.id))
         .slice(0, BOT_CAPABILITY_LIMITS.connections);
       const identities = await resolveBotMcpConnectionIdentities(controller.signal, {

@@ -1,3 +1,4 @@
+import { mcpProviderGrantKey } from "./mcp-provider-auth-core.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
@@ -108,7 +109,10 @@ async function reconcileNow(
     // immediately before committing credential deletion.
     invalidateMcpOAuthOperation(pending.serverId);
     assertCurrent(isCurrent);
-    if (cleanup.clearOAuth) await clearOAuth(pending.serverId, isCurrent);
+    if (cleanup.clearOAuth) {
+      await clearOAuth(pending.serverId, isCurrent);
+      await secrets.deleteKey(mcpProviderGrantKey(pending.serverId), isCurrent);
+    }
     if (cleanup.clearPresetKey) {
       await secrets.deleteKey(presetSecretId(pending.serverId), isCurrent);
     }

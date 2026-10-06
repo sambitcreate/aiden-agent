@@ -45,6 +45,10 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    const val CHAT_FORK_FEATURE = "chat-fork-v1"
+    const val CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1"
+    const val MAX_FORK_SUMMARY_FOCUS_LENGTH = 1_000
+    const val MAX_FORK_PREFILL_ATTACHMENTS = 10
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4

@@ -1,4 +1,5 @@
 import type { CompactionEngine } from "../shared/compaction";
+import { parseAgentsInstructionNotices, type AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
   TtsJobSnapshot,
@@ -476,7 +477,8 @@ export const mcpApi = {
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) => invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
+  oauthStatus: (id: string) => invoke<{ authorized: boolean; providerAuthorized?: boolean }>("mcp:oauthStatus", id),
+  providerAuth: (server: McpServer, allowed: boolean) => invoke<{ authorized: boolean }>("mcp:providerAuth", server, allowed),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
 };
@@ -1269,7 +1271,8 @@ interface ChatArtifactNotification {
 export type ChatStatusPhase = "model_loading" | "model_ready";
 interface ChatStatus {
   streamId: string;
-  phase: ChatStatusPhase;
+  phase: ChatStatusPhase | "agents_instructions_limited";
+  notices?: unknown;
 }
 interface ChatDone {
   streamId: string;
@@ -1384,6 +1387,8 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
+  /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
+  onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
 }
 
@@ -1439,7 +1444,13 @@ export function startGeneration(
   );
   unsubs.push(
     onNotification<ChatStatus>("chat:status", (p) => {
-      if (p.streamId === streamId) callbacks.onStatus?.(p.phase);
+      if (p.streamId !== streamId) return;
+      if (p.phase === "agents_instructions_limited") {
+        const notices = parseAgentsInstructionNotices(p.notices);
+        if (notices) callbacks.onAgentsInstructionNotices?.(notices);
+      } else {
+        callbacks.onStatus?.(p.phase);
+      }
     }),
   );
   unsubs.push(
