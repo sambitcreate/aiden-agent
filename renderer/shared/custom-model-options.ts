@@ -1,5 +1,8 @@
+import type { SamplingParamsByThinkingLevel } from "@earendil-works/pi-ai";
+
 /** Explicit user overrides, separate from rediscovered provider metadata. */
 export interface CustomModelOptions {
+  samplingParamsByThinkingLevel?: SamplingParamsByThinkingLevel;
   vision?: boolean;
   reasoning?: boolean;
   toolCall?: boolean;
@@ -19,6 +22,9 @@ export function parseCustomModelOptions(
   }
   const raw = value as Record<string, unknown>;
   const result: CustomModelOptions = {};
+  if (raw.samplingParamsByThinkingLevel !== undefined) {
+    result.samplingParamsByThinkingLevel = parseSamplingParamsByThinkingLevel(raw.samplingParamsByThinkingLevel);
+  }
   for (const key of [
     "vision",
     "reasoning",
@@ -116,4 +122,22 @@ export async function prepareCustomModelToolContext<T>(
   options: CustomModelOptions | undefined,
 ): Promise<T> {
   return options?.toolCall === false || !prepare ? context : prepare(context);
+}
+
+/** Sampling only: metadata must not overwrite messages, tools, model or auth. */
+export function parseSamplingParamsByThinkingLevel(value: unknown): SamplingParamsByThinkingLevel {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid per-thinking-level sampling parameters.");
+  const result: SamplingParamsByThinkingLevel = {};
+  const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  const fields = new Set(["temperature", "top_p", "top_k", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "seed"]);
+  for (const [level, parameters] of Object.entries(value)) {
+    if (!levels.has(level) || !parameters || typeof parameters !== "object" || Array.isArray(parameters)) throw new Error("Invalid sampling thinking level.");
+    const parsed: Record<string, number> = {};
+    for (const [key, number] of Object.entries(parameters)) {
+      if (!fields.has(key) || typeof number !== "number" || !Number.isFinite(number) || Math.abs(number) > 1_000_000) throw new Error("Invalid sampling parameter.");
+      parsed[key] = number;
+    }
+    result[level as keyof SamplingParamsByThinkingLevel] = parsed;
+  }
+  return result;
 }

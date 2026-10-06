@@ -535,7 +535,7 @@ test("isolated built-in provider environments preserve only reviewed parity vari
     HTTPS_PROXY: "https://proxy.example",
     PRIVATE_UNRELATED_SECRET: "must-not-cross",
   };
-  assert.deepEqual(ambientProviderEnv("azure-openai-responses", source), {
+  assert.deepEqual(ambientProviderEnv("azure", source), {
     AZURE_OPENAI_BASE_URL: source.AZURE_OPENAI_BASE_URL,
     AZURE_OPENAI_RESOURCE_NAME: source.AZURE_OPENAI_RESOURCE_NAME,
     AZURE_OPENAI_API_VERSION: source.AZURE_OPENAI_API_VERSION,

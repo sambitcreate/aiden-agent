@@ -38,10 +38,11 @@ test("the aggregate gate accepts successful required jobs", () => {
 });
 
 test("a conditional job may be skipped only for its explicitly false area", () => {
-  const decisions = { ...allTrue, desktop: false, android: false };
+  const decisions = { ...allTrue, desktop: false, android: false, catalog: false };
   const { needs } = needsFor(decisions, {
     android: { result: "skipped" },
     build: { result: "skipped" },
+    catalog: { result: "skipped" },
     e2e: { result: "skipped" },
     unit: { result: "skipped" },
     verify: { result: "skipped" },
@@ -70,16 +71,18 @@ test("a job selected by several areas may skip only when all of them are false",
   });
   assert.deepEqual(evaluateRequiredGate(cliNeeds, cliOnly).failures, [{ job: "static", reason: "unexpected-skip" }]);
 
-  // The catalog-only main push skips everything except the catalog contracts.
+  // A catalog-only change runs the catalog contracts and the desktop unit lanes.
   const catalogOnly = Object.fromEntries(Object.keys(allTrue).map((area) => [area, area === "catalog"]));
   const skipped = Object.fromEntries(
     Object.keys(REQUIRED_JOB_RULES)
-      .filter((job) => !["changes", "policy", "catalog"].includes(job))
+      .filter((job) => !["changes", "policy", "catalog", "unit"].includes(job))
       .map((job) => [job, { result: "skipped" }]),
   );
   assert.equal(evaluateRequiredGate(needsFor(catalogOnly, skipped).needs, catalogOnly).ok, true);
   const missingCatalog = evaluateRequiredGate(needsFor(catalogOnly, { ...skipped, catalog: { result: "skipped" } }).needs, catalogOnly);
   assert.deepEqual(missingCatalog.failures, [{ job: "catalog", reason: "unexpected-skip" }]);
+  const missingUnit = evaluateRequiredGate(needsFor(catalogOnly, { ...skipped, unit: { result: "skipped" } }).needs, catalogOnly);
+  assert.deepEqual(missingUnit.failures, [{ job: "unit", reason: "unexpected-skip" }]);
 });
 
 test("failed, canceled, unknown, and missing results fail the aggregate", () => {

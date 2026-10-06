@@ -2,9 +2,15 @@ name: CI
 
 on:
   pull_request:
+  # Started by model-catalog-main-baseline.yml after a catalog merge, which
+  # (made with the job token) produces no push event of its own.
+  workflow_dispatch:
   push:
     branches:
       - main
+      # The model catalog bot pushes here with its deploy key; a pull request it
+      # opens with the job token would not start CI on its own.
+      - "automation/models-dev-catalog-*"
 
 permissions:
   contents: read
@@ -211,7 +217,8 @@ jobs:
   unit:
     name: Desktop tests (${{ matrix.lane }})
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    # Catalog refreshes run these too: the runtime takes model limits from it.
+    if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
     runs-on: macos-26
     timeout-minutes: 25
     strategy:
@@ -518,11 +525,12 @@ jobs:
         run: node scripts/ci-timings.mjs
 
   # Linux packaging and its E2E gate run for Linux-relevant changes and on
-  # every main push. linux-rpm skips with it.
+  # every main push. The matrix job always starts and skips its steps
+  # otherwise, because a skipped matrix job reports under the unexpanded
+  # name and never satisfies the required "Linux x64"/"Linux arm64" checks.
   linux:
     name: Linux ${{ matrix.arch }}
     needs: changes
-    if: ${{ needs.changes.outputs.linux == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -537,32 +545,40 @@ jobs:
       contents: read
     steps:
       - name: Check out source
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 
       - name: Use Node.js 22
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 22.22.3
           cache: npm
 
       - name: Install Linux test dependencies
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
 
       - name: Install locked dependencies
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm ci
 
       - name: Verify TypeScript and lint
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm run type-check && npm run lint
 
       - name: Run Pi extension, Linux contract, and native helper tests
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm run test:pi-extensions && npm run test:linux-contracts && npm run test:linux-native
 
       - name: Verify Bot authority with an isolated persistent keyring
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm run test:secret-service-integration
 
       - name: Build, install, and verify Linux distributions
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: |
           set -euo pipefail
           npm run dist:linux
@@ -580,7 +596,7 @@ jobs:
           grep -F "$expected_version" <<<"$appimage_output"
 
       - name: Prepare baseline-verified RPM for Fedora acceptance
-        if: matrix.arch == 'x64'
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -594,7 +610,7 @@ jobs:
           )
 
       - name: Upload baseline-verified RPM for Fedora acceptance
-        if: matrix.arch == 'x64'
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: linux-rpm-x64-${{ github.run_id }}-${{ github.run_attempt }}
@@ -605,6 +621,7 @@ jobs:
           retention-days: 1
 
       - name: Smoke the installed GUI without a keyring session
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -632,7 +649,7 @@ jobs:
           fi
 
       - name: Run deterministic Electron E2E gate
-        if: matrix.arch == 'x64'
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         run: |
           set -euo pipefail
           # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor,
@@ -666,7 +683,8 @@ jobs:
 
   linux-rpm:
     name: Linux x64 · Fedora RPM
-    needs: linux
+    needs: [changes, linux]
+    if: ${{ needs.changes.outputs.linux == 'true' }}
     runs-on: ubuntu-24.04
     container: fedora:44
     timeout-minutes: 60

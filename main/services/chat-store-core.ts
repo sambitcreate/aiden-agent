@@ -43,6 +43,7 @@ import {
   projectVisibleChatMetadata,
 } from "./visible-chat-projection.js";
 import { MAX_VISIBLE_COPY_MESSAGES } from "../../renderer/shared/chat-copy-contract.js";
+import { ChatForkError } from "./chat-fork-error.js";
 import { jsonStringBytesBounded } from "./json-representation.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
@@ -1230,6 +1231,8 @@ export function createChatStore(
       /** Start the fork with a pending summary of the source after the cut. */
       forkSummary?: { instructions?: string };
       assertCurrent?: () => void;
+      /** Check the source under the copy lock, for example against a client's revision. */
+      assertSource?: (source: Chat) => void;
       /**
        * Prepare dependent durable records before this chat becomes visible.
        * `sourceMessageIds[i]` is the source message copied into `chat.messages[i]`.
@@ -1243,7 +1246,8 @@ export function createChatStore(
       return shared([input.sourceChatId, newChatId], true, async () => {
         input.assertCurrent?.();
         const source = await readChat(input.sourceChatId, "owner");
-        if (!source) throw new Error(`Chat ${input.sourceChatId} not found`);
+        if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
+        input.assertSource?.(source);
         if (
           input.expectedWorkspaceId !== undefined &&
           (source.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
@@ -1266,14 +1270,24 @@ export function createChatStore(
             (message) => message.id === cut.messageId && message.role === "assistant",
           );
           if (throughIndex < 0) {
-            throw new Error("Choose a completed assistant turn to fork from.");
+            throw new ChatForkError(
+              source.messages.some((message) => message.id === cut.messageId)
+                ? "ineligible"
+                : "message_not_found",
+              "Choose a completed assistant turn to fork from.",
+            );
           }
         } else if (cut?.position === "before") {
           const userIndex = source.messages.findIndex(
             (message) => message.id === cut.messageId && message.role === "user",
           );
           if (userIndex < 0) {
-            throw new Error("Choose one of your messages to edit in a fork.");
+            throw new ChatForkError(
+              source.messages.some((message) => message.id === cut.messageId)
+                ? "ineligible"
+                : "message_not_found",
+              "Choose one of your messages to edit in a fork.",
+            );
           }
           throughIndex = userIndex - 1;
         }
@@ -1286,7 +1300,8 @@ export function createChatStore(
             }
           }
           if (!hasVisibleUser) {
-            throw new Error(
+            throw new ChatForkError(
+              "ineligible",
               cut.position === "before"
                 ? "Nothing comes before the first message to fork."
                 : "The selected turn has no user message to copy.",
@@ -1295,10 +1310,10 @@ export function createChatStore(
         }
 
         if (input.forkSummary && (!input.forkAt || source.botId)) {
-          throw new Error("Only a fork can carry a summary.");
+          throw new ChatForkError("ineligible", "Only a fork can carry a summary.");
         }
         if (input.forkSummary && throughIndex >= source.messages.length - 1) {
-          throw new Error("Nothing happened after this point to summarize.");
+          throw new ChatForkError("ineligible", "Nothing happened after this point to summarize.");
         }
 
         const copiedMessages: ChatMessage[] = [];
@@ -1308,11 +1323,11 @@ export function createChatStore(
           if (value === undefined) return;
           const remaining = MAX_VISIBLE_COPY_BYTES - chargedBytes;
           if (value.length > remaining) {
-            throw new Error("This chat is too large to copy safely.");
+            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
           chargedBytes += jsonStringBytesBounded(value, remaining);
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
-            throw new Error("This chat is too large to copy safely.");
+            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
         };
         const metadata = projectVisibleChatMetadata(source);
@@ -1343,7 +1358,7 @@ export function createChatStore(
           const message = projectVisibleChatMessage(sourceMessage);
           if (!message) continue;
           if (copiedMessages.length >= MAX_VISIBLE_COPY_MESSAGES) {
-            throw new Error("This chat has too many messages to copy safely.");
+            throw new ChatForkError("too_large", "This chat has too many messages to copy safely.");
           }
           chargedBytes += 512;
           charge(message.content);
@@ -1364,7 +1379,7 @@ export function createChatStore(
             charge(artifact.mediaId);
           }
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
-            throw new Error("This chat is too large to copy safely.");
+            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
           sourceMessageIds.push(message.id);
           copiedMessages.push({

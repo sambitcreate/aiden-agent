@@ -15,6 +15,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { desktopChatExecutionOptions } from "../chat-generation-start.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { appendPiMessages } from "../pi-compaction-session-store.js";
 import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
@@ -25,6 +26,7 @@ import {
   type SubagentRuntimeChild,
 } from "./child-agent-runtime.js";
 import { SubagentConcurrencyGate } from "./concurrency-gate.js";
+import { subagentsAllowedForGeneration } from "./eligibility.js";
 import {
   assertSubagentHistoryEnabled,
   registerSubagentTool,
@@ -286,12 +288,11 @@ test("production tool assembly reaches the feature-gated lazy factory", async ()
 });
 
 test("production generation carries parent exclusions and Bot Files authority into child reads", async () => {
-  const [generationSource, childRuntimeSource, assemblySource, chatHandlerSource] =
+  const [generationSource, childRuntimeSource, assemblySource] =
     await Promise.all([
       readFile(new URL("../llm-client.ts", import.meta.url), "utf-8"),
       readFile(new URL("./subagent-child-runtime.ts", import.meta.url), "utf-8"),
       readFile(new URL("./subagent-tool-assembly.ts", import.meta.url), "utf-8"),
-      readFile(new URL("../../handlers/chat.ts", import.meta.url), "utf-8"),
     ]);
   assert.match(
     generationSource,
@@ -306,7 +307,24 @@ test("production generation carries parent exclusions and Bot Files authority in
     assemblySource,
     /capabilityProfile:\s*\{\s*kind: "subagent",\s*role: input\.role,\s*inheritedCeiling: input\.inheritedCeiling,/,
   );
-  assert.match(chatHandlerSource, /allowSubagents: true,\s*usageSource: "chat",/);
+});
+
+test("desktop execution options admit foreground delegation without bypassing workspace authority", () => {
+  const generation = {
+    ...desktopChatExecutionOptions("desktop-turn", () => {}),
+    assistantMode: false,
+    workspaceId: "workspace-1",
+    folderPath: "/workspace",
+    permission: "ask",
+  };
+
+  assert.equal(subagentsAllowedForGeneration(generation), true);
+  assert.equal(
+    subagentsAllowedForGeneration({ ...generation, excludedToolNames: new Set(["subagent"]) }),
+    false,
+  );
+  assert.equal(subagentsAllowedForGeneration({ ...generation, workspaceId: undefined }), false);
+  assert.equal(subagentsAllowedForGeneration({ ...generation, permission: "none" }), false);
 });
 
 test("production V2 control registration is reachable only through the canonical store selection", async () => {
@@ -608,7 +626,8 @@ test("child completion fails closed on a Pi journal append failure", async () =>
   assert.equal(registry.activeCount, 0);
 });
 
-test("forked initial context is semantically compacted before the first provider request", async () => {
+for (const recentBudget of [undefined, 0]) {
+test(`forked initial context respects ${recentBudget === undefined ? "default" : "zero recent"} model budget before the first provider request`, async () => {
   const core = createFauxCore({
     provider: "aiden-compat-initial-fork",
     models: [{ id: "compat-initial-fork", contextWindow: 32_768 }],
@@ -633,7 +652,9 @@ test("forked initial context is semantically compacted before the first provider
   core.setResponses(Array.from({ length: 64 }, () => respond));
   const registry = new SubagentRuntimeRegistry();
   const modelRuntime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple);
+  const overrides = { "aiden-compat-initial-fork/compat-initial-fork": { reserveTokens: 8_192, keepRecentTokens: recentBudget ?? 12_288 } };
   const runningChild = registry.create({
+    compactionModelOverrides: recentBudget === undefined ? undefined : overrides,
     authority: {
       generationId: "compatibility-generation",
       chatId: "compatibility-chat",
@@ -657,6 +678,8 @@ test("forked initial context is semantically compacted before the first provider
     ]).flat(),
   });
 
+  // Already admitted children retain their captured budget even if settings change.
+  overrides["aiden-compat-initial-fork/compat-initial-fork"].keepRecentTokens = 20_000;
   const outcome = await runningChild.prompt("Conclude from the forked conversation.");
 
   assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
@@ -664,11 +687,13 @@ test("forked initial context is semantically compacted before the first provider
   assert.equal(requestKinds[0], "summary");
   assert.ok(requestKinds.indexOf("provider") > 0);
   assert.doesNotMatch(firstContext, /FORK-START-0/u);
-  assert.match(firstContext, /FORK-START-9/u);
+  if (recentBudget === undefined) assert.match(firstContext, /FORK-START-9/u);
+  else assert.doesNotMatch(firstContext, /FORK-START-9/u);
   assert.match(firstContext, /Conclude from the forked conversation/u);
   assert.ok(firstContext.length < 100_000);
   assert.equal(registry.activeCount, 0);
 });
+}
 
 test("runtime registry rejects app-wide child overflow before allocating another Agent", async () => {
   const core = createFauxCore({
