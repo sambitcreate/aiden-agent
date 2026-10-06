@@ -32,6 +32,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
@@ -85,17 +86,7 @@ fun AidenVoiceWaveform(
                 Spacer(modifier = Modifier.width(8.dp))
             }
             Canvas(modifier = Modifier.size(width = 88.dp, height = 24.dp)) {
-                val barWidth = 4.dp.toPx()
-                val heights = AidenVoiceWaveformBars.heights(animatedAmp, barCount, size.height, 4.dp.toPx())
-                val spacing = if (barCount > 1) (size.width - barWidth * barCount) / (barCount - 1) else 0f
-                heights.forEachIndexed { i, barHeight ->
-                    drawRoundRect(
-                        color = color,
-                        topLeft = Offset(i * (barWidth + spacing), (size.height - barHeight) / 2f),
-                        size = Size(barWidth, barHeight),
-                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
-                    )
-                }
+                drawVoiceBars(animatedAmp, barCount, color)
             }
             if (label != null) {
                 Spacer(modifier = Modifier.width(8.dp))
@@ -145,4 +136,34 @@ private fun RecordingDot(color: Color, alpha: () -> Float) {
             .size(8.dp)
             .drawBehind { drawCircle(color.copy(alpha = color.alpha * alpha())) }
     )
+}
+
+/**
+ * Bare amplitude bars for a caller that already animates [amplitude]. The value is read
+ * only while drawing, so a per-frame source redraws without recomposing.
+ */
+@Composable
+internal fun AidenVoiceBars(
+    amplitude: () -> Float,
+    barCount: Int,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        drawVoiceBars(amplitude().coerceIn(0.1f, 1f), barCount, color)
+    }
+}
+
+private fun DrawScope.drawVoiceBars(amplitude: Float, barCount: Int, color: Color) {
+    val barWidth = 4.dp.toPx()
+    val heights = AidenVoiceWaveformBars.heights(amplitude, barCount, size.height, 4.dp.toPx())
+    val spacing = if (barCount > 1) (size.width - barWidth * barCount) / (barCount - 1) else 0f
+    heights.forEachIndexed { i, barHeight ->
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(i * (barWidth + spacing), (size.height - barHeight) / 2f),
+            size = Size(barWidth, barHeight),
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+        )
+    }
 }

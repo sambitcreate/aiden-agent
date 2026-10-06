@@ -593,11 +593,17 @@ fun AidenChatDetailScreen(
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = readAloud.activeMessageId != null,
-                    enter = aidenBannerEnter(reduceMotion),
-                    exit = aidenBannerExit(reduceMotion)
-                ) {
+                // Keeps the last live values while collapsing so the pill never empties mid-exit.
+                AidenComposerReveal(
+                    value = readAloud.activeMessageId?.let {
+                        AidenReadAloudMiniPlayerState(
+                            phase = readAloud.phase,
+                            label = readAloud.progressLabel,
+                            progressRatio = readAloud.progressRatio,
+                            totalSegments = readAloud.totalSegments
+                        )
+                    }
+                ) { state ->
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -605,10 +611,10 @@ fun AidenChatDetailScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         AidenReadAloudMiniPlayer(
-                            phase = readAloud.phase,
-                            label = readAloud.progressLabel,
-                            progressRatio = readAloud.progressRatio,
-                            totalSegments = readAloud.totalSegments,
+                            phase = state.phase,
+                            label = state.label,
+                            progressRatio = state.progressRatio,
+                            totalSegments = state.totalSegments,
                             onStop = { readAloud.stop() }
                         )
                     }

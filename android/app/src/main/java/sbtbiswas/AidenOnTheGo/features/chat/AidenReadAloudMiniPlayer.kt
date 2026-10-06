@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -50,6 +49,14 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+
+/** Values the mini player shows; retained while it collapses after Read Aloud stops. */
+data class AidenReadAloudMiniPlayerState(
+    val phase: AidenReadAloudPhase,
+    val label: String,
+    val progressRatio: Float,
+    val totalSegments: Int
+)
 
 /**
  * Floating tonal pill shown while Read Aloud is active: a mini waveform, the phase
@@ -124,7 +131,11 @@ fun AidenReadAloudMiniPlayer(
 
 @Composable
 private fun AidenReadAloudMiniWaveform(playing: Boolean, reduceMotion: Boolean) {
-    val amplitude = if (playing && !reduceMotion) {
+    val modifier = Modifier
+        .size(width = 48.dp, height = 24.dp)
+        .clearAndSetSemantics { }
+    val color = AidenTheme.palette.accent
+    if (playing && !reduceMotion) {
         val transition = rememberInfiniteTransition(label = "read_aloud_wave")
         val pulse by transition.animateFloat(
             initialValue = 0.35f,
@@ -132,23 +143,12 @@ private fun AidenReadAloudMiniWaveform(playing: Boolean, reduceMotion: Boolean) 
             animationSpec = infiniteRepeatable(tween(durationMillis = 420), RepeatMode.Reverse),
             label = "read_aloud_wave_amp"
         )
-        pulse
-    } else if (reduceMotion) {
-        0.6f
+        // Read only while drawing so the pulse redraws the bars without recomposing.
+        AidenVoiceBars(amplitude = { pulse }, barCount = 5, color = color, modifier = modifier)
     } else {
-        0.25f
+        val still = if (reduceMotion) 0.6f else 0.25f
+        AidenVoiceBars(amplitude = { still }, barCount = 5, color = color, modifier = modifier)
     }
-    AidenVoiceWaveform(
-        amplitude = amplitude,
-        barCount = 5,
-        color = AidenTheme.palette.accent,
-        modifier = Modifier
-            .width(48.dp)
-            .height(32.dp)
-            .clearAndSetSemantics { },
-        label = null,
-        contained = false
-    )
 }
 
 @Composable
