@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
@@ -85,8 +86,17 @@ internal fun AidenConnectedActionSegment(
 ) {
     val palette = AidenTheme.palette
     val interaction = remember { MutableInteractionSource() }
+    val reduceMotion = aidenReduceMotion()
     val leading: @Composable () -> Unit = {
-        if (loading) {
+        if (loading && reduceMotion) {
+            CircularProgressIndicator(
+                progress = { 0.75f },
+                color = palette.accent,
+                trackColor = palette.accent.copy(alpha = 0.18f),
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(16.dp)
+            )
+        } else if (loading) {
             CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
         } else {
             Icon(icon, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
