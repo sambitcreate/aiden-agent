@@ -80,6 +80,35 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
 - **Status codes.** Summary actions answer 409 `revision_conflict` only for `ForkSummaryStateError` (the summary moved on); any other error falls through to the router's internal-error path. A fork whose result (chat plus staged prefill) would exceed the durable-operation size limit is refused with 413 before install. Replays of any rejection come back as 409 `internal_error`, because the idempotency ledger stores only contract codes.
 - **Peer.** `peer-operation.ts` `forkBody` accepts only `focus`; `remote-host-adapter.ts` maps the wire `focus` back to the desktop's `instructions`.
 
+## Paired Macs — desktop forks a peer's chat (branch `feat/chat-fork-peer`)
+
+- **Peer operations.**
+  - `forkChat` is `POST /chats/{id}/fork`, with If-Match, an Idempotency-Key and a strictly validated body.
+  - `forkSummaryRetry`, `forkSummarySkip` and `forkSummaryCancel` are `POST /chats/{id}/fork-summary/<action>`. They take an empty body and are not keyed.
+  - All of them are parsed by the protocol's own parsers.
+- **Adapter and gating.**
+  - `RemoteHostAdapter` grants `fork` when the host advertises `chat-fork-v1` and `forkSummary` when it also advertises `chat-fork-summary-v1`. Both also need `chat:write`.
+  - `LocalHostAdapter` never grants either: the local pane forks through `chatsApi`.
+  - `forkLineage(chatId)` reads the full chat, because feed rows leave the summary out.
+- **Keys.** The key of a fork whose answer was lost lives in the window's `chatIntentLedger` (`forkKey`/`beginFork`/`settleFork`, scoped to host + chat), not on the `ChatSessionControl`. Asking for the identical fork (same message, position, summary and revision) from this pane or one reopened on the same chat reuses the original key, so the host replays the first fork instead of making a second copy. The key is cleared on success or a definite refusal and kept only on `outcome_unknown`. A fork entry raises no ledger notification, so it never shows the unresolved banner or holds sending.
+- **Pane** (`remote-chat-view.tsx`).
+  - Fork is offered only for chats the feed lists (`forkable`). That excludes Bot chats, and also chats beyond the 2000-row feed cap.
+  - Edit in fork is hidden on the first prompt while no older page exists (`MessageList forkBeforeFirstPrompt`).
+  - Forks are disabled while a run has started or a send is in flight.
+  - After a fork the pane opens the new chat. A `before` fork seeds the composer draft with only `prefill.text`. The composer can't show uploads staged on the host, so those are released and the user is told to attach them again.
+  - The lineage row and `ForkSummaryCard` come from `useRemoteForkLineage`. It runs one full-chat read (best-effort, under the 1 MiB GET cap) and caches `{lineage, feedRevision}`, where `feedRevision` is the feed row revision when the read started. While the summary is pending or failed it reads again whenever the row revision differs from that cached one; it never compares the feed token with the content-hash revision. A retry, skip or ready result from another device therefore replaces a stale failed card and releases the composer hold.
+  - Summary actions call `beginUpdate()` as they start, which records the row revision. If the row hasn't moved when the answer arrives, the answer is written into the query under that revision. If it has moved, the answer may be older than a feed-driven read, so the query is invalidated and re-read instead.
+  - A pending or failed summary holds the composer with `FORK_SUMMARY_HOLD_MESSAGE`.
+- **Tests.**
+  - `main/services/peer-remote-chat-fork.test.ts` (in `test:remote-chat`) runs end to end over the real IPC, peer-operation and host chat service. It covers:
+    - a lost answer replaying one fork;
+    - a stale revision;
+    - the prefill;
+    - capability gating;
+    - the summary actions;
+    - refusal codes.
+  - `remote-chat-view.test.tsx` covers the rendered fork actions, lineage, summary hold and `remoteForkErrorMessage`.
+
 ## Mobile PR — Android half (branch `feat/chat-fork-android`)
 
 - **Client.** `AidenRemoteClient.forkChat` posts `/chats/{id}/fork` with `If-Match` and an `Idempotency-Key`, expects `201 {chat, prefill?}`, and rejects a result that has no lineage or is the source chat. A blank focus sends `summary: {}`. `retryForkSummary`, `skipForkSummary` and `cancelForkSummary` post to `/fork-summary/{retry|skip|cancel}`. 409 `operation_in_progress` and `revision_conflict` get their own copy in `AidenChatForkErrors`.
