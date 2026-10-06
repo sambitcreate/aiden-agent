@@ -218,6 +218,7 @@ class MainActivity : ComponentActivity() {
                                     voiceInputStore = voiceInputStore,
                                     liveNotificationManager = liveNotificationManager,
                                     startVoiceOnOpen = screen.startsVoice,
+                                    onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateBack = navigator::back
                                 )
                             }

@@ -2,7 +2,7 @@ import {
   generateBranchSummary,
   TODO_CONTEXT,
   withAbortSignal,
-} from "@earendil-works/pi-agent-core";
+} from "./pi-legacy-harness.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   MAX_FORK_SUMMARY_FILES,

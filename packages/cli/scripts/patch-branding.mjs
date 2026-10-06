@@ -38,6 +38,13 @@ if (expectedPin && installedVersion !== expectedPin) {
 
 const patches = [
 	{
+		file: join(piAgentDir, "dist", "modes", "interactive", "theme", "theme.js"),
+		replacements: [{
+			from: "const name = themeName ?? SYSTEM_THEME_NAME;",
+			to: "const name = themeName ?? getTerminalTheme(); // Aiden palettes by default; system remains selectable",
+		}],
+	},
+	{
 		file: join(piAgentDir, "dist", "modes", "interactive", "interactive-mode.js"),
 		replacements: [
 			{
@@ -48,20 +55,6 @@ const patches = [
 			{
 				from: "tmux extended-keys-format is xterm. Pi works best with csi-u.",
 				to: "tmux extended-keys-format is xterm. Aiden works best with csi-u.",
-			},
-			{
-				// Minimal startup: the loaded Context/Skills/Themes/Extensions
-				// listing never renders (the Aiden header itself stays), while
-				// load-error diagnostics still surface. --verbose or turning
-				// quietStartup off in /config brings the listing back.
-				from: "const showListing = options?.force || this.options.verbose || !this.settingsManager.getQuietStartup();",
-				to: "const showListing = options?.force || this.options.verbose; // resources listing off by default (Aiden)",
-			},
-			{
-				// The listing is off by default, so the header hint should not
-				// advertise it.
-				from: "to show full startup help and loaded resources.",
-				to: "to show full startup help.",
 			},
 			{
 				// Both changelog-triggered call sites of the pi.dev report-install
@@ -75,24 +68,14 @@ const patches = [
 				// The ping endpoint itself: strip it so no telemetry URL ships.
 				from: "https://pi.dev/api/report-install?version=",
 				to: "data:text/plain,telemetry-removed?version=",
-			},			{
-				// The startup wordmark: 5-row solid-block AIDEN banner
-				// (inspired by oh-my-pi's PI_LOGO). The one-loop sheen
-				// animation is layered on top by the aiden-startup extension
-				// via ctx.ui.setHeader. appliedMarker keeps repeat builds
-				// idempotent.
-				from: "const logo = theme.bold(theme.fg(\"accent\", APP_NAME)) + theme.fg(\"dim\", ` v${this.version}`);",
-				appliedMarker: "__aidenWordmark",
-				to: [
-					"const __aidenWordmark = [",
-					'"███████ █████ ██████  ███████ ██   ██",',
-					'"██   ██   ██  ██   ██ ██      ███  ██",',
-					'"███████   ██  ██   ██ ████    ██ █ ██",',
-					'"██   ██   ██  ██   ██ ██      ██  ███",',
-					'"██   ██ █████ ██████  ███████ ██   ██",',
-					"].map((line) => theme.fg(\"accent\", line));",
-					"const logo = `${__aidenWordmark.join(\"\\n\")}\\n${theme.fg(\"dim\", ` v${this.version}`)}`;",
-				].join("\n"),
+			},
+			{
+				from: "const showLogo = supportsPiLogo();",
+				to: "const showLogo = false; // Aiden owns its startup wordmark",
+			},
+			{
+				from: '${piWordmark()}',
+				to: '${theme.bold(theme.fg("accent", APP_NAME))}',
 			},
 		],
 	},
@@ -129,6 +112,10 @@ const patches = [
 		file: join(piAgentDir, "dist", "core", "settings-manager.js"),
 		replacements: [
 			{
+				from: 'const value = this.settings.theme;',
+				to: 'const value = this.settings.theme ?? "light/dark";',
+			},
+			{
 				// Install telemetry (pi.dev report-install ping + pi attribution
 				// headers) must default off in Aiden; the entry also forces
 				// PI_TELEMETRY=0 so settings cannot re-enable it.
@@ -136,11 +123,9 @@ const patches = [
 				to: "return this.settings.enableInstallTelemetry ?? false;",
 			},
 			{
-				// Active revert of an earlier Aiden patch: the header (Aiden
-				// logo + hints) must keep the stock quietStartup default —
-				// flipping it silenced the whole header including branding.
-				from: "return this.settings.quietStartup ?? true;",
-				to: "return this.settings.quietStartup ?? false;",
+				// Native 1.0 supports the header-only behavior Aiden used to patch.
+				from: 'const value = this.settings.quietStartup;',
+				to: 'const value = this.settings.quietStartup ?? "header";',
 			},
 
 		],

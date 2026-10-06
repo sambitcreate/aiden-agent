@@ -120,6 +120,52 @@
     }
   ],
   "paths": {
+    "/providers": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "createProvider",
+        "x-aiden-capability": "workspace:manage",
+        "x-aiden-additional-capabilities": [
+          "server:read"
+        ],
+        "x-aiden-feature": "providers-create-v1",
+        "description": "Contract revision 22 (providers-create-v1). Create a custom provider on the paired host without contacting its endpoint. Credentials are write-only and stored encrypted on the host. Creation is scoped to the authenticated device and Idempotency-Key. Replays never overwrite an existing connection or rotate its key.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCreation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created provider or recovered creation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCreationReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health",
@@ -5054,6 +5100,159 @@
       }
     },
     "schemas": {
+      "ProviderCreation": {
+        "type": "object",
+        "required": [
+          "label",
+          "baseUrl",
+          "kind",
+          "deployment",
+          "needsKey",
+          "models",
+          "confirmedForeground"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "baseUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "kind": {
+            "enum": [
+              "openai",
+              "anthropic"
+            ]
+          },
+          "deployment": {
+            "enum": [
+              "local",
+              "hosted"
+            ]
+          },
+          "needsKey": {
+            "type": "boolean"
+          },
+          "apiKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "writeOnly": true
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/ProviderCreationModel"
+            }
+          },
+          "confirmedForeground": {
+            "const": true
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "needsKey": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "apiKey"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "apiKey"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "ProviderCreationModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "vision",
+          "reasoning",
+          "toolCall"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "vision": {
+            "type": "boolean"
+          },
+          "reasoning": {
+            "type": "boolean"
+          },
+          "toolCall": {
+            "type": "boolean"
+          },
+          "contextLength": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          },
+          "outputLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          },
+          "maxImages": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        }
+      },
+      "ProviderCreationReceipt": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "models"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [

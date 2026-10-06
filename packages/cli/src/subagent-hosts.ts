@@ -9,11 +9,16 @@ import { insightCredentials } from "./credentials.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
 import { readJson } from "./state.ts";
 
-export function createCliSubagentHosts(agentDir: string) {
-  const key = randomBytes(32), cache = new SubagentMcpInventoryCache();
-  const revision = () => createHmac("sha256", key).update(JSON.stringify({
-    configuration: readJson(join(agentDir, "mcp.json"), []), credentials: readJson(join(agentDir, "credentials/insights.json"), {}),
+export function createCliMcpRevision(agentDir: string) {
+  const key = randomBytes(32);
+  return () => createHmac("sha256", key).update(JSON.stringify({
+    configuration: readJson(join(agentDir, "aiden-mcp.json"), []), credentials: readJson(join(agentDir, "credentials/insights.json"), {}),
   })).digest("hex");
+}
+
+export function createCliSubagentHosts(agentDir: string) {
+  const cache = new SubagentMcpInventoryCache();
+  const revision = createCliMcpRevision(agentDir);
   const mcpHost: SubagentMcpReadHost = {
     async resolveServer(id, signal) { signal.throwIfAborted(); return (await storeFor(agentDir).load()).find((item) => item.id === id); },
     async withClient(server, signal, operation) {

@@ -128,6 +128,9 @@ fun AidenAppearanceSettingsScreen(
         )
 
         Spacer(modifier = Modifier.height(16.dp))
+        AidenProviderSettings(remoteClient)
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         if (onOpenInstallations != null) {
             Surface(

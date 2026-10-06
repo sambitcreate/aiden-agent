@@ -1,4 +1,4 @@
-import { formatSkillInvocation } from "@earendil-works/pi-agent-core";
+import { formatSkillInvocation } from "./pi-legacy-harness.js";
 import {
   SLASH_LIMITS,
   SkillInvocationError,
