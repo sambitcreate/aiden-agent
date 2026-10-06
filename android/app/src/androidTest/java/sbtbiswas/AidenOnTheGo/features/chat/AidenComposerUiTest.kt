@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -325,13 +326,14 @@ class AidenComposerUiTest {
 
     private fun setModelPickerComposer(
         providers: List<AidenProvider>,
-        picks: MutableList<PickedModel>
+        picks: MutableList<PickedModel>,
+        config: AidenAppearanceConfig = AidenAppearanceConfig()
     ) {
         compose.setContent {
             var provider by remember { mutableStateOf(providers.first()) }
             var model by remember { mutableStateOf(providers.first().models.first()) }
             var level by remember { mutableStateOf(providers.first().models.first().thinkingLevels?.lastOrNull()) }
-            AidenTheme {
+            AidenTheme(config = config) {
                 AidenComposerView(
                     draft = "",
                     onDraftChange = {},
@@ -354,6 +356,42 @@ class AidenComposerUiTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun reduceMotionPreferencePresentsAStillModelSheetThatClosesInstantly() {
+        val model = AidenModel(id = "fast", label = "Fast model", thinkingLevels = listOf("low", "high"))
+        val other = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        setModelPickerComposer(
+            listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(model, other))),
+            picks,
+            AidenAppearanceConfig(reduceMotion = true)
+        )
+
+        // With the clock held, the sheet is fully on screen after a single frame: no slide-in.
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag(AidenStillBottomSheetTag).assertExists()
+        compose.onNodeWithText("Model & Thinking").assertIsDisplayed()
+
+        // A scrim tap dismisses on the next frame without an exit animation.
+        compose.onNodeWithTag(AidenStillBottomSheetTag).performTouchInput { click(Offset(centerX, 8f)) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Model & Thinking").assertDoesNotExist()
+
+        // Picking a model still applies it and closes the still sheet at once.
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNode(hasText("Deep model") and isSelectable()).performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.runOnIdle {
+            assertEquals(1, picks.size)
+            assertEquals("deep", picks.single().modelId)
+        }
+        compose.onNodeWithTag(AidenStillBottomSheetTag).assertDoesNotExist()
+        compose.mainClock.autoAdvance = true
     }
 
     @Test

@@ -1,5 +1,21 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -78,11 +94,7 @@ internal fun AidenComposerModelSheet(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = palette.raised
-    ) {
+    val sheetBody: @Composable () -> Unit = {
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
@@ -169,7 +181,68 @@ internal fun AidenComposerModelSheet(
             }
         }
     }
+
+    // Material's sheet motion cannot follow Aiden's Reduce Motion preference, so reduced
+    // motion presents the same content in a still sheet with no slide or predictive back.
+    if (reduceMotion) {
+        AidenStillBottomSheet(onDismiss = onDismiss, containerColor = palette.raised) { sheetBody() }
+    } else {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = palette.raised
+        ) {
+            sheetBody()
+        }
+    }
 }
+
+/**
+ * Bottom sheet without motion: appears and dismisses instantly, and system back or a scrim
+ * tap closes it without the predictive-back shrink. Used when motion is reduced.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AidenStillBottomSheet(
+    onDismiss: () -> Unit,
+    containerColor: Color,
+    content: @Composable () -> Unit
+) {
+    val maxSheetHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp
+    Popup(
+        alignment = Alignment.BottomCenter,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(BottomSheetDefaults.ScrimColor)
+                .clickable(interactionSource = null, indication = null, onClickLabel = "Close sheet", onClick = onDismiss)
+                .testTag(AidenStillBottomSheetTag),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Surface(
+                shape = BottomSheetDefaults.ExpandedShape,
+                color = containerColor,
+                modifier = Modifier
+                    .widthIn(max = BottomSheetDefaults.SheetMaxWidth)
+                    .fillMaxWidth()
+                    .heightIn(max = maxSheetHeight)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                ) {
+                    BottomSheetDefaults.DragHandle()
+                    content()
+                }
+            }
+        }
+    }
+}
+
+internal const val AidenStillBottomSheetTag = "aiden.sheet.still"
 
 /** Connected group card announced as a radio choice; selection is the radio plus a tonal fill. */
 @Composable
