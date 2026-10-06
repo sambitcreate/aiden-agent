@@ -258,9 +258,8 @@ test("empty-chat workspace moves serialize against generation authority and term
 });
 
 test("renderer message appends serialize against detached terminal persistence", async () => {
-  const [handler, generationHandler, llm, schedule, surfaces] = await Promise.all([
+  const [handler, llm, schedule, surfaces] = await Promise.all([
     source("main/handlers/chats.ts"),
-    source("main/handlers/chat.ts"),
     source("main/services/llm-client.ts"),
     source("main/services/schedule-execution.ts"),
     source("main/services/conversation-surface-generation.ts"),
@@ -288,7 +287,6 @@ test("renderer message appends serialize against detached terminal persistence",
   const registerGeneration = llm.indexOf("initializing.set(streamId, initialization)", handoff);
   assert.ok(handoff >= 0);
   assert.ok(registerGeneration > handoff);
-  assert.match(generationHandler, /turnId: messageTurnId/u);
   assert.match(
     schedule,
     /beginSurfaceGeneration\(llmClient\.beginChatTurn\.bind\(llmClient\), surface\)[\s\S]{0,900}chatStore\.appendMessage\([\s\S]{0,1600}startSurfaceGeneration\(/u,

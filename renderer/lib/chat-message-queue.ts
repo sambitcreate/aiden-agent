@@ -70,23 +70,6 @@ export class ChatMessageQueue {
       messages: [...this.snapshot.messages, structuredClone(message)],
     });
   }
-  replaceWith(message: QueuedChatMessage, requestStop?: () => boolean) {
-    // Validate before discarding the old queue so an invalid redirect cannot
-    // erase already accepted local follow-ups.
-    new ChatMessageQueue().validate(message);
-    if (this.snapshot.sendingId) {
-      throw new Error("Wait for the queued message to finish saving before redirecting.");
-    }
-    if (requestStop && !requestStop()) {
-      throw new Error("The current response has ended. Send your message normally.");
-    }
-    this.publish({
-      messages: [structuredClone(message)],
-      paused: false,
-      holdReason: this.snapshot.holdReason,
-      forkSummaryHeld: this.snapshot.forkSummaryHeld,
-    });
-  }
   edit(id: string): boolean {
     if (this.snapshot.sendingId || !this.snapshot.messages.some((item) => item.id === id))
       return false;
@@ -286,6 +269,22 @@ export function steerRejectionMessage(reason: ChatRunInputRejectionReason | unde
       return "Steer accepts plain text only.";
     default:
       return "The current response has ended. Send your message normally.";
+  }
+}
+
+/**
+ * User-facing copy for run input main saved to the transcript but the run
+ * never took (it ended, was stopped, or was full). iOS and Android show the
+ * same receipts for the same Remote outcomes, so keep the three in step.
+ */
+export function committedRunInputNotice(reason: ChatRunInputRejectionReason | undefined): string {
+  switch (reason) {
+    case "cancelled":
+      return "Saved to the chat — the run was cancelled before it could use it";
+    case "capacity":
+      return "Saved to the chat — the run queue was full";
+    default:
+      return "Saved to the chat — the run ended before it could use it";
   }
 }
 

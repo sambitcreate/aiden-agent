@@ -568,6 +568,12 @@ class AidenRemoteClient(
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
 
+    suspend fun createProvider(input: AidenProviderCreation, idempotencyKey: UUID): AidenProviderCreationReceipt =
+        executeRequest("/providers", method = "POST", idempotencyKey = idempotencyKey,
+            acceptedStatus = setOf(201), bodyJson = json.encodeToString(input)) { bytes ->
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
+
     suspend fun memorySettings(): AidenMemorySettings =
         executeRequest("/memory/settings") { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))
@@ -695,6 +701,34 @@ class AidenRemoteClient(
         c
     }
 
+    /**
+     * One page of a chat's visible messages, oldest first. Without [before]
+     * the page ends at the newest message; otherwise it ends just before that
+     * message. A [before] the Mac no longer has is `409 revision_conflict`.
+     */
+    suspend fun messagesWindow(
+        chatId: String,
+        before: String? = null,
+        limit: Int = AidenChatMessagesWindow.DEFAULT_LIMIT
+    ): AidenChatMessagesWindow {
+        if (limit !in 1..AidenChatMessagesWindow.MAXIMUM_LIMIT) throw AidenRemoteClientException.InvalidResponse()
+        val path = buildString {
+            append("/chats/").append(chatId).append("/messages?limit=").append(limit)
+            if (before != null) {
+                append("&before=").append(URLEncoder.encode(before, Charsets.UTF_8.name()).replace("+", "%20"))
+            }
+        }
+        return executeRequest(path, botScope = AidenBotPrivateResponseScope.MessagesWindowProjection) { bytes ->
+            val window = json.decodeFromString<AidenChatMessagesWindow>(String(bytes, Charsets.UTF_8))
+            if (window.chatId != chatId || window.messages.size > limit ||
+                (before != null && window.messages.any { it.id == before })
+            ) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            window
+        }
+    }
+
     suspend fun chatTasks(id: String): AidenChatTaskProgress = executeRequest(
         "/chats/$id/tasks",
         botScope = AidenBotPrivateResponseScope.ChatProgressProjection,
@@ -817,6 +851,66 @@ class AidenRemoteClient(
         botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    /**
+     * Forks [id] at [messageId] (contract revision 21, `chat-fork-v1`).
+     * [summaryFocus] is only sent with [withSummary], which needs
+     * `chat-fork-summary-v1`; a blank focus asks for an unfocused summary.
+     * A replay with the same [idempotencyKey] and body returns the first fork.
+     */
+    suspend fun forkChat(
+        id: String,
+        revision: String,
+        messageId: String,
+        position: AidenChatForkPosition,
+        withSummary: Boolean = false,
+        summaryFocus: String? = null,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatForkResult = executeRequest(
+        "/chats/$id/fork",
+        method = "POST",
+        ifMatchRevision = revision,
+        idempotencyKey = idempotencyKey,
+        bodyJson = json.encodeToString(
+            ChatForkRequest(
+                messageId = messageId,
+                position = position,
+                summary = if (withSummary) {
+                    ChatForkSummaryRequest(summaryFocus?.trim()?.takeIf { it.isNotEmpty() })
+                } else null
+            )
+        ),
+        acceptedStatus = setOf(201),
+        botScope = AidenBotPrivateResponseScope.ChatProjection
+    ) { bytes ->
+        val result = json.decodeFromString<AidenChatForkResult>(String(bytes, Charsets.UTF_8))
+        if (result.chat.id == id) throw AidenRemoteClientException.InvalidResponse()
+        result
+    }
+
+    /** Asks for a failed fork summary again with the same focus. */
+    suspend fun retryForkSummary(chatId: String): AidenChat = forkSummaryChatAction(chatId, "retry")
+
+    /** Drops the fork summary, which turns the chat into a plain fork. */
+    suspend fun skipForkSummary(chatId: String): AidenChat = forkSummaryChatAction(chatId, "skip")
+
+    /** Stops a running fork summary, which then fails; `cancelled` is false when nothing ran. */
+    suspend fun cancelForkSummary(chatId: String): AidenChatForkSummaryCancel = executeRequest(
+        "/chats/$chatId/fork-summary/cancel",
+        method = "POST"
+    ) { bytes ->
+        json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    private suspend fun forkSummaryChatAction(chatId: String, action: String): AidenChat = executeRequest(
+        "/chats/$chatId/fork-summary/$action",
+        method = "POST",
+        botScope = AidenBotPrivateResponseScope.ChatProjection
+    ) { bytes ->
+        val chat = json.decodeFromString<AidenChat>(String(bytes, Charsets.UTF_8))
+        if (chat.id != chatId) throw AidenRemoteClientException.InvalidResponse()
+        chat
     }
 
     suspend fun uploadAttachment(
@@ -1042,7 +1136,7 @@ class AidenRemoteClient(
         expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS
     )
 
-    // --- Contract revision 21: runs started on the Mac, in Telegram or by the scheduler ---
+    // --- Contract revision 24: runs started on the Mac, in Telegram or by the scheduler ---
 
     /** The chat's newest run, possibly already ended. The first frame fixes
      * the run identity; a frame naming any other run ends the feed. */
@@ -2057,6 +2151,17 @@ class AidenRemoteClient(
     /** Encodes to `{}` without a message id so the Mac reads through its newest message. */
     @Serializable
     private data class ChatReadRequest(val throughMessageId: String? = null)
+
+    @Serializable
+    private data class ChatForkRequest(
+        val messageId: String,
+        val position: AidenChatForkPosition,
+        val summary: ChatForkSummaryRequest? = null
+    )
+
+    /** Encodes to `{}` for an unfocused summary. */
+    @Serializable
+    private data class ChatForkSummaryRequest(val focus: String? = null)
 
     @Serializable
     private data class ChatMoveRequest(

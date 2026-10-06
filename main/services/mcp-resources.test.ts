@@ -240,3 +240,40 @@ test("accepted plain expansions encode every reserved character and Unicode with
   const encoded = "%21%27%28%29%2A%3A%2F%3F%23%5B%5D%40%25%C3%A9";
   assert.equal(result.requestedUri, `memo://root/%20/${encoded}/${encoded}`);
 });
+
+test("resource reads return bounded raster content with URI metadata and no inline binary strings", async () => {
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const { tool } = fixture(port({ readResource: async ({ uri }) => ({ contents: [
+    { uri, text: "A small diagram" },
+    { uri: "memo://image", mimeType: "image/png", blob: png },
+    { uri: "memo://binary", mimeType: "application/octet-stream", blob: "cHJpdmF0ZSBiaW5hcnk=" },
+  ] }) }));
+  const { resources } = await invoke(tool, { action: "list" });
+  const result = await tool.execute("image-read", { action: "read", handle: resources[0].handle });
+  assert.deepEqual(result.content[1], { type: "image", mimeType: "image/png", data: png });
+  const metadata = JSON.parse((result.content[0] as { text: string }).text);
+  assert.equal(metadata.requestedUri, "memo://private/one");
+  assert.equal(metadata.contents[0].text, "A small diagram");
+  assert.equal(metadata.contents[1].uri, "memo://image");
+  assert.match(metadata.contents[1].image, /Attached/u);
+  assert.match(metadata.contents[2].omitted, /no file was created/u);
+  assert.ok(!JSON.stringify(metadata).includes(png));
+  assert.ok(!JSON.stringify(result).includes("cHJpdmF0ZSBiaW5hcnk="));
+});
+
+test("resource image validation rejects MIME mismatch, malformed/oversized data and excess images", async () => {
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const { tool } = fixture(port({ readResource: async ({ uri }) => ({ contents: [
+    { uri, mimeType: "image/png", blob: "!!!!" },
+    { uri, mimeType: "image/jpeg", blob: png },
+    { uri, mimeType: "image/png", blob: Buffer.alloc(2 * 1024 * 1024 + 1).toString("base64") },
+    { uri, mimeType: "image/svg+xml", blob: Buffer.from("<svg/>").toString("base64") },
+    ...Array.from({ length: 5 }, (_, index) => ({ uri: `memo://valid/${index}`, mimeType: "image/png", blob: png })),
+  ] }) }));
+  const { resources } = await invoke(tool, { action: "list" });
+  const result = await tool.execute("image-read", { action: "read", handle: resources[0].handle });
+  assert.equal(result.content.filter((part) => part.type === "image").length, 4);
+  const metadata = JSON.parse((result.content[0] as { text: string }).text);
+  for (const index of [0, 1, 2, 3, 8]) assert.match(metadata.contents[index].omitted, /image omitted/u);
+  assert.equal(metadata.contents.filter((part: { image?: string }) => part.image).length, 4);
+});

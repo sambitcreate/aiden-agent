@@ -10,10 +10,13 @@ import {
   type HostChatApprovalResult,
   type HostChatAttachmentUpload,
   type HostChatCapability,
+  type HostChatForkInput,
+  type HostChatLineage,
   type HostChatQuestionInput,
   type HostChatQuestionResult,
   type HostChatStatus,
   type HostChatTurnReceipt,
+  type HostForkedChat,
 } from "./host-chat-adapter";
 
 /** The chat a session is bound to, fixed for the session's lifetime. */
@@ -84,6 +87,8 @@ const UNSUPPORTED_REASON: Partial<Record<HostChatCapability, string>> = {
   browseFolders: "That Mac doesn't allow browsing its folders from here.",
   createWorkspace: "That Mac doesn't allow new projects from here.",
   botChats: "That Mac doesn't allow Bot chats from here.",
+  fork: "That Mac doesn't allow forking from here.",
+  forkSummary: "That Mac doesn't allow fork summaries from here.",
 };
 
 /** What a turn carries besides its text. */
@@ -447,6 +452,45 @@ export class ChatSessionControl {
   async remove(revision?: string): Promise<void> {
     this.guard("remove");
     return this.adapter.remove(this.ref.chatId, revision ? { revision } : {});
+  }
+
+  /**
+   * Forks this chat on its host. When the host's answer is lost, the key is
+   * kept in the window's ledger: asking for the same fork again, from this
+   * pane or one reopened on the same chat, returns the fork the host already
+   * made instead of a second copy.
+   */
+  async fork(input: Omit<HostChatForkInput, "idempotencyKey" | "revision">, revision?: string): Promise<HostForkedChat> {
+    this.guard(input.summary ? "forkSummary" : "fork");
+    if (!this.adapter.fork) throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.fork! });
+    if (!revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before forking it." });
+    // The host fingerprints the body and the revision together with the key.
+    const signature = JSON.stringify([input.messageId, input.position, input.summary ?? null, revision]);
+    const key = this.ledger.forkKey(this.ref, signature) ?? mintPeerIdempotencyKey();
+    this.ledger.beginFork(this.ref, { signature, idempotencyKey: key });
+    try {
+      const forked = await this.adapter.fork(this.ref.chatId, { ...input, revision, idempotencyKey: key });
+      this.ledger.settleFork(this.ref, key);
+      return forked;
+    } catch (error) {
+      // Only a lost answer keeps the key; a refusal means the host made no fork.
+      if (!isOutcomeUnknown(error)) this.ledger.settleFork(this.ref, key);
+      throw error;
+    }
+  }
+
+  /** Retries or skips this fork's summary. */
+  async forkSummary(action: "retry" | "skip"): Promise<HostChatLineage> {
+    this.guard("forkSummary");
+    if (!this.adapter.forkSummary) throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.forkSummary! });
+    return this.adapter.forkSummary(this.ref.chatId, action);
+  }
+
+  /** Stops this fork's pending summary; false when it had already settled. */
+  async cancelForkSummary(): Promise<boolean> {
+    this.guard("forkSummary");
+    if (!this.adapter.cancelForkSummary) throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.forkSummary! });
+    return this.adapter.cancelForkSummary(this.ref.chatId);
   }
 
   dismissElsewhere(): void {

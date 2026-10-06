@@ -58,6 +58,7 @@ const LOCAL_CAPABILITIES: ReadonlySet<HostChatCapability> = new Set<HostChatCapa
   "rename",
   "remove",
   "localPanels",
+  // No "fork": the local pane forks through `chatsApi` directly.
 ]);
 
 const LOCAL_STATUS: HostChatStatus = { availability: "online", generation: 0 };

@@ -1,5 +1,7 @@
 {
-  "contractRevision": 21,
+  "contractRevision": 24,
+  "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
+  "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -1102,7 +1104,7 @@
     "nextOffset": 2,
     "complete": true
   },
-  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 21, "pairingRequests": true },
+  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 24, "pairingRequests": true },
   "hostFeedEvents": [
     { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
     { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false } },
@@ -1127,7 +1129,13 @@
         "createdAt": "2026-08-18T19:00:01.000Z"
       }
     ],
-    "hasOlder": true
+    "hasOlder": true,
+    "workspaceId": "workspace_fixture_01",
+    "title": "Fixture review chat",
+    "providerId": "provider_fixture",
+    "modelId": "model_fixture",
+    "createdAt": "2026-08-18T19:00:00.000Z",
+    "updatedAt": "2026-08-18T19:01:10.000Z"
   },
   "runControlError": {
     "error": {
@@ -1414,5 +1422,65 @@
         "state": "done"
       }
     }
-  ]
+  ],
+  "chatFork": {
+    "features": ["chat-fork-v1", "chat-fork-summary-v1"],
+    "fork": {
+      "request": { "messageId": "message_fixture_source_assistant_01", "position": "after", "summary": { "focus": "the protocol decisions" } },
+      "response": {
+        "chat": {
+          "id": "chat_fixture_fork_01",
+          "workspaceId": "workspace_fixture_01",
+          "title": "Remote protocol review",
+          "providerId": "provider_fixture",
+          "modelId": "model_fixture",
+          "messages": [
+            { "id": "message_fixture_fork_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
+            { "id": "message_fixture_fork_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+          ],
+          "createdAt": "2026-08-18T19:05:00.000Z",
+          "updatedAt": "2026-08-18T19:05:00.000Z",
+          "revision": "chat_revision_fork_1",
+          "forkedFrom": {
+            "chatId": "chat_fixture_source_01",
+            "messageId": "message_fixture_source_assistant_01",
+            "position": "after",
+            "at": "2026-08-18T19:05:00.000Z",
+            "summary": { "state": "pending", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions" }
+          }
+        }
+      }
+    },
+    "editFork": {
+      "request": { "messageId": "message_fixture_source_user_02", "position": "before" },
+      "response": {
+        "chat": {
+          "id": "chat_fixture_fork_02",
+          "workspaceId": "workspace_fixture_01",
+          "title": "Remote protocol review",
+          "providerId": "provider_fixture",
+          "modelId": "model_fixture",
+          "messages": [
+            { "id": "message_fixture_edit_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
+            { "id": "message_fixture_edit_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+          ],
+          "createdAt": "2026-08-18T19:06:00.000Z",
+          "updatedAt": "2026-08-18T19:06:00.000Z",
+          "revision": "chat_revision_fork_2",
+          "forkedFrom": { "chatId": "chat_fixture_source_01", "messageId": "message_fixture_source_user_02", "position": "before", "at": "2026-08-18T19:06:00.000Z" }
+        },
+        "prefill": {
+          "text": "Now check the error codes.",
+          "attachments": [
+            { "id": "att_fixture_fork_codes_000000000000000000000000", "name": "codes.txt", "mimeType": "text/plain", "kind": "text", "size": 42, "expiresAt": "2026-08-18T19:16:00.000Z" }
+          ]
+        }
+      }
+    },
+    "summaryStates": [
+      { "state": "ready", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "text": "The review settled on revision 21 and kept every route additive." },
+      { "state": "failed", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "error": "The summary could not be generated." }
+    ],
+    "summaryCancel": { "cancelled": true }
+  }
 }

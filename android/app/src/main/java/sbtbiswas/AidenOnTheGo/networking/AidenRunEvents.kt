@@ -25,7 +25,7 @@ import java.io.InputStream
 import java.io.InputStreamReader
 import java.time.Instant
 
-// Contract revision 21: phone observation and control of runs started on the
+// Contract revision 24: phone observation and control of runs started on the
 // Mac, in Telegram or by the scheduler.
 
 enum class AidenRemoteRunEndState(val wireName: String) {

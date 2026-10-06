@@ -120,6 +120,52 @@
     }
   ],
   "paths": {
+    "/providers": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "createProvider",
+        "x-aiden-capability": "workspace:manage",
+        "x-aiden-additional-capabilities": [
+          "server:read"
+        ],
+        "x-aiden-feature": "providers-create-v1",
+        "description": "Contract revision 22 (providers-create-v1). Create a custom provider on the paired host without contacting its endpoint. Credentials are write-only and stored encrypted on the host. Creation is scoped to the authenticated device and Idempotency-Key. Replays never overwrite an existing connection or rotate its key.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCreation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created provider or recovered creation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCreationReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health",
@@ -946,6 +992,107 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Chat"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/fork": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "forkChat",
+        "description": "Contract revision 21 fork (chat-fork-v1). Creates a new chat in the same workspace from one message of a regular chat. position after keeps everything through the chosen settled assistant reply; position before keeps everything before the chosen user prompt and returns that prompt as prefill so the device can edit and resend it in the fork, with its attachments restaged for this device. A summary request (chat-fork-summary-v1) starts the fork with a pending summary of what followed the cut in the source. Bot chats are not forked (not_found). An ineligible message is invalid_request, a busy source is operation_in_progress, and a fork too large to copy is payload_too_large.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatForkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Fork created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatForkResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/fork-summary/{action}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "chatForkSummaryAction",
+        "description": "Contract revision 21 fork summary actions (chat-fork-summary-v1). retry asks for a failed summary again with the same focus, skip continues without the summary (the fork becomes a plain fork), and both return the Chat. cancel stops a running summary, which becomes failed, and returns ChatForkSummaryCancel. A chat without a fork summary is not_found; a summary that moved on (finished, retried or cancelled elsewhere) is revision_conflict.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "retry",
+                "skip",
+                "cancel"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Summary action applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Chat"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatForkSummaryCancel"
+                    }
+                  ]
                 }
               }
             }
@@ -4309,7 +4456,7 @@
       ],
       "get": {
         "operationId": "chatCurrentRunEvents",
-        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch. Contract revision 21 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
+        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -4345,7 +4492,7 @@
       ],
       "get": {
         "operationId": "runEvents",
-        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted. Contract revision 21 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
+        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -4409,7 +4556,7 @@
       ],
       "post": {
         "operationId": "cancelRun",
-        "description": "Contract revision 19 (run-control-v1). Stops a running run whatever surface started it. Requires chat write access to the run's chat. run_gone for an unknown run; operation_stale once the run has finished. Contract revision 21 (phone-run-control-v1): a phone holding runs:control also needs chat:write, and bot:write for a Bot chat.",
+        "description": "Contract revision 19 (run-control-v1). Stops a running run whatever surface started it. Requires chat write access to the run's chat. run_gone for an unknown run; operation_stale once the run has finished. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs chat:write, and bot:write for a Bot chat.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -4465,7 +4612,7 @@
       ],
       "post": {
         "operationId": "respondRunApproval",
-        "description": "Contract revision 19 (run-control-v1). Resolves an approval in this run whoever owns it. The first responder wins; a later responder receives 409 approval_resolved with the winning decision and resolvedAt, and an Idempotency-Key replay returns the same outcome. An approval that is not part of the run is not_found. Allowing an approval whose details were too large to send is capability_denied; review it on the host. Contract revision 21 (phone-run-control-v1): a phone holding runs:control also needs approval:respond; a phone may allow only an approval its projection marked canAllow, otherwise allow is capability_denied and deny still works.",
+        "description": "Contract revision 19 (run-control-v1). Resolves an approval in this run whoever owns it. The first responder wins; a later responder receives 409 approval_resolved with the winning decision and resolvedAt, and an Idempotency-Key replay returns the same outcome. An approval that is not part of the run is not_found. Allowing an approval whose details were too large to send is capability_denied; review it on the host. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs approval:respond; a phone may allow only an approval its projection marked canAllow, otherwise allow is capability_denied and deny still works.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -4529,7 +4676,7 @@
       ],
       "post": {
         "operationId": "respondRunQuestion",
-        "description": "Contract revision 19 (run-control-v1). Answers or dismisses a question in this run whoever owns it. The first responder wins; a later responder receives 409 question_already_resolved with the winning outcome and resolvedAt. Contract revision 21 (phone-run-control-v1): a phone holding runs:control also needs questions:respond.",
+        "description": "Contract revision 19 (run-control-v1). Answers or dismisses a question in this run whoever owns it. The first responder wins; a later responder receives 409 question_already_resolved with the winning outcome and resolvedAt. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs questions:respond.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -4593,7 +4740,7 @@
       ],
       "post": {
         "operationId": "submitRunInput",
-        "description": "Contract revision 19 (run-control-v1). Mid-flight steer or queue input for a running run, with the same admission semantics as /streams/{streamId}/inputs. Contract revision 21 (phone-run-control-v1): a phone holding runs:control also needs chat:write, and bot:write for a Bot chat.",
+        "description": "Contract revision 19 (run-control-v1). Mid-flight steer or queue input for a running run, with the same admission semantics as /streams/{streamId}/inputs. Contract revision 24 (phone-run-control-v1): a phone holding runs:control also needs chat:write, and bot:write for a Bot chat.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "runs:control",
         "parameters": [
@@ -4953,6 +5100,159 @@
       }
     },
     "schemas": {
+      "ProviderCreation": {
+        "type": "object",
+        "required": [
+          "label",
+          "baseUrl",
+          "kind",
+          "deployment",
+          "needsKey",
+          "models",
+          "confirmedForeground"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "baseUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "kind": {
+            "enum": [
+              "openai",
+              "anthropic"
+            ]
+          },
+          "deployment": {
+            "enum": [
+              "local",
+              "hosted"
+            ]
+          },
+          "needsKey": {
+            "type": "boolean"
+          },
+          "apiKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "writeOnly": true
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/ProviderCreationModel"
+            }
+          },
+          "confirmedForeground": {
+            "const": true
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "needsKey": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "apiKey"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "apiKey"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "ProviderCreationModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "vision",
+          "reasoning",
+          "toolCall"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "vision": {
+            "type": "boolean"
+          },
+          "reasoning": {
+            "type": "boolean"
+          },
+          "toolCall": {
+            "type": "boolean"
+          },
+          "contextLength": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          },
+          "outputLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000
+          },
+          "maxImages": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        }
+      },
+      "ProviderCreationReceipt": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "models"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -5444,7 +5744,7 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 21 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only.",
             "minItems": 1,
             "maxItems": 8,
             "items": {
@@ -7432,6 +7732,14 @@
               true
             ]
           },
+          "forkedFrom": {
+            "description": "Additive in contract revision 21: present on a chat created by Fork.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatForkLineage"
+              }
+            ]
+          },
           "providerId": {
             "type": "string",
             "minLength": 1,
@@ -7531,9 +7839,214 @@
           "unread": {
             "description": "Additive in contract revision 18. True only when assistant output was persisted after the chat was last viewed on any surface (desktop or a paired device). Output older than the host's read-tracking baseline is never unread. Always false on hosts that do not advertise chat-read-state-v1.",
             "type": "boolean"
+          },
+          "forkedFrom": {
+            "description": "Additive in contract revision 21: lineage for the sidebar fork glyph. Rows never carry the summary.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatForkLineageRow"
+              }
+            ]
           }
         },
         "additionalProperties": true
+      },
+      "ChatForkSummary": {
+        "type": "object",
+        "description": "Contract revision 21. What happened after the fork point in the source chat, summarized for the fork's model context. Messages sent while it is pending wait for it; a failed summary blocks sending until it is retried or skipped.",
+        "required": [
+          "state",
+          "afterMessageId"
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ]
+          },
+          "afterMessageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "description": "The fork's last copied message; the summary follows it."
+          },
+          "focus": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "The focus the summary was asked for."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "error": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "Why the summary failed, in Aiden's own words. Provider errors stay on the Mac."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatForkLineage": {
+        "type": "object",
+        "description": "Contract revision 21. The chat and message this chat was forked from. The source may since have been deleted.",
+        "required": [
+          "chatId",
+          "messageId",
+          "position",
+          "at"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "position": {
+            "enum": [
+              "after",
+              "before"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ChatForkSummary"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatForkLineageRow": {
+        "type": "object",
+        "description": "Contract revision 21. Fork lineage on a chat row, without the summary.",
+        "required": [
+          "chatId",
+          "messageId",
+          "position",
+          "at"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "position": {
+            "enum": [
+              "after",
+              "before"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatForkRequest": {
+        "type": "object",
+        "required": [
+          "messageId",
+          "position"
+        ],
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "position": {
+            "enum": [
+              "after",
+              "before"
+            ]
+          },
+          "summary": {
+            "type": "object",
+            "description": "Fork with summary (chat-fork-summary-v1).",
+            "properties": {
+              "focus": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000,
+                "description": "Optional focus for the summary; surrounding whitespace is trimmed."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatForkResult": {
+        "type": "object",
+        "required": [
+          "chat"
+        ],
+        "properties": {
+          "chat": {
+            "$ref": "#/components/schemas/Chat",
+            "description": "The new fork; it always carries forkedFrom."
+          },
+          "prefill": {
+            "type": "object",
+            "description": "Only for position before: the chosen prompt to edit and resend in the fork. Attachments that cannot be restaged are omitted.",
+            "required": [
+              "text"
+            ],
+            "properties": {
+              "text": {
+                "type": "string",
+                "maxLength": 200000
+              },
+              "attachments": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "$ref": "#/components/schemas/AttachmentReference"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatForkSummaryCancel": {
+        "type": "object",
+        "required": [
+          "cancelled"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "boolean",
+            "description": "False when no summary was running."
+          }
+        },
+        "additionalProperties": false
       },
       "ChatSummaryPage": {
         "type": "object",
@@ -11672,7 +12185,12 @@
       },
       "ChatMessagesWindow": {
         "type": "object",
+        "description": "Contract revision 23 (chat-messages-window-metadata-v1) adds the chat metadata a whole-chat read returns: workspaceId, botId, title, titlePending, providerId/modelId, createdAt and updatedAt. A host advertising chat-messages-window-metadata-v1 always includes workspaceId, title, createdAt and updatedAt; a client that refreshes from a window falls back to GET /chats/{chatId} when they are absent.",
         "x-aiden-max-json-response-bytes": 1048576,
+        "dependentRequired": {
+          "providerId": ["modelId"],
+          "modelId": ["providerId"]
+        },
         "required": [
           "chatId",
           "revision",
@@ -11700,6 +12218,53 @@
           "hasOlder": {
             "type": "boolean",
             "description": "True when older visible messages exist before the first returned message."
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "titlePending": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "forkedFrom": {
+            "description": "Additive in contract revision 21: present on a fork, with its summary.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatForkLineage"
+              }
+            ]
           }
         },
         "additionalProperties": false

@@ -2,7 +2,7 @@ import {
   generateBranchSummary,
   TODO_CONTEXT,
   withAbortSignal,
-} from "@earendil-works/pi-agent-core";
+} from "./pi-legacy-harness.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   MAX_FORK_SUMMARY_FILES,
@@ -15,6 +15,7 @@ import { chatMessageToPiMessage } from "./generation-messages.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import { createPiCompactionModels } from "./pi-compaction-core.js";
 import type { PiSessionEntry } from "./pi-session-port.js";
+import { FORK_SUMMARY_FAILURES as FAILURES, ForkSummaryStateError } from "./chat-fork-error.js";
 import type { Chat, ChatMessage } from "./types.js";
 
 export interface ForkSummaryServiceDeps {
@@ -47,7 +48,7 @@ const PI_BRANCH_PREAMBLE = /^The user explored a different conversation branch b
 const PI_FILE_SECTIONS = /(?:\n\n<(read-files|modified-files)>\n[\s\S]*?\n<\/\1>)+$/u;
 
 function boundedFailure(message: string): string {
-  const text = message.trim() || "The summary could not be generated.";
+  const text = message.trim() || FAILURES.generic;
   return text.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS
     ? `${text.slice(0, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS - 1)}…`
     : text;
@@ -116,7 +117,7 @@ export class ForkSummaryService {
   cancel(chatId: string): boolean {
     const operation = this.running.get(chatId);
     if (!operation) return false;
-    operation.controller.abort(new DOMException("Summary cancelled.", "AbortError"));
+    operation.controller.abort(new DOMException(FAILURES.cancelled, "AbortError"));
     return true;
   }
 
@@ -131,7 +132,7 @@ export class ForkSummaryService {
           }
         : null,
     );
-    if (!chat) throw new Error("This fork has no failed summary to retry.");
+    if (!chat) throw new ForkSummaryStateError("This fork has no failed summary to retry.");
     this.deps.published?.(chat);
     void this.run(chatId);
     return chat;
@@ -140,12 +141,12 @@ export class ForkSummaryService {
   /** Continue without summary: the fork becomes a plain fork and may send. */
   async skip(chatId: string): Promise<Chat> {
     if (this.running.has(chatId)) {
-      throw new Error("Cancel the summary before continuing without it.");
+      throw new ForkSummaryStateError("Cancel the summary before continuing without it.");
     }
     const chat = await this.deps.updateForkSummary(chatId, (summary) =>
       summary && summary.state !== "ready" ? undefined : null,
     );
-    if (!chat) throw new Error("This fork has no unfinished summary.");
+    if (!chat) throw new ForkSummaryStateError("This fork has no unfinished summary.");
     this.deps.published?.(chat);
     return chat;
   }
@@ -158,7 +159,7 @@ export class ForkSummaryService {
     if (this.running.has(chatId)) return;
     const chat = await this.deps.updateForkSummary(chatId, (summary) =>
       summary?.state === "pending" && !this.running.has(chatId)
-        ? { ...summary, state: "failed", error: "Summarizing stopped before it finished." }
+        ? { ...summary, state: "failed", error: FAILURES.interrupted }
         : null,
     );
     if (chat) this.deps.published?.(chat);
@@ -177,10 +178,10 @@ export class ForkSummaryService {
       });
     } catch (cause) {
       const error = signal.aborted
-        ? "Summary cancelled."
+        ? FAILURES.cancelled
         : cause instanceof ForkSummaryFailure
           ? boundedFailure(cause.message)
-          : "The summary could not be generated.";
+          : FAILURES.generic;
       outcome = (summary) => ({ ...summary, state: "failed", error });
     }
     const chat = await this.deps.updateForkSummary(chatId, (summary) =>
@@ -197,19 +198,19 @@ export class ForkSummaryService {
     const lineage = fork?.forkedFrom;
     if (lineage?.summary?.state !== "pending") return undefined;
     const source = await this.deps.getChat(lineage.chatId);
-    if (!source) throw new ForkSummaryFailure("The original chat is no longer available.");
+    if (!source) throw new ForkSummaryFailure(FAILURES.sourceGone);
     if (!source.providerId || !source.model) {
-      throw new ForkSummaryFailure("The original chat has no model to summarize with.");
+      throw new ForkSummaryFailure(FAILURES.noModel);
     }
     const cut = sourceMessagesAfterCut(source, lineage);
-    if (!cut) throw new ForkSummaryFailure("The fork point is no longer in the original chat.");
-    if (cut.after.length === 0) throw new ForkSummaryFailure("Nothing happened after this point to summarize.");
+    if (!cut) throw new ForkSummaryFailure(FAILURES.cutGone);
+    if (cut.after.length === 0) throw new ForkSummaryFailure(FAILURES.nothingAfter);
 
     let runtime: ResolvedModelRuntime;
     try {
       runtime = await this.deps.resolveRuntime(source.providerId, source.model, signal, source.id);
     } catch {
-      throw new ForkSummaryFailure("The original chat's model is unavailable.");
+      throw new ForkSummaryFailure(FAILURES.modelUnavailable);
     }
     signal.throwIfAborted();
     // The journal adds tool calls and results the transcript does not show.
@@ -234,7 +235,7 @@ export class ForkSummaryService {
     signal.throwIfAborted();
     if (!result.ok) throw new ForkSummaryFailure(result.error.message);
     const text = result.value.summary.replace(PI_BRANCH_PREAMBLE, "").replace(PI_FILE_SECTIONS, "").trim();
-    if (!text) throw new ForkSummaryFailure("The model returned an empty summary.");
+    if (!text) throw new ForkSummaryFailure(FAILURES.empty);
     return {
       text: text.length > MAX_FORK_SUMMARY_TEXT_CHARS ? `${text.slice(0, MAX_FORK_SUMMARY_TEXT_CHARS - 1)}…` : text,
       files: {

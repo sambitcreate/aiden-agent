@@ -237,7 +237,7 @@ function isPhoneRunCapability(value: unknown): boolean {
 
 /**
  * Host authority a device type may hold: desktops hold the full host
- * vocabulary; phones only the phone-scoped run subset (contract revision 21).
+ * vocabulary; phones only the phone-scoped run subset (contract revision 24).
  */
 function mayHoldHostCapability(type: unknown, capability: unknown): boolean {
   return type === "mac" || type === "linux" || isPhoneRunCapability(capability);

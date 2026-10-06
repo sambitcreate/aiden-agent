@@ -25,7 +25,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import sbtbiswas.AidenOnTheGo.protocol.AidenSSEParserException
 
-/** Contract revision 21: phones observe and control runs started elsewhere. */
+/** Contract revision 24: phones observe and control runs started elsewhere. */
 class AidenForeignRunTest {
     private val json = Json { ignoreUnknownKeys = true }
 

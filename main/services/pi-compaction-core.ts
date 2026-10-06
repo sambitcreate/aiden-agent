@@ -2,24 +2,8 @@ import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shar
 import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import { VccError } from "./pi-vcc/errors.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
-import {
-  DEFAULT_COMPACTION_SETTINGS,
-  CompactionError,
-  calculateContextTokens,
-  compact,
-  estimateContextTokens,
-  estimateTokens,
-  prepareCompaction,
-  shouldCompact,
-  uuidv7,
-  TODO_CONTEXT,
-  withAbortSignal,
-  type AgentMessage,
-  type CompactionSettings,
-  type CompactionPreparation,
-  type CompactResult,
-  type ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { DEFAULT_COMPACTION_SETTINGS, CompactionError, calculateContextTokens, compact, estimateContextTokens, estimateTokens, prepareCompaction, shouldCompact, uuidv7, TODO_CONTEXT, withAbortSignal, type CompactionSettings, type CompactionPreparation, type CompactResult } from "./pi-legacy-harness.js";
 import {
   isContextOverflow,
   isRetryableAssistantError,
@@ -94,7 +78,7 @@ export interface PiCompactionCoordinatorOptions {
   model: ResolvedModelRuntime["model"];
   thinkingLevel: ThinkingLevel;
   consumeHostFailure?: () => "inference" | "policy" | undefined;
-  settings?: CompactionSettings;
+  settings?: Partial<CompactionSettings>;
   signal?: AbortSignal;
   onEvent?: (event: PiCompactionEvent) => void;
   /** Bounded host backoff for transient provider/transport retries. */

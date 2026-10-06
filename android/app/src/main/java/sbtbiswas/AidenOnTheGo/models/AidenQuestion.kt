@@ -35,7 +35,7 @@ data class AidenStreamPendingQuestion(
     val expiresAt: Instant
 )
 
-/** Contract revision 21: a question prompt on a run this phone did not start. */
+/** Contract revision 24: a question prompt on a run this phone did not start. */
 data class AidenRemoteRunQuestion(
     val promptId: String,
     val questions: List<AidenRemoteQuestion>,
@@ -150,7 +150,7 @@ object AidenQuestionContractCodec {
         )
     }
 
-    /** Contract revision 21: a run question prompt. Unlike a phone-owned
+    /** Contract revision 24: a run question prompt. Unlike a phone-owned
      * stream prompt it names its tool call, and `expiresAt` is present only
      * when the host set one. */
     fun parseRunQuestion(element: JsonElement, label: String = "run question"): AidenRemoteRunQuestion {

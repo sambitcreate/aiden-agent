@@ -108,6 +108,8 @@ actor AidenChatCache {
         // Optional so caches written before contract revision 18 still load.
         let rowState: AidenChatRowState?
         let unread: Bool?
+        // Optional so caches written before contract revision 21 still load.
+        let forkedFrom: AidenChatForkLineage?
 
         init(_ summary: AidenChatSummary) {
             id = summary.id
@@ -120,6 +122,7 @@ actor AidenChatCache {
             activity = summary.activity
             rowState = summary.rowState
             unread = summary.unread
+            forkedFrom = summary.forkedFrom
         }
 
         var summary: AidenChatSummary {
@@ -133,7 +136,8 @@ actor AidenChatCache {
                 revision: revision,
                 activity: activity,
                 rowState: rowState,
-                unread: unread ?? false
+                unread: unread ?? false,
+                forkedFrom: forkedFrom
             )
         }
     }

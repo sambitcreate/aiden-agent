@@ -126,13 +126,13 @@ export interface AidenRemoteHostRunDevice {
   capabilities: ReadonlySet<AidenRemoteCapability>;
   /**
    * Paired device type. A phone (anything but `mac`/`linux`) holding the
-   * phone-scoped run subset (contract revision 21) always receives the phone
+   * phone-scoped run subset (contract revision 24) always receives the phone
    * projection, whatever grants it holds.
    */
   type?: string;
 }
 
-/** Phones never receive host-only approval facts (contract revision 21). */
+/** Phones never receive host-only approval facts (contract revision 24). */
 export function isPhoneRunDevice(device: { type?: string }): boolean {
   return device.type !== undefined && device.type !== "mac" && device.type !== "linux";
 }

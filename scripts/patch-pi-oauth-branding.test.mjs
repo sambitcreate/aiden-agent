@@ -1,10 +1,12 @@
+/* global fetch */
+
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { patchPiOAuthBranding } from "./patch-pi-oauth-branding.mjs";
 
@@ -17,14 +19,16 @@ async function fixture(t) {
   const oauthRoot = path.join(packageRoot, "dist", "auth", "oauth");
   await mkdir(path.join(root, "resources"), { recursive: true });
   await mkdir(oauthRoot, { recursive: true });
+  await mkdir(path.join(packageRoot, "dist", "utils"), { recursive: true });
   await copyFile(
     path.join(repositoryRoot, "resources", "app-icon.png"),
     path.join(root, "resources", "app-icon.png"),
   );
   for (const relativePath of [
     "package.json",
-    path.join("dist", "auth", "oauth", "oauth-page.js"),
-    path.join("dist", "auth", "oauth", "openai-codex.js"),
+    path.join("dist", "utils", "oauth-page.js"),
+    path.join("dist", "auth", "oauth", "callback-server.js"),
+    path.join("dist", "auth", "oauth", "openai-chatgpt.js"),
   ]) {
     await copyFile(
       path.join(repositoryRoot, "node_modules", "@earendil-works", "pi-ai", relativePath),
@@ -39,25 +43,36 @@ test("brands Pi OAuth callbacks as Aiden and remains idempotent", async (t) => {
   await patchPiOAuthBranding(root);
   assert.deepEqual(await patchPiOAuthBranding(root), { changed: false });
 
-  const page = await readFile(path.join(packageRoot, "dist", "auth", "oauth", "oauth-page.js"), "utf8");
-  const openAi = await readFile(
-    path.join(packageRoot, "dist", "auth", "oauth", "openai-codex.js"),
-    "utf8",
-  );
-  assert.match(page, /Aiden Agent sign-in successful/u);
-  assert.match(page, /Aiden Agent sign-in failed/u);
-  assert.match(page, /data:image\/png;base64,/u);
-  assert.doesNotMatch(page, /const LOGO_SVG = `<svg/u);
-  assert.match(
-    openAi,
-    /Your ChatGPT account is connected to Aiden Agent\. You can close this window\./u,
-  );
-  assert.doesNotMatch(openAi, /OpenAI authentication completed/u);
+  const pagePath = path.join(packageRoot, "dist", "utils", "oauth-page.js");
+  const page = await import(pathToFileURL(pagePath).href);
+  const success = page.oauthSuccessHtml("Connected account");
+  const failure = page.oauthErrorHtml("Denied", "Retry sign-in");
+  assert.match(success, /<title>Aiden Agent sign-in successful<\/title>/u);
+  assert.match(success, /Connected account/u);
+  assert.match(success, /data:image\/png;base64,/u);
+  assert.match(failure, /<title>Aiden Agent sign-in failed<\/title>/u);
+  assert.match(failure, /Retry sign-in/u);
+
+  const { startOAuthCallbackServer } = await import(pathToFileURL(
+    path.join(packageRoot, "dist", "auth", "oauth", "callback-server.js"),
+  ).href);
+  const server = await startOAuthCallbackServer({
+    providerName: "OpenAI", host: "127.0.0.1", port: 0, path: "/auth/callback",
+    state: "test-state", complete: async (code) => code,
+  });
+  try {
+    const response = await fetch(`${server.redirectUri}?state=test-state&code=accepted`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Your OpenAI account is connected to Aiden Agent/u);
+    assert.equal(await server.wait(), "accepted");
+  } finally {
+    server.close();
+  }
 
   await writeFile(path.join(root, "resources", "app-icon.png"), "replacement-icon");
   assert.deepEqual(await patchPiOAuthBranding(root), { changed: true });
   const refreshedPage = await readFile(
-    path.join(packageRoot, "dist", "auth", "oauth", "oauth-page.js"),
+    path.join(packageRoot, "dist", "utils", "oauth-page.js"),
     "utf8",
   );
   assert.match(refreshedPage, new RegExp(Buffer.from("replacement-icon").toString("base64"), "u"));
@@ -68,12 +83,12 @@ test("fails closed when the pinned Pi package changes", async (t) => {
   const packageJsonPath = path.join(packageRoot, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   await writeFile(packageJsonPath, `${JSON.stringify({ ...packageJson, version: "0.84.1" })}\n`);
-  await assert.rejects(patchPiOAuthBranding(root), /Expected @earendil-works\/pi-ai 0\.87\.1/u);
+  await assert.rejects(patchPiOAuthBranding(root), /Expected @earendil-works\/pi-ai 1\.0\.3/u);
 });
 
 test("fails closed when an upstream callback template drifts", async (t) => {
   const { packageRoot, root } = await fixture(t);
-  const oauthPagePath = path.join(packageRoot, "dist", "auth", "oauth", "oauth-page.js");
+  const oauthPagePath = path.join(packageRoot, "dist", "utils", "oauth-page.js");
   const page = await readFile(oauthPagePath, "utf8");
   await writeFile(
     oauthPagePath,

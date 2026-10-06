@@ -8,7 +8,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import java.time.Instant
 
-// Contract revision 21: foreign runs.
+// Contract revision 24: foreign runs.
 
 /** How a prompt on a foreign run was resolved by another surface (the Mac,
  * Telegram, or another device) before this phone answered it. */
@@ -58,7 +58,7 @@ data class AidenForeignRunResolution(
     }
 }
 
-/** Contract revision 21: the phone's live projection of a run it did not start
+/** Contract revision 24: the phone's live projection of a run it did not start
  * (on the Mac, in Telegram or from the scheduler). It is a pure reducer over
  * [AidenRemoteRunEvent], so attaching mid-run, gap snapshots and
  * first-responder-wins resolutions are testable without a network. */

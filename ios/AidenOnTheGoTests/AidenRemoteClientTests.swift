@@ -4514,6 +4514,364 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(requests, 0)
     }
 
+    func testForkWithSummarySendsContractRequestAndDecodesFixtureLineage() async throws {
+        let responseData = try botFixtureData(at: ["chatFork", "fork", "response"])
+        let expectedBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "request"])
+            ) as? [String: Any]
+        )
+        let key = UUID()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "https://aiden.test/api/aiden/v1/chats/chat_fixture_source_01/fork"
+            )
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "chat_revision_source_7")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Idempotency-Key"),
+                key.uuidString.lowercased()
+            )
+            XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, expectedBody as NSDictionary)
+            return Self.response(for: request, status: 201, data: responseData)
+        }
+
+        let result = try await makeClient().forkChat(
+            chatId: "chat_fixture_source_01",
+            revision: "chat_revision_source_7",
+            messageId: "message_fixture_source_assistant_01",
+            position: .after,
+            summaryFocus: "  the protocol decisions\n",
+            idempotencyKey: key
+        )
+
+        XCTAssertEqual(result.chat.id, "chat_fixture_fork_01")
+        XCTAssertNil(result.prefill)
+        let lineage = try XCTUnwrap(result.chat.forkedFrom)
+        XCTAssertEqual(lineage.chatId, "chat_fixture_source_01")
+        XCTAssertEqual(lineage.position, .after)
+        XCTAssertEqual(lineage.summary?.state, .pending)
+        XCTAssertEqual(lineage.summary?.afterMessageId, "message_fixture_fork_assistant_01")
+        XCTAssertEqual(lineage.summary?.focus, "the protocol decisions")
+    }
+
+    func testEditInForkOmitsSummaryAndReturnsPrefill() async throws {
+        let responseData = try botFixtureData(at: ["chatFork", "editFork", "response"])
+        let expectedBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "editFork", "request"])
+            ) as? [String: Any]
+        )
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, expectedBody as NSDictionary)
+            return Self.response(for: request, status: 201, data: responseData)
+        }
+
+        let result = try await makeClient().forkChat(
+            chatId: "chat_fixture_source_01",
+            revision: "chat_revision_source_7",
+            messageId: "message_fixture_source_user_02",
+            position: .before
+        )
+
+        XCTAssertEqual(result.chat.id, "chat_fixture_fork_02")
+        XCTAssertEqual(result.chat.forkedFrom?.position, .before)
+        XCTAssertNil(result.chat.forkedFrom?.summary)
+        XCTAssertEqual(result.prefill?.text, "Now check the error codes.")
+        XCTAssertEqual(result.prefill?.attachments.map(\.name), ["codes.txt"])
+    }
+
+    func testForkSummaryRequestShapesMatchTheContract() async throws {
+        var bodies: [[String: Any]] = []
+        let responseData = try botFixtureData(at: ["chatFork", "fork", "response"])
+        AidenRemoteMockURLProtocol.handler = { request in
+            bodies.append(try Self.jsonBody(request))
+            return Self.response(for: request, status: 201, data: responseData)
+        }
+        let client = makeClient()
+        for focus in [nil, " \n", "the protocol decisions"] as [String?] {
+            _ = try await client.forkChat(
+                chatId: "chat_fixture_source_01",
+                revision: "chat_revision_source_7",
+                messageId: "message_fixture_source_assistant_01",
+                position: .after,
+                summaryFocus: focus
+            )
+        }
+
+        XCTAssertEqual(bodies.count, 3)
+        XCTAssertNil(bodies[0]["summary"], "A plain fork asks for no summary.")
+        XCTAssertEqual(bodies[1]["summary"] as? NSDictionary, [:] as NSDictionary)
+        XCTAssertEqual(
+            bodies[2]["summary"] as? NSDictionary,
+            ["focus": "the protocol decisions"] as NSDictionary
+        )
+
+        await assertInvalidResponse {
+            try await client.forkChat(
+                chatId: "chat_fixture_source_01",
+                revision: "chat_revision_source_7",
+                messageId: "message_fixture_source_assistant_01",
+                position: .after,
+                summaryFocus: String(repeating: "é", count: 1_001)
+            )
+        }
+        XCTAssertEqual(bodies.count, 3, "An over-long focus never leaves the phone.")
+    }
+
+    func testForkRejectsResultsThatDoNotRecordTheRequestedCut() async throws {
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "editFork", "response"])
+            ) as? [String: Any]
+        )
+        func mutated(_ change: (inout [String: Any]) -> Void) throws -> Data {
+            var value = fixture
+            change(&value)
+            return try JSONSerialization.data(withJSONObject: value)
+        }
+        func chat(_ value: [String: Any], _ change: (inout [String: Any]) -> Void) -> [String: Any] {
+            var chat = value["chat"] as! [String: Any]
+            change(&chat)
+            return chat
+        }
+        let cases: [(position: AidenChatForkPosition, data: Data)] = [
+            (.before, try mutated { $0["chat"] = chat($0) { $0.removeValue(forKey: "forkedFrom") } }),
+            (.before, try mutated { $0["chat"] = chat($0) { $0["id"] = "chat_fixture_source_01" } }),
+            (.after, try mutated { _ in }),
+        ]
+        for testCase in cases {
+            AidenRemoteMockURLProtocol.handler = { request in
+                Self.response(for: request, status: 201, data: testCase.data)
+            }
+            await assertInvalidResponse {
+                try await self.makeClient().forkChat(
+                    chatId: "chat_fixture_source_01",
+                    revision: "chat_revision_source_7",
+                    messageId: "message_fixture_source_user_02",
+                    position: testCase.position
+                )
+            }
+        }
+    }
+
+    func testForkSummaryActionsPostToTheirRoutes() async throws {
+        var paths: [String] = []
+        let cancelData = try botFixtureData(at: ["chatFork", "summaryCancel"])
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            let path = try XCTUnwrap(request.url?.path)
+            paths.append(path)
+            if path.hasSuffix("/cancel") {
+                return Self.response(for: request, status: 200, data: cancelData)
+            }
+            return Self.chatResponse(for: request, status: 200, revision: "rev-2", id: "chat-1")
+        }
+        let client = makeClient()
+
+        let retried = try await client.retryForkSummary(chatId: "chat-1")
+        let skipped = try await client.skipForkSummary(chatId: "chat-1")
+        XCTAssertEqual(retried.id, "chat-1")
+        XCTAssertEqual(skipped.id, "chat-1")
+        let cancelled = try await client.cancelForkSummary(chatId: "chat-1")
+        XCTAssertTrue(cancelled)
+        XCTAssertEqual(paths, [
+            "/api/aiden/v1/chats/chat-1/fork-summary/retry",
+            "/api/aiden/v1/chats/chat-1/fork-summary/skip",
+            "/api/aiden/v1/chats/chat-1/fork-summary/cancel",
+        ])
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            Self.chatResponse(for: request, status: 200, revision: "rev-2", id: "chat-2")
+        }
+        await assertInvalidResponse { try await client.skipForkSummary(chatId: "chat-1") }
+    }
+
+    func testForkLineageDecodingKeepsChatsReadableWhenLineageIsDamaged() throws {
+        var chat = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "response", "chat"])
+            ) as? [String: Any]
+        )
+        func decode(_ value: [String: Any]) throws -> AidenChat {
+            try AidenRemoteJSONDecoder.decode(
+                AidenChat.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+        }
+        // A chat read keeps the summary's focus text.
+        XCTAssertEqual(try decode(chat).forkedFrom?.summary?.focus, "the protocol decisions")
+        var leaked = chat
+        leaked["instructions"] = "the protocol decisions"
+        XCTAssertThrowsError(try decode(leaked))
+
+        var lineage = try XCTUnwrap(chat["forkedFrom"] as? [String: Any])
+
+        // A damaged summary is dropped on its own; the chat stays a fork.
+        lineage["summary"] = ["state": "thinking", "afterMessageId": "message_fixture_fork_assistant_01"]
+        chat["forkedFrom"] = lineage
+        let unsummarized = try decode(chat)
+        XCTAssertEqual(unsummarized.forkedFrom?.chatId, "chat_fixture_source_01")
+        XCTAssertNil(unsummarized.forkedFrom?.summary)
+
+        // Damaged lineage identity is dropped; the chat itself still decodes.
+        lineage["chatId"] = "chat with spaces"
+        chat["forkedFrom"] = lineage
+        let unlinked = try decode(chat)
+        XCTAssertEqual(unlinked.id, "chat_fixture_fork_01")
+        XCTAssertNil(unlinked.forkedFrom)
+
+        chat.removeValue(forKey: "forkedFrom")
+        XCTAssertNil(try decode(chat).forkedFrom)
+    }
+
+    func testForkSummaryStatesDecodeInChatReadsAndChatLists() throws {
+        let chat = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "response", "chat"])
+            ) as? [String: Any]
+        )
+        let lineage = try XCTUnwrap(chat["forkedFrom"] as? [String: Any])
+        let pending = try XCTUnwrap(lineage["summary"] as? [String: Any])
+        let settled = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "summaryStates"])
+            ) as? [[String: Any]]
+        )
+        func withSummary(_ summary: [String: Any]) -> [String: Any] {
+            var forkedFrom = lineage
+            forkedFrom["summary"] = summary
+            var value = chat
+            value["forkedFrom"] = forkedFrom
+            return value
+        }
+        func decodedSummaries(_ summary: [String: Any]) throws -> [AidenChatForkSummary?] {
+            let value = withSummary(summary)
+            let read = try AidenRemoteJSONDecoder.decode(
+                AidenChat.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+            let list = try AidenRemoteJSONDecoder.decode(
+                AidenChatListResponse.self,
+                from: JSONSerialization.data(withJSONObject: ["chats": [value]])
+            )
+            XCTAssertEqual(list.chats.map(\.id), ["chat_fixture_fork_01"])
+            return [read.forkedFrom?.summary, list.chats.first?.forkedFrom?.summary]
+        }
+
+        let expected: [AidenChatForkSummary] = [
+            AidenChatForkSummary(
+                state: .pending,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions"
+            ),
+            AidenChatForkSummary(
+                state: .ready,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions",
+                text: "The review settled on revision 21 and kept every route additive."
+            ),
+            AidenChatForkSummary(
+                state: .failed,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions",
+                error: "The summary could not be generated."
+            ),
+        ]
+        let fixtures = [pending] + settled
+        XCTAssertEqual(fixtures.count, expected.count)
+        for (fixture, summary) in zip(fixtures, expected) {
+            XCTAssertEqual(try decodedSummaries(fixture), [summary, summary])
+        }
+
+        // The pre-rename `instructions` key is private text again everywhere,
+        // so a chat carrying it is refused outright rather than half-shown.
+        var renamed = pending
+        renamed.removeValue(forKey: "focus")
+        renamed["instructions"] = "the protocol decisions"
+        XCTAssertThrowsError(try decodedSummaries(renamed))
+
+        // File paths stay on the Mac: a summary that still lists them is
+        // dropped on its own and the chat stays a readable fork.
+        var withFiles = settled[0]
+        withFiles["files"] = ["read": ["Sources/App.swift"], "modified": []]
+        XCTAssertEqual(try decodedSummaries(withFiles), [nil, nil])
+    }
+
+    func testChatSummaryRowsCarryLineageWithoutTheSummary() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        let lineage = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "response", "chat", "forkedFrom"])
+            ) as? [String: Any]
+        )
+        var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        // Rows never need the focus text; a row that sends a summary still
+        // shows only the lineage.
+        var rowLineage = lineage
+        rowLineage["summary"] = ["state": "pending", "afterMessageId": "message_fixture_fork_assistant_01"]
+        summaries[0]["forkedFrom"] = rowLineage
+        summaries[1]["forkedFrom"] = ["chatId": "chat_fixture_source_01"]
+        object["summaries"] = summaries
+        let page = try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+
+        XCTAssertEqual(page.summaries[0].forkedFrom?.chatId, "chat_fixture_source_01")
+        XCTAssertEqual(page.summaries[0].forkedFrom?.position, .after)
+        XCTAssertNil(page.summaries[0].forkedFrom?.summary)
+        XCTAssertNil(page.summaries[1].forkedFrom, "An incomplete lineage is dropped, not the row.")
+    }
+
+    func testProviderCreationUsesForegroundWriteOnlyCredentialAndStableKey() async throws {
+        let client = makeClient()
+        let key = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/providers")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any])
+            XCTAssertEqual(payload["confirmedForeground"] as? Bool, true)
+            XCTAssertEqual(payload["apiKey"] as? String, "synthetic-provider-key")
+            let models = try XCTUnwrap(payload["models"] as? [[String: Any]])
+            XCTAssertEqual(models.first?["vision"] as? Bool, true)
+            return Self.response(for: request, status: 201, json: #"{"id":"custom:remote-fixture","label":"Private","models":["vision"]}"#)
+        }
+        let input = AidenProviderCreation(label: "Private", baseUrl: "https://models.example.test/v1", kind: "openai", deployment: "hosted", needsKey: true, apiKey: "synthetic-provider-key", models: [.init(id: "vision", vision: true, reasoning: false, toolCall: true)])
+        XCTAssertTrue(input.isValid)
+        let receipt = try await client.createProvider(input, idempotencyKey: key)
+        XCTAssertEqual(receipt.models, ["vision"])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenProviderCreationReceipt.self, from: Data(#"{"id":"google","label":"Private","models":["vision"]}"#.utf8)))
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenProviderCreationReceipt.self, from: Data(#"{"id":"custom:remote-fixture","label":"Private","models":[]}"#.utf8)))
+    }
+
+    func testProviderCreationValidationRejectsControlCharactersAndOversizedFields() {
+        func input(label: String = "Private", url: String = "https://models.example.test/v1", key: String = "synthetic-key", id: String = "vision") -> AidenProviderCreation {
+            AidenProviderCreation(label: label, baseUrl: url, kind: "openai", deployment: "hosted", needsKey: true, apiKey: key, models: [.init(id: id, vision: true, reasoning: false, toolCall: true)])
+        }
+        XCTAssertTrue(input(key: String(repeating: "a", count: 4096)).isValid)
+        XCTAssertFalse(input(key: String(repeating: "a", count: 4097)).isValid)
+        XCTAssertFalse(input(url: "https://models.example.test/" + String(repeating: "a", count: 2048)).isValid)
+        XCTAssertFalse(input(label: "private\tname").isValid)
+        XCTAssertFalse(input(id: "model\nnext").isValid)
+        XCTAssertFalse(input(id: " ").isValid)
+        XCTAssertTrue(input().isValid)
+        XCTAssertNotNil(input(id: "model\nnext").validationMessage)
+    }
+
+    func testProviderCreationSharedFixtureOmitsCredentialsForKeylessConnections() throws {
+        let input = try botFixtureData(at: ["providerCreation"])
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: input) as? [String: Any])
+        XCTAssertNil(payload["apiKey"])
+        XCTAssertEqual(payload["needsKey"] as? Bool, false)
+        let receipt: AidenProviderCreationReceipt = try botFixtureValue(at: ["providerCreationReceipt"])
+        XCTAssertEqual(receipt.models, ["fixture-vision"])
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,

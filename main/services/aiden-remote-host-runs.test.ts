@@ -71,7 +71,7 @@ const observer = (id: string) => ({
   capabilities: new Set<AidenRemoteCapability>(["runs:observe"]),
 });
 
-/** A phone holding the phone-scoped run subset (contract revision 21). */
+/** A phone holding the phone-scoped run subset (contract revision 24). */
 const phone = (id: string) => ({
   id,
   type: "iphone",

@@ -13,7 +13,14 @@ import {
   type AskUserQuestionV1,
 } from "../../renderer/shared/ask-user-question.js";
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
+import {
+  MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
+  MAX_FORK_SUMMARY_TEXT_CHARS,
+} from "../../renderer/shared/chat-copy-contract.js";
 import type {
+  AidenRemoteChatForkLineageProjection,
+  AidenRemoteChatForkSummaryProjection,
+  AidenRemoteChatForkResult,
   AidenRemoteChatProjection,
   AidenRemoteChatSummaryPage,
   AidenRemoteChatSummaryProjection,
@@ -24,7 +31,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 21 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 24 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -109,7 +116,7 @@ export type AidenRemoteHostCapability =
   (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number];
 
 /**
- * Phone-scoped subset of the host run authority (contract revision 21). A
+ * Phone-scoped subset of the host run authority (contract revision 24). A
  * phone (`iphone`/`ipad`) may negotiate these through
  * `POST /device/capabilities` only while the server advertises
  * `phone-run-control-v1`. Unlike a desktop, a phone's run grants never widen
@@ -196,6 +203,14 @@ export const AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v
  * `hasOlder` flag. `GET /chats/{chatId}` is unchanged for older clients.
  */
 export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1" as const;
+/**
+ * Server feature token (contract revision 23): every messages window also
+ * carries the chat's mutable metadata (`workspaceId`, `botId?`, `title`,
+ * `providerId?`/`modelId?`, `createdAt`, `updatedAt`, `titlePending?`), so a
+ * phone can refresh through windows alone and still learn renames and model
+ * changes. Hosts without it serve message-only windows.
+ */
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1" as const;
 export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT = 50;
 export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT = 200;
 
@@ -207,7 +222,7 @@ export const AIDEN_REMOTE_RUN_STREAMS_FEATURE = "run-streams-v1" as const;
 export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
 /**
  * Server feature token for phone observation and control of runs started
- * elsewhere (desktop, Telegram, scheduler), contract revision 21. Advertised
+ * elsewhere (desktop, Telegram, scheduler), contract revision 24. Advertised
  * to phones only, and only while the host run registry is wired; it gates the
  * phone-scoped `runs:observe`/`runs:control` negotiation.
  */
@@ -219,6 +234,17 @@ export const AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1" as 
  * instead.
  */
 export const AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE = "pairing-requests-v1" as const;
+/**
+ * Server feature token for `POST /chats/{chatId}/fork` and the `forkedFrom`
+ * lineage on chats and list rows (contract revision 21).
+ */
+export const AIDEN_REMOTE_CHAT_FORK_FEATURE = "chat-fork-v1" as const;
+/**
+ * Server feature token for Fork with summary: the fork request's `summary`
+ * and the `/chats/{chatId}/fork-summary/{retry,skip,cancel}` routes
+ * (contract revision 21). Advertised only by a host that can summarize.
+ */
+export const AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1" as const;
 
 /** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
 export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
@@ -1050,22 +1076,51 @@ export interface AidenRemoteContractFixture {
   hostFeedEvents?: AidenRemoteHostFeedFixtureEvent[];
   /** Revision 19: one complete run stream, ending with `run.ended`. */
   runEvents?: AidenRemoteHostFeedFixtureEvent[];
-  /** Revision 19: one `GET /chats/{chatId}/messages` page. */
+  /**
+   * Revision 19: one `GET /chats/{chatId}/messages` page. Since revision 23
+   * it also carries the chat metadata (`chat-messages-window-metadata-v1`).
+   */
   messagesWindow?: {
     chatId: string;
     revision: string;
     messages: unknown[];
     hasOlder: boolean;
+    workspaceId?: string;
+    botId?: string;
+    title?: string;
+    providerId?: string;
+    modelId?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    titlePending?: true;
   };
   /** Revision 19: a run-control loser's `409 approval_resolved`. */
   runControlError?: AidenRemoteErrorEnvelope;
   /** Revision 20, `pairing-requests-v1`: desktop connection request shapes and match-code vectors. */
   pairingRequests?: AidenRemotePairingRequestsFixture;
   /**
-   * Revision 21, `phone-run-control-v1`: a foreign run as a phone holding the
+   * Revision 24, `phone-run-control-v1`: a foreign run as a phone holding the
    * phone-scoped run subset sees it (phone approval projection, no details).
    */
   phoneRunEvents?: AidenRemoteHostFeedFixtureEvent[];
+  /** Revision 21, `chat-fork-v1` and `chat-fork-summary-v1`: fork requests, responses and a summary cancel. */
+  chatFork?: AidenRemoteChatForkFixture;
+}
+
+export interface AidenRemoteChatForkFixtureExchange {
+  request: { messageId: string; position: "after" | "before"; summary?: { focus?: string } };
+  response: AidenRemoteChatForkResult;
+}
+
+export interface AidenRemoteChatForkFixture {
+  features: string[];
+  /** A fork after a reply that asks for a summary. */
+  fork: AidenRemoteChatForkFixtureExchange;
+  /** A fork before a prompt, whose response returns the prompt to edit. */
+  editFork: AidenRemoteChatForkFixtureExchange;
+  /** Settled summaries a Chat read can carry. */
+  summaryStates: AidenRemoteChatForkSummaryProjection[];
+  summaryCancel: { cancelled: boolean };
 }
 
 /** One status poll answer; only `approved` carries the sealed grant envelope. */
@@ -2285,6 +2340,102 @@ function parseChatMessageOutcome(
   };
 }
 
+const REMOTE_SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+
+function parseChatForkLineageProjection(
+  value: unknown,
+  label: string,
+  allowSummary: boolean,
+): AidenRemoteChatForkLineageProjection {
+  if (!isRecord(value)) throw new Error(`${label} forkedFrom must be an object.`);
+  assertExactKeys(
+    value,
+    allowSummary ? ["chatId", "messageId", "position", "at", "summary"] : ["chatId", "messageId", "position", "at"],
+    `${label} forkedFrom`,
+  );
+  const chatId = boundedText(value.chatId, `${label} forkedFrom chatId`, 128);
+  const messageId = boundedText(value.messageId, `${label} forkedFrom messageId`, 128);
+  if (!REMOTE_SAFE_ID.test(chatId) || !REMOTE_SAFE_ID.test(messageId)) {
+    throw new Error(`${label} forkedFrom identifiers are invalid.`);
+  }
+  const summary = hasOwn(value, "summary")
+    ? parseChatForkSummaryProjection(value.summary, `${label} forkedFrom summary`)
+    : undefined;
+  return {
+    chatId,
+    messageId,
+    position: enumMember(value.position, ["after", "before"] as const, `${label} forkedFrom position`),
+    at: dateTimeValue(value.at, `${label} forkedFrom at`),
+    ...(summary ? { summary } : {}),
+  };
+}
+
+function parseChatForkSummaryProjection(value: unknown, label: string): AidenRemoteChatForkSummaryProjection {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["state", "afterMessageId", "focus", "text", "error"], label);
+  const afterMessageId = boundedText(value.afterMessageId, `${label} afterMessageId`, 160);
+  if (!/^[A-Za-z0-9_-]+$/u.test(afterMessageId)) throw new Error(`${label} afterMessageId is invalid.`);
+  const state = enumMember(value.state, ["pending", "ready", "failed"] as const, `${label} state`);
+  if (state === "ready" && !hasOwn(value, "text")) throw new Error(`${label} must carry text when ready.`);
+  if (state !== "failed" && hasOwn(value, "error")) throw new Error(`${label} error belongs to a failed summary.`);
+  return {
+    state,
+    afterMessageId,
+    ...(hasOwn(value, "focus")
+      ? { focus: boundedText(value.focus, `${label} focus`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) }
+      : {}),
+    ...(hasOwn(value, "text") ? { text: boundedText(value.text, `${label} text`, MAX_FORK_SUMMARY_TEXT_CHARS) } : {}),
+    ...(hasOwn(value, "error")
+      ? { error: boundedText(value.error, `${label} error`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) }
+      : {}),
+  };
+}
+
+/** `POST /chats/{chatId}/fork` response (`chat-fork-v1`). */
+export function parseAidenRemoteChatForkResult(
+  value: unknown,
+  label = "Chat fork response",
+): AidenRemoteChatForkResult {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["chat", "prefill"], label);
+  const chat = parseAidenRemoteChatProjection(value.chat, `${label} chat`);
+  if (!chat.forkedFrom) throw new Error(`${label} chat must carry forkedFrom.`);
+  if (!hasOwn(value, "prefill")) return { chat };
+  if (chat.forkedFrom.position !== "before") {
+    throw new Error(`${label} prefill belongs to a fork before a prompt.`);
+  }
+  const prefill = value.prefill;
+  if (!isRecord(prefill)) throw new Error(`${label} prefill must be an object.`);
+  assertExactKeys(prefill, ["text", "attachments"], `${label} prefill`);
+  // A prefill is resent as one turn, which holds at most ten attachments.
+  if (hasOwn(prefill, "attachments") && (!Array.isArray(prefill.attachments) || prefill.attachments.length > 10)) {
+    throw new Error(`${label} prefill attachments must contain at most 10 items.`);
+  }
+  return {
+    chat,
+    prefill: {
+      text: boundedText(prefill.text, `${label} prefill text`, 200_000, true),
+      ...(hasOwn(prefill, "attachments")
+        ? {
+            attachments: parseChatMessageAttachments(prefill.attachments, `${label} prefill`).map(
+              (attachment, index) => {
+                const entry = (prefill.attachments as Record<string, unknown>[])[index]!;
+                // A restaged attachment is sent back by ID with the fork's next turn.
+                if (!/^att_[A-Za-z0-9_-]{43}$/u.test(attachment.id)) {
+                  throw new Error(`${label} prefill attachment ${index} id must be an uploaded attachment ID.`);
+                }
+                return {
+                  ...attachment,
+                  expiresAt: dateTimeValue(entry.expiresAt, `${label} prefill attachment ${index} expiresAt`),
+                };
+              },
+            ),
+          }
+        : {}),
+    },
+  };
+}
+
 export function parseAidenRemoteChatProjection(
   value: unknown,
   label = "Chat response",
@@ -2413,6 +2564,10 @@ export function parseAidenRemoteChatProjection(
         ? { titlePending: true as const }
         : (() => { throw new Error(`${label} titlePending may only be true.`); })()
       : {}),
+    // Additive in contract revision 21.
+    ...(hasOwn(value, "forkedFrom")
+      ? { forkedFrom: parseChatForkLineageProjection(value.forkedFrom, label, true) }
+      : {}),
   };
 }
 
@@ -2474,6 +2629,10 @@ export function parseAidenRemoteChatSummaryProjection(
       ? typeof value.unread === "boolean"
         ? { unread: value.unread }
         : (() => { throw new Error(`${label} unread must be a boolean.`); })()
+      : {}),
+    // Additive in contract revision 21; rows never carry the summary.
+    ...(hasOwn(value, "forkedFrom")
+      ? { forkedFrom: parseChatForkLineageProjection(value.forkedFrom, label, false) }
       : {}),
   };
 }
@@ -5250,8 +5409,12 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     parsePairingRequestsFixture(value.pairingRequests);
   }
   if (value.phoneRunEvents !== undefined) {
-    if (contractRevision < 21) throw new Error("Phone run fixtures require contract revision 21.");
+    if (contractRevision < 24) throw new Error("Phone run fixtures require contract revision 24.");
     parseRunEventSequence(value.phoneRunEvents, "Fixture phone run events", "phone");
+  }
+  if (value.chatFork !== undefined) {
+    if (contractRevision < 21) throw new Error("Chat fork fixtures require contract revision 21.");
+    parseChatForkFixture(value.chatFork);
   }
   assertNoForbiddenWireKeys(value);
   return {
@@ -5457,6 +5620,66 @@ function fixtureTimestamp(value: unknown, label: string): string {
   return value;
 }
 
+function parseChatForkFixtureExchange(value: unknown, label: string): AidenRemoteChatForkFixtureExchange {
+  const exchange = requiredFixtureRecord(value, label, ["request", "response"]);
+  const request = requiredFixtureRecord(exchange.request, `${label} request`, ["messageId", "position"], ["summary"]);
+  const messageId = boundedText(request.messageId, `${label} request messageId`, 128);
+  if (!REMOTE_SAFE_ID.test(messageId)) throw new Error(`${label} request messageId is invalid.`);
+  const position = enumMember(request.position, ["after", "before"] as const, `${label} request position`);
+  let summary: { focus?: string } | undefined;
+  if (request.summary !== undefined) {
+    const body = requiredFixtureRecord(request.summary, `${label} request summary`, [], ["focus"]);
+    summary = body.focus === undefined
+      ? {}
+      : { focus: boundedText(body.focus, `${label} request summary focus`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) };
+  }
+  const response = parseAidenRemoteChatForkResult(exchange.response, `${label} response`);
+  const lineage = response.chat.forkedFrom!;
+  if (lineage.messageId !== messageId || lineage.position !== position) {
+    throw new Error(`${label} response must record the requested fork point.`);
+  }
+  if (Boolean(summary) !== Boolean(lineage.summary)) {
+    throw new Error(`${label} response must carry a summary exactly when one was requested.`);
+  }
+  return { request: { messageId, position, ...(summary ? { summary } : {}) }, response };
+}
+
+function parseChatForkFixture(value: unknown): AidenRemoteChatForkFixture {
+  const section = requiredFixtureRecord(value, "Chat fork fixture", [
+    "features",
+    "fork",
+    "editFork",
+    "summaryStates",
+    "summaryCancel",
+  ]);
+  const features = section.features;
+  if (
+    !Array.isArray(features) ||
+    features.length !== 2 ||
+    !features.includes(AIDEN_REMOTE_CHAT_FORK_FEATURE) ||
+    !features.includes(AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE)
+  ) {
+    throw new Error("Chat fork fixture must name chat-fork-v1 and chat-fork-summary-v1.");
+  }
+  const fork = parseChatForkFixtureExchange(section.fork, "Chat fork fixture fork");
+  if (fork.response.chat.forkedFrom?.summary?.state !== "pending") {
+    throw new Error("Chat fork fixture fork must start with a pending summary.");
+  }
+  const editFork = parseChatForkFixtureExchange(section.editFork, "Chat fork fixture editFork");
+  if (!editFork.response.prefill) throw new Error("Chat fork fixture editFork must return the prompt to edit.");
+  if (!Array.isArray(section.summaryStates)) throw new Error("Chat fork fixture summaryStates must be an array.");
+  const summaryStates = section.summaryStates.map((summary, index) =>
+    parseChatForkSummaryProjection(summary, `Chat fork fixture summaryStates[${index}]`),
+  );
+  const states = summaryStates.map(({ state }) => state);
+  if (!states.includes("ready") || !states.includes("failed")) {
+    throw new Error("Chat fork fixture summaryStates must include ready and failed summaries.");
+  }
+  const cancel = requiredFixtureRecord(section.summaryCancel, "Chat fork fixture summaryCancel", ["cancelled"]);
+  if (typeof cancel.cancelled !== "boolean") throw new Error("Chat fork fixture summaryCancel cancelled must be boolean.");
+  return { features: [...features], fork, editFork, summaryStates, summaryCancel: { cancelled: cancel.cancelled } };
+}
+
 /**
  * Validates the `pairing-requests-v1` section: unauthenticated request,
  * reveal and poll shapes, the sealed grant envelope and the match-code
@@ -5582,7 +5805,7 @@ function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequests
 
 /**
  * One complete run stream: contiguous sequences, with `run.ended` repeating
- * the last event's sequence. The `phone` projection (contract revision 21) is
+ * the last event's sequence. The `phone` projection (contract revision 24) is
  * what a phone holding the phone-scoped run subset receives: approvals carry a
  * summary, `canAllow` and offered scopes but never tool details.
  */
@@ -5649,6 +5872,9 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
   });
   if (!runEnded) throw new Error("A run stream fixture ends with run.ended.");
 }
+const AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS = [
+  "workspaceId", "botId", "title", "providerId", "modelId", "createdAt", "updatedAt", "titlePending",
+] as const;
 
 function parseRevision19Fixture(
   value: Record<string, unknown>,
@@ -5715,13 +5941,28 @@ function parseRevision19Fixture(
 
   const window = value.messagesWindow;
   if (!isRecord(window)) throw new Error("Fixture messages window is invalid.");
-  assertExactKeys(window, ["chatId", "revision", "messages", "hasOlder"], "Fixture messages window");
+  const withMetadata = context.contractRevision >= 23;
+  assertExactKeys(
+    window,
+    [
+      "chatId", "revision", "messages", "hasOlder",
+      ...(withMetadata ? AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS : []),
+    ],
+    "Fixture messages window",
+  );
   boundedText(window.chatId, "Messages window chatId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
   boundedRevision(window.revision, "Messages window revision");
   if (!Array.isArray(window.messages) || window.messages.length > AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT) {
     throw new Error("Messages window messages must be a bounded array.");
   }
   if (typeof window.hasOlder !== "boolean") throw new Error("Messages window hasOlder must be boolean.");
+  if (withMetadata) {
+    // Revision 23: the window's metadata is the chat projection's, so it is
+    // held to the same rules (paired provider/model, ordered timestamps,
+    // Bot transcripts without reasoning).
+    const { chatId, hasOlder: _hasOlder, ...projection } = window;
+    parseAidenRemoteChatProjection({ ...projection, id: chatId }, "Fixture messages window");
+  }
 
   const runControlError = parseErrorEnvelopeFixture(value.runControlError, "Fixture run control error");
   return {

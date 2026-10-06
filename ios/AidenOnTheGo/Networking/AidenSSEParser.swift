@@ -94,7 +94,7 @@ struct AidenSSEParser: AidenSSEEventParsing {
 }
 
 /// Parses the contract revision 19 run streams as a phone holding the
-/// revision 21 phone-scoped run subset sees them.
+/// revision 24 phone-scoped run subset sees them.
 struct AidenRunSSEParser: AidenSSEEventParsing {
     private var frames = AidenSSEFrameParser(minimumEventID: 0)
 

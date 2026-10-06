@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 21)
+        XCTAssertEqual(fixture.contractRevision, 24)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)
@@ -1248,7 +1248,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeSSEEvent(from: Data(tooLargeNextSequence.utf8)))
     }
 
-    // MARK: Contract revision 21: phone observation and control of foreign runs
+    // MARK: Contract revision 24: phone observation and control of foreign runs
 
     func testPhoneRunFixtureDrivesForeignRunProjectionThroughFirstResponderOutcomes() throws {
         let fixture = try AidenRemoteJSONDecoder.decode(

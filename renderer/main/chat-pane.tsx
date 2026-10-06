@@ -17,6 +17,7 @@ import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
   chatMessageQueue,
+  committedRunInputNotice,
   steerQueuedMessage,
   steerRejectionMessage,
   withCommittedRunInput,
@@ -1787,7 +1788,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (receipt.committed) {
         // Main already saved it; resolving consumes the draft so it is not resent.
-        toast.info("The response ended first, so your guidance was saved to the conversation.");
+        toast.info(committedRunInputNotice(receipt.reason));
       } else {
         throw new Error(steerRejectionMessage(receipt.reason));
       }
@@ -1815,7 +1816,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (outcome.kind === "committed") {
-        toast.info("The response ended first, so the message was saved to the conversation.");
+        toast.info(committedRunInputNotice(outcome.reason));
       } else if (outcome.kind === "rejected") {
         toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
       } else if (outcome.kind === "unknown") {
@@ -1825,30 +1826,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [admitSteer, isStoppingGeneration, messageQueue, visibleDetachedProjection],
-  );
-
-  const redirectMessage = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
-      if (!text.trim() || attachments.length > 0 || skillInvocation) {
-        throw new Error("Redirect requires text without attachments or a skill.");
-      }
-      if (
-        !(canStopGeneration || visibleDetachedProjection) ||
-        isStoppingGeneration ||
-        stopRequestedRef.current
-      ) {
-        throw new Error("The current response has ended. Send your message normally.");
-      }
-      const replacement = {
-        id: createChatTurnId(), text, attachments: [] as Attachment[],
-      };
-      messageQueue.replaceWith(replacement, () => {
-        const stopping = handleStop();
-        if (stopping) stopRequestedRef.current = true;
-        return stopping;
-      });
-    },
-    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -2687,7 +2664,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
                 onSteer={draft ? undefined : steerMessage}
-                onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={
