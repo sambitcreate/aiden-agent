@@ -24,7 +24,9 @@ class AidenBotExpressivePresentationTest {
     @Test
     fun onlyHeroAvatarsWithAnAccessoryFloatAndOnlyWhenMotionIsAllowed() {
         assertTrue(aidenBotAvatarAccessoryFloats(112.dp, AidenBotAvatarDetail.HALO, reduceMotion = false))
-        assertTrue(aidenBotAvatarAccessoryFloats(64.dp, AidenBotAvatarDetail.ORBIT, reduceMotion = false))
+        assertTrue(aidenBotAvatarAccessoryFloats(84.dp, AidenBotAvatarDetail.ORBIT, reduceMotion = false))
+        // The 72.dp favorites row stays still so Bots home can go idle.
+        assertFalse(aidenBotAvatarAccessoryFloats(72.dp, AidenBotAvatarDetail.ORBIT, reduceMotion = false))
 
         assertFalse(aidenBotAvatarAccessoryFloats(112.dp, AidenBotAvatarDetail.HALO, reduceMotion = true))
         assertFalse(aidenBotAvatarAccessoryFloats(52.dp, AidenBotAvatarDetail.HALO, reduceMotion = false))

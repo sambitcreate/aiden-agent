@@ -82,7 +82,7 @@ object AidenBotAvatarColors {
 }
 
 /** Smallest semantic avatar size that gets the idle accessory float. */
-val AidenBotAvatarHeroFloatMinSize = 64.dp
+val AidenBotAvatarHeroFloatMinSize = 80.dp
 
 /**
  * Hero-sized semantic avatars float their accessory gently while idle. Small avatars,

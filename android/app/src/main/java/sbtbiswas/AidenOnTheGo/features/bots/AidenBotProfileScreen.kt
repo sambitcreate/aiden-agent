@@ -1,5 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -595,6 +598,7 @@ fun AidenBotProfileActionBar(
                     .fillMaxHeight()
                     .tactilePress(interaction)
                     .alpha(if (action.enabled) 1f else 0.38f)
+                    .semantics { role = Role.Button }
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,

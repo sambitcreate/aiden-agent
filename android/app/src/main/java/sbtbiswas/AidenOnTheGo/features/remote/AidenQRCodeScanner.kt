@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.foundation.layout.Spacer
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -9,7 +11,6 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -239,69 +240,70 @@ private fun ScannerViewfinderOverlay(
         )
     }
 
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val width = size.width
-        val height = size.height
-        val boxSize = (minOf(width, height) * 0.7f).coerceAtMost(240.dp.toPx())
+    Spacer(
+        modifier = Modifier
+            .fillMaxSize()
+            .drawWithCache {
+                val width = size.width
+                val height = size.height
+                val boxSize = (minOf(width, height) * 0.7f).coerceAtMost(240.dp.toPx())
+                val left = (width - boxSize) / 2f
+                val top = (height - boxSize) / 2f
+                val right = left + boxSize
+                val bottom = top + boxSize
+                val cutoutRadius = CornerRadius(16.dp.toPx())
+                val borderStroke = Stroke(width = 2.dp.toPx())
+                // Rounded corner brackets that follow the 16.dp cutout radius.
+                val bracketStroke = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val radius = 16.dp.toPx()
+                val length = 28.dp.toPx()
+                val brackets = listOf(
+                    cornerBracketPath(Offset(left, top), 1f, 1f, radius, length),
+                    cornerBracketPath(Offset(right, top), -1f, 1f, radius, length),
+                    cornerBracketPath(Offset(right, bottom), -1f, -1f, radius, length),
+                    cornerBracketPath(Offset(left, bottom), 1f, -1f, radius, length)
+                )
+                val laserBrush = Brush.horizontalGradient(
+                    colors = listOf(Color.Transparent, accentColor, Color.Transparent),
+                    startX = left,
+                    endX = right
+                )
+                val laserSize = Size(boxSize - 16.dp.toPx(), 2.dp.toPx())
+                val laserLeft = left + 8.dp.toPx()
 
-        val left = (width - boxSize) / 2f
-        val top = (height - boxSize) / 2f
-        val right = left + boxSize
-        val bottom = top + boxSize
+                onDrawBehind {
+                    // Dark dimming overlay around targeting box
+                    drawRect(color = Color.Black.copy(alpha = 0.55f), size = size)
 
-        // Dark dimming overlay around targeting box
-        drawRect(
-            color = Color.Black.copy(alpha = 0.55f),
-            size = size
-        )
+                    // Clear center targeting window
+                    drawRoundRect(
+                        color = Color.Transparent,
+                        topLeft = Offset(left, top),
+                        size = Size(boxSize, boxSize),
+                        cornerRadius = cutoutRadius,
+                        blendMode = BlendMode.Clear
+                    )
 
-        // Clear center targeting window
-        drawRoundRect(
-            color = Color.Transparent,
-            topLeft = Offset(left, top),
-            size = Size(boxSize, boxSize),
-            cornerRadius = CornerRadius(16.dp.toPx()),
-            blendMode = BlendMode.Clear
-        )
+                    // Viewfinder bounding box border
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.3f),
+                        topLeft = Offset(left, top),
+                        size = Size(boxSize, boxSize),
+                        cornerRadius = cutoutRadius,
+                        style = borderStroke
+                    )
 
-        // Viewfinder bounding box border
-        drawRoundRect(
-            color = Color.White.copy(alpha = 0.3f),
-            topLeft = Offset(left, top),
-            size = Size(boxSize, boxSize),
-            cornerRadius = CornerRadius(16.dp.toPx()),
-            style = Stroke(width = 2.dp.toPx())
-        )
+                    brackets.forEach { drawPath(path = it, color = accentColor, style = bracketStroke) }
 
-        // Rounded corner brackets that follow the 16.dp cutout radius.
-        val bracketStroke = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val radius = 16.dp.toPx()
-        val length = 28.dp.toPx()
-        listOf(
-            Offset(left, top) to Offset(1f, 1f),
-            Offset(right, top) to Offset(-1f, 1f),
-            Offset(right, bottom) to Offset(-1f, -1f),
-            Offset(left, bottom) to Offset(1f, -1f)
-        ).forEach { (corner, direction) ->
-            drawPath(
-                path = cornerBracketPath(corner, direction.x, direction.y, radius, length),
-                color = accentColor,
-                style = bracketStroke
-            )
-        }
-
-        // Laser line (held at mid-height when motion is reduced)
-        val laserY = top + boxSize * laserYRatio.value
-        drawRect(
-            brush = Brush.horizontalGradient(
-                colors = listOf(Color.Transparent, accentColor, Color.Transparent),
-                startX = left,
-                endX = right
-            ),
-            topLeft = Offset(left + 8.dp.toPx(), laserY),
-            size = Size(boxSize - 16.dp.toPx(), 2.dp.toPx())
-        )
-    }
+                    // Laser line (held at mid-height when motion is reduced)
+                    drawRect(
+                        brush = laserBrush,
+                        topLeft = Offset(laserLeft, top + boxSize * laserYRatio.value),
+                        size = laserSize
+                    )
+                }
+            }
+    )
 }
 
 /** Laser position, as a fraction of the viewfinder height, when motion is reduced. */

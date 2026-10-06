@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -790,6 +792,7 @@ fun AidenBotsHomeScreen(
                     modifier = Modifier
                         .size(54.dp)
                         .tactilePress(fabInteraction)
+                        .semantics { role = Role.Button }
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
