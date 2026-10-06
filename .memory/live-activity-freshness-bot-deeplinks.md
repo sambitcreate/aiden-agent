@@ -26,3 +26,11 @@ Branch: `feature/live-activity-freshness`. Plan: `docs/plans/completed/live-acti
 PR #119 adds `AidenBotLiveActivityStateTests.swift` and edits the pbxproj. This branch adds no new iOS files, to avoid conflicting with it.
 
 Status (2026-10-01): merged in PR #276 (on main after 0.51.0); plan moved to `docs/plans/completed/`.
+
+## Stale waiting-for-approval (2026-10-05)
+
+- `AgentRunStalePresentation.copy(for:systemMarkedStale:)` (shared app/widget) decides stale Lock Screen and expanded island copy.
+  - Stale `waitingForApproval` keeps the "Waiting for approval" lead and adds an "Open to answer" action.
+  - Every other stale status keeps "Latest status shown" with no action; fresh or final runs return `nil`.
+- Stale styling (dot, keyline, freshness chip, trailing "Latest") is unchanged; only the copy differs.
+- Branch `fix/la-stale-keeps-waiting`; adapted from the Hermex stale-Bot fix, without Bot-specific copy.
