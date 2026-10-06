@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -13,8 +14,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -24,7 +27,15 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -256,7 +267,7 @@ fun AidenBotProfileScreen(
                 if (isArchived) {
                     Surface(
                         color = palette.warning.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = AidenShape.Button,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -270,109 +281,69 @@ fun AidenBotProfileScreen(
                     }
                 }
 
-                // 4-Button Action Bar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // 1. Chat button
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                val existing = conversations.firstOrNull { it.botId == bot.id }
-                                if (existing != null) {
-                                    onNavigateToChat(existing.chatId)
+                AidenBotProfileActionBar(
+                    actions = listOf(
+                        AidenBotProfileAction(
+                            label = "Chat",
+                            icon = Icons.Default.Chat,
+                            enabled = bot.health == AidenBotHealth.READY,
+                            emphasized = true,
+                            onClick = {
+                                scope.launch {
+                                    val existing = conversations.firstOrNull { it.botId == bot.id }
+                                    if (existing != null) {
+                                        onNavigateToChat(existing.chatId)
+                                    } else {
+                                        val cl = client ?: return@launch
+                                        try {
+                                            val created = cl.createBotChat(bot.id)
+                                            onNavigateToChat(created.id)
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+                            }
+                        ),
+                        AidenBotProfileAction(
+                            label = "Edit",
+                            icon = Icons.Default.Edit,
+                            onClick = { onNavigateToEditBot(botId) }
+                        ),
+                        AidenBotProfileAction(
+                            label = "Access",
+                            icon = Icons.Default.Shield,
+                            onClick = {
+                                if (onNavigateToCustomAccess != null) {
+                                    onNavigateToCustomAccess(botId)
                                 } else {
-                                    val cl = client ?: return@launch
+                                    onNavigateToEditBot(botId)
+                                }
+                            }
+                        ),
+                        AidenBotProfileAction(
+                            label = if (isFavorite) "Unpin" else "Pin",
+                            icon = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                            iconTint = if (isFavorite) palette.accent else null,
+                            onClick = onClick@{
+                                val cl = client ?: return@onClick
+                                val favs = favorites ?: return@onClick
+                                scope.launch {
+                                    val next = if (isFavorite) {
+                                        favoriteList.filter { it != botId }
+                                    } else {
+                                        (favoriteList + botId).take(AidenBotWire.MAX_FAVORITES)
+                                    }
                                     try {
-                                        val created = cl.createBotChat(bot.id)
-                                        onNavigateToChat(created.id)
-                                    } catch (_: Exception) {}
+                                        val updated = cl.updateFavorites(next, favs.revision)
+                                        favorites = updated
+                                        onBotMutated()
+                                    } catch (e: Exception) {
+                                        actionError = e.message
+                                    }
                                 }
                             }
-                        },
-                        enabled = bot.health == AidenBotHealth.READY,
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text("Chat", color = Color.White, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-
-                    // 2. Edit button
-                    OutlinedButton(
-                        border = null,
-                        onClick = { onNavigateToEditBot(botId) },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Edit, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text("Edit", color = palette.foreground, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-
-                    // 3. Access button
-                    OutlinedButton(
-                        border = null,
-                        onClick = {
-                            if (onNavigateToCustomAccess != null) {
-                                onNavigateToCustomAccess(botId)
-                            } else {
-                                onNavigateToEditBot(botId)
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Shield, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text("Access", color = palette.foreground, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-
-                    // 4. Pin / Favorite button
-                    OutlinedButton(
-                        border = null,
-                        onClick = {
-                            val cl = client ?: return@OutlinedButton
-                            val favs = favorites ?: return@OutlinedButton
-                            scope.launch {
-                                val next = if (isFavorite) {
-                                    favoriteList.filter { it != botId }
-                                } else {
-                                    (favoriteList + botId).take(AidenBotWire.MAX_FAVORITES)
-                                }
-                                try {
-                                    val updated = cl.updateFavorites(next, favs.revision)
-                                    favorites = updated
-                                    onBotMutated()
-                                } catch (e: Exception) {
-                                    actionError = e.message
-                                }
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                                contentDescription = null,
-                                tint = if (isFavorite) palette.accent else palette.foreground,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(if (isFavorite) "Unpin" else "Pin", color = palette.foreground, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
+                        )
+                    )
+                )
 
                 // Favorite Order Card (if favorite)
                 if (isFavorite && favoriteIndex >= 0) {
@@ -450,38 +421,37 @@ fun AidenBotProfileScreen(
                     }
                 }
 
-                // Chat History Section Card
-                Card(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(14.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "Recent Chats",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = palette.secondary
-                        )
+                    Text(
+                        text = "Recent Chats",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.secondary,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
 
+                    AidenConnectedColumn {
                         if (conversations.isEmpty()) {
-                            Text(
-                                text = "No conversation history yet.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = palette.secondary
-                            )
+                            AidenGroupCard(index = 0, count = 1, role = null) {
+                                Text(
+                                    text = "No conversation history yet.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = palette.secondary
+                                )
+                            }
                         } else {
-                            conversations.forEach { conv ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { onNavigateToChat(conv.chatId) }
-                                        .padding(vertical = 8.dp)
+                            conversations.forEachIndexed { index, conv ->
+                                AidenGroupCard(
+                                    index = index,
+                                    count = conversations.size,
+                                    onClick = { onNavigateToChat(conv.chatId) },
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     Icon(Icons.Default.ChatBubbleOutline, contentDescription = null, tint = palette.accent, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(10.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = conv.title.ifEmpty { "Chat" },
@@ -551,11 +521,13 @@ fun AidenBotProfileScreen(
             title = { Text("Archive ${bot?.name ?: "Bot"}?") },
             text = { Text("Its chats stay available to read. Restore the Bot later to edit it or start new work.") },
             confirmButton = {
-                TextButton(
-                    onClick = {
+                AidenDialogConfirmButton(
+                    text = "Archive Bot",
+                    destructive = true,
+                    onClick = onClick@{
                         isConfirmingArchive = false
-                        val cl = client ?: return@TextButton
-                        val b = bot ?: return@TextButton
+                        val cl = client ?: return@onClick
+                        val b = bot ?: return@onClick
                         scope.launch {
                             try {
                                 val res = aidenBotProfileLifecycleUpdate(
@@ -573,16 +545,74 @@ fun AidenBotProfileScreen(
                             }
                         }
                     }
-                ) {
-                    Text("Archive Bot", color = palette.danger, fontWeight = FontWeight.Bold)
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { isConfirmingArchive = false }) {
-                    Text("Cancel", color = palette.secondary)
-                }
+                AidenDialogDismissButton(onClick = { isConfirmingArchive = false })
             },
+            shape = AidenShape.Dialog,
             containerColor = palette.raised
         )
+    }
+}
+
+data class AidenBotProfileAction(
+    val label: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit,
+    val enabled: Boolean = true,
+    val emphasized: Boolean = false,
+    val iconTint: Color? = null
+)
+
+/**
+ * Connected horizontal group of filled tonal squircles. The emphasized action takes the
+ * accent tonal fill; the others sit on the high tonal tier.
+ */
+@Composable
+fun AidenBotProfileActionBar(
+    actions: List<AidenBotProfileAction>,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
+    ) {
+        actions.forEachIndexed { index, action ->
+            val interaction = remember { MutableInteractionSource() }
+            val ink = if (action.emphasized) palette.accent else palette.foreground
+            Surface(
+                onClick = action.onClick,
+                enabled = action.enabled,
+                shape = aidenGroupItemShape(index, actions.size, orientation = AidenGroupOrientation.HORIZONTAL),
+                color = if (action.emphasized) palette.accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                interactionSource = interaction,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .tactilePress(interaction)
+                    .alpha(if (action.enabled) 1f else 0.38f)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp)
+                ) {
+                    Icon(action.icon, contentDescription = null, tint = action.iconTint ?: ink, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = action.label,
+                        color = ink,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
     }
 }

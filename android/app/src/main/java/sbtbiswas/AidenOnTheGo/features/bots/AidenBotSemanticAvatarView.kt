@@ -1,11 +1,18 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -17,12 +24,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 
 data class AidenBotAvatarPresentation(
     val shape: AidenBotAvatarShape,
@@ -72,6 +81,19 @@ object AidenBotAvatarColors {
     }
 }
 
+/** Smallest semantic avatar size that gets the idle accessory float. */
+val AidenBotAvatarHeroFloatMinSize = 64.dp
+
+/**
+ * Hero-sized semantic avatars float their accessory gently while idle. Small avatars,
+ * accessory-free recipes, and reduced motion stay still.
+ */
+fun aidenBotAvatarAccessoryFloats(
+    size: Dp,
+    detail: AidenBotAvatarDetail,
+    reduceMotion: Boolean
+): Boolean = !reduceMotion && detail != AidenBotAvatarDetail.NONE && size >= AidenBotAvatarHeroFloatMinSize
+
 @Composable
 fun AidenBotSemanticAvatarView(
     avatar: AidenBotSemanticAvatar,
@@ -82,6 +104,20 @@ fun AidenBotSemanticAvatarView(
     val presentation = aidenBotAvatarPresentation(avatar)
     val gradientColors = AidenBotAvatarColors.getGradient(presentation.color)
     val eyeGlyph = AidenBotAvatarColors.getEyeGlyph(presentation.eyes)
+    val floats = aidenBotAvatarAccessoryFloats(size, presentation.detail, aidenReduceMotion())
+    val accessoryLift: State<Float>? = if (floats) {
+        rememberInfiniteTransition(label = "bot_avatar_float").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 2400, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "bot_avatar_accessory_lift"
+        )
+    } else {
+        null
+    }
 
     Box(
         modifier = modifier.size(size),
@@ -160,45 +196,48 @@ fun AidenBotSemanticAvatarView(
             drawPath(path = shapePath, color = Color.White.copy(alpha = 0.35f), style = Stroke(width = maxOf(1f, w * 0.02f)))
 
             // Detail accessories
-            when (presentation.detail) {
-                AidenBotAvatarDetail.HALO -> {
-                    drawOval(
-                        color = Color.White.copy(alpha = 0.75f),
-                        topLeft = Offset(w * 0.22f, h * 0.02f),
-                        size = Size(w * 0.56f, h * 0.18f),
-                        style = Stroke(width = maxOf(1.5f, w * 0.035f))
-                    )
+            val lift = -(accessoryLift?.value ?: 0f) * h * 0.03f
+            translate(top = lift) {
+                when (presentation.detail) {
+                    AidenBotAvatarDetail.HALO -> {
+                        drawOval(
+                            color = Color.White.copy(alpha = 0.75f),
+                            topLeft = Offset(w * 0.22f, h * 0.02f),
+                            size = Size(w * 0.56f, h * 0.18f),
+                            style = Stroke(width = maxOf(1.5f, w * 0.035f))
+                        )
+                    }
+                    AidenBotAvatarDetail.ORBIT -> {
+                        drawOval(
+                            color = Color.White.copy(alpha = 0.65f),
+                            topLeft = Offset(w * 0.08f, h * 0.32f),
+                            size = Size(w * 0.84f, h * 0.36f),
+                            style = Stroke(width = maxOf(1.2f, w * 0.025f))
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = w * 0.05f,
+                            center = Offset(w * 0.88f, h * 0.5f)
+                        )
+                    }
+                    AidenBotAvatarDetail.SPARKLES -> {
+                        // Star sparkle
+                        val sx = w * 0.8f
+                        val sy = h * 0.2f
+                        val sr = w * 0.1f
+                        drawLine(Color.White.copy(alpha = 0.85f), Offset(sx - sr, sy), Offset(sx + sr, sy), strokeWidth = 2f)
+                        drawLine(Color.White.copy(alpha = 0.85f), Offset(sx, sy - sr), Offset(sx, sy + sr), strokeWidth = 2f)
+                    }
+                    AidenBotAvatarDetail.ANTENNA -> {
+                        drawLine(Color.White.copy(alpha = 0.8f), Offset(w * 0.5f, h * 0.16f), Offset(w * 0.5f, h * 0.02f), strokeWidth = 2f)
+                        drawCircle(Color.White, radius = w * 0.05f, center = Offset(w * 0.5f, h * 0.02f))
+                    }
+                    AidenBotAvatarDetail.BOLTS -> {
+                        drawCircle(Color.White.copy(alpha = 0.8f), radius = w * 0.035f, center = Offset(w * 0.15f, h * 0.3f))
+                        drawCircle(Color.White.copy(alpha = 0.8f), radius = w * 0.035f, center = Offset(w * 0.85f, h * 0.3f))
+                    }
+                    AidenBotAvatarDetail.NONE -> {}
                 }
-                AidenBotAvatarDetail.ORBIT -> {
-                    drawOval(
-                        color = Color.White.copy(alpha = 0.65f),
-                        topLeft = Offset(w * 0.08f, h * 0.32f),
-                        size = Size(w * 0.84f, h * 0.36f),
-                        style = Stroke(width = maxOf(1.2f, w * 0.025f))
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = w * 0.05f,
-                        center = Offset(w * 0.88f, h * 0.5f)
-                    )
-                }
-                AidenBotAvatarDetail.SPARKLES -> {
-                    // Star sparkle
-                    val sx = w * 0.8f
-                    val sy = h * 0.2f
-                    val sr = w * 0.1f
-                    drawLine(Color.White.copy(alpha = 0.85f), Offset(sx - sr, sy), Offset(sx + sr, sy), strokeWidth = 2f)
-                    drawLine(Color.White.copy(alpha = 0.85f), Offset(sx, sy - sr), Offset(sx, sy + sr), strokeWidth = 2f)
-                }
-                AidenBotAvatarDetail.ANTENNA -> {
-                    drawLine(Color.White.copy(alpha = 0.8f), Offset(w * 0.5f, h * 0.16f), Offset(w * 0.5f, h * 0.02f), strokeWidth = 2f)
-                    drawCircle(Color.White, radius = w * 0.05f, center = Offset(w * 0.5f, h * 0.02f))
-                }
-                AidenBotAvatarDetail.BOLTS -> {
-                    drawCircle(Color.White.copy(alpha = 0.8f), radius = w * 0.035f, center = Offset(w * 0.15f, h * 0.3f))
-                    drawCircle(Color.White.copy(alpha = 0.8f), radius = w * 0.035f, center = Offset(w * 0.85f, h * 0.3f))
-                }
-                AidenBotAvatarDetail.NONE -> {}
             }
         }
 
