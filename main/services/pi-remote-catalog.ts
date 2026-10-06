@@ -1,3 +1,4 @@
+import { parseSamplingParamsByThinkingLevel } from "../../renderer/shared/custom-model-options.js";
 import type { Api, Model, ModelsStoreEntry, Provider } from "@earendil-works/pi-ai";
 import { GOOGLE_PROVIDER_ID, isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
 import { readBoundedBody } from "../shared/bounded-body.js";
@@ -13,8 +14,8 @@ const UNKNOWN_COST_SENTINEL = -1_000_000;
 const MAX_CATALOG_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 /** Keep synchronized with the deliberately pinned @earendil-works/pi-ai dependency. */
-export const AIDEN_PI_CATALOG_VERSION = "0.87.1";
-export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-09-22T19:31:44.346Z");
+export const AIDEN_PI_CATALOG_VERSION = "1.0.3";
+export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-10-05T08:25:18.129Z");
 export const AIDEN_PI_CATALOG_USER_AGENT = `Aiden-Agent pi-ai/${AIDEN_PI_CATALOG_VERSION}`;
 export const PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -171,6 +172,7 @@ function normalizeModel(providerId: string, value: unknown, policy: CatalogPolic
     baseUrl: model.baseUrl,
     reasoning: model.reasoning,
     ...(model.thinkingLevelMap === undefined ? {} : { thinkingLevelMap: structuredClone(model.thinkingLevelMap) }),
+    ...(model.samplingParamsByThinkingLevel === undefined ? {} : { samplingParamsByThinkingLevel: parseSamplingParamsByThinkingLevel(model.samplingParamsByThinkingLevel) }),
     input: [...input],
     cost: structuredClone(model.cost),
     contextWindow: model.contextWindow,
@@ -188,6 +190,11 @@ export function parsePiRemoteCatalog(providerId: string, value: unknown, policy:
   const models: Model<Api>[] = [];
   const ids = new Set<string>();
   for (const entry of entries) {
+    // Pi 1.0 catalogs can contain multiple operations for the same upstream ID.
+    // This endpoint is exclusively a chat inventory: never reinterpret another
+    // operation as a chat model, even when it happens to carry chat-like fields.
+    const type = record(entry)?.type;
+    if (type !== undefined && type !== "chat") continue;
     const model = normalizeModel(providerId, entry, policy);
     if (!model || ids.has(model.id)) {
       throw new Error(`Invalid model catalog entry for provider "${providerId}".`);

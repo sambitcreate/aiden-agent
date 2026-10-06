@@ -132,3 +132,14 @@ test("keeps local selection, pins, and Model Pad placement through onboarding ID
   });
   assert.equal(migrateGoogleProviderPreferences(storage, { [releasedId]: canonicalId }), false);
 });
+
+test("Azure selections and pinned models migrate while custom aliases retain ownership", () => {
+  for (const aliases of [{}, { "azure-openai-responses": "custom:azure" }] as Array<Record<string, string>>) {
+    const storage = memoryStorage({ [SELECTED_PROVIDER_KEY]: "azure-openai-responses", [PINNED_MODELS_KEY]: JSON.stringify(["azure-openai-responses::deployment"]) });
+    const target = aliases["azure-openai-responses"] ?? "azure";
+    assert.equal(migrateGoogleProviderPreferences(storage, aliases), true);
+    assert.equal(storage.value(SELECTED_PROVIDER_KEY), target);
+    assert.deepEqual(JSON.parse(storage.value(PINNED_MODELS_KEY)!), [`${target}::deployment`]);
+    assert.equal(migrateGoogleProviderPreferences(storage, aliases), false);
+  }
+});

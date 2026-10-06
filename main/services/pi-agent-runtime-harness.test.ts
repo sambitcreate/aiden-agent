@@ -12,7 +12,8 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { convertToLlm, type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
 import { createModels } from "@earendil-works/pi-ai";
 import { appendPiMessages } from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
@@ -29,6 +30,8 @@ import {
 import { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
+import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
@@ -65,6 +68,7 @@ async function managedTestHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
   options: {
     tools?: AgentTool[];
+    deferredTools?: readonly AgentTool[];
     extensions?: PiAgentRuntimeHarnessOptions["extensions"];
     identity?: PiAgentRuntimeHarnessOptions["identity"];
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
@@ -123,6 +127,7 @@ async function managedTestHarness(
     }),
   );
   const harness = new PiAgentRuntimeHarness({
+    deferredTools: options.deferredTools,
     extensions: options.extensions,
     identity: options.identity,
     convertToLlm,
@@ -221,6 +226,28 @@ test("Pi runtime harness preserves sequential execution for effectful tool batch
     "second_effect:start",
     "second_effect:end",
   ]);
+});
+
+test("Pi 1.0 records requested thinking level through the legacy journal boundary", async () => {
+  const checkpoint = createCompactionSummaryMessage("Keep migration decision", 10_000, 1);
+  const { harness } = testHarness([fauxAssistantMessage("Continued on the current agent")], {
+    initialState: { thinkingLevel: "high", messages: [checkpoint] },
+  });
+  await harness.prompt("Continue");
+  const response = harness.state.messages.find((message) => message.role === "assistant");
+  assert.ok(response && response.role === "assistant");
+  // 0.87.1 did not record the requested level. This exercises the actual host
+  // runtime instead of merely checking which package version was installed.
+  assert.equal(response.thinkingLevel, "high");
+  const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: "pi-one-replay" }));
+  await session.appendMessage(checkpoint);
+  await session.appendMessage(response);
+  const reopenedContext = await session.buildContext();
+  assert.deepEqual(reopenedContext.messages, [checkpoint, response]);
+  const projected = convertToLlm(reopenedContext.messages);
+  assert.equal(projected[0]?.role, "user");
+  assert.match(JSON.stringify(projected[0]), /Keep migration decision/u);
+  assert.equal(projected[1]?.role === "assistant" && projected[1].thinkingLevel, "high");
 });
 
 test("extension observer failures are reported without corrupting the Pi turn", async () => {
@@ -679,6 +706,140 @@ test("managed run commits an assistant tool plan before executing effects", asyn
   const outcome = await running;
   assert.equal(outcome.kind, "completed");
   assert.deepEqual(trace, ["plan-append", "tool"]);
+});
+
+test("codemode nested calls retain approval, schema validation, sequential execution and durable effect ownership", async (t) => {
+  const effectStore = await effectStoreFixture(t);
+  let harness!: PiAgentRuntimeHarness;
+  const trace: string[] = [];
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const read: AgentTool = {
+    name: "read_file", label: "Read", description: "Read", parameters: Type.Object({ path: Type.String() }), replay: "safe",
+    async execute(_id, args) {
+      const { path } = args as { path: string };
+      trace.push(`start:${path}`);
+      assert.ok((await effectStore.listEffectsByChat("nested-chat")).some((effect) => effect.toolName === "read_file" && effect.state === "dispatch_started"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      trace.push(`end:${path}`);
+      return { content: [{ type: "text", text: String(path) }], details: null };
+    },
+  };
+  const write: AgentTool = { ...read, name: "write_file", execute: async () => { throw new Error("Denied write must not execute"); } };
+  const events: string[] = [];
+  ({ harness } = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'const r = await Promise.all([tools.read_file({path:"one"}), tools.read_file({path:"two"}), tools.write_file({path:"denied"}), tools.read_file({})]); text(r.map(x => x.isError));' }, { id: "script" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("complete"),
+  ], {
+    tools: [read, write, codemode],
+    effects: { store: effectStore, chatId: "nested-chat" },
+    beforeToolCall: async ({ toolCall }) => toolCall.name === "write_file" ? { block: true, reason: "Denied by user" } : undefined,
+  }));
+  harness.subscribe((event) => {
+    if (event.type === "tool_execution_start" || event.type === "tool_execution_end") events.push(`${event.type}:${event.toolCallId}`);
+  });
+  assert.equal((await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "run", timestamp: 1 } })).kind, "completed");
+  assert.deepEqual(trace, ["start:one", "end:one", "start:two", "end:two"]);
+  const effects = await effectStore.listEffectsByChat("nested-chat");
+  assert.deepEqual(effects.map((effect) => effect.toolName).sort(), ["codemode", "read_file", "read_file"]);
+  assert.ok(effects.every((effect) => effect.state === "completed"));
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  assert.equal(result?.role, "toolResult");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), [false, false, true, true]);
+  assert.deepEqual(result.nestedCalls?.calls.map((call) => call.status), ["ok", "ok", "error", "error"]);
+  assert.equal(result.nestedCalls?.complete, true);
+  assert.ok(events.indexOf("tool_execution_end:script/1") < events.indexOf("tool_execution_start:script/2"));
+  assert.ok(events.indexOf("tool_execution_end:script/4") < events.indexOf("tool_execution_end:script"));
+  await assert.rejects(harness.executeNestedToolCall("script", "read_file", { path: "late" }), /No active/u);
+});
+
+test("codemode cannot recover from a nested effect whose terminal persistence failed", async (t) => {
+  const effectStore = await effectStoreFixture(t);
+  const finish = effectStore.finishEffect.bind(effectStore);
+  let failed = false;
+  effectStore.finishEffect = async (input) => {
+    if (!failed && input.state === "completed") { failed = true; throw new Error("Storage unavailable"); }
+    return finish(input);
+  };
+  let harness!: PiAgentRuntimeHarness;
+  let mutations = 0;
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const write: AgentTool = {
+    name: "write_file", label: "Write", description: "Write", parameters: Type.Object({}), replay: "never",
+    execute: async () => { mutations += 1; return { content: [{ type: "text", text: "written" }], details: null }; },
+  };
+  const prepared = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'try { await tools.write_file({}); } catch {} text("continue");' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("must not continue"),
+  ], { tools: [write, codemode], effects: { store: effectStore, chatId: "nested-failure" } });
+  harness = prepared.harness;
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "run", timestamp: 1 } });
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(prepared.core.state.callCount, 1);
+  assert.equal(mutations, 1);
+  const effects = await effectStore.listEffectsByChat("nested-failure");
+  assert.equal(effects.find((effect) => effect.toolName === "write_file")?.state, "unknown");
+});
+
+test("nested result redaction removes stale structured data before the script receives it", async () => {
+  let harness!: PiAgentRuntimeHarness;
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const read: AgentTool = { name: "read_file", label: "Read", description: "Read", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "secret" }], structuredContent: { secret: "must not reach script" }, details: null }) };
+  ({ harness } = testHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'const r = await tools.read_file({}); text({content:r.content, hasStructured:r.structuredContent !== undefined});' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    initialState: { tools: [read, codemode] },
+    afterToolCall: async ({ toolCall }) => toolCall.name === "read_file" ? { content: [{ type: "text", text: "redacted" }] } : undefined,
+  }));
+  await harness.prompt("run");
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  assert.equal(result?.role, "toolResult");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { content: [{ type: "text", text: "redacted" }], hasStructured: false });
+});
+
+test("nested call arguments are retained within per-call and per-script budgets that reset for each parent", async () => {
+  let harness!: PiAgentRuntimeHarness;
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const read: AgentTool = { name: "read_file", label: "Read", description: "Read", parameters: Type.Object({ path: Type.String() }),
+    execute: async () => ({ content: [{ type: "text", text: "ok" }], details: null }) };
+  // Each call's arguments serialize to exactly 7000 UTF-8 bytes ({"path":"…"} adds 11 bytes, "é" is two).
+  const script = 'for (const size of [6989, 6989, 6989, 6989, 6989]) await tools.read_file({path:"x".repeat(size)}); await tools.read_file({path:"é".repeat(4100)});';
+  ({ harness } = testHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: script }, { id: "first" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'await tools.read_file({path:"x".repeat(6989)});' }, { id: "second" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], { initialState: { tools: [read, codemode] } }));
+  await harness.prompt("run");
+  const nested = (id: string) => {
+    const message = harness.state.messages.find((entry) => entry.role === "toolResult" && entry.toolCallId === id);
+    if (message?.role !== "toolResult" || !message.nestedCalls) throw new Error(`Missing nested calls for ${id}`);
+    return message.nestedCalls;
+  };
+  const first = nested("first");
+  assert.deepEqual(first.calls.map((call) => call.arguments ? "kept" : call.argumentsBytes), ["kept", "kept", "kept", "kept", 7000, 8211]);
+  assert.equal(first.complete, false);
+  const second = nested("second");
+  assert.equal((second.calls[0]!.arguments as { path: string }).path.length, 6989);
+  assert.equal(second.complete, true);
+});
+
+test("nested termination fences tool calls already queued by a script", async () => {
+  let harness!: PiAgentRuntimeHarness;
+  let calls = 0;
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const read: AgentTool = { name: "read_file", label: "Read", description: "Read", parameters: Type.Object({}), execute: async () => {
+    calls += 1;
+    return { content: [{ type: "text", text: "stop" }], details: null, terminate: true };
+  } };
+  ({ harness } = testHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'await Promise.allSettled([tools.read_file({}), tools.read_file({})]);' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("must not continue"),
+  ], { initialState: { tools: [read, codemode] } }));
+  await harness.prompt("run");
+  assert.equal(calls, 1);
+  assert.equal(harness.state.messages.filter((message) => message.role === "assistant").length, 1);
 });
 
 test("managed effects record dispatch and terminal evidence outside the Pi journal", async (t) => {
@@ -3256,4 +3417,64 @@ test("AGENTS edits enter only the next logical model request and preserve the to
   assert.match(prompts[0], /INITIAL_GUIDANCE/); assert.ok(!prompts[0].includes("NEXT_GUIDANCE"));
   assert.match(prompts[1], /NEXT_GUIDANCE/); assert.ok(!prompts[1].includes("INITIAL_GUIDANCE"));
   assert.deepEqual(toolSets, [[tool.name], [tool.name]]);
+});
+
+
+test("deferred MCP schemas stay outside provider requests while discovery and approved effects remain available", async (t) => {
+  const store = await effectStoreFixture(t);
+  let harness!: PiAgentRuntimeHarness;
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const leaseRegistry = new McpConfigurationLeaseRegistry();
+  const lease = leaseRegistry.acquire("docs");
+  const toolSets: string[][] = [];
+  const approved: string[] = [];
+  let dispatches = 0;
+  const remote = Object.assign<AgentTool, object>({
+    name: "remote_docs", label: "Docs", description: "Search documents", replay: "never",
+    parameters: Type.Object({ query: Type.String() }),
+    async execute() {
+      lease.assertCurrent();
+      assert.ok((await store.listEffectsByChat("deferred")).some((effect) => effect.toolName === "remote_docs" && effect.state === "dispatch_started"));
+      dispatches += 1;
+      return { content: [{ type: "text", text: "document found" }], details: null };
+    },
+  }, { codemode: true, discovery: { namespace: "docs", label: "Documents" } });
+  const deferred = [remote];
+  const codemode = createPiCodemodeTool({ tools: () => harness.getCallableTools(), executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const prepared = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'text(await searchTools("documents")); text(await tools.remote_docs({query:"first"})); text(await tools.remote_docs({query:"revoked"}));' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    tools: [codemode], deferredTools: deferred, effects: { store, chatId: "deferred" },
+    beforeToolCall: async ({ toolCall }) => {
+      approved.push(toolCall.name);
+      if (toolCall.arguments.query === "revoked") leaseRegistry.invalidate("docs");
+      return undefined;
+    },
+    streamFn: (model, context, options) => {
+      toolSets.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return providerCore.streamSimple(model, context, options);
+    },
+  });
+  harness = prepared.harness;
+  providerCore = prepared.core;
+  deferred.length = 0;
+  remote.parameters = Type.Object({ changed: Type.Number() });
+  assert.equal((await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "search", timestamp: 1 } })).kind, "completed");
+  assert.deepEqual(toolSets, [["codemode"], ["codemode"]]);
+  assert.deepEqual(approved, ["codemode", "remote_docs", "remote_docs"]);
+  assert.equal(dispatches, 1);
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  assert.equal(outputs[0].tools[0].name, "remote_docs");
+  assert.deepEqual(outputs[0].tools[0].inputSchema.required, ["query"]);
+  assert.equal(outputs[1].isError, false);
+  assert.equal(outputs[2].isError, true);
+  assert.match(JSON.stringify(outputs[2]), /configuration changed/u);
+  const effects = await store.listEffectsByChat("deferred");
+  assert.equal(effects.filter((effect) => effect.toolName === "remote_docs").length, 2);
+  assert.deepEqual(effects.filter((effect) => effect.toolName === "remote_docs").map((effect) => effect.state).sort(), ["completed", "remote_error"]);
+  const fresh = testHarness([], { initialState: { tools: [codemode] } }).harness;
+  assert.deepEqual(fresh.getCallableTools().map((tool) => tool.name), ["codemode"]);
 });

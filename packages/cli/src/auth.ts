@@ -2,12 +2,12 @@ import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { randomUUID } from "node:crypto";
 import type { Credential, ApiKeyCredential, OAuthCredential, AuthType } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { ProviderAuthFlowCoordinator, type ProviderAuthPromptDto, type ProviderAuthEventDto, type ProviderAuthDoneDto, type ProviderAuthErrorDto, type ProviderAuthOwner } from "../../../main/services/provider-auth-flow-core.js";
 import { validateOnboardingProviderCredential } from "../../../main/services/onboarding-provider-validation.js";
 import { createCliModelRuntime } from "./providers.ts";
 
-export function createCliAuthCoordinator(runtime: ModelRuntime, openExternal: (url: string) => Promise<void>) {
+export function createCliAuthCoordinator(runtime: ModelRuntime, openExternal: (url: string) => Promise<void>, getDeviceId?: () => string) {
   return new ProviderAuthFlowCoordinator({ openExternal,
     backendFor(providerId, authType) {
       const provider = runtime.getProvider(providerId);
@@ -18,7 +18,7 @@ export function createCliAuthCoordinator(runtime: ModelRuntime, openExternal: (u
         async authenticate(interaction) {
           const login = authType === "oauth" ? provider.auth.oauth?.login : provider.auth.apiKey?.login;
           if (!login) throw new Error(`This provider does not offer ${authType} login.`);
-          const credential = await login({ ...interaction, signal: interaction.signal ?? new AbortController().signal });
+          const credential = await login({ ...interaction, signal: interaction.signal ?? new AbortController().signal }, { getDeviceId });
           if (credential.type === "api_key" && credential.key) {
             const models = runtime.getModels(providerId), first = models[0];
             if (!first) throw new Error("This provider has no installed chat models.");
@@ -54,7 +54,8 @@ export async function authCommand(agentDir: string, args: string[]) {
   const runtime = await createCliModelRuntime(agentDir);
   if (action === "list") return runtime.listCredentials();
   if (!provider) throw new Error("Usage: auth list | login <provider> [oauth|api_key] | logout <provider>");
-  const coordinator = createCliAuthCoordinator(runtime, async (url) => { process.stderr.write(`${url}\n`); });
+  const settings = SettingsManager.create(process.cwd(), agentDir);
+  const coordinator = createCliAuthCoordinator(runtime, async (url) => { process.stderr.write(`${url}\n`); }, () => settings.getOrCreateDeviceId());
   if (action === "logout") { try { await coordinator.logout(provider); return { provider, signedOut: true }; } finally { await coordinator.shutdown(); } }
   if (action !== "login" || !["oauth", "api_key"].includes(method)) throw new Error("Expected login with oauth or api_key, or logout.");
   if (!process.stdin.isTTY) throw new Error("Interactive login needs a terminal. For headless jobs use provider environment keys or an existing auth.json.");
@@ -90,5 +91,5 @@ export async function authCommand(agentDir: string, args: string[]) {
   };
   reader.on("SIGINT", () => { controller.abort(); coordinator.cancel(owner, request); });
   try { coordinator.start(owner, request); return await result; }
-  finally { await coordinator.shutdown(); reader.close(); output.end(); }
+  finally { await coordinator.shutdown(); await settings.flush(); reader.close(); output.end(); }
 }

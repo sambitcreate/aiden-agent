@@ -1147,6 +1147,9 @@ final class AidenChatViewModel {
     @ObservationIgnored private var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
+    /// The fork request whose outcome is still unknown, replayed with the
+    /// same Idempotency-Key so a lost response never yields a second fork.
+    @ObservationIgnored private var forkAttempt: AidenChatForkAttempt?
     @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
@@ -1192,6 +1195,10 @@ final class AidenChatViewModel {
     private(set) var isRespondingToApproval = false
     private(set) var isStopping = false
     private(set) var isSubmittingRunInput = false
+    private(set) var isForking = false
+    private(set) var isSettlingForkSummary = false
+    /// The chat this fork came from, once resolved for the lineage row.
+    private(set) var forkSource: AidenChatForkSource = .unresolved
     private(set) var runInputReceipt: String?
     @ObservationIgnored private var runInputReceiptTask: Task<Void, Never>?
     @ObservationIgnored private var lastRunInputAttempt: AidenRunInputPresentation.Attempt?
@@ -1578,6 +1585,8 @@ final class AidenChatViewModel {
                 }
             }
         }
+        // Edit in fork: its prompt text arrived through the draft store above.
+        adoptForkPrefillAttachments(context: context)
         // Reserve Send synchronously, restore local drafts first, then let the
         // status probe run alongside independent transcript/catalog reads.
         async let restoration: Void = restoreStreamIfNeeded(needed: needsStreamRestoration)
@@ -1720,6 +1729,273 @@ final class AidenChatViewModel {
             }
             coordinator.haptics.play(.error, scope: hapticScope)
             return false
+        }
+    }
+
+    // MARK: - Fork (contract revision 21)
+
+    /// Fork actions for the transcript menus; nil hides every action. Forks
+    /// are Workspace-only and wait for the current turn to settle.
+    var forkAvailability: AidenChatForkAvailability? {
+        guard !isReadOnlyPresentation, !isRemoved, !chat.isBotChat, isConnected,
+              coordinator.activeInstanceId == instanceId,
+              let server = coordinator.server, server.supportsChatFork,
+              !isForking, !isStarting, !isRestoringStream, activeStreamID == nil, !isStreaming else { return nil }
+        return AidenChatForkAvailability(supportsSummary: server.supportsChatForkSummary)
+    }
+
+    /// Forks this chat at a settled message and returns the new chat to open.
+    /// Edit in fork seeds the fork's composer: the prompt text through the
+    /// per-chat draft store, restaged attachments through the prefill handoff.
+    func fork(
+        messageId: String,
+        action: AidenChatForkMenuAction,
+        summaryFocus: String = ""
+    ) async -> AidenChat? {
+        guard let availability = forkAvailability,
+              AidenChatForkEligibility.actions(
+                  for: chat.messages,
+                  supportsSummary: availability.supportsSummary
+              )[messageId]?.contains(action) == true,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else { return nil }
+        isForking = true
+        defer { isForking = false }
+        let source = chat
+        let attempt = AidenChatForkAttempt.retaining(
+            forkAttempt,
+            context: context,
+            request: .init(
+                chatId: source.id,
+                revision: source.revision,
+                messageId: messageId,
+                position: action.position,
+                summaryFocus: action == .forkWithSummary ? summaryFocus : nil
+            )
+        )
+        forkAttempt = attempt
+        do {
+            let result = try await coordinator.remoteClient(for: context).forkChat(
+                chatId: attempt.request.chatId,
+                revision: attempt.request.revision,
+                messageId: attempt.request.messageId,
+                position: attempt.request.position,
+                summaryFocus: attempt.request.summaryFocus,
+                idempotencyKey: attempt.idempotencyKey
+            )
+            // The Mac answered: the next fork is a new request.
+            if forkAttempt == attempt { forkAttempt = nil }
+            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
+            let forked = result.chat
+            guard !forked.isBotChat, forked.workspaceId == source.workspaceId else {
+                presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
+                coordinator.haptics.play(.error, scope: hapticScope)
+                return nil
+            }
+            let writeToken = cache.reserveChatWrite()
+            _ = try? await cache.saveChat(forked, instanceId: context.instanceId, writeToken: writeToken)
+            await cache.admitCreatedWorkspaceChat(
+                chatId: forked.id,
+                instanceId: context.instanceId,
+                workspaceId: forked.workspaceId,
+                writeToken: writeToken
+            )
+            guard coordinator.isCurrent(context) else { return nil }
+            if let prefill = result.prefill {
+                await seedForkComposer(prefill, forkId: forked.id, context: context)
+                guard coordinator.isCurrent(context) else { return nil }
+            }
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-fork:\(forked.id)")
+            return forked
+        } catch let error where aidenIsCancellation(error) {
+            // A cancelled request may already have reached the Mac; keep the key.
+            return nil
+        } catch {
+            if forkAttempt == attempt, !AidenChatForkAttempt.outcomeIsUnknown(after: error) {
+                forkAttempt = nil
+            }
+            if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
+            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
+            if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {
+                presentedError = String(localized: "This chat changed on your Mac. Try again.")
+                _ = await refreshForkChat(context: context)
+            } else {
+                presentedError = error.localizedDescription
+            }
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return nil
+        }
+    }
+
+    private func seedForkComposer(
+        _ prefill: AidenChatForkPrefill,
+        forkId: String,
+        context: AidenRemoteRequestContext
+    ) async {
+        if !prefill.text.isEmpty {
+            // Unpairing purges the store and bumps every session generation,
+            // so a save racing it is rejected; re-check before and after.
+            let session = await draftStore.beginSession(instanceId: context.instanceId, chatId: forkId)
+            if coordinator.isCurrent(context) {
+                _ = try? await draftStore.save(prefill.text, session: session)
+            }
+            if !coordinator.isCurrent(context) {
+                await draftStore.remove(instanceId: context.instanceId, chatId: forkId)
+                return
+            }
+        }
+        let attachments = prefill.attachments.filter { $0.isValid() }
+        guard !attachments.isEmpty, let client = try? coordinator.remoteClient(for: context) else { return }
+        AidenChatForkPrefillHandoff.stage(
+            .init(attachments: attachments, context: context, client: client),
+            chatId: forkId
+        )
+    }
+
+    /// Adopts restaged Edit in fork attachments once, as uploads this
+    /// composer owns, so removing one also deletes it on the Mac.
+    private func adoptForkPrefillAttachments(context: AidenRemoteRequestContext) {
+        guard let entry = AidenChatForkPrefillHandoff.take(instanceId: context.instanceId, chatId: chat.id),
+              entry.context == context, coordinator.isCurrent(context),
+              pendingAttachments.isEmpty, !isUploadingAttachment, !isPreparingAttachments, !isStarting else { return }
+        let attachments = entry.attachments.filter { $0.isValid() }
+        for reference in attachments {
+            ownedUploadReferences[reference.id] = (reference, entry.context, entry.client)
+        }
+        pendingAttachments = attachments
+    }
+
+    /// Try a failed fork summary again with the same focus.
+    func retryForkSummary() async {
+        await settleForkSummary(dedupeKey: "retry") { client, chatId in
+            try await client.retryForkSummary(chatId: chatId)
+        }
+    }
+
+    /// Continue without the summary; the fork becomes a plain fork.
+    func skipForkSummary() async {
+        await settleForkSummary(dedupeKey: "skip") { client, chatId in
+            try await client.skipForkSummary(chatId: chatId)
+        }
+    }
+
+    /// Stop a running summary. It becomes failed, so reread the chat.
+    func cancelForkSummary() async {
+        guard canSettleForkSummary,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else { return }
+        isSettlingForkSummary = true
+        defer { isSettlingForkSummary = false }
+        do {
+            _ = try await coordinator.remoteClient(for: context).cancelForkSummary(chatId: chat.id)
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            _ = await refreshForkChat(context: context)
+        } catch {
+            await handleForkSummaryError(error, context: context)
+        }
+    }
+
+    /// Whether the summary card offers Cancel, Retry, and Continue without summary.
+    var canSettleForkSummary: Bool {
+        !isSettlingForkSummary && !isReadOnlyPresentation && !isRemoved && !chat.isBotChat
+            && chat.forkedFrom?.summary != nil
+            && coordinator.server?.supportsChatForkSummary == true
+    }
+
+    private func settleForkSummary(
+        dedupeKey: String,
+        _ action: (AidenRemoteClient, String) async throws -> AidenChat
+    ) async {
+        guard canSettleForkSummary,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else { return }
+        isSettlingForkSummary = true
+        defer { isSettlingForkSummary = false }
+        let writeToken = cache.reserveChatWrite()
+        do {
+            let updated = try await action(coordinator.remoteClient(for: context), chat.id)
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            await acceptRemoteChat(updated, context: context, writeToken: writeToken, scheduleTitleRefresh: false)
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "fork-summary-\(dedupeKey):\(updated.revision)")
+        } catch {
+            await handleForkSummaryError(error, context: context)
+        }
+    }
+
+    private func handleForkSummaryError(_ error: Error, context: AidenRemoteRequestContext) async {
+        if aidenIsCancellation(error) { return }
+        if await coordinator.handleCredentialRevocation(error, context: context) { return }
+        guard !isRemoved, coordinator.isCurrent(context) else { return }
+        if case AidenRemoteClientError.server(_, let body) = error,
+           ["not_found", "revision_conflict", "operation_in_progress"].contains(body.code.rawValue) {
+            // The summary moved on elsewhere (finished, retried, or skipped).
+            if await refreshForkChat(context: context) { return }
+        }
+        presentedError = error.localizedDescription
+        coordinator.haptics.play(.error, scope: hapticScope)
+    }
+
+    /// Rereads the chat while its fork summary is pending so the card
+    /// settles without a manual refresh. Ends once the state changes.
+    func observePendingForkSummary() async {
+        guard !isReadOnlyFixture else { return }
+        while chat.forkedFrom?.summary?.state == .pending, !isRemoved {
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+            guard let context = try? coordinator.requestContext(for: instanceId),
+                  coordinator.isCurrent(context) else { return }
+            if isStarting || isLoading || isSettlingForkSummary { continue }
+            _ = await refreshForkChat(context: context)
+        }
+    }
+
+    /// A quiet reread: failures stay silent, unlike `reconcileChat`.
+    private func refreshForkChat(context: AidenRemoteRequestContext) async -> Bool {
+        guard !isStarting else { return false }
+        let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
+        do {
+            let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
+            guard !isRemoved, coordinator.isCurrent(context), generation == transcriptGeneration else { return false }
+            return await acceptRemoteChat(remote, context: context, writeToken: writeToken, scheduleTitleRefresh: false)
+        } catch {
+            _ = await coordinator.handleCredentialRevocation(error, context: context)
+            return false
+        }
+    }
+
+    /// Resolves the source chat's title for the "Forked from" row. A source
+    /// the Mac no longer has reads as deleted; any other failure hides the row.
+    func resolveForkSource() async {
+        guard !isReadOnlyFixture, let lineage = chat.forkedFrom,
+              let context = try? coordinator.requestContext(for: instanceId),
+              coordinator.isCurrent(context) else { return }
+        let sourceId = lineage.chatId
+        var title: String?
+        if let cached = await cache.admittedChat(instanceId: context.instanceId, chatId: sourceId) {
+            title = cached.displayTitle
+        } else if let summary = await cache.loadChatSummaries(instanceId: context.instanceId)?
+            .summaries.first(where: { $0.id == sourceId }) {
+            title = summary.title
+        }
+        guard coordinator.isCurrent(context), chat.forkedFrom?.chatId == sourceId else { return }
+        if let title {
+            forkSource = .titled(title)
+            return
+        }
+        do {
+            let source = try await coordinator.remoteClient(for: context).chat(id: sourceId)
+            guard coordinator.isCurrent(context), chat.forkedFrom?.chatId == sourceId else { return }
+            forkSource = .titled(source.displayTitle)
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context), chat.forkedFrom?.chatId == sourceId else { return }
+            if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "not_found" {
+                forkSource = .deleted
+            }
         }
     }
 
@@ -3745,7 +4021,7 @@ final class AidenChatViewModel {
     }
 
     /// Read the newest transcript. With `chat-messages-window-v1` and its
-    /// revision-21 metadata this is the newest page, carrying the chat's
+    /// revision-23 metadata this is the newest page, carrying the chat's
     /// current title, timestamps and model like a whole-chat read; it is
     /// folded into earlier pages already on screen when it is published (or
     /// replaces them when `replacing`). Without the window, or from a page
@@ -4117,18 +4393,19 @@ struct AidenWorkspaceChatsView: View {
                 } else {
                     ForEach(model.chats) { chat in
                         NavigationLink {
-                            AidenChatDetailView(
+                            AidenForkableChatDetailView(
                                 coordinator: coordinator,
                                 chat: chat,
                                 onChatUpdated: {
                                     model.accept($0)
                                     onChatUpdated($0)
                                 },
-                                onChatActivityChanged: onChatActivityChanged
+                                onChatActivityChanged: onChatActivityChanged,
+                                onForkOpened: acceptOpenedFork
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(chat.displayTitle).lineLimit(1)
+                                AidenForkableChatTitle(title: chat.displayTitle, isFork: chat.forkedFrom != nil)
                                 AidenRelativeTimestampView(date: chat.updatedAt)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -4161,15 +4438,17 @@ struct AidenWorkspaceChatsView: View {
             set: { if !$0 { createdChat = nil } }
         )) {
             if let createdChat {
-                AidenChatDetailView(
+                AidenForkableChatDetailView(
                     coordinator: coordinator,
                     chat: createdChat,
                     onChatUpdated: {
                         model.accept($0)
                         onChatUpdated($0)
                     },
-                    onChatActivityChanged: onChatActivityChanged
+                    onChatActivityChanged: onChatActivityChanged,
+                    onForkOpened: acceptOpenedFork
                 )
+                .id(createdChat.id)
             }
         }
         .toolbar {
@@ -4224,6 +4503,12 @@ struct AidenWorkspaceChatsView: View {
         renameTitle = chat.displayTitle
         renameChat = chat
     }
+
+    /// Lists the fork; the detail pushes it over its source.
+    private func acceptOpenedFork(_ chat: AidenChat) {
+        model.accept(chat)
+        onChatUpdated(chat)
+    }
 }
 
 private enum AidenChatAttachmentCoordinateSpace {
@@ -4258,8 +4543,12 @@ struct AidenChatDetailView: View {
     @FocusState private var composerIsFocused: Bool
     @Namespace private var attachmentMotionNamespace
     @State private var coordinator: AidenRemoteCoordinator?
+    @State private var forkSummaryRequest: AidenForkSummaryRequest?
     let autoStartVoice: Bool
     let allowsMutations: Bool
+    /// Opens a chat this one was forked into. Nil hides the fork actions,
+    /// for surfaces that cannot navigate to a new Workspace chat.
+    private let onOpenChat: (@MainActor (AidenChat) -> Void)?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -4267,9 +4556,11 @@ struct AidenChatDetailView: View {
         autoStartVoice: Bool = false,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
-        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in },
+        onOpenChat: (@MainActor (AidenChat) -> Void)? = nil
     ) {
         _coordinator = State(initialValue: coordinator)
+        self.onOpenChat = onOpenChat
         _model = State(initialValue: AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
@@ -4291,6 +4582,7 @@ struct AidenChatDetailView: View {
         _botToolsModel = State(initialValue: nil)
         autoStartVoice = false
         allowsMutations = false
+        onOpenChat = nil
     }
 #endif
 
@@ -4379,6 +4671,17 @@ struct AidenChatDetailView: View {
         .sheet(item: $botSheet) { botSheetContent($0) }
         .sheet(item: $progressSheet) { progressSheet in
             AidenChatProgressSheet(kind: progressSheet, model: model)
+        }
+        .sheet(item: $forkSummaryRequest) { request in
+            AidenForkSummarySheet { focus in
+                performFork(messageID: request.id, action: .forkWithSummary, focus: focus)
+            }
+        }
+        .task(id: model.chat.forkedFrom?.chatId) {
+            await model.resolveForkSource()
+        }
+        .task(id: model.chat.forkedFrom?.summary?.state) {
+            await model.observePendingForkSummary()
         }
         .alert("Aiden On The Go", isPresented: Binding(
             get: { model.presentedError != nil || model.readAloud.errorMessage != nil },
@@ -4538,6 +4841,9 @@ struct AidenChatDetailView: View {
             alignment: .leading,
             spacing: presentationStyle == .botMessages ? 3 : 18
         ) {
+            if let forkLabel = model.forkSource.label {
+                AidenChatForkLineageRow(label: forkLabel)
+            }
             if model.hasOlderMessages {
                 AidenLoadEarlierMessagesButton(isLoading: model.isLoadingEarlierMessages) {
                     loadEarlierMessages(proxy)
@@ -4555,7 +4861,17 @@ struct AidenChatDetailView: View {
                 readAloudActiveID: model.readAloud.activeMessageID,
                 onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
                     if model.askAbout(selection) { composerIsFocused = true }
-                }
+                },
+                forkAvailability: onOpenChat == nil ? nil : model.forkAvailability,
+                onFork: onOpenChat == nil ? nil : { messageID, action in
+                    if action == .forkWithSummary {
+                        forkSummaryRequest = AidenForkSummaryRequest(id: messageID)
+                    } else {
+                        performFork(messageID: messageID, action: action)
+                    }
+                },
+                canSettleForkSummary: model.canSettleForkSummary,
+                isSettlingForkSummary: model.isSettlingForkSummary
             )
             .equatable()
             if model.isStreaming || !model.liveText.isEmpty {
@@ -4568,6 +4884,18 @@ struct AidenChatDetailView: View {
         }
         .padding(.horizontal)
         .padding(.top, 20)
+    }
+
+    private func performFork(messageID: String, action: AidenChatForkMenuAction, focus: String = "") {
+        guard let onOpenChat else { return }
+        Task { @MainActor in
+            guard let forked = await model.fork(
+                messageId: messageID,
+                action: action,
+                summaryFocus: focus
+            ) else { return }
+            onOpenChat(forked)
+        }
     }
 
     private var composer: some View {
@@ -4989,9 +5317,19 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// Quotes a selection into the composer; nil while the chat is read-only.
     /// Closure identity is excluded from equality like the stable `model`.
     var onAskAbout: ((String) -> Void)? = nil
+    /// Nil hides every fork action (no `chat-fork-v1`, read-only, or busy).
+    var forkAvailability: AidenChatForkAvailability? = nil
+    var onFork: ((String, AidenChatForkMenuAction) -> Void)? = nil
+    /// Value snapshots for the fork summary card's actions.
+    var canSettleForkSummary = false
+    var isSettlingForkSummary = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
+        (lhs.onFork == nil) == (rhs.onFork == nil) &&
+        lhs.forkAvailability == rhs.forkAvailability &&
+        lhs.canSettleForkSummary == rhs.canSettleForkSummary &&
+        lhs.isSettlingForkSummary == rhs.isSettlingForkSummary &&
         // `model` is a shared reference (same pointer on both sides of every
         // comparison), so equality must cover the value-typed snapshots the
         // body renders — `chat`, the Read Aloud state — and the presentation style.
@@ -5001,12 +5339,34 @@ private struct AidenSettledMessageRows: View, Equatable {
     }
 
     var body: some View {
+        let forkActions = forkAvailability.map {
+            AidenChatForkEligibility.actions(for: chat.messages, supportsSummary: $0.supportsSummary)
+        } ?? [:]
+        let forkSummary = chat.forkedFrom?.summary
         ForEach(Array(chat.messages.enumerated()), id: \.element.id) { index, message in
-            messageRow(message, at: index)
+            messageRow(message, at: index, forkActions: forkActions[message.id] ?? [])
+            // The summary sits in model context right after the last copied message.
+            if let forkSummary, forkSummary.afterMessageId == message.id {
+                forkSummaryCard(forkSummary)
+            }
         }
     }
 
-    private func messageRow(_ message: AidenChatMessage, at index: Int) -> some View {
+    private func forkSummaryCard(_ summary: AidenChatForkSummary) -> some View {
+        AidenForkSummaryCard(
+            summary: summary,
+            isBusy: isSettlingForkSummary,
+            onCancel: canSettleForkSummary ? { Task { await model.cancelForkSummary() } } : nil,
+            onRetry: canSettleForkSummary ? { Task { await model.retryForkSummary() } } : nil,
+            onSkip: canSettleForkSummary ? { Task { await model.skipForkSummary() } } : nil
+        )
+    }
+
+    private func messageRow(
+        _ message: AidenChatMessage,
+        at index: Int,
+        forkActions: [AidenChatForkMenuAction]
+    ) -> some View {
         let previous = index > 0 ? chat.messages[index - 1] : nil
         let isBotMessage = presentationStyle == .botMessages
         let topPadding: CGFloat = isBotMessage && !aidenMessagesJoin(previous, message) ? 9 : 0
@@ -5024,7 +5384,9 @@ private struct AidenSettledMessageRows: View, Equatable {
             readAloudAction: readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
             readAloudActive: readAloudActiveID == message.id,
             showsFooter: showsFooter,
-            onAskAbout: onAskAbout
+            onAskAbout: onAskAbout,
+            forkActions: onFork == nil ? [] : forkActions,
+            onFork: onFork.map { handler in { (action: AidenChatForkMenuAction) in handler(message.id, action) } }
         )
         .equatable()
         .padding(.top, topPadding)
@@ -5040,6 +5402,8 @@ private struct AidenMessageView: View, Equatable {
     var readAloudActive = false
     var showsFooter = true
     var onAskAbout: ((String) -> Void)? = nil
+    var forkActions: [AidenChatForkMenuAction] = []
+    var onFork: ((AidenChatForkMenuAction) -> Void)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -5050,7 +5414,9 @@ private struct AidenMessageView: View, Equatable {
             (lhs.readAloudAction == nil) == (rhs.readAloudAction == nil) &&
             lhs.readAloudActive == rhs.readAloudActive &&
             lhs.showsFooter == rhs.showsFooter &&
-            (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil)
+            (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
+            lhs.forkActions == rhs.forkActions &&
+            (lhs.onFork == nil) == (rhs.onFork == nil)
     }
 
     private var selectableText: String {
@@ -5128,6 +5494,16 @@ private struct AidenMessageView: View, Equatable {
                     }
                 }
             }
+            if let onFork, !forkActions.isEmpty {
+                Divider()
+                ForEach(forkActions, id: \.self) { action in
+                    Button {
+                        onFork(action)
+                    } label: {
+                        Label(action.menuTitle, systemImage: action.systemImage)
+                    }
+                }
+            }
         }
         .accessibilityActions {
             if let copyText = AidenMessageActionContent.copyText(
@@ -5144,6 +5520,11 @@ private struct AidenMessageView: View, Equatable {
                     Button("Ask about this") {
                         onAskAbout(selectableText)
                     }
+                }
+            }
+            if let onFork {
+                ForEach(forkActions, id: \.self) { action in
+                    Button(action.accessibilityTitle) { onFork(action) }
                 }
             }
         }

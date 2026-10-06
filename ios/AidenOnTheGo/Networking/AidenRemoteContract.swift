@@ -3280,7 +3280,7 @@ private enum AidenBotPrivateResponseValidator {
         case .messagesWindow:
             // A window page carries the same message projection as a chat
             // read, so it is held to the same private-field rules, including
-            // the Bot classification its revision-21 metadata names.
+            // the Bot classification its revision-23 metadata names.
             try validateChildProjectionFields(value)
             if let object = value as? [String: Any] {
                 try validate(value, root: object["botId"] is String ? "chat" : "regularChat", path: [])
@@ -3403,14 +3403,14 @@ struct AidenChatListResponse: Decodable {
 /// One page of `GET /chats/{chatId}/messages` (`chat-messages-window-v1`):
 /// messages oldest first, ending just before the requested cursor (or at the
 /// newest message), plus whether older visible messages exist. Since contract
-/// revision 21 (`chat-messages-window-metadata-v1`) a page also carries the
+/// revision 23 (`chat-messages-window-metadata-v1`) a page also carries the
 /// chat metadata a whole-chat read returns, so a refresh from the newest page
 /// stays as authoritative for the title and model as `GET /chats/{chatId}`.
 struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
     static let defaultLimit = 50
     static let maximumLimit = 200
 
-    /// The chat metadata carried by a revision-21 page.
+    /// The chat metadata carried by a revision-23 page.
     struct Metadata: Equatable, Sendable {
         var workspaceId: String
         var botId: String?
@@ -3428,19 +3428,24 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
     let hasOlder: Bool
     /// Nil from a Mac that predates `chat-messages-window-metadata-v1`.
     let metadata: Metadata?
+    /// Fork lineage (revision 21), present on a fork's pages as on its
+    /// whole-chat read, so a windowed refresh keeps the lineage row.
+    let forkedFrom: AidenChatForkLineage?
 
     init(
         chatId: String,
         revision: String,
         messages: [AidenChatMessage],
         hasOlder: Bool,
-        metadata: Metadata? = nil
+        metadata: Metadata? = nil,
+        forkedFrom: AidenChatForkLineage? = nil
     ) {
         self.chatId = chatId
         self.revision = revision
         self.messages = messages
         self.hasOlder = hasOlder
         self.metadata = metadata
+        self.forkedFrom = forkedFrom
     }
 
     /// The chat this page describes, with the page's messages, or nil when the
@@ -3458,7 +3463,8 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
             createdAt: metadata.createdAt,
             updatedAt: metadata.updatedAt,
             revision: revision,
-            titlePending: metadata.titlePending
+            titlePending: metadata.titlePending,
+            forkedFrom: forkedFrom
         )
     }
 
@@ -3483,13 +3489,16 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
             )
         }
         metadata = try Self.decodeMetadata(from: values)
+        // Additive lineage, dropped rather than rejecting the page when
+        // invalid, as on a whole-chat read.
+        forkedFrom = try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom)
     }
 
     private static let metadataKeys: [CodingKeys] = [
         .workspaceId, .botId, .title, .titlePending, .providerId, .modelId, .createdAt, .updatedAt,
     ]
 
-    /// Revision-21 metadata is all-or-nothing and held to the chat
+    /// Revision-23 metadata is all-or-nothing and held to the chat
     /// projection's bounds: a partial set fails closed rather than leaving a
     /// refresh to mix the page's title with a stale model.
     private static func decodeMetadata(
@@ -3546,6 +3555,7 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case chatId, revision, messages, hasOlder
         case workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt
+        case forkedFrom
     }
 }
 

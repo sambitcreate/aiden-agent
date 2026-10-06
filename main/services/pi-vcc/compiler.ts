@@ -1,5 +1,5 @@
 import { VccError } from "./errors.js";
-import { estimateTokens, type CompactionPreparation } from "@earendil-works/pi-agent-core";
+import { estimateTokens, type CompactionPreparation } from "../pi-legacy-harness.js";
 import type { PiSessionEntry } from "../pi-session-port.js";
 import { sanitizeCredentialText } from "../../../renderer/shared/subagent-safe-text.js";
 import { compileRanked } from "./vendor/core/summarize.js";

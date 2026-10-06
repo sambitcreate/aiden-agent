@@ -335,7 +335,6 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(ipc, /"chats:export", \{ chatId \}/u);
   assert.doesNotMatch(ipc, /chats:export[\s\S]{0,120}(?:filePath|outputPath|targetPath)/u);
   assert.match(mainHandlers, /dialog\.showSaveDialog\(parent/u);
-  assert.match(mainHandlers, /llmClient\.beginChatCopy\(parsed\.chatId\)/u);
   assert.match(mainHandlers, /llmClient\.beginChatExport\(chatId\)/u);
   assert.match(platform, /try \{[\s\S]{0,240}webContents\.send[\s\S]{0,240}catch \(error\)/u);
   assert.match(branchPicker, /openWorktreeOnMount[\s\S]{0,500}programmaticReturnFocusRef/u);

@@ -180,6 +180,14 @@ class AidenTranscriptWindowTest {
         assertEquals("m", chat.modelId)
         assertEquals(Instant.parse("2026-09-27T13:00:00Z"), chat.updatedAt)
         assertEquals("r", chat.revision)
+        assertNull(chat.forkedFrom)
+
+        // A fork's page carries its lineage, so a windowed refresh keeps the lineage row.
+        val forked = json.decodeFromString<AidenChatMessagesWindow>(
+            page.replace(""""title":"Named",""", """"title":"Named","forkedFrom":{"chatId":"chat-source","messageId":"message-2","position":"after","at":"2026-09-27T11:00:00Z"},""")
+        ).chat()!!
+        assertEquals("chat-source", forked.forkedFrom?.chatId)
+        assertEquals("message-2", forked.forkedFrom?.messageId)
 
         assertNull(
             json.decodeFromString<AidenChatMessagesWindow>("""{"chatId":"c","revision":"r","messages":[],"hasOlder":false}""").chat()
@@ -230,7 +238,7 @@ class AidenTranscriptWindowTest {
     @Test
     fun aWindowWithoutMetadataKeepsTheWholeChatRead() =
         withWindowedMac(advertisesWindow = true, advertisesMetadata = false) { mac, model ->
-            // A revision-19/20 Mac pages messages but cannot say the chat's
+            // A revision-19 to 22 Mac pages messages but cannot say the chat's
             // title or model, so the phone keeps reading whole chats from it.
             val opened = withTimeout(5_000) { model.chat.first { it?.revision == "window-r1" } }!!
             assertEquals(ids(1..120), opened.messages.map { it.id })

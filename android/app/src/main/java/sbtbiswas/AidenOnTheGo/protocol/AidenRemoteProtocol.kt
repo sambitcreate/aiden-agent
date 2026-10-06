@@ -47,6 +47,10 @@ object AidenRemoteProtocol {
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
     const val CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1"
     const val CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1"
+    const val CHAT_FORK_FEATURE = "chat-fork-v1"
+    const val CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1"
+    const val MAX_FORK_SUMMARY_FOCUS_LENGTH = 1_000
+    const val MAX_FORK_PREFILL_ATTACHMENTS = 10
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4
@@ -208,7 +212,7 @@ sealed class AidenBotPrivateResponseScope {
     data class Root(val root: String) : AidenBotPrivateResponseScope()
     object ChatProjection : AidenBotPrivateResponseScope()
     object ChatSummaryProjection : AidenBotPrivateResponseScope()
-    /** A `GET /chats/{id}/messages` page: the chat message projection, Bot-classified by its revision-21 `botId`. */
+    /** A `GET /chats/{id}/messages` page: the chat message projection, Bot-classified by its revision-23 `botId`. */
     object MessagesWindowProjection : AidenBotPrivateResponseScope()
     /** Progress has its own strict DTO parser; this scope only applies the generic wire-key guard. */
     object ChatProgressProjection : AidenBotPrivateResponseScope()
@@ -282,7 +286,7 @@ object AidenBotPrivateResponseValidator {
             is AidenBotPrivateResponseScope.MessagesWindowProjection -> {
                 // A window page carries the same message projection as a chat
                 // read, so it is held to the same rules, including the Bot
-                // classification its revision-21 metadata names.
+                // classification its revision-23 metadata names.
                 val botChat = (element as? kotlinx.serialization.json.JsonObject)?.containsKey("botId") == true
                 validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false, regularChat = !botChat)
             }

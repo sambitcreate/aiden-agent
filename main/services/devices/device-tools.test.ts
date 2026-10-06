@@ -164,13 +164,14 @@ test("device_open's quick start allows simctl for gaps without letting the agent
 test("quick start pins every command and quotes unsafe values", () => {
   assert.equal(shellQuote("/data/bin/agent-device"), "/data/bin/agent-device");
   assert.equal(shellQuote("/Library/Application Support/it's"), `'/Library/Application Support/it'"'"'s'`);
-  const target = [...agentDeviceTargetArgs(IPHONE), "--session", "aiden-abc"];
+  // Reproduce the CI session whose hexadecimal identity contains "adb".
+  const target = [...agentDeviceTargetArgs(IPHONE), "--session", "aiden-18ddf9eadb8b3922a2612d23"];
   assert.deepEqual(target.slice(0, 4), ["--platform", "ios", "--udid", "UDID-1"]);
   const text = agentDeviceQuickStart(IPHONE, target, "/Users/me/Library/Application Support/Aiden/agent-device");
   assert.match(text, /watching iPhone 17 Pro \(iOS 27\.0\) in the Simulator tab/u);
-  assert.match(text, /'\/Users\/me\/Library\/Application Support\/Aiden\/agent-device' snapshot -i --platform ios --udid UDID-1 --session aiden-abc/u);
+  assert.match(text, /'\/Users\/me\/Library\/Application Support\/Aiden\/agent-device' snapshot -i --platform ios --udid UDID-1 --session aiden-18ddf9eadb8b3922a2612d23/u);
   assert.match(text, /XCTest runner/u);
-  assert.doesNotMatch(text, /adb|Android|T3/u);
+  assert.doesNotMatch(text, /\b(?:adb|android|T3)\b/iu);
 });
 
 test("pngDimensions reads IHDR and rejects anything else", () => {

@@ -64,6 +64,7 @@ export function buildModel(
     contextWindow: limits.contextWindow,
     maxTokens: limits.maxTokens,
     thinkingLevelMap: limits.thinkingLevelMap,
+    samplingParamsByThinkingLevel: limits.samplingParamsByThinkingLevel,
     compat:
       provider.kind === "anthropic" && limits.forceAdaptiveThinking
         ? { forceAdaptiveThinking: true }

@@ -92,6 +92,8 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatReadStateFeature = "chat-read-state-v1"
     static let chatMessagesWindowFeature = "chat-messages-window-v1"
     static let chatMessagesWindowMetadataFeature = "chat-messages-window-metadata-v1"
+    static let chatForkFeature = "chat-fork-v1"
+    static let chatForkSummaryFeature = "chat-fork-summary-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -249,13 +251,24 @@ struct AidenServer: Codable, Equatable, Sendable {
     }
 
     /// `GET /chats/{chatId}/messages` pages that also carry the chat's
-    /// metadata (revisions 19 and 21). A revision-19/20 page has no title or
+    /// metadata (revisions 19 and 23). A revision-19 to 22 page has no title or
     /// model, so refreshing from it would leave a desktop rename or model
     /// change unseen; without both tokens the client keeps reading whole
     /// transcripts through `GET /chats/{chatId}`.
     var supportsChatMessagesWindow: Bool {
         features.contains(Self.chatMessagesWindowFeature)
             && features.contains(Self.chatMessagesWindowMetadataFeature)
+    }
+
+    /// `POST /chats/{id}/fork` and fork lineage (revision 21).
+    var supportsChatFork: Bool {
+        features.contains(Self.chatForkFeature)
+    }
+
+    /// Fork with summary and the `fork-summary` retry, skip, and cancel
+    /// actions. Meaningful only alongside chat-fork-v1.
+    var supportsChatForkSummary: Bool {
+        supportsChatFork && features.contains(Self.chatForkSummaryFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -402,6 +415,65 @@ struct AidenWorkspacePatch: Encodable, Equatable, Sendable {
     }
 }
 
+struct AidenProviderCreationModel: Encodable, Equatable, Sendable {
+    let id: String
+    let vision: Bool
+    let reasoning: Bool
+    let toolCall: Bool
+}
+
+struct AidenProviderCreation: Encodable, Equatable, Sendable {
+    let label: String
+    let baseUrl: String
+    let kind: String
+    let deployment: String
+    let needsKey: Bool
+    let apiKey: String?
+    let models: [AidenProviderCreationModel]
+    let confirmedForeground = true
+
+    var isValid: Bool { validationMessage == nil }
+
+    var validationMessage: String? {
+        func bounded(_ value: String, _ maximum: Int) -> Bool {
+            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf16.count <= maximum &&
+                !value.unicodeScalars.contains { $0.value < 32 || $0.value == 127 }
+        }
+        guard bounded(label, 120) else { return "Enter a name of up to 120 characters without line breaks." }
+        guard bounded(baseUrl, 2048),
+              let url = URL(string: baseUrl), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
+            return "Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment (up to 2,048 characters)."
+        }
+        guard ["openai", "anthropic"].contains(kind), ["local", "hosted"].contains(deployment) else { return "Choose an API format and deployment." }
+        guard needsKey ? bounded(apiKey ?? "", 4096) : apiKey == nil else { return "Enter an API key of up to 4,096 characters without line breaks, or turn off Requires API key." }
+        guard (1...32).contains(models.count), models.allSatisfy({ bounded($0.id, 128) }),
+              Set(models.map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines) }).count == models.count else {
+            return "Enter 1–32 unique model IDs, each up to 128 characters without line breaks."
+        }
+        return nil
+    }
+}
+
+struct AidenProviderCreationReceipt: Decodable, Equatable, Sendable {
+    let id: String
+    let label: String
+    let models: [String]
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        models = try values.decode([String].self, forKey: .models)
+        guard id.hasPrefix("custom:remote-"), id.count <= 128, !label.isEmpty, label.count <= 120,
+              (1...32).contains(models.count), Set(models).count == models.count,
+              models.allSatisfy({ !$0.isEmpty && $0.count <= 128 }) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid provider creation receipt."))
+        }
+    }
+    private enum CodingKeys: String, CodingKey { case id, label, models }
+}
+
 struct AidenMemorySettings: Codable, Equatable, Sendable {
     let enabled: Bool
     let revision: String
@@ -532,6 +604,21 @@ final class AidenRemoteClient: @unchecked Sendable {
     private struct ChatMoveRequest: Encodable {
         let workspaceId: String
         let confirmedForeground = true
+    }
+
+    private struct ChatForkRequest: Encodable {
+        struct Summary: Encodable {
+            let focus: String?
+        }
+
+        let messageId: String
+        let position: AidenChatForkPosition
+        /// Present only for Fork with summary; `{}` asks for an unfocused summary.
+        let summary: Summary?
+    }
+
+    private struct ChatForkSummaryCancelResponse: Decodable {
+        let cancelled: Bool
     }
 
     private struct ApprovalRequest: Encodable {
@@ -972,6 +1059,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    func createProvider(_ input: AidenProviderCreation, idempotencyKey: UUID) async throws -> AidenProviderCreationReceipt {
+        try await send(method: "POST", path: ["providers"], body: input,
+                       headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()], acceptedStatus: [201])
+    }
+
     func memorySettings() async throws -> AidenMemorySettings {
         try await send(method: "GET", path: ["memory", "settings"])
     }
@@ -1134,6 +1226,83 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: ["If-Match": revision],
             acceptedStatus: [204]
         )
+    }
+
+    /// Fork a chat at a settled message (contract revision 21). `after` keeps
+    /// the chosen reply; `before` cuts just before the chosen prompt and
+    /// returns it as `prefill` to edit and resend. A summary focus is sent
+    /// only for Fork with summary; pass an empty string for an unfocused
+    /// summary and nil for a plain fork.
+    func forkChat(
+        chatId: String,
+        revision: String,
+        messageId: String,
+        position: AidenChatForkPosition,
+        summaryFocus: String? = nil,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChatForkResult {
+        try validateRemoteIdentifier(chatId)
+        try validateRemoteIdentifier(messageId)
+        try validateRevision(revision)
+        let summary = summaryFocus.map { raw -> ChatForkRequest.Summary in
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ChatForkRequest.Summary(focus: trimmed.isEmpty ? nil : trimmed)
+        }
+        // The Mac measures in UTF-16 code units, so match it exactly.
+        if let focus = summary?.focus,
+           focus.utf16.count > AidenChatForkSummary.maximumFocusLength {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let result: AidenChatForkResult = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork"],
+            body: ChatForkRequest(messageId: messageId, position: position, summary: summary),
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            acceptedStatus: [201]
+        )
+        // The fork is a new chat that records this source and cut point.
+        guard result.chat.id != chatId,
+              let lineage = result.chat.forkedFrom,
+              lineage.chatId == chatId,
+              lineage.messageId == messageId,
+              lineage.position == position,
+              position == .before || result.prefill == nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
+    }
+
+    /// Ask the Mac to try a failed fork summary again.
+    func retryForkSummary(chatId: String) async throws -> AidenChat {
+        try await forkSummaryAction(chatId: chatId, action: "retry")
+    }
+
+    /// Continue the fork without its summary; queued messages then send.
+    func skipForkSummary(chatId: String) async throws -> AidenChat {
+        try await forkSummaryAction(chatId: chatId, action: "skip")
+    }
+
+    /// Stop a pending fork summary. Returns false when none was running.
+    func cancelForkSummary(chatId: String) async throws -> Bool {
+        try validateRemoteIdentifier(chatId)
+        let response: ChatForkSummaryCancelResponse = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork-summary", "cancel"]
+        )
+        return response.cancelled
+    }
+
+    private func forkSummaryAction(chatId: String, action: String) async throws -> AidenChat {
+        try validateRemoteIdentifier(chatId)
+        let chat: AidenChat = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork-summary", action]
+        )
+        guard chat.id == chatId else { throw AidenRemoteClientError.invalidResponse }
+        return chat
     }
 
     /// Report that the user viewed a chat, clearing its unread marker on every
