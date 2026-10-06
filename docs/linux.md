@@ -17,7 +17,12 @@ curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/insta
 ```
 
 Linux installation requires a current trusted GitHub CLI so the selected package
-can be checked against Aiden's main-branch release-workflow attestation. Pass an
+can be checked against Aiden's main-branch release-workflow attestation. The
+installer needs `gh` 2.68 or newer and stops with an explicit message otherwise;
+distribution archives can be much older (Ubuntu 26.04 ships 2.46, which has no
+`gh attestation` command), so install `gh` from the
+[GitHub CLI package repository](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
+when the distribution's copy is rejected. Pass an
 independently reviewed release commit for the strictest path:
 
 ```sh

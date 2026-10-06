@@ -114,8 +114,6 @@ artifact=/absolute/path/to/downloaded-package.rpm
 gh attestation verify "$artifact" \
   --hostname github.com \
   --repo sambitcreate/aiden-agent \
-  --signer-repo sambitcreate/aiden-agent \
-  --signer-workflow sambitcreate/aiden-agent/.github/workflows/release.yml \
   --cert-identity https://github.com/sambitcreate/aiden-agent/.github/workflows/release.yml@refs/heads/main \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
   --source-ref refs/heads/main \
