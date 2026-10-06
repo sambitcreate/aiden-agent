@@ -2,12 +2,19 @@ package sbtbiswas.AidenOnTheGo
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.features.workspaces.AidenUsageHeatmapDay
+import sbtbiswas.AidenOnTheGo.features.workspaces.AidenUsageTokenKind
+import sbtbiswas.AidenOnTheGo.features.workspaces.aidenUsageDayInspectionLabel
 import sbtbiswas.AidenOnTheGo.features.workspaces.aidenUsageHeatmapDays
 import sbtbiswas.AidenOnTheGo.features.workspaces.aidenUsageRatio
+import sbtbiswas.AidenOnTheGo.features.workspaces.aidenUsageTokenSegments
+import sbtbiswas.AidenOnTheGo.features.workspaces.aidenUsageToggleSelectedDay
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
 import java.nio.file.Files
+import java.util.Locale
 
 class AidenUsagePresentationTest {
     @Test
@@ -33,6 +40,58 @@ class AidenUsagePresentationTest {
         assertEquals(0.0, aidenUsageRatio(1, 0), 0.0)
         assertEquals(0.5, aidenUsageRatio(5, 10), 0.0)
         assertEquals(1.0, aidenUsageRatio(15, 10), 0.0)
+    }
+
+    @Test
+    fun tokenBarSegmentsAreProportionalInLegendOrderAndSkipEmptyKinds() {
+        val segments = aidenUsageTokenSegments(
+            AidenUsageTokens(
+                input = 600,
+                output = 300,
+                cacheRead = 100,
+                cacheWrite = 5_000,
+                reasoning = 0,
+                total = 6_000
+            )
+        )
+
+        assertEquals(
+            listOf(AidenUsageTokenKind.INPUT, AidenUsageTokenKind.OUTPUT, AidenUsageTokenKind.CACHE_READ),
+            segments.map { it.kind }
+        )
+        assertEquals(listOf(600, 300, 100), segments.map { it.tokens })
+        assertEquals(0.6f, segments[0].fraction, 1e-6f)
+        assertEquals(0.3f, segments[1].fraction, 1e-6f)
+        assertEquals(0.1f, segments[2].fraction, 1e-6f)
+    }
+
+    @Test
+    fun tokenBarHasNoSegmentsWithoutTokens() {
+        assertTrue(aidenUsageTokenSegments(tokens(0)).isEmpty())
+    }
+
+    @Test
+    fun tappingADaySelectsItAndTappingItAgainClearsTheInspection() {
+        assertEquals("2026-10-06", aidenUsageToggleSelectedDay(null, "2026-10-06"))
+        assertEquals("2026-10-07", aidenUsageToggleSelectedDay("2026-10-06", "2026-10-07"))
+        assertNull(aidenUsageToggleSelectedDay("2026-10-06", "2026-10-06"))
+    }
+
+    @Test
+    fun inspectionLabelNamesTheDayAndItsTokens() {
+        assertEquals("Last 30 days", aidenUsageDayInspectionLabel(null, Locale.US))
+        assertEquals(
+            "Oct 6 · 48,210 tokens",
+            aidenUsageDayInspectionLabel(AidenUsageHeatmapDay("2026-10-06", 48_210), Locale.US)
+        )
+        assertEquals(
+            "Oct 7 · 1 token",
+            aidenUsageDayInspectionLabel(AidenUsageHeatmapDay("2026-10-07", 1), Locale.US)
+        )
+        assertEquals(
+            "someday · 0 tokens",
+            aidenUsageDayInspectionLabel(AidenUsageHeatmapDay("someday", 0), Locale.US)
+        )
     }
 
     @Test
