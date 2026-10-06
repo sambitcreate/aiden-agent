@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -70,6 +72,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
+import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
@@ -100,6 +103,7 @@ fun AidenChatDetailScreen(
     draftStore: AidenChatDraftStore,
     voiceInputStore: AidenVoiceInputStore,
     liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
+    networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     startVoiceOnOpen: Boolean = false,
     onNavigateToChat: (String) -> Unit = {},
     onNavigateBack: () -> Unit
@@ -119,7 +123,8 @@ fun AidenChatDetailScreen(
             coordinator,
             chatCache,
             draftStore,
-            liveNotificationManager
+            liveNotificationManager,
+            networkAvailability
         )
     )
 
@@ -829,6 +834,7 @@ fun AidenChatDetailScreen(
                         val reasoning by viewModel.reasoning.collectAsStateWithLifecycle()
                         val tools by viewModel.tools.collectAsStateWithLifecycle()
                         val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
+                        val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
                         ActiveStreamingCard(
                             liveText = liveText,
                             reasoning = reasoning,
@@ -836,7 +842,8 @@ fun AidenChatDetailScreen(
                             activityTimeline = activityTimeline,
                             isBotChat = isBotChat,
                             palette = palette,
-                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages)
+                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
+                            isWaitingForNetwork = isWaitingForNetwork
                         )
                     }
                 }
@@ -1340,14 +1347,15 @@ private fun AssistantMessageRow(
 }
 
 @Composable
-private fun ActiveStreamingCard(
+internal fun ActiveStreamingCard(
     liveText: String,
     reasoning: String,
     tools: List<AidenLiveTool>,
     activityTimeline: AidenGenerationTimeline?,
     isBotChat: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
-    liveStart: java.time.Instant? = null
+    liveStart: java.time.Instant? = null,
+    isWaitingForNetwork: Boolean = false
 ) {
     val reasoningActive = reasoning.isNotEmpty() && (
         AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
@@ -1471,7 +1479,8 @@ private fun ActiveStreamingCard(
                     )
                     AidenStreamingCursor(palette = palette)
                 }
-            } else if (reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
+            }
+            if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
                     Spacer(modifier = Modifier.width(10.dp))
@@ -1483,6 +1492,34 @@ private fun ActiveStreamingCard(
                     )
                 }
             }
+            }
+            // Chronological and fallback transcripts both show the pause,
+            // after whatever content the run already produced.
+            if (isWaitingForNetwork) {
+                if (!chronologicalRows.isNullOrEmpty() || liveText.isNotEmpty() || reasoning.isNotEmpty() || tools.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                // A paused run, not an error: neutral copy and icon, no banner.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.semantics(mergeDescendants = true) {
+                        contentDescription = "Aiden is waiting for the network to return"
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.WifiOff,
+                        contentDescription = null,
+                        tint = palette.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Waiting for network",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.secondary
+                    )
+                }
             }
         }
     }

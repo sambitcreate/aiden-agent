@@ -1146,6 +1146,7 @@ final class AidenChatViewModel {
     private var isRestoringStream = false
     @ObservationIgnored private var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
+    @ObservationIgnored private let networkPath: AidenNetworkPathSource?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
@@ -1176,6 +1177,10 @@ final class AidenChatViewModel {
             onChatActivityChanged(chat.id, isActive ? .active : .idle)
         }
     }
+    private var networkWaitStreamID: String?
+    /// The live stream lost its transport while the device is offline and is
+    /// parked until the path returns. No error is shown in this state.
+    var isWaitingForNetwork: Bool { networkWaitStreamID != nil && networkWaitStreamID == activeStreamID }
     private(set) var liveText = ""
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
@@ -1282,6 +1287,7 @@ final class AidenChatViewModel {
         draftStore: AidenChatDraftStore = .shared,
         modelPreferenceStore: AidenModelPreferenceStore = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
+        networkPath: AidenNetworkPathSource? = nil,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
@@ -1294,6 +1300,7 @@ final class AidenChatViewModel {
             liveActivities: liveActivities ?? .shared
         )
         modelPreferenceContext = try? coordinator.requestContext(for: preferenceInstanceId)
+        self.networkPath = networkPath ?? AidenNetworkPathMonitor.shared.availability
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
@@ -1323,6 +1330,7 @@ final class AidenChatViewModel {
     init(readOnlyFixture chat: AidenChat) {
         runtime = .readOnlyFixture
         modelPreferenceContext = nil
+        networkPath = nil
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
@@ -1374,6 +1382,7 @@ final class AidenChatViewModel {
         activityTimeline = nil
         pendingApproval = nil
         streamState = nil
+        networkWaitStreamID = nil
         clearRecoveryWarning()
         if let removedStreamID {
             Task { await liveActivities.updateStatus(instanceID: instanceId, streamID: removedStreamID, state: .cancelled) }
@@ -3558,7 +3567,11 @@ final class AidenChatViewModel {
     ) async {
         var stream = original
         var terminalReplayGate = AidenTerminalReplayGate()
-        var retryAttempt = 0
+        var recovery = AidenStreamNetworkRecovery(path: networkPath ?? AidenNetworkAvailability())
+        let streamID = original.streamId
+        let onWaiting: (Bool) async -> Void = { [weak self] waiting in
+            await self?.setWaitingForNetwork(waiting, streamID: streamID)
+        }
         while !Task.isCancelled && coordinator.isCurrent(context) && activeStreamID == stream.streamId {
             do {
                 let events = try coordinator.remoteClient(for: context).streamEvents(
@@ -3582,9 +3595,13 @@ final class AidenChatViewModel {
                     // alone loses their prefix after relaunch and writes on every token.
                 }
 
+                // A stream that ended without a terminal frame is a lost stream
+                // too: offline, park before any status probe or reconnect.
+                guard try await recovery.shouldProbeAfterStreamFailure(onWaiting: onWaiting) else { continue }
+                guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                 guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-                retryAttempt = 0
+                recovery.recordHealthy()
                 clearRecoveryWarning()
                 await apply(
                     status,
@@ -3602,10 +3619,18 @@ final class AidenChatViewModel {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
+                // Offline: park without a status probe, warning, or backoff and
+                // reopen from the last applied sequence when the path returns.
+                do {
+                    guard try await recovery.shouldProbeAfterStreamFailure(onWaiting: onWaiting) else { continue }
+                } catch {
+                    return
+                }
+                guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 do {
                     let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                     guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-                    retryAttempt = 0
+                    recovery.recordHealthy()
                     clearRecoveryWarning()
                     await apply(
                         status,
@@ -3633,18 +3658,35 @@ final class AidenChatViewModel {
                         return
                     }
                     guard !isRemoved, !Task.isCancelled, activeStreamID == stream.streamId else { return }
-                    showRecoveryWarning(error.localizedDescription)
-                    await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
-                    let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: retryAttempt)
-                    retryAttempt += 1
+                    let message = error.localizedDescription
                     do {
-                        try await Task.sleep(for: .milliseconds(delay))
+                        _ = try await recovery.recoverAfterProbeFailure(
+                            onBackoff: { [weak self] in
+                                guard let self, !self.isRemoved, self.activeStreamID == streamID else { return }
+                                self.showRecoveryWarning(message)
+                                await self.liveActivities.markStale(instanceID: self.instanceId, streamID: streamID)
+                            },
+                            onWaiting: onWaiting
+                        )
                     } catch {
                         return
                     }
                     continue
                 }
             }
+        }
+    }
+
+    private func setWaitingForNetwork(_ waiting: Bool, streamID: String) async {
+        if waiting {
+            guard !isRemoved, activeStreamID == streamID else { return }
+            networkWaitStreamID = streamID
+            // Losing the network is not an error: drop any recovery warning so
+            // the composer shows no banner while the run waits.
+            clearRecoveryWarning()
+            await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+        } else if networkWaitStreamID == streamID {
+            networkWaitStreamID = nil
         }
     }
 
@@ -6624,7 +6666,18 @@ private struct AidenLiveResponseView: View {
                ) {
                 AidenLiveElapsedLabel(start: start)
             }
-            if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
+            if model.isStreaming && model.isWaitingForNetwork {
+                HStack(spacing: 8) {
+                    Image(systemName: "wifi.slash")
+                        .accessibilityHidden(true)
+                    Text("Waiting for network")
+                }
+                .font(.callout)
+                .foregroundStyle(palette.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Aiden is waiting for the network to return")
+                .transition(.opacity)
+            } else if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 let activity = activity
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)

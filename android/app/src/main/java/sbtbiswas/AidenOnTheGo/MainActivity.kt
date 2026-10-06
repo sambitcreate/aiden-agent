@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
         val appearanceStore = container.appearanceStore
         val voiceInputStore = container.voiceInputStore
         val liveNotificationManager = container.liveNotificationManager
+        val networkAvailability = container.networkAvailability
         val coordinator = container.coordinator
         // A recreated Activity keeps its intent; re-reading it would replay the
         // link (and create another chat for a new-chat link). Only an unhandled
@@ -217,6 +218,7 @@ class MainActivity : ComponentActivity() {
                                     draftStore = draftStore,
                                     voiceInputStore = voiceInputStore,
                                     liveNotificationManager = liveNotificationManager,
+                                    networkAvailability = networkAvailability,
                                     startVoiceOnOpen = screen.startsVoice,
                                     onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateBack = navigator::back

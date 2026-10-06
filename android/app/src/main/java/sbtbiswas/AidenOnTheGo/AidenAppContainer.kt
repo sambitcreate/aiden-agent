@@ -9,6 +9,7 @@ import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentCatalogStore
+import sbtbiswas.AidenOnTheGo.networking.AidenConnectivityNetworkAvailability
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
@@ -33,6 +34,7 @@ class AidenAppContainer(context: Context) {
     val voiceInputStore = AidenVoiceInputStore(appContext)
     val intentCatalogStore = AidenIntentCatalogStore(appContext)
     val liveNotificationManager = AidenRemoteLiveNotificationManager(appContext)
+    val networkAvailability = AidenConnectivityNetworkAvailability(appContext)
     val coordinator = AidenRemoteCoordinator(
         installationStore = installationStore,
         storageDir = filesDir,
