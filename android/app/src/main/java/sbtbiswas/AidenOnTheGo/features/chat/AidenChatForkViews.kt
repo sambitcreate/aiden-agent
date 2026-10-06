@@ -1,16 +1,21 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,9 +35,18 @@ import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.models.AidenChatForkSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatForkSummaryState
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 
 private const val FORK_SUMMARY_TITLE = "What happened after this point"
+private val CompactActionPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
 
 /** "Forked from {title}" at the top of a fork's transcript. Opens the source unless it was deleted. */
 @Composable
@@ -48,33 +62,57 @@ fun AidenForkLineageRow(
         is AidenChatForkSource.Resolving, is AidenChatForkSource.Unknown -> "Forked from another chat"
     }
     val opens = onOpenSource != null && source !is AidenChatForkSource.Deleted
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .fillMaxWidth()
-            .then(
+    val interaction = remember { MutableInteractionSource() }
+    Box(modifier = modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = CircleShape,
+            modifier = if (opens) Modifier.tactilePress(interaction) else Modifier
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .then(
+                        if (opens) {
+                            Modifier.clickable(
+                                interactionSource = interaction,
+                                indication = ripple(),
+                                role = Role.Button,
+                                onClickLabel = "Open the original chat"
+                            ) {
+                                onOpenSource?.invoke(source.chatId)
+                            }
+                        } else Modifier
+                    )
+                    .heightIn(min = 32.dp)
+                    .padding(start = 10.dp, end = if (opens) 8.dp else 12.dp, top = 6.dp, bottom = 6.dp)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.CallSplit,
+                    contentDescription = null,
+                    tint = palette.secondary,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.secondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
                 if (opens) {
-                    Modifier.clickable(role = Role.Button, onClickLabel = "Open the original chat") {
-                        onOpenSource?.invoke(source.chatId)
-                    }
-                } else Modifier
-            )
-            .padding(vertical = 6.dp)
-    ) {
-        Icon(
-            Icons.AutoMirrored.Filled.CallSplit,
-            contentDescription = null,
-            tint = palette.secondary,
-            modifier = Modifier.size(14.dp)
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = palette.secondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = palette.secondary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -125,9 +163,12 @@ fun AidenForkSummaryCard(
                             )
                         }
                         if (canManage) {
-                            TextButton(onClick = onCancel, enabled = !busy) {
-                                Text("Cancel", color = palette.foreground)
-                            }
+                            AidenTonalButton(
+                                text = "Cancel",
+                                onClick = onCancel,
+                                enabled = !busy,
+                                contentPadding = CompactActionPadding
+                            )
                         }
                     }
                     FocusLine(summary.focus, palette)
@@ -143,21 +184,16 @@ fun AidenForkSummaryCard(
                     )
                     FocusLine(summary.focus, palette)
                     if (canManage) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = onRetry,
-                                enabled = !busy,
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = palette.accent,
-                                    contentColor = palette.canvas
-                                )
-                            ) {
-                                Text("Retry", fontWeight = FontWeight.SemiBold)
-                            }
-                            TextButton(onClick = onSkip, enabled = !busy) {
-                                Text("Continue without summary", color = palette.foreground)
-                            }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            AidenPrimaryButton(text = "Retry", onClick = onRetry, enabled = !busy)
+                            AidenTonalButton(
+                                text = "Continue without summary",
+                                onClick = onSkip,
+                                enabled = !busy
+                            )
                         }
                     }
                 }
@@ -174,12 +210,23 @@ private fun ReadySummary(
     body: @Composable (String) -> Unit
 ) {
     var expanded by rememberSaveable(summary.afterMessageId) { mutableStateOf(false) }
-    val rotation by animateFloatAsState(if (expanded) 90f else 0f, label = "forkSummaryChevron")
+    val reduceMotion = aidenReduceMotion()
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = AidenMotion.spatial(reduceMotion),
+        label = "forkSummaryChevron"
+    )
+    val interaction = remember { MutableInteractionSource() }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(role = Role.Button) { expanded = !expanded }
+            .tactilePress(interaction, targetScale = 0.98f)
+            .clickable(
+                interactionSource = interaction,
+                indication = ripple(),
+                role = Role.Button
+            ) { expanded = !expanded }
             .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
             .padding(vertical = 2.dp)
     ) {
@@ -199,8 +246,14 @@ private fun ReadySummary(
     )
     AnimatedVisibility(
         visible = expanded,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut()
+        enter = if (reduceMotion) EnterTransition.None else {
+            expandVertically(AidenMotion.spatialExpressiveSpring(), expandFrom = Alignment.Top) +
+                fadeIn(AidenMotion.short())
+        },
+        exit = if (reduceMotion) ExitTransition.None else {
+            shrinkVertically(AidenMotion.spatialExpressiveSpring(), shrinkTowards = Alignment.Top) +
+                fadeOut(AidenMotion.short())
+        }
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
             FocusLine(summary.focus, palette)
@@ -267,12 +320,14 @@ fun AidenForkSummaryDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(focus.trim().ifEmpty { null }) }, enabled = !busy) {
-                Text("Fork", fontWeight = FontWeight.SemiBold, color = palette.accent)
-            }
+            AidenDialogConfirmButton(
+                text = "Fork",
+                onClick = { onConfirm(focus.trim().ifEmpty { null }) },
+                enabled = !busy
+            )
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = palette.foreground) }
-        }
+        dismissButton = { AidenDialogDismissButton(onClick = onDismiss) },
+        shape = AidenShape.Dialog,
+        containerColor = palette.raised
     )
 }

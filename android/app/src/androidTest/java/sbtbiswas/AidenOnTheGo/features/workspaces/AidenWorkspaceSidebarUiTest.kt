@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -63,6 +64,44 @@ class AidenWorkspaceSidebarUiTest {
         disclosure.assert(
             SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded")
         )
+    }
+
+    @Test
+    fun disclosureRevealsAndHidesTheWorkspaceContents() {
+        val workspace = AidenWorkspace(
+            id = "beta",
+            name = "Beta",
+            permission = AidenWorkspacePermission.ASK,
+            updatedAt = Instant.parse("2026-08-24T12:00:00Z"),
+            revision = "beta-r1"
+        )
+        val section = AidenWorkspaceSidebarSection(
+            workspace = workspace,
+            chats = emptyList(),
+            newestActivityAt = workspace.updatedAt ?: Instant.EPOCH
+        )
+        var expanded by mutableStateOf(false)
+        var createdChats = 0
+
+        compose.setContent {
+            AidenTheme {
+                AidenWorkspaceSidebarSectionRow(
+                    section = section,
+                    expanded = expanded,
+                    canCreateChat = true,
+                    onToggle = { expanded = !expanded },
+                    onCreateChat = { createdChats += 1 },
+                    onNavigateToChat = {}
+                )
+            }
+        }
+
+        compose.onNodeWithText("New chat").assertDoesNotExist()
+        compose.onNodeWithTag("workspace_disclosure_beta").performClick()
+        compose.onNodeWithText("New chat").assertIsDisplayed().performClick()
+        assertEquals(1, createdChats)
+        compose.onNodeWithTag("workspace_disclosure_beta").performClick()
+        compose.onNodeWithText("New chat").assertDoesNotExist()
     }
 
     @Test

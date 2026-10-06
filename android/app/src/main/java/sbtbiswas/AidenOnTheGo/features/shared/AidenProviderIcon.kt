@@ -18,12 +18,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sbtbiswas.AidenOnTheGo.models.AidenProviderArtwork
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.compositeOver
 
 object AidenProviderIconResolver {
     val supportedSlugs = setOf(
@@ -99,22 +101,18 @@ fun AidenProviderIcon(
     } else {
         // Semantic Monogram or Icon Badge
         val initial = providerLabel.trim().firstOrNull()?.uppercaseChar() ?: 'A'
-        val badgeColor = when (slug) {
-            "openai", "openai-codex" -> Color(0xFF10A37F)
-            "claude", "anthropic" -> Color(0xFFD97706)
-            "google", "google-vertex" -> Color(0xFF4285F4)
-            "deepseek" -> Color(0xFF0066FF)
-            "grok", "xai" -> Color(0xFF1D1D1D)
-            "mistral" -> Color(0xFFFF7000)
-            "ollama" -> Color(0xFF24292E)
-            else -> palette.accent
-        }
+        val monogram = aidenProviderMonogramColors(
+            brandFill = aidenProviderBrandFill(slug) ?: palette.accent,
+            surface = palette.raised,
+            liftedFill = MaterialTheme.colorScheme.surfaceContainerHighest,
+            liftedInk = palette.foreground
+        )
 
         Box(
             modifier = modifier
                 .size(size)
                 .clip(RoundedCornerShape(size * 0.25f))
-                .background(badgeColor),
+                .background(monogram.fill),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -122,8 +120,58 @@ fun AidenProviderIcon(
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
                 fontSize = (size.value * 0.55f).sp,
-                color = Color.White
+                color = monogram.ink
             )
         }
     }
+}
+
+/** Brand fill for a provider's monogram badge, or null to fall back to the theme accent. */
+internal fun aidenProviderBrandFill(slug: String?): Color? = when (slug) {
+    "openai", "openai-codex" -> Color(0xFF10A37F)
+    "claude", "anthropic" -> Color(0xFFD97706)
+    "google", "google-vertex" -> Color(0xFF4285F4)
+    "deepseek" -> Color(0xFF0066FF)
+    "grok", "xai" -> Color(0xFF1D1D1D)
+    "mistral" -> Color(0xFFFF7000)
+    "ollama" -> Color(0xFF24292E)
+    else -> null
+}
+
+internal data class AidenMonogramColors(val fill: Color, val ink: Color)
+
+/** True when a near-black brand fill would sink into a dark surface and lose its edge. */
+internal fun aidenMonogramBlendsIntoSurface(fill: Color, surface: Color): Boolean =
+    fill.luminance() < 0.03f && surface.luminance() < 0.18f
+
+/**
+ * Badge colors for a monogram: the brand fill with white ink, or, when that fill would
+ * disappear into a dark surface, a lifted tonal fill with foreground ink.
+ */
+internal fun aidenProviderMonogramColors(
+    brandFill: Color,
+    surface: Color,
+    liftedFill: Color,
+    liftedInk: Color
+): AidenMonogramColors =
+    if (aidenMonogramBlendsIntoSurface(brandFill, surface)) {
+        // Lighter dark cards (e.g. Paper/Calm) can sit closer to the top tonal tier than
+        // to the near-black brand fill; step the badge further toward the ink so it
+        // always separates from the card more than the brand fill would.
+        val fill = if (contrastRatio(liftedFill, surface) > contrastRatio(brandFill, surface)) {
+            liftedFill
+        } else {
+            liftedInk.copy(alpha = LiftedInkAlpha).compositeOver(surface)
+        }
+        AidenMonogramColors(fill = fill, ink = liftedInk)
+    } else {
+        AidenMonogramColors(fill = brandFill, ink = Color.White)
+    }
+
+private const val LiftedInkAlpha = 0.22f
+
+private fun contrastRatio(a: Color, b: Color): Float {
+    val hi = maxOf(a.luminance(), b.luminance())
+    val lo = minOf(a.luminance(), b.luminance())
+    return (hi + 0.05f) / (lo + 0.05f)
 }

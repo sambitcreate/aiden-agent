@@ -544,7 +544,8 @@ jobs:
           LINUX_RESULT: ${{ needs.linux.result }}
         run: |
           case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT" in
-            success:true:success|success:false:skipped) exit 0 ;;
+            # Unselected, the always-started linux matrix skips its steps and reports success.
+            success:true:success|success:false:success|success:false:skipped) exit 0 ;;
             *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT"; exit 1 ;;
           esac
 

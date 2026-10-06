@@ -9,14 +9,16 @@ import android.graphics.BitmapFactory
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -47,12 +49,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
@@ -67,8 +71,11 @@ import sbtbiswas.AidenOnTheGo.models.AidenAttachmentKind
 import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.security.MessageDigest
 import kotlin.math.abs
 import kotlin.math.max
@@ -118,6 +125,18 @@ internal object AidenAttachmentGalleryWindow {
     fun contains(index: Int, selectedIndex: Int, count: Int): Boolean =
         count > 0 && index in 0 until count && selectedIndex in 0 until count &&
             abs(index - selectedIndex) <= 1
+}
+
+internal object AidenImageCountBadge {
+    val ActiveDotWidth: Dp = 18.dp
+    val DotSize: Dp = 6.dp
+
+    /** "2 / 4" for the deck's glass pill, or null when there is nothing to page through. */
+    fun label(selection: Int, count: Int): String? =
+        if (count <= 1) null else "${selection.coerceIn(0, count - 1) + 1} / $count"
+
+    /** The selected page's dot stretches into a pill; the others stay round. */
+    fun dotWidth(index: Int, selectedIndex: Int): Dp = if (index == selectedIndex) ActiveDotWidth else DotSize
 }
 
 internal enum class AidenMessageMediaEdge {
@@ -201,10 +220,10 @@ private fun AidenInlineImageCardDeck(
 ) {
     var rawDrag by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
-    val reduceMotion = rememberAidenReduceMotion()
+    val reduceMotion = aidenReduceMotion()
     val settledDrag by animateFloatAsState(
         targetValue = if (dragging && !reduceMotion) rawDrag else 0f,
-        animationSpec = AidenMotion.spatialExpressiveSpring(),
+        animationSpec = AidenMotion.spatial(reduceMotion),
         label = "image_deck_settle"
     )
     val density = LocalDensity.current
@@ -299,8 +318,67 @@ private fun AidenInlineImageCardDeck(
                 )
             }
         }
+        AidenImageCountBadge.label(selection, attachments.size)?.let { count ->
+            AidenGlassCountPill(
+                text = count,
+                container = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.88f),
+                content = AidenTheme.palette.foreground,
+                modifier = Modifier
+                    .align(if (edge == AidenMessageMediaEdge.TRAILING) Alignment.BottomEnd else Alignment.BottomStart)
+                    .padding(10.dp)
+                    .zIndex(3f)
+                    // The deck already announces "Photo n of N".
+                    .clearAndSetSemantics {}
+            )
+        }
     }
 }
+
+@Composable
+private fun AidenGlassCountPill(
+    text: String,
+    container: Color,
+    content: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(color = container, contentColor = content, shape = CircleShape, modifier = modifier) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = content,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun AidenGalleryGlassButton(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val interaction = remember { MutableInteractionSource() }
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        interactionSource = interaction,
+        colors = IconButtonDefaults.iconButtonColors(
+            containerColor = GalleryGlass,
+            contentColor = Color.White,
+            disabledContainerColor = GalleryGlass,
+            disabledContentColor = Color.White
+        ),
+        modifier = Modifier
+            .size(AidenUi.MinimumTouchTarget)
+            .tactilePress(interaction)
+    ) {
+        content()
+    }
+}
+
+private val GalleryGlass = Color.Black.copy(alpha = 0.48f)
 
 @Composable
 private fun AidenAttachmentImage(
@@ -379,6 +457,7 @@ private fun AidenAttachmentGallery(
     }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val reduceMotion = aidenReduceMotion()
     var saveMenu by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var pendingLegacySave by remember { mutableStateOf<List<AidenMessageAttachment>?>(null) }
@@ -459,26 +538,31 @@ private fun AidenAttachmentGallery(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
-                    .background(Color.Black.copy(alpha = 0.72f))
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onDismiss) {
+                AidenGalleryGlassButton(onClick = onDismiss) {
                     Icon(Icons.Default.Close, contentDescription = "Close image viewer", tint = Color.White)
                 }
-                Text(
-                    text = if (pages.size == 1) pages.first().name else "${pagerState.currentPage + 1} of ${pages.size}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1
-                )
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    AidenGlassCountPill(
+                        text = if (pages.size == 1) pages.first().name else "${pagerState.currentPage + 1} of ${pages.size}",
+                        container = GalleryGlass,
+                        content = Color.White,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                }
                 Box {
-                    IconButton(onClick = { saveMenu = true }, enabled = !saving) {
+                    AidenGalleryGlassButton(onClick = { saveMenu = true }, enabled = !saving) {
                         if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Color.White)
                         else Icon(Icons.Default.MoreVert, contentDescription = "Save images", tint = Color.White)
                     }
-                    DropdownMenu(expanded = saveMenu, onDismissRequest = { saveMenu = false }) {
+                    DropdownMenu(
+                        expanded = saveMenu,
+                        onDismissRequest = { saveMenu = false },
+                        shape = AidenShape.Snackbar,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                    ) {
                         DropdownMenuItem(
                             text = { Text("Save Image") },
                             leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
@@ -506,19 +590,27 @@ private fun AidenAttachmentGallery(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 18.dp)
-                        .background(Color.Black.copy(alpha = 0.48f), CircleShape)
+                        .background(GalleryGlass, CircleShape)
                         .padding(horizontal = 10.dp, vertical = 7.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     pages.indices.forEach { index ->
+                        val selected = index == pagerState.currentPage
+                        val dotWidth by animateDpAsState(
+                            targetValue = AidenImageCountBadge.dotWidth(index, pagerState.currentPage),
+                            animationSpec = AidenMotion.snappy(reduceMotion),
+                            label = "gallery_page_dot"
+                        )
+                        val dotColor by animateColorAsState(
+                            targetValue = if (selected) Color.White else Color.White.copy(alpha = 0.42f),
+                            animationSpec = AidenMotion.nonSpatial(reduceMotion),
+                            label = "gallery_page_dot_color"
+                        )
                         Box(
                             Modifier
-                                .size(if (index == pagerState.currentPage) 7.dp else 5.dp)
-                                .background(
-                                    if (index == pagerState.currentPage) Color.White else Color.White.copy(alpha = 0.42f),
-                                    CircleShape
-                                )
+                                .size(width = dotWidth, height = AidenImageCountBadge.DotSize)
+                                .background(dotColor, CircleShape)
                         )
                     }
                 }

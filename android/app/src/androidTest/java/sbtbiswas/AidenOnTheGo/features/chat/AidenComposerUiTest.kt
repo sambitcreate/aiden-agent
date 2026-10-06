@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -16,6 +17,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceConfig
 import sbtbiswas.AidenOnTheGo.models.AidenComposerSuggestion
 import sbtbiswas.AidenOnTheGo.models.AidenModel
 import sbtbiswas.AidenOnTheGo.models.AidenProvider
@@ -286,5 +288,191 @@ class AidenComposerUiTest {
         // The selected-skill chip clears without touching the draft.
         compose.onNodeWithContentDescription("Remove skill review-code").performClick()
         compose.runOnIdle { assertEquals(true, cleared) }
+    }
+
+    @Test
+    fun sendAndStopEachFireOncePerTap() {
+        var sends = 0
+        var stops = 0
+        var streaming by mutableStateOf(false)
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "ship it",
+                    onDraftChange = {},
+                    onSend = { sends++ },
+                    onStop = { stops++ },
+                    canSend = !streaming,
+                    isStreaming = streaming,
+                    isVoiceListening = false,
+                    onToggleVoice = {}
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Send message").assertHasClickAction().performClick()
+        compose.runOnIdle {
+            assertEquals(1, sends)
+            streaming = true
+        }
+        compose.onNodeWithContentDescription("Stop generation").assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(1, sends)
+            assertEquals(1, stops)
+        }
+    }
+
+    private class PickedModel(val providerId: String, val modelId: String, val thinkingLevel: String?)
+
+    private fun setModelPickerComposer(
+        providers: List<AidenProvider>,
+        picks: MutableList<PickedModel>,
+        config: AidenAppearanceConfig = AidenAppearanceConfig()
+    ) {
+        compose.setContent {
+            var provider by remember { mutableStateOf(providers.first()) }
+            var model by remember { mutableStateOf(providers.first().models.first()) }
+            var level by remember { mutableStateOf(providers.first().models.first().thinkingLevels?.lastOrNull()) }
+            AidenTheme(config = config) {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    selectedProvider = provider,
+                    selectedModel = model,
+                    selectedThinkingLevel = level,
+                    availableProviders = providers,
+                    onSelectModel = { p, m, l ->
+                        picks += PickedModel(p.id, m.id, l)
+                        provider = p
+                        model = m
+                        level = l
+                    }
+                )
+            }
+        }
+    }
+
+    @Test
+    fun reduceMotionPreferencePresentsAStillModelSheetThatClosesInstantly() {
+        val model = AidenModel(id = "fast", label = "Fast model", thinkingLevels = listOf("low", "high"))
+        val other = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        setModelPickerComposer(
+            listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(model, other))),
+            picks,
+            AidenAppearanceConfig(reduceMotion = true)
+        )
+
+        // With the clock held, the sheet is fully on screen after a single frame: no slide-in.
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag(AidenStillBottomSheetTag).assertExists()
+        compose.onNodeWithText("Model & Thinking").assertIsDisplayed()
+
+        // A scrim tap dismisses on the next frame without an exit animation.
+        compose.onNodeWithTag(AidenStillBottomSheetTag).performTouchInput { click(Offset(centerX, 8f)) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Model & Thinking").assertDoesNotExist()
+
+        // Picking a model still applies it and closes the still sheet at once.
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNode(hasText("Deep model") and isSelectable()).performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.runOnIdle {
+            assertEquals(1, picks.size)
+            assertEquals("deep", picks.single().modelId)
+        }
+        compose.onNodeWithTag(AidenStillBottomSheetTag).assertDoesNotExist()
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test
+    fun modelSheetSetsThinkingInPlaceAndPicksModelsFromRadioRows() {
+        val fast = AidenModel(id = "fast", label = "Fast model", thinkingLevels = listOf("low", "medium", "high"))
+        val deep = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        setModelPickerComposer(listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(fast, deep))), picks)
+
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.onNodeWithText("Model & Thinking").assertIsDisplayed()
+
+        // Effort is one connected radio group: exactly one segment is chosen.
+        compose.onNode(hasText("High") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("Low") and isSelectable()).assertIsNotSelected()
+        compose.onNode(hasText("Low") and isSelectable()).performClick()
+        compose.runOnIdle {
+            assertEquals(1, picks.size)
+            assertEquals("fast", picks.single().modelId)
+            assertEquals("low", picks.single().thinkingLevel)
+        }
+        // Thinking applies in place, so the sheet stays open on the new choice.
+        compose.onNode(hasText("Low") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("High") and isSelectable()).assertIsNotSelected()
+
+        compose.onNode(hasText("Fast model") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("Deep model") and isSelectable()).assertIsNotSelected().performClick()
+        compose.runOnIdle {
+            assertEquals(2, picks.size)
+            assertEquals("deep", picks.last().modelId)
+            assertEquals(null, picks.last().thinkingLevel)
+        }
+        // Picking a model applies it and closes the sheet.
+        compose.onNodeWithText("Model & Thinking").assertDoesNotExist()
+        compose.onNode(hasText("Deep model") and isSelectable()).assertDoesNotExist()
+        compose.onNodeWithText("Deep model").assertIsDisplayed()
+    }
+
+    @Test
+    fun aLongThinkingLadderIsAConnectedRadioListInsteadOfSegments() {
+        val levels = listOf("off", "minimal", "low", "medium", "high")
+        val model = AidenModel(id = "m", label = "Ladder model", thinkingLevels = levels)
+        val picks = mutableListOf<PickedModel>()
+        setModelPickerComposer(listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(model))), picks)
+
+        compose.onNodeWithContentDescription("Select model").performClick()
+        for (label in listOf("Off", "Minimal", "Low", "Medium")) {
+            compose.onNode(hasText(label) and isSelectable()).assertIsDisplayed().assertIsNotSelected()
+        }
+        compose.onNode(hasText("High") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("Minimal") and isSelectable()).performClick()
+        compose.runOnIdle { assertEquals(listOf("minimal"), picks.map { it.thinkingLevel }) }
+        // Tapping the current effort again is not a new choice.
+        compose.onNode(hasText("Minimal") and isSelectable()).assertIsSelected().performClick()
+        compose.runOnIdle { assertEquals(1, picks.size) }
+    }
+
+    @Test
+    fun withReducedMotionDictationShowsAStillStopGlyphThatTogglesOnce() {
+        var toggles = 0
+        compose.setContent {
+            AidenTheme(config = AidenAppearanceConfig(reduceMotion = true)) {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = true,
+                    isVoiceBusy = true,
+                    onToggleVoice = { toggles++ },
+                    voiceErrorMessage = "Microphone unavailable"
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Start voice input").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Stop voice input").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, toggles) }
+        // A voice error is hidden while dictation runs.
+        compose.onNodeWithText("Microphone unavailable").assertDoesNotExist()
     }
 }

@@ -1,6 +1,12 @@
 package sbtbiswas.AidenOnTheGo
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.SnackbarHost
@@ -19,7 +25,10 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSnackbar
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
@@ -52,8 +61,14 @@ fun ContentView(
         color = AidenTheme.palette.canvas
     ) {
         Box(Modifier.fillMaxSize()) {
+            val reduceMotion = aidenReduceMotion()
             AnimatedContent(
                 targetState = connectionState,
+                contentKey = { it == AidenConnectionState.NEEDS_PAIRING },
+                transitionSpec = {
+                    fadeIn(AidenMotion.nonSpatial(reduceMotion)) togetherWith
+                        fadeOut(AidenMotion.nonSpatial(reduceMotion))
+                },
                 label = "ContentViewTransition"
             ) { state ->
                 when (state) {
@@ -86,7 +101,11 @@ fun ContentView(
             }
             SnackbarHost(
                 hostState = snackbarHostState,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 12.dp),
+                snackbar = { data -> AidenSnackbar(data) }
             )
         }
     }

@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -29,10 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,13 +42,20 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import androidx.compose.foundation.lazy.itemsIndexed
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -369,18 +372,20 @@ fun AidenScheduledTasksScreen(
             title = { Text("Delete ${selectedTask.name}?") },
             text = { Text("This removes the automation and its saved run history from Aiden.") },
             dismissButton = {
-                TextButton(
-                    contentPadding = AidenButtonDefaults.TextContentPadding,
+                AidenTonalButton(
+                    text = "Cancel",
                     onClick = { showDeleteConfirmation = false },
                     enabled = operationTaskId == null
-                ) { Text("Cancel") }
+                )
             },
             confirmButton = {
-                TextButton(
-                    contentPadding = AidenButtonDefaults.TextContentPadding,
-                    onClick = {
-                        val activeClient = client ?: return@TextButton
-                        if (operationTaskId != null || !hasCurrentAccess(AidenRemoteCapability.SCHEDULE_WRITE)) return@TextButton
+                AidenDialogConfirmButton(
+                    text = "Delete",
+                    destructive = true,
+                    enabled = operationTaskId == null && canWriteSchedules,
+                    onClick = confirmDelete@{
+                        val activeClient = client ?: return@confirmDelete
+                        if (operationTaskId != null || !hasCurrentAccess(AidenRemoteCapability.SCHEDULE_WRITE)) return@confirmDelete
                         val requestId = UUID.randomUUID()
                         operationTaskId = selectedTask.id
                         operationRequestId = requestId
@@ -403,12 +408,13 @@ fun AidenScheduledTasksScreen(
                                 }
                             }
                         }
-                    },
-                    enabled = operationTaskId == null && canWriteSchedules,
-                    colors = ButtonDefaults.textButtonColors(contentColor = palette.danger)
-                ) { Text("Delete") }
+                    }
+                )
             },
-            containerColor = palette.raised
+            shape = AidenShape.Dialog,
+            containerColor = palette.raised,
+            titleContentColor = palette.foreground,
+            textContentColor = palette.secondary
         )
     }
 }
@@ -465,29 +471,8 @@ private fun AidenScheduledTaskList(
                 Spacer(Modifier.height(18.dp))
                 AidenScheduleSearchField(query, onQueryChanged)
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    AidenScheduledTaskFilter.entries.forEach { choice ->
-                        Surface(
-                            onClick = { onFilterChanged(choice) },
-                            color = if (choice == filter) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .heightIn(min = AidenUi.MinimumTouchTarget)
-                                .semantics {
-                                    role = Role.RadioButton
-                                    selected = choice == filter
-                                    contentDescription = "${choice.title} scheduled tasks"
-                                }
-                        ) {
-                            Text(
-                                choice.title,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = if (choice == filter) palette.foreground else palette.secondary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                            )
-                        }
-                    }
-                }
+                AidenScheduledTaskFilterRow(filter = filter, onFilterChanged = onFilterChanged)
+                Spacer(Modifier.height(8.dp))
             }
         }
 
@@ -530,16 +515,36 @@ private fun AidenScheduledTaskList(
             }
         }
 
-        items(tasks, key = AidenScheduledTask::id) { task ->
+        itemsIndexed(tasks, key = { _, task -> task.id }) { index, task ->
             AidenScheduledTaskRow(
                 task = task,
+                index = index,
+                count = tasks.size,
                 enabled = canManage && operationTaskId == null,
                 operationInProgress = operationTaskId == task.id,
                 onClick = { onSelectTask(task) },
-                onToggleEnabled = { onToggleEnabled(task) }
+                onToggleEnabled = { onToggleEnabled(task) },
+                modifier = Modifier
+                    .padding(horizontal = AidenUi.ScreenGutter)
+                    .padding(bottom = if (index < tasks.lastIndex) AidenShape.GroupGap else 0.dp)
             )
         }
     }
+}
+
+/** Connected All / Active / Paused status filter. */
+@Composable
+internal fun AidenScheduledTaskFilterRow(
+    filter: AidenScheduledTaskFilter,
+    onFilterChanged: (AidenScheduledTaskFilter) -> Unit
+) {
+    AidenSegmentedPillRow(
+        options = AidenScheduledTaskFilter.entries,
+        selected = filter,
+        onSelect = onFilterChanged,
+        label = { it.title },
+        segmentContentDescription = { "${it.title} scheduled tasks" }
+    )
 }
 
 @Composable
@@ -583,21 +588,25 @@ internal fun AidenScheduleSearchField(value: String, onValueChanged: (String) ->
 @Composable
 private fun AidenScheduledTaskRow(
     task: AidenScheduledTask,
+    index: Int,
+    count: Int,
     enabled: Boolean,
     operationInProgress: Boolean,
     onClick: () -> Unit,
-    onToggleEnabled: () -> Unit
+    onToggleEnabled: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = AidenUi.ScreenGutter, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically
+    AidenGroupCard(
+        index = index,
+        count = count,
+        onClick = onClick,
+        modifier = modifier,
+        contentPadding = PaddingValues(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.Start
     ) {
         Box(
-            modifier = Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerLow),
+            modifier = Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center
         ) {
             if (operationInProgress) {
@@ -693,29 +702,23 @@ private fun AidenScheduledTaskDetail(
         AidenSectionLabel("Controls")
         Spacer(Modifier.height(9.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
+            AidenPrimaryButton(
+                text = if (task.running) "Running" else "Run now",
                 onClick = onRunNow,
                 enabled = canManage && !operationInProgress && !task.running,
-                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                shape = RoundedCornerShape(11.dp)
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (task.running) "Running" else "Run now")
-            }
-            FilledTonalButton(
+                leadingIcon = Icons.Default.PlayArrow
+            )
+            AidenTonalButton(
+                text = if (task.enabled) "Pause" else "Resume",
                 onClick = onToggleEnabled,
                 enabled = canManage && !operationInProgress,
-                shape = RoundedCornerShape(11.dp)
-            ) {
-                Icon(if (task.enabled) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (task.enabled) "Pause" else "Resume")
-            }
+                leadingIcon = if (task.enabled) Icons.Default.Pause else Icons.Default.PlayArrow
+            )
         }
         TextButton(
             onClick = onDelete,
             enabled = canManage && !operationInProgress,
+            shape = AidenShape.Button,
             colors = ButtonDefaults.textButtonColors(contentColor = palette.danger),
             contentPadding = PaddingValues(horizontal = 0.dp)
         ) { Text("Delete automation") }

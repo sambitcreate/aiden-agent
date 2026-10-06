@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.features.remote
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,6 +17,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -27,8 +32,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotCanonicalAvatarView
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.UUID
 
 enum class AidenBotChatAccessScope(val label: String) {
@@ -358,6 +372,22 @@ class AidenBotConversationFilesModel(
     }
 }
 
+object AidenBotChatToolsTags {
+    const val AVATAR = "aiden.botTools.avatar"
+    const val GENERIC_ICON = "aiden.botTools.genericIcon"
+}
+
+fun aidenBotChatAccessModeLabel(mode: AidenBotChatAccessMode): String = when (mode) {
+    AidenBotChatAccessMode.INHERIT -> "Inherit Bot"
+    AidenBotChatAccessMode.CUSTOM -> "Customize"
+}
+
+private data class AidenBotChatToolAction(
+    val icon: ImageVector,
+    val contentDescription: String,
+    val onClick: () -> Unit
+)
+
 @Composable
 fun AidenBotChatToolsBar(
     bot: AidenBotSummary?,
@@ -380,7 +410,21 @@ fun AidenBotChatToolsBar(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Icon(Icons.Default.SmartToy, contentDescription = null, tint = palette.accent)
+            if (bot != null) {
+                AidenBotCanonicalAvatarView(
+                    avatar = bot.avatar,
+                    botId = bot.id,
+                    size = 32.dp,
+                    modifier = Modifier.testTag(AidenBotChatToolsTags.AVATAR)
+                )
+            } else {
+                Icon(
+                    Icons.Default.SmartToy,
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.testTag(AidenBotChatToolsTags.GENERIC_ICON)
+                )
+            }
             Spacer(modifier = Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -399,19 +443,56 @@ fun AidenBotChatToolsBar(
                 }
             }
 
-            if (model?.hasFiles == true && onOpenFiles != null) {
-                IconButton(onClick = onOpenFiles) {
-                    Icon(Icons.Default.Folder, contentDescription = "Files", tint = palette.secondary)
+            val actions = buildList {
+                if (model?.hasFiles == true && onOpenFiles != null) {
+                    add(AidenBotChatToolAction(Icons.Default.Folder, "Files", onOpenFiles))
+                }
+                add(AidenBotChatToolAction(Icons.Default.Shield, "Access", onOpenAccess))
+                add(AidenBotChatToolAction(Icons.Default.Info, "Profile", onOpenProfile))
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)) {
+                actions.forEachIndexed { index, action ->
+                    AidenBotChatToolPill(
+                        action = action,
+                        shape = aidenGroupItemShape(
+                            index,
+                            actions.size,
+                            outer = AidenShape.SplitOuter,
+                            inner = AidenShape.SplitInner,
+                            orientation = AidenGroupOrientation.HORIZONTAL
+                        )
+                    )
                 }
             }
-
-            IconButton(onClick = onOpenAccess) {
-                Icon(Icons.Default.Shield, contentDescription = "Access", tint = palette.secondary)
-            }
-            IconButton(onClick = onOpenProfile) {
-                Icon(Icons.Default.Info, contentDescription = "Profile", tint = palette.secondary)
-            }
         }
+    }
+}
+
+@Composable
+private fun AidenBotChatToolPill(action: AidenBotChatToolAction, shape: Shape) {
+    val palette = AidenTheme.palette
+    val interaction = remember { MutableInteractionSource() }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(width = 44.dp, height = 40.dp)
+            .tactilePress(interaction)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(
+                interactionSource = interaction,
+                indication = ripple(),
+                role = Role.Button,
+                onClick = action.onClick
+            )
+    ) {
+        Icon(
+            action.icon,
+            contentDescription = action.contentDescription,
+            tint = palette.secondary,
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
 
@@ -458,7 +539,8 @@ fun AidenBotChatAccessSheet(
                     modifier = Modifier.weight(1f)
                 )
                 if (selectedScope == AidenBotChatAccessScope.CHAT) {
-                    Button(
+                    AidenPrimaryButton(
+                        text = if (model.isSaving) "Saving…" else "Save",
                         onClick = {
                             if (client != null) {
                                 coroutineScope.launch {
@@ -468,35 +550,19 @@ fun AidenBotChatAccessSheet(
                                 }
                             }
                         },
-                        enabled = model.canEdit(hostAllowsMutations, connected, canWriteBots) && !model.isSaving,
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(if (model.isSaving) "Saving…" else "Save", color = palette.onAccent, fontWeight = FontWeight.Bold)
-                    }
+                        enabled = model.canEdit(hostAllowsMutations, connected, canWriteBots) && !model.isSaving
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Scope Selector
-            Row(modifier = Modifier.fillMaxWidth()) {
-                FilterChip(
-                    border = null,
-                    selected = selectedScope == AidenBotChatAccessScope.CHAT,
-                    onClick = { selectedScope = AidenBotChatAccessScope.CHAT },
-                    label = { Text("This chat") },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                FilterChip(
-                    border = null,
-                    selected = selectedScope == AidenBotChatAccessScope.BOT,
-                    onClick = { selectedScope = AidenBotChatAccessScope.BOT },
-                    label = { Text("Bot defaults") },
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            AidenSegmentedPillRow(
+                options = listOf(AidenBotChatAccessScope.CHAT, AidenBotChatAccessScope.BOT),
+                selected = selectedScope,
+                onSelect = { selectedScope = it },
+                label = { it.label }
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -521,23 +587,15 @@ fun AidenBotChatAccessSheet(
                 val canEdit = model.allowsDraftEditing(hostAllowsMutations, connected, canWriteBots)
 
                 if (currentDraft != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Mode:", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        FilterChip(
-                            border = null,
-                            selected = currentDraft.mode == AidenBotChatAccessMode.INHERIT,
-                            onClick = { if (canEdit) model.draft = currentDraft.copy(mode = AidenBotChatAccessMode.INHERIT) },
-                            label = { Text("Inherit Bot") }
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        FilterChip(
-                            border = null,
-                            selected = currentDraft.mode == AidenBotChatAccessMode.CUSTOM,
-                            onClick = { if (canEdit) model.draft = currentDraft.copy(mode = AidenBotChatAccessMode.CUSTOM) },
-                            label = { Text("Customize") }
-                        )
-                    }
+                    Text("Mode", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    AidenSegmentedPillRow(
+                        options = listOf(AidenBotChatAccessMode.INHERIT, AidenBotChatAccessMode.CUSTOM),
+                        selected = currentDraft.mode,
+                        onSelect = { mode -> if (canEdit) model.draft = currentDraft.copy(mode = mode) },
+                        label = ::aidenBotChatAccessModeLabel,
+                        enabled = canEdit
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -548,11 +606,7 @@ fun AidenBotChatAccessSheet(
                                     .fillMaxWidth()
                                     .verticalScroll(rememberScrollState())
                             ) {
-                                // Commands
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
+                                AidenGroupCard(index = 0, count = 1, role = null) {
                                     Text("Run commands", style = MaterialTheme.typography.bodyMedium, color = palette.foreground, modifier = Modifier.weight(1f))
                                     Switch(
                                         checked = currentDraft.shellEnabled,
@@ -561,26 +615,30 @@ fun AidenBotChatAccessSheet(
                                     )
                                 }
 
-                                // Skills
                                 if (cat.skills.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Spacer(modifier = Modifier.height(16.dp))
                                     Text("Skills", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
-                                    for (skill in cat.skills) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(skill.label, style = MaterialTheme.typography.bodySmall, color = palette.foreground, modifier = Modifier.weight(1f))
-                                            Switch(
-                                                checked = currentDraft.skillIDs.contains(skill.id),
-                                                onCheckedChange = { checked ->
-                                                    if (canEdit) {
-                                                        val updated = if (checked) currentDraft.skillIDs + skill.id else currentDraft.skillIDs - skill.id
-                                                        model.draft = currentDraft.copy(skillIDs = updated)
-                                                    }
-                                                },
-                                                enabled = canEdit && skill.available
-                                            )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    AidenConnectedColumn {
+                                        cat.skills.forEachIndexed { index, skill ->
+                                            AidenGroupCard(
+                                                index = index,
+                                                count = cat.skills.size,
+                                                role = null,
+                                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                            ) {
+                                                Text(skill.label, style = MaterialTheme.typography.bodySmall, color = palette.foreground, modifier = Modifier.weight(1f))
+                                                Switch(
+                                                    checked = currentDraft.skillIDs.contains(skill.id),
+                                                    onCheckedChange = { checked ->
+                                                        if (canEdit) {
+                                                            val updated = if (checked) currentDraft.skillIDs + skill.id else currentDraft.skillIDs - skill.id
+                                                            model.draft = currentDraft.copy(skillIDs = updated)
+                                                        }
+                                                    },
+                                                    enabled = canEdit && skill.available
+                                                )
+                                            }
                                         }
                                     }
                                 }

@@ -1,10 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -23,13 +25,12 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QuestionMark
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -49,7 +49,13 @@ import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.models.AidenPendingQuestion
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionAnswerDraft
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionRespondRequest
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 
 /** `ask_user_question` prompt card (iOS parity: AidenQuestionCard). All
  * questions render stacked; a non-blank custom draft overrides that question's
@@ -75,9 +81,9 @@ fun AidenQuestionCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
-            .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp)),
+            .shadow(elevation = 8.dp, shape = RoundedCornerShape(24.dp)),
         colors = CardDefaults.cardColors(containerColor = palette.raised),
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(24.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -135,108 +141,122 @@ fun AidenQuestionCard(
                     color = palette.foreground
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                question.options.forEach { option ->
-                    val selected = selections[index]?.contains(option.label) == true
-                    Row(
-                        verticalAlignment = Alignment.Top,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) palette.accent.copy(alpha = 0.10f) else palette.canvas)
-                            .toggleable(
-                                value = selected,
-                                enabled = enabled,
-                                role = if (question.multiSelect) Role.Checkbox else Role.RadioButton,
-                                onValueChange = {
-                                    selections = AidenQuestionAnswerDraft.toggled(
-                                        selections = selections,
-                                        questionIndex = index,
-                                        label = option.label,
-                                        multiSelect = question.multiSelect
-                                    )
-                                }
+                val groupCount = question.options.size + 1
+                AidenConnectedColumn(
+                    modifier = if (question.multiSelect) Modifier else Modifier.selectableGroup()
+                ) {
+                    question.options.forEachIndexed { optionIndex, option ->
+                        val selected = selections[index]?.contains(option.label) == true
+                        val interaction = remember { MutableInteractionSource() }
+                        AidenGroupCard(
+                            index = optionIndex,
+                            count = groupCount,
+                            selected = selected,
+                            containerColor = palette.canvas,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.Top,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier
+                                .clip(aidenGroupItemShape(optionIndex, groupCount))
+                                .tactilePress(interaction, targetScale = 0.985f)
+                                .toggleable(
+                                    value = selected,
+                                    enabled = enabled,
+                                    role = if (question.multiSelect) Role.Checkbox else Role.RadioButton,
+                                    interactionSource = interaction,
+                                    indication = ripple(),
+                                    onValueChange = {
+                                        selections = AidenQuestionAnswerDraft.toggled(
+                                            selections = selections,
+                                            questionIndex = index,
+                                            label = option.label,
+                                            multiSelect = question.multiSelect
+                                        )
+                                    }
+                                )
+                        ) {
+                            Icon(
+                                if (question.multiSelect) {
+                                    if (selected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank
+                                } else {
+                                    if (selected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked
+                                },
+                                contentDescription = null,
+                                tint = if (selected) palette.accent else palette.secondary,
+                                modifier = Modifier.size(20.dp)
                             )
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            if (question.multiSelect) {
-                                if (selected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank
-                            } else {
-                                if (selected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked
-                            },
-                            contentDescription = null,
-                            tint = if (selected) palette.accent else palette.secondary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = option.label,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = palette.foreground
-                            )
-                            Text(
-                                text = option.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = palette.secondary
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                if (customOpen.contains(index)) {
-                    val draftValue = customDrafts[index] ?: ""
-                    BasicTextField(
-                        value = draftValue,
-                        onValueChange = { next ->
-                            customDrafts = if (next.isEmpty()) customDrafts - index else customDrafts + (index to next)
-                        },
-                        enabled = enabled,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.foreground),
-                        cursorBrush = SolidColor(palette.accent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(palette.canvas)
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                            .semantics { contentDescription = "Custom answer" }
-                    ) { innerTextField ->
-                        Box {
-                            if (draftValue.isEmpty()) {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Type your answer",
+                                    text = option.label,
                                     style = MaterialTheme.typography.bodyMedium,
+                                    color = palette.foreground
+                                )
+                                Text(
+                                    text = option.description,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = palette.secondary
                                 )
                             }
-                            innerTextField()
                         }
                     }
-                } else {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable(enabled = enabled) { customOpen = customOpen + index }
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                            .semantics {
+                    if (customOpen.contains(index)) {
+                        val draftValue = customDrafts[index] ?: ""
+                        AidenGroupCard(
+                            index = groupCount - 1,
+                            count = groupCount,
+                            containerColor = palette.canvas,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            BasicTextField(
+                                value = draftValue,
+                                onValueChange = { next ->
+                                    customDrafts = if (next.isEmpty()) customDrafts - index else customDrafts + (index to next)
+                                },
+                                enabled = enabled,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.foreground),
+                                cursorBrush = SolidColor(palette.accent),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .semantics { contentDescription = "Custom answer" }
+                            ) { innerTextField ->
+                                Box {
+                                    if (draftValue.isEmpty()) {
+                                        Text(
+                                            text = "Type your answer",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = palette.secondary
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            }
+                        }
+                    } else {
+                        AidenGroupCard(
+                            index = groupCount - 1,
+                            count = groupCount,
+                            onClick = { customOpen = customOpen + index },
+                            enabled = enabled,
+                            containerColor = palette.canvas,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.semantics {
                                 contentDescription = "Type something. Shows a field for a custom answer"
                             }
-                    ) {
-                        Icon(
-                            Icons.Default.Edit,
-                            contentDescription = null,
-                            tint = palette.secondary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Type something.",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium,
-                            color = palette.secondary
-                        )
+                        ) {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Type something.",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = palette.secondary
+                            )
+                        }
                     }
                 }
             }
@@ -262,22 +282,17 @@ fun AidenQuestionCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    Button(
+                    AidenTonalButton(
+                        text = "Skip",
                         onClick = { onSubmit(AidenQuestionRespondRequest(cancelled = true, answers = emptyList())) },
-                        enabled = enabled,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Skip", fontWeight = FontWeight.SemiBold)
-                    }
+                        enabled = enabled
+                    )
                     Spacer(modifier = Modifier.width(10.dp))
-                    Button(
+                    AidenPrimaryButton(
+                        text = "Submit",
                         onClick = { onSubmit(AidenQuestionRespondRequest(cancelled = false, answers = answers)) },
-                        enabled = enabled && answers.isNotEmpty(),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Submit", color = palette.onAccent, fontWeight = FontWeight.Bold)
-                    }
+                        enabled = enabled && answers.isNotEmpty()
+                    )
                 }
             }
         }

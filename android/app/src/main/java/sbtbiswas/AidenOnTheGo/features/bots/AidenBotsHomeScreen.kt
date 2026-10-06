@@ -1,6 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -22,6 +27,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -31,11 +37,17 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.exponentialVerticalScrim
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.time.Instant
 import java.time.ZoneId
@@ -172,6 +184,15 @@ fun aidenBotFavoriteOrder(
     return result
 }
 
+/** Resting radius of the 54dp New-Bot FAB: a full circle. */
+val AidenBotsDockFabRestingRadius = 27.dp
+
+/** Squircle radius the New-Bot FAB morphs to while pressed or while the list scrolls. */
+val AidenBotsDockFabActiveRadius = 16.dp
+
+fun aidenBotsDockFabCornerRadius(pressed: Boolean, scrolling: Boolean): Dp =
+    if (pressed || scrolling) AidenBotsDockFabActiveRadius else AidenBotsDockFabRestingRadius
+
 data class AidenBotInboxActivityStatus(
     val label: String,
     val symbol: String
@@ -205,18 +226,17 @@ fun AidenBotSkeletonBlock(
     modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
-    val infiniteTransition = rememberInfiniteTransition(label = "ShimmerTransition")
-    val shimmerTranslate by infiniteTransition.animateFloat(
-        initialValue = -300f,
-        targetValue = 600f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "ShimmerTranslate"
-    )
-
     val shimmerBrush = if (!reduceMotion) {
+        val infiniteTransition = rememberInfiniteTransition(label = "ShimmerTransition")
+        val shimmerTranslate by infiniteTransition.animateFloat(
+            initialValue = -300f,
+            targetValue = 600f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1500, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "ShimmerTranslate"
+        )
         Brush.linearGradient(
             colors = listOf(
                 palette.raised,
@@ -301,7 +321,9 @@ fun AidenBotsHomeScreen(
     modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val client by coordinator.client.collectAsStateWithLifecycle()
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
 
@@ -400,6 +422,7 @@ fun AidenBotsHomeScreen(
                 .padding(padding)
         ) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 104.dp)
             ) {
@@ -429,7 +452,7 @@ fun AidenBotsHomeScreen(
                 when (contentState) {
                     AidenBotsHomeContentState.LOADING -> {
                         item {
-                            AidenBotHomeSkeletonView()
+                            AidenBotHomeSkeletonView(reduceMotion = reduceMotion)
                         }
                     }
                     AidenBotsHomeContentState.ERROR -> {
@@ -442,7 +465,7 @@ fun AidenBotsHomeScreen(
                                 action = {
                                     Button(
                                         onClick = { viewModel.loadBots(force = true) },
-                                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
                                         shape = RoundedCornerShape(24.dp),
                                         modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                                     ) { Text("Retry") }
@@ -464,7 +487,7 @@ fun AidenBotsHomeScreen(
                                     {
                                         Button(
                                             onClick = onNavigateToCreateBot,
-                                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
                                             shape = RoundedCornerShape(24.dp),
                                             modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                                         ) { Text("New Bot") }
@@ -503,12 +526,23 @@ fun AidenBotsHomeScreen(
                                     modifier = Modifier.padding(bottom = 16.dp)
                                 ) {
                                     items(favoriteBots, key = { it.id }) { bot ->
+                                        val pressInteraction = remember { MutableInteractionSource() }
                                         Column(
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             modifier = Modifier
+                                                .animateItem(
+                                                    fadeInSpec = AidenMotion.nonSpatial(reduceMotion),
+                                                    placementSpec = AidenMotion.spatial(reduceMotion),
+                                                    fadeOutSpec = AidenMotion.nonSpatial(reduceMotion)
+                                                )
                                                 .width(80.dp)
+                                                .tactilePress(pressInteraction)
                                                 .clip(RoundedCornerShape(16.dp))
-                                                .clickable { startOrOpenChat(bot) }
+                                                .clickable(
+                                                    interactionSource = pressInteraction,
+                                                    indication = ripple(),
+                                                    role = Role.Button
+                                                ) { startOrOpenChat(bot) }
                                                 .padding(vertical = 4.dp)
                                         ) {
                                             Box(
@@ -661,6 +695,15 @@ fun AidenBotsHomeScreen(
                 }
             }
 
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .exponentialVerticalScrim(palette.canvas.copy(alpha = 0.94f))
+                    .navigationBarsPadding()
+                    .height(96.dp)
+            )
+
             // 1:1 Parity iOS Glass Bottom Dock
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -730,22 +773,32 @@ fun AidenBotsHomeScreen(
                     }
                 }
 
-                // Standalone 54dp Floating Action Button
+                // Standalone 54dp Floating Action Button, morphing circle -> squircle
+                val fabInteraction = remember { MutableInteractionSource() }
+                val fabPressed by fabInteraction.collectIsPressedAsState()
+                val fabRadius by animateDpAsState(
+                    targetValue = aidenBotsDockFabCornerRadius(fabPressed, listState.isScrollInProgress),
+                    animationSpec = AidenMotion.spatial(reduceMotion),
+                    label = "bots_fab_radius"
+                )
+                val fabEnabled = chatReadyBots.isNotEmpty()
                 Surface(
-                    shape = CircleShape,
-                    color = if (chatReadyBots.isNotEmpty()) palette.accent else palette.raised,
+                    onClick = { isChoosingBotDialog = true },
+                    enabled = fabEnabled,
+                    shape = RoundedCornerShape(fabRadius),
+                    color = if (fabEnabled) palette.accent else palette.raised,
                     shadowElevation = 3.dp,
-                    modifier = Modifier.size(54.dp)
+                    interactionSource = fabInteraction,
+                    modifier = Modifier
+                        .size(54.dp)
+                        .tactilePress(fabInteraction)
+                        .semantics { role = Role.Button }
                 ) {
-                    IconButton(
-                        onClick = { isChoosingBotDialog = true },
-                        enabled = chatReadyBots.isNotEmpty(),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
+                    Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Default.Edit,
                             contentDescription = "Open Bot Chat",
-                            tint = if (chatReadyBots.isNotEmpty()) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
+                            tint = if (fabEnabled) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -766,20 +819,17 @@ fun AidenBotsHomeScreen(
                 ) {
                     Text("Open this Bot’s chat. Aiden starts it the first time if needed.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                     Spacer(modifier = Modifier.height(4.dp))
-                    chatReadyBots.forEach { bot ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable {
+                    AidenConnectedColumn {
+                        chatReadyBots.forEachIndexed { index, bot ->
+                            AidenGroupCard(
+                                index = index,
+                                count = chatReadyBots.size,
+                                onClick = {
                                     isChoosingBotDialog = false
                                     startOrOpenChat(bot)
                                 },
-                            color = palette.raised
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(12.dp)
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                contentPadding = PaddingValues(12.dp)
                             ) {
                                 AidenBotCanonicalAvatarView(
                                     coordinator = coordinator,
@@ -788,7 +838,6 @@ fun AidenBotsHomeScreen(
                                     name = bot.name,
                                     size = 36.dp
                                 )
-                                Spacer(modifier = Modifier.width(12.dp))
                                 Text(bot.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                             }
                         }
@@ -797,11 +846,10 @@ fun AidenBotsHomeScreen(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { isChoosingBotDialog = false }) {
-                    Text("Cancel", color = palette.secondary)
-                }
+                AidenDialogDismissButton(onClick = { isChoosingBotDialog = false })
             },
-            containerColor = palette.canvas
+            shape = AidenShape.Dialog,
+            containerColor = palette.raised
         )
     }
 }

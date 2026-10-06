@@ -1,22 +1,31 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.Color
@@ -24,6 +33,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -31,9 +41,18 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+
+private val AidenFileTreeStep = 14.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -205,6 +224,104 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
         AidenWorkspaceFileTree.visible(fileIndex?.entries ?: emptyList(), expanded, searchQuery)
     }
 
+    fun saveDocument(doc: AidenWorkspaceFileDocument) {
+        if (client == null || isSaving || !availability().canEditDocument) return
+        isSaving = true
+        scope.launch {
+            try {
+                val updated = client.writeWorkspaceFile(
+                    workspaceId = workspaceId,
+                    fileId = doc.id,
+                    displayPath = doc.displayPath,
+                    content = draftContent,
+                    expectedVersion = doc.version
+                )
+                selectedFile = updated
+                // Lazy saves rotate the file handle; keep the tree bound to it.
+                fileIndex?.let { current ->
+                    val rebound = AidenWorkspaceFileTree.rebind(current, doc.id, updated.id)
+                    if (rebound !== current) {
+                        fileIndex = rebound
+                        if (activeInstanceId != null) cache.store(rebound, activeInstanceId, workspaceId)
+                    }
+                }
+                originalContent = updated.content
+                draftContent = updated.content
+                isDirty = false
+                if (activeInstanceId != null) {
+                    cache.store(updated, activeInstanceId, workspaceId)
+                }
+            } catch (e: AidenRemoteClientException.Server) {
+                if (e.statusCode == 409) {
+                    showConflictDialog = true
+                } else {
+                    errorMessage = e.message
+                }
+            } catch (e: Exception) {
+                errorMessage = e.localizedMessage
+            } finally {
+                isSaving = false
+            }
+        }
+    }
+
+    fun openEntry(entry: AidenWorkspaceFileEntry) {
+        if (entry.kind == AidenWorkspaceFileKind.DIRECTORY) {
+            if (entry.displayPath in expanded) expanded = expanded - entry.displayPath
+            else {
+                expanded = expanded + entry.displayPath
+                if (entry.displayPath !in loadedFolders && fileIndex?.directoryPath != null) loadPage(entry)
+            }
+        }
+        if (entry.kind == AidenWorkspaceFileKind.FILE) {
+            openRevision += 1
+            val revision = openRevision
+            scope.launch {
+                if (client != null) {
+                    try {
+                        val fetchedDoc = client.workspaceFile(workspaceId, entry.id)
+                        if (revision != openRevision) return@launch
+                        isEditing = false
+                        isOfflineDocument = false
+                        selectedFile = fetchedDoc
+                        originalContent = fetchedDoc.content
+                        draftContent = fetchedDoc.content
+                        isDirty = false
+                        if (activeInstanceId != null) {
+                            cache.store(fetchedDoc, activeInstanceId, workspaceId)
+                        }
+                    } catch (error: Exception) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        if (revision != openRevision) return@launch
+                        errorMessage = error.localizedMessage
+                        // Try load from cache
+                        if (activeInstanceId != null) {
+                            val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
+                            if (cachedDoc != null) {
+                                isOfflineDocument = true
+                                isEditing = false
+                                selectedFile = cachedDoc
+                                originalContent = cachedDoc.content
+                                draftContent = cachedDoc.content
+                                isDirty = false
+                            }
+                        }
+                    }
+                } else if (activeInstanceId != null) {
+                    isEditing = false
+                    val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
+                    if (cachedDoc != null) {
+                        isOfflineDocument = true
+                        selectedFile = cachedDoc
+                        originalContent = cachedDoc.content
+                        draftContent = cachedDoc.content
+                        isDirty = false
+                    }
+                }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -240,75 +357,29 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             }
                         }
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
                     }
                 },
                 actions = {
                     val doc = selectedFile
                     if (doc != null) {
                         if (!isEditing) {
-                            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { isEditing = true }, enabled = availability().canEditDocument && client != null) { Text("Edit") }
+                            AidenTonalButton(
+                                text = "Edit",
+                                onClick = { isEditing = true },
+                                enabled = availability().canEditDocument && client != null,
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
                         }
                         if (isDirty) {
-                            TextButton(
-                                contentPadding = AidenButtonDefaults.TextContentPadding,
-                                onClick = { showDiscardConfirmDialog = true },
-                                colors = ButtonDefaults.textButtonColors(contentColor = palette.secondary)
-                            ) {
-                                Text("Discard")
-                            }
-                            Button(
-                                onClick = {
-                                    if (client != null && !isSaving && availability().canEditDocument) {
-                                        isSaving = true
-                                        scope.launch {
-                                            try {
-                                                val updated = client.writeWorkspaceFile(
-                                                    workspaceId = workspaceId,
-                                                    fileId = doc.id,
-                                                    displayPath = doc.displayPath,
-                                                    content = draftContent,
-                                                    expectedVersion = doc.version
-                                                )
-                                                selectedFile = updated
-                                                // Lazy saves rotate the file handle; keep the tree bound to it.
-                                                fileIndex?.let { current ->
-                                                    val rebound = AidenWorkspaceFileTree.rebind(current, doc.id, updated.id)
-                                                    if (rebound !== current) {
-                                                        fileIndex = rebound
-                                                        if (activeInstanceId != null) cache.store(rebound, activeInstanceId, workspaceId)
-                                                    }
-                                                }
-                                                originalContent = updated.content
-                                                draftContent = updated.content
-                                                isDirty = false
-                                                if (activeInstanceId != null) {
-                                                    cache.store(updated, activeInstanceId, workspaceId)
-                                                }
-                                            } catch (e: AidenRemoteClientException.Server) {
-                                                if (e.statusCode == 409) {
-                                                    showConflictDialog = true
-                                                } else {
-                                                    errorMessage = e.message
-                                                }
-                                            } catch (e: Exception) {
-                                                errorMessage = e.localizedMessage
-                                            } finally {
-                                                isSaving = false
-                                            }
-                                        }
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                shape = RoundedCornerShape(8.dp),
-                                enabled = !isSaving && availability().canEditDocument
-                            ) {
-                                if (isSaving) {
-                                    CircularProgressIndicator(color = palette.onAccent, modifier = Modifier.size(16.dp))
-                                } else {
-                                    Text("Save", color = palette.onAccent, fontWeight = FontWeight.Bold)
-                                }
-                            }
+                            AidenDiscardSavePair(
+                                saving = isSaving,
+                                saveEnabled = !isSaving && availability().canEditDocument,
+                                onDiscard = { showDiscardConfirmDialog = true },
+                                onSave = { saveDocument(doc) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
                         }
                     } else {
                         IconButton(onClick = { refreshFiles() }) {
@@ -376,10 +447,33 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
             if (doc != null) {
                 if (!isEditing) {
                     val lines = remember(doc.id, draftContent) { AidenWorkspaceSourcePreview.lines(draftContent) }
-                    LazyColumn(Modifier.fillMaxSize().background(palette.raised).padding(16.dp)) {
+                    val gutterColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    LazyColumn(
+                        Modifier
+                            .fillMaxSize()
+                            .background(palette.raised)
+                            .drawBehind {
+                                val inset = 8.dp.toPx()
+                                drawRoundRect(
+                                    color = gutterColor,
+                                    topLeft = Offset(inset, inset),
+                                    size = Size(52.dp.toPx(), size.height - inset * 2),
+                                    cornerRadius = CornerRadius(12.dp.toPx())
+                                )
+                            }
+                            .padding(16.dp)
+                    ) {
                         items(lines.size) { index ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                Text("${index + 1}", color = palette.secondary, fontFamily = FontFamily.Monospace, modifier = Modifier.width(48.dp))
+                                Text(
+                                    "${index + 1}",
+                                    color = palette.secondary,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.width(36.dp)
+                                )
+                                Spacer(Modifier.width(16.dp))
                                 androidx.compose.foundation.text.selection.SelectionContainer {
                                     Text(lines[index], color = palette.foreground, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                                 }
@@ -438,7 +532,8 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
                 ) {
                     if (filteredEntries.isEmpty() && !isLoading) {
                         item {
@@ -467,112 +562,15 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             }
                         }
                     }
-                    items(filteredEntries, key = { it.displayPath }) { entry ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = (entry.displayPath.count { it == '/' }.coerceAtMost(12) * 12).dp, top = 2.dp, bottom = 2.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .semantics { if (entry.kind == AidenWorkspaceFileKind.DIRECTORY) stateDescription = if (entry.displayPath in expanded) "Expanded" else "Collapsed" }
-                                .clickable(enabled = entry.kind != AidenWorkspaceFileKind.SYMLINK && entry.displayPath !in loadingFolders) {
-                                    if (entry.kind == AidenWorkspaceFileKind.DIRECTORY) {
-                                        if (entry.displayPath in expanded) expanded = expanded - entry.displayPath
-                                        else {
-                                            expanded = expanded + entry.displayPath
-                                            if (entry.displayPath !in loadedFolders && fileIndex?.directoryPath != null) loadPage(entry)
-                                        }
-                                    }
-                                    if (entry.kind == AidenWorkspaceFileKind.FILE) {
-                                        openRevision += 1
-                                        val revision = openRevision
-                                        scope.launch {
-                                            if (client != null) {
-                                                try {
-                                                    val fetchedDoc = client.workspaceFile(workspaceId, entry.id)
-                                                    if (revision != openRevision) return@launch
-                                                    isEditing = false
-                                                    isOfflineDocument = false
-                                                    selectedFile = fetchedDoc
-                                                    originalContent = fetchedDoc.content
-                                                    draftContent = fetchedDoc.content
-                                                    isDirty = false
-                                                    if (activeInstanceId != null) {
-                                                        cache.store(fetchedDoc, activeInstanceId, workspaceId)
-                                                    }
-                                                } catch (error: Exception) {
-                                                    if (error is kotlinx.coroutines.CancellationException) throw error
-                                                    if (revision != openRevision) return@launch
-                                                    errorMessage = error.localizedMessage
-                                                    // Try load from cache
-                                                    if (activeInstanceId != null) {
-                                                        val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
-                                                        if (cachedDoc != null) {
-                                                            isOfflineDocument = true
-                                                            isEditing = false
-                                                            selectedFile = cachedDoc
-                                                            originalContent = cachedDoc.content
-                                                            draftContent = cachedDoc.content
-                                                            isDirty = false
-                                                        }
-                                                    }
-                                                }
-                                            } else if (activeInstanceId != null) {
-                                                isEditing = false
-                                                val cachedDoc = cache.load(activeInstanceId, workspaceId)?.documents?.get(entry.id)
-                                                if (cachedDoc != null) {
-                                                    isOfflineDocument = true
-                                                    selectedFile = cachedDoc
-                                                    originalContent = cachedDoc.content
-                                                    draftContent = cachedDoc.content
-                                                    isDirty = false
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                            colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = when (entry.kind) {
-                                        AidenWorkspaceFileKind.DIRECTORY -> if (entry.displayPath in expanded) Icons.Default.FolderOpen else Icons.Default.Folder
-                                        AidenWorkspaceFileKind.SYMLINK -> Icons.Default.Link
-                                        AidenWorkspaceFileKind.FILE -> Icons.Default.Description
-                                    },
-                                    contentDescription = null,
-                                    tint = when (entry.kind) {
-                                        AidenWorkspaceFileKind.DIRECTORY -> palette.accent
-                                        AidenWorkspaceFileKind.SYMLINK -> palette.warning
-                                        AidenWorkspaceFileKind.FILE -> palette.secondary
-                                    },
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = entry.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = palette.foreground,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                entry.language?.let { lang ->
-                                    Surface(
-                                        color = palette.canvas,
-                                        shape = RoundedCornerShape(4.dp)
-                                    ) {
-                                        Text(
-                                            text = lang,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = palette.secondary,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    itemsIndexed(filteredEntries, key = { _, entry -> entry.displayPath }) { index, entry ->
+                        AidenWorkspaceFileTreeRow(
+                            entry = entry,
+                            index = index,
+                            count = filteredEntries.size,
+                            expanded = entry.displayPath in expanded,
+                            enabled = entry.kind != AidenWorkspaceFileKind.SYMLINK && entry.displayPath !in loadingFolders,
+                            onClick = { openEntry(entry) }
+                        )
                     }
                 }
             }
@@ -581,66 +579,213 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
 
     // Discard Confirmation Dialog
     if (showDiscardConfirmDialog) {
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = "Discard Changes?",
             onDismissRequest = { showDiscardConfirmDialog = false },
-            title = { Text("Discard Changes?", fontWeight = FontWeight.Bold) },
-            text = { Text("You have unsaved changes in this file. Are you sure you want to discard them?") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showDiscardConfirmDialog = false
-                        draftContent = originalContent
-                        isDirty = false
-                        selectedFile = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.danger)
-                ) {
-                    Text("Discard", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showDiscardConfirmDialog = false }) {
-                    Text("Keep Editing", color = palette.foreground)
-                }
+            confirmText = "Discard",
+            dismissText = "Keep Editing",
+            destructive = true,
+            onConfirm = {
+                showDiscardConfirmDialog = false
+                draftContent = originalContent
+                isDirty = false
+                selectedFile = null
             }
-        )
+        ) {
+            Text("You have unsaved changes in this file. Are you sure you want to discard them?")
+        }
     }
 
     // 409 Conflict Dialog
     if (showConflictDialog && selectedFile != null) {
         val doc = selectedFile!!
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = "Conflict Detected",
             onDismissRequest = { showConflictDialog = false },
-            title = { Text("Conflict Detected", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("This file on your paired desktop was modified since you opened it. Would you like to reload the latest version from your desktop?")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showConflictDialog = false
-                        scope.launch {
-                            if (client != null) {
-                                try {
-                                    val reloaded = client.workspaceFile(workspaceId, doc.id)
-                                    selectedFile = reloaded
-                                    originalContent = reloaded.content
-                                    draftContent = reloaded.content
-                                    isDirty = false
-                                } catch (_: Exception) {}
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                ) {
-                    Text("Reload from desktop", color = palette.onAccent)
-                }
-            },
-            dismissButton = {
-                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showConflictDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
+            confirmText = "Reload from desktop",
+            onConfirm = {
+                showConflictDialog = false
+                scope.launch {
+                    if (client != null) {
+                        try {
+                            val reloaded = client.workspaceFile(workspaceId, doc.id)
+                            selectedFile = reloaded
+                            originalContent = reloaded.content
+                            draftContent = reloaded.content
+                            isDirty = false
+                        } catch (_: Exception) {}
+                    }
                 }
             }
-        )
+        ) {
+            Text("This file on your paired desktop was modified since you opened it. Would you like to reload the latest version from your desktop?")
+        }
+    }
+}
+
+/**
+ * Connected Discard / Save pair for the file editor toolbar: a quiet tonal Discard segment
+ * joined to the accent Save segment by a narrow seam.
+ */
+@Composable
+private fun AidenDiscardSavePair(
+    saving: Boolean,
+    saveEnabled: Boolean,
+    onDiscard: () -> Unit,
+    onSave: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    val outer = 12.dp
+    val discardInteraction = remember { MutableInteractionSource() }
+    val saveInteraction = remember { MutableInteractionSource() }
+    Row(
+        modifier = modifier.height(40.dp),
+        horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
+    ) {
+        Surface(
+            onClick = onDiscard,
+            shape = aidenGroupItemShape(0, 2, outer, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = palette.foreground,
+            interactionSource = discardInteraction,
+            modifier = Modifier
+                .fillMaxHeight()
+                .tactilePress(discardInteraction)
+                .semantics { role = Role.Button }
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 14.dp)) {
+                Text("Discard", style = MaterialTheme.typography.labelLarge, color = palette.foreground)
+            }
+        }
+        Surface(
+            onClick = onSave,
+            enabled = saveEnabled,
+            shape = aidenGroupItemShape(1, 2, outer, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
+            color = if (saveEnabled || saving) palette.accent else palette.accent.copy(alpha = 0.4f),
+            contentColor = palette.onAccent,
+            interactionSource = saveInteraction,
+            modifier = Modifier
+                .fillMaxHeight()
+                .tactilePress(saveInteraction)
+                .semantics { role = Role.Button }
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 16.dp)) {
+                if (saving) {
+                    CircularProgressIndicator(color = palette.onAccent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                } else {
+                    Text("Save", style = MaterialTheme.typography.labelLarge, color = palette.onAccent, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One row of the workspace file tree. Nested rows draw a faint guide line per ancestor
+ * level, and folders lead with a chevron that turns when expanded (instantly when motion
+ * is reduced).
+ */
+@Composable
+internal fun AidenWorkspaceFileTreeRow(
+    entry: AidenWorkspaceFileEntry,
+    index: Int,
+    count: Int,
+    expanded: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val isDirectory = entry.kind == AidenWorkspaceFileKind.DIRECTORY
+    val depth = AidenFileTreeLayout.depth(entry.displayPath)
+    val guideColor = palette.secondary.copy(alpha = 0.18f)
+    val chevronRotation by animateFloatAsState(
+        targetValue = AidenFileTreeLayout.chevronRotation(expanded),
+        animationSpec = AidenMotion.spatial(reduceMotion),
+        label = "tree_chevron"
+    )
+    val interaction = remember { MutableInteractionSource() }
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = aidenGroupItemShape(index, count),
+        color = palette.raised,
+        interactionSource = interaction,
+        modifier = modifier
+            .fillMaxWidth()
+            .tactilePress(interaction, targetScale = 0.985f)
+            .semantics { if (isDirectory) stateDescription = if (expanded) "Expanded" else "Collapsed" }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .height(IntrinsicSize.Min)
+                .padding(start = 8.dp, end = 12.dp)
+        ) {
+            if (depth > 0) {
+                Box(
+                    modifier = Modifier
+                        .width(AidenFileTreeLayout.indent(depth, AidenFileTreeStep.value).dp)
+                        .fillMaxHeight()
+                        .drawBehind {
+                            val stroke = 1.dp.toPx()
+                            AidenFileTreeLayout.guideCenters(depth, AidenFileTreeStep.toPx()).forEach { x ->
+                                drawLine(guideColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = stroke)
+                            }
+                        }
+                )
+            }
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(20.dp)) {
+                if (isDirectory) {
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = palette.secondary,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .graphicsLayer { rotationZ = chevronRotation }
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = when (entry.kind) {
+                    AidenWorkspaceFileKind.DIRECTORY -> if (expanded) Icons.Default.FolderOpen else Icons.Default.Folder
+                    AidenWorkspaceFileKind.SYMLINK -> Icons.Default.Link
+                    AidenWorkspaceFileKind.FILE -> Icons.Default.Description
+                },
+                contentDescription = null,
+                tint = when (entry.kind) {
+                    AidenWorkspaceFileKind.DIRECTORY -> palette.accent
+                    AidenWorkspaceFileKind.SYMLINK -> palette.warning
+                    AidenWorkspaceFileKind.FILE -> palette.secondary
+                },
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = entry.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.foreground,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp)
+            )
+            entry.language?.let { lang ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = lang,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.secondary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }

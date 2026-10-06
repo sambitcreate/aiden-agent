@@ -2,11 +2,14 @@ package sbtbiswas.AidenOnTheGo.navigation
 
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
@@ -20,7 +23,9 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 
 /** Owns the saveable back stack and the per-entry UI state of the screens on it. */
@@ -87,15 +92,21 @@ fun AidenNavigationHost(
         contentKey = { it.stateKey },
         label = "ScreenTransition",
         modifier = modifier.graphicsLayer {
-            // Predictive back: the departing screen recedes with the gesture.
-            if (!reduceMotion) {
-                val scale = 1f - 0.08f * backProgress
-                scaleX = scale
-                scaleY = scale
+            // Predictive back: the departing screen recedes with the gesture and detaches
+            // as a rounded, softly elevated surface so its corners follow the display's.
+            val depth = predictiveBackDepth(backProgress, reduceMotion)
+            scaleX = depth.scale
+            scaleY = depth.scale
+            if (depth.cornerRadius > 0.dp) {
+                shape = RoundedCornerShape(depth.cornerRadius)
+                clip = true
+                shadowElevation = depth.shadowElevation.toPx()
             }
         },
         transitionSpec = {
-            if (navigator.isNavigatingBack) {
+            if (reduceMotion) {
+                EnterTransition.None togetherWith ExitTransition.None
+            } else if (navigator.isNavigatingBack) {
                 (slideInVertically(
                     initialOffsetY = { -it / 10 },
                     animationSpec = AidenMotion.spatialExpressiveSpring<IntOffset>()
@@ -122,4 +133,25 @@ fun AidenNavigationHost(
             content(screen)
         }
     }
+}
+
+/** Visual depth of the receding screen during a predictive back gesture. */
+data class AidenPredictiveBackDepth(
+    val scale: Float,
+    val cornerRadius: Dp,
+    val shadowElevation: Dp
+)
+
+/**
+ * Maps predictive back [progress] (0..1) to scale, corner radius, and shadow. Reduced
+ * motion keeps the screen still and square.
+ */
+fun predictiveBackDepth(progress: Float, reduceMotion: Boolean): AidenPredictiveBackDepth {
+    val p = progress.coerceIn(0f, 1f)
+    if (reduceMotion || p == 0f) return AidenPredictiveBackDepth(1f, 0.dp, 0.dp)
+    return AidenPredictiveBackDepth(
+        scale = 1f - 0.08f * p,
+        cornerRadius = (28f * p).dp,
+        shadowElevation = (16f * p).dp
+    )
 }

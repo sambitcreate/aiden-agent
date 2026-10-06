@@ -258,7 +258,7 @@ fun AidenBotImagePlaygroundSheet(
 
         Button(
             onClick = onDismiss,
-            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
