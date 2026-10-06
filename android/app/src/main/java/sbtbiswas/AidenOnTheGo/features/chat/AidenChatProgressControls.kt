@@ -17,13 +17,17 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import sbtbiswas.AidenOnTheGo.models.AidenAgentNavigation
 import sbtbiswas.AidenOnTheGo.models.AidenAgentNavigationScope
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -32,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -63,9 +68,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -85,8 +94,49 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatTask
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskProgress
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskUnavailableReason
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+
+internal enum class AidenTaskStepTone { DONE, ACTIVE, PENDING }
+
+/** Segments of the task sheet's connected step bar. Long plans fold into [MAX_SEGMENTS] buckets. */
+internal object AidenTaskStepBar {
+    const val MAX_SEGMENTS = 12
+
+    fun segments(
+        statuses: List<AidenChatTaskStatus>,
+        maxSegments: Int = MAX_SEGMENTS
+    ): List<AidenTaskStepTone> {
+        val visible = statuses.filter { it != AidenChatTaskStatus.DELETED }
+        if (visible.isEmpty() || maxSegments <= 0) return emptyList()
+        if (visible.size <= maxSegments) return visible.map { tone(listOf(it)) }
+        return List(maxSegments) { bucket ->
+            val from = bucket * visible.size / maxSegments
+            val to = (bucket + 1) * visible.size / maxSegments
+            tone(visible.subList(from, to))
+        }
+    }
+
+    fun completedFraction(statuses: List<AidenChatTaskStatus>): Float {
+        val visible = statuses.filter { it != AidenChatTaskStatus.DELETED }
+        if (visible.isEmpty()) return 0f
+        return visible.count { it == AidenChatTaskStatus.COMPLETED }.toFloat() / visible.size
+    }
+
+    private fun tone(group: List<AidenChatTaskStatus>): AidenTaskStepTone = when {
+        group.any { it == AidenChatTaskStatus.IN_PROGRESS } -> AidenTaskStepTone.ACTIVE
+        group.all { it == AidenChatTaskStatus.COMPLETED } -> AidenTaskStepTone.DONE
+        else -> AidenTaskStepTone.PENDING
+    }
+}
 
 @Composable
 fun AidenChatProgressControls(
@@ -314,7 +364,9 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        AidenTaskStepProgressBar(tasks.map { it.status })
+        Spacer(modifier = Modifier.height(12.dp))
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxWidth(),
@@ -324,6 +376,49 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
             items(tasks, key = { it.id }) { task ->
                 AidenTaskRow(task)
             }
+        }
+    }
+}
+
+@Composable
+private fun AidenTaskStepProgressBar(statuses: List<AidenChatTaskStatus>) {
+    val segments = AidenTaskStepBar.segments(statuses)
+    if (segments.isEmpty()) return
+    val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val fraction = AidenTaskStepBar.completedFraction(statuses)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(6.dp)
+            .semantics { progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f) },
+        horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
+    ) {
+        segments.forEachIndexed { index, tone ->
+            val fill by animateColorAsState(
+                targetValue = when (tone) {
+                    AidenTaskStepTone.DONE -> palette.success
+                    AidenTaskStepTone.ACTIVE -> palette.accent
+                    AidenTaskStepTone.PENDING -> MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+                animationSpec = AidenMotion.nonSpatial(reduceMotion),
+                label = "task_step_fill"
+            )
+            Spacer(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(
+                        aidenGroupItemShape(
+                            index,
+                            segments.size,
+                            outer = 3.dp,
+                            inner = 1.dp,
+                            orientation = AidenGroupOrientation.HORIZONTAL
+                        )
+                    )
+                    .background(fill)
+            )
         }
     }
 }
@@ -454,43 +549,48 @@ private fun AidenAgentRosterContent(
             history.forEach { roster -> roster.previousTurns.forEach(::add) }
         }.distinctBy { it.turnId }.filterNot { it.turnId in hiddenTurnIds }
         if (history.size > 1 || turnOptions.isNotEmpty()) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 10.dp)) {
-                item {
-                    Surface(
-                        color = if (selectedRoster.epoch == currentRoster.epoch && selectedRoster.turnId == currentRoster.turnId) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        },
-                        shape = MaterialTheme.shapes.large,
-                        modifier = Modifier
-                            .heightIn(min = AidenUi.MinimumTouchTarget)
-                            .clickable(role = Role.Button) { onSelectTurn(null) }
-                            .semantics { role = Role.Button }
-                    ) {
-                        Text(
-                            text = "Current",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (selectedRoster.epoch == currentRoster.epoch && selectedRoster.turnId == currentRoster.turnId) palette.accent else palette.foreground,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp)
+            val choices = buildList {
+                add(
+                    AidenRosterTurnOption(
+                        key = "current",
+                        label = "Current",
+                        isSelected = selectedRoster.epoch == currentRoster.epoch && selectedRoster.turnId == currentRoster.turnId,
+                        turnId = null
+                    )
+                )
+                historicalSnapshots.forEach { roster ->
+                    add(
+                        AidenRosterTurnOption(
+                            key = "snapshot:${roster.epoch}:${roster.turnId}",
+                            label = roster.agents.firstOrNull()?.startedAt?.let { "Earlier · ${formatRosterDate(it)}" }
+                                ?: "Earlier session",
+                            isSelected = roster.epoch == selectedRoster.epoch && roster.turnId == selectedRoster.turnId,
+                            turnId = roster.turnId
                         )
-                    }
-                }
-                items(historicalSnapshots, key = { "snapshot:${it.epoch}:${it.turnId}" }) { roster ->
-                    val isSelected = roster.epoch == selectedRoster.epoch && roster.turnId == selectedRoster.turnId
-                    AidenRosterTurnChoice(
-                        label = roster.agents.firstOrNull()?.startedAt?.let { "Earlier · ${formatRosterDate(it)}" }
-                            ?: "Earlier session",
-                        isSelected = isSelected,
-                        onClick = { onSelectTurn(roster.turnId) }
                     )
                 }
-                items(turnOptions, key = { "previous:${it.turnId}" }) { turn ->
-                    val isSelected = selectedRoster.turnId == turn.turnId
+                turnOptions.forEach { turn ->
+                    add(
+                        AidenRosterTurnOption(
+                            key = "previous:${turn.turnId}",
+                            label = "Earlier · ${formatRosterDate(turn.startedAt)}",
+                            isSelected = selectedRoster.turnId == turn.turnId,
+                            turnId = turn.turnId
+                        )
+                    )
+                }
+            }
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap),
+                contentPadding = PaddingValues(bottom = 10.dp)
+            ) {
+                itemsIndexed(choices, key = { _, choice -> choice.key }) { index, choice ->
                     AidenRosterTurnChoice(
-                        label = "Earlier · ${formatRosterDate(turn.startedAt)}",
-                        isSelected = isSelected,
-                        onClick = { onSelectTurn(turn.turnId) }
+                        label = choice.label,
+                        isSelected = choice.isSelected,
+                        index = index,
+                        count = choices.size,
+                        onClick = { onSelectTurn(choice.turnId) }
                     )
                 }
             }
@@ -531,25 +631,58 @@ private fun AidenAgentRosterContent(
     }
 }
 
+private data class AidenRosterTurnOption(
+    val key: String,
+    val label: String,
+    val isSelected: Boolean,
+    val turnId: String?
+)
+
+/** One pill in the connected turn selector; selection is a tonal fill, never a border. */
 @Composable
 private fun AidenRosterTurnChoice(
     label: String,
     isSelected: Boolean,
+    index: Int,
+    count: Int,
     onClick: () -> Unit
 ) {
+    val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val fill by animateColorAsState(
+        targetValue = if (isSelected) palette.accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "roster_turn_fill"
+    )
+    val ink by animateColorAsState(
+        targetValue = if (isSelected) palette.accent else palette.foreground,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "roster_turn_ink"
+    )
+    val interaction = remember { MutableInteractionSource() }
     Surface(
-        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.large,
+        color = fill,
+        shape = aidenGroupItemShape(index, count, orientation = AidenGroupOrientation.HORIZONTAL),
         modifier = Modifier
             .heightIn(min = AidenUi.MinimumTouchTarget)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { role = Role.Button }
+            .tactilePress(interaction)
+            .clickable(
+                interactionSource = interaction,
+                indication = androidx.compose.material3.ripple(),
+                role = Role.Button,
+                onClick = onClick
+            )
+            .semantics {
+                role = Role.Button
+                selected = isSelected
+            }
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = if (isSelected) AidenTheme.palette.accent else AidenTheme.palette.foreground,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp)
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+            color = ink,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 15.dp)
         )
     }
 }
@@ -678,20 +811,20 @@ private fun AidenAgentDetailContent(
                 )
             },
             confirmButton = {
-                TextButton(
+                AidenDialogConfirmButton(
+                    text = "Stop agent",
                     onClick = {
                         confirmsStop = false
                         onStop()
-                    }
-                ) {
-                    Text("Stop agent", color = palette.danger)
-                }
+                    },
+                    destructive = true
+                )
             },
             dismissButton = {
-                TextButton(onClick = { confirmsStop = false }) {
-                    Text("Keep running")
-                }
-            }
+                AidenDialogDismissButton(text = "Keep running", onClick = { confirmsStop = false })
+            },
+            shape = AidenShape.Dialog,
+            containerColor = palette.raised
         )
     }
 }

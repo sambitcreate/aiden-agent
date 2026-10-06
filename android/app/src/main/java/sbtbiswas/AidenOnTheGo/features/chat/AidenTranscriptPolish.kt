@@ -22,7 +22,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,6 +49,9 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatMessage
 import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 
 /**
  * Elapsed-time presentation for assistant turns. Durations come from the
@@ -276,16 +278,17 @@ fun AidenSelectTextDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done") }
+            AidenDialogConfirmButton(text = "Done", onClick = onDismiss)
         },
         dismissButton = if (onAskAbout != null) {
             {
-                TextButton(onClick = {
+                AidenDialogDismissButton(text = "Ask about all", onClick = {
                     onAskAbout(text)
                     onDismiss()
-                }) { Text("Ask about all") }
+                })
             }
         } else null,
+        shape = AidenShape.Dialog,
         containerColor = palette.raised
     )
 }
