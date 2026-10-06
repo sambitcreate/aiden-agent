@@ -24,6 +24,9 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -542,7 +545,9 @@ fun AidenBotCustomAccessFlowScreen(
             title = { Text("Discard access changes?") },
             text = { Text("Your unsaved Custom Access changes will be lost.") },
             confirmButton = {
-                TextButton(
+                AidenDialogConfirmButton(
+                    text = "Discard Changes",
+                    destructive = true,
                     onClick = {
                         isConfirmingDiscard = false
                         val nextId = pendingBotSwitchId
@@ -553,15 +558,12 @@ fun AidenBotCustomAccessFlowScreen(
                             onNavigateBack()
                         }
                     }
-                ) {
-                    Text("Discard Changes", color = palette.danger, fontWeight = FontWeight.Bold)
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { isConfirmingDiscard = false }) {
-                    Text("Keep Editing", color = palette.secondary)
-                }
+                AidenDialogDismissButton(text = "Keep Editing", onClick = { isConfirmingDiscard = false })
             },
+            shape = AidenShape.Dialog,
             containerColor = palette.raised
         )
     }
