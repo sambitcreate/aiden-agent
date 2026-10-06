@@ -1,5 +1,9 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -111,6 +115,7 @@ fun AidenProductShellScreen(
                     .fillMaxSize()
                     .productAreaLayer(AidenProductArea.WORKSPACES, rtl) { areaPosition.value }
                     .zIndex(if (activeArea == AidenProductArea.WORKSPACES) 1f else 0f)
+                    .inactiveAreaGuard(activeArea == AidenProductArea.WORKSPACES)
                     .semantics { if (activeArea != AidenProductArea.WORKSPACES) hideFromAccessibility() }
             )
 
@@ -119,6 +124,7 @@ fun AidenProductShellScreen(
                     .fillMaxSize()
                     .productAreaLayer(AidenProductArea.BOTS, rtl) { areaPosition.value }
                     .zIndex(if (activeArea == AidenProductArea.BOTS) 1f else 0f)
+                    .inactiveAreaGuard(activeArea == AidenProductArea.BOTS)
                     .semantics { if (activeArea != AidenProductArea.BOTS) hideFromAccessibility() }
             ) {
                 AidenProductTopBar(
@@ -314,6 +320,26 @@ internal fun aidenProductAreaLayerTransform(areaIndex: Int, position: Float): Ai
         alpha = 1f - abs(distance)
     )
 }
+
+/**
+ * The inactive area stays composed for the directional switch but must not take taps,
+ * keyboard focus, or D-pad traversal; alpha alone does not stop hit testing.
+ */
+internal fun Modifier.inactiveAreaGuard(active: Boolean): Modifier =
+    if (active) {
+        this
+    } else {
+        this
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                    }
+                }
+            }
+            .focusProperties { onEnter = { cancelFocusChange() } }
+            .focusGroup()
+    }
 
 private fun Modifier.productAreaLayer(
     area: AidenProductArea,

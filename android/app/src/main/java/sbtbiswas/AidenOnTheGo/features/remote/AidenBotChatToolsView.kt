@@ -476,7 +476,7 @@ private fun AidenBotChatToolPill(action: AidenBotChatToolAction, shape: Shape) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(width = 40.dp, height = 34.dp)
+            .size(width = 44.dp, height = 40.dp)
             .tactilePress(interaction)
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
