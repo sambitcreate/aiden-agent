@@ -8,9 +8,21 @@ import {
   getOnboardingMoreProviders,
   isOnboardingBuiltinProviderReady,
   onboardingBuiltinProviderSetupLabel,
+  onboardingChatGptSelection,
   resolveProviderIconSlug,
   splitPiBuiltinProviders,
 } from "./pi-provider-display.js";
+
+test("ChatGPT onboarding resumes current OpenAI without reconnecting or switching to legacy", () => {
+  const openai = { hasKey: true, models: ["current", "preferred"], defaultModel: "preferred" };
+  const legacy = { configured: true, needsAttention: false, models: [{ id: "legacy" }] };
+  assert.deepEqual(onboardingChatGptSelection(openai, undefined), { providerId: "openai", model: "preferred" });
+  assert.deepEqual(onboardingChatGptSelection(openai, legacy), { providerId: "openai", model: "preferred" });
+  assert.deepEqual(onboardingChatGptSelection({ ...openai, defaultModel: "removed" }, legacy), { providerId: "openai", model: "current" });
+  assert.deepEqual(onboardingChatGptSelection({ ...openai, hasKey: false }, legacy), { providerId: "openai-codex", model: "legacy" });
+  assert.equal(onboardingChatGptSelection({ ...openai, models: [] }, undefined), undefined);
+  assert.equal(onboardingChatGptSelection(undefined, { ...legacy, needsAttention: true }), undefined);
+});
 
 function occurrences(source: string, value: string): number {
   return source.split(value).length - 1;
@@ -252,4 +264,9 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     occurrences(providersSettingsSource, "group-data-[highlighted]:text-accent-foreground"),
     6,
   );
+});
+
+ test("Azure retains its provider artwork after the Pi identity rename", () => {
+  assert.equal(resolveProviderIconSlug("azure"), "azure-openai-responses");
+  assert.equal(resolveProviderIconSlug("azure-openai-responses"), "azure-openai-responses");
 });

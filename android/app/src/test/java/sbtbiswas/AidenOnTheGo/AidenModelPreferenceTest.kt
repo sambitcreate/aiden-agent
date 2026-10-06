@@ -38,6 +38,12 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenModelPreferenceTest {
+    @Test
+    fun azureProviderIdentityKeepsItsArtwork() {
+        assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure"))
+        assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure-openai-responses"))
+    }
+
     @get:Rule
     val tempFolder = TemporaryFolder()
 

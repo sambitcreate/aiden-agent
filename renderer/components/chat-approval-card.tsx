@@ -1,3 +1,5 @@
+import { ClassifierApproval } from "./classifier-approval";
+import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
 import { ShieldQuestion } from "lucide-react";
 import { Button, Text } from "./ui";
@@ -82,7 +84,9 @@ export function ChatApprovalCard({
   const pendingShell = isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingRunGrant = isSubagentRunGrantApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingFormFill = isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingClassifier = classifierApprovalState(pending.toolName, details);
   const invalidPendingPrivilegedApproval =
+    pendingClassifier.invalid ||
     (claimsKind(details, "subagent-workspace-write") && pendingWorkspaceWrite === undefined) ||
     (claimsKind(details, "subagent-mcp-mutation") && pendingMcpMutation === undefined) ||
     (claimsKind(details, "subagent-shell") && pendingShell === undefined) ||
@@ -96,7 +100,7 @@ export function ChatApprovalCard({
   // Only plain workspace writes and shell commands can be remembered; the main
   // process offers scopes solely for those, and specialized cards keep once.
   const pendingRememberScopes =
-    !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
+    !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
       ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
       : [];
   const disabled = deciding || disabledReason !== undefined;
@@ -156,6 +160,8 @@ export function ChatApprovalCard({
             Aiden cannot safely authorize this action from this view. Deny it here or review the exact action on the
             device that owns this chat.
           </Text>
+        ) : pendingClassifier.details ? (
+          <ClassifierApproval details={pendingClassifier.details} descriptionId={summaryId} />
         ) : pendingWorkspaceWrite ? (
           <SubagentWorkspaceWriteApproval details={pendingWorkspaceWrite} descriptionId={summaryId} />
         ) : pendingMcpMutation ? (
@@ -175,7 +181,8 @@ export function ChatApprovalCard({
             variant="small"
             as="p"
             id={summaryId}
-            className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
+            tabIndex={0}
+            className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
           >
             {pending.summary}
           </Text>

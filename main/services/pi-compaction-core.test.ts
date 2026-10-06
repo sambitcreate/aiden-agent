@@ -4,8 +4,8 @@ import { appendFile, chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { JsonlSessionRepo, TODO_CONTEXT } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { JsonlSessionRepo, TODO_CONTEXT } from "./pi-legacy-harness.js";
+import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import {
   createModels,
   fauxAssistantMessage,
@@ -21,7 +21,8 @@ import {
   type PiCompactionEvent,
 } from "./pi-compaction-core.js";
 import { VccError } from "./pi-vcc/errors.js";
-import { CompactionError } from "@earendil-works/pi-agent-core";
+import { CompactionError, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
+import { DEFAULT_COMPACTION_KEEP_RECENT_TOKENS, DEFAULT_COMPACTION_RESERVE_TOKENS } from "../../renderer/shared/compaction.js";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
   AIDEN_PI_TRANSACTION,
@@ -2655,4 +2656,9 @@ test("compaction failure diagnostics keep the later cause after budget recovery 
   assert.equal(compactionFailureDiagnosticFields({
     reason: "manual", sessionFailed: false, error: new Error("unclassified"),
   }).compactionFailure, "other");
+});
+
+test("renderer compaction defaults match the pi runtime defaults they describe", () => {
+  assert.equal(DEFAULT_COMPACTION_RESERVE_TOKENS, DEFAULT_COMPACTION_SETTINGS.reserveTokens);
+  assert.equal(DEFAULT_COMPACTION_KEEP_RECENT_TOKENS, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
 });

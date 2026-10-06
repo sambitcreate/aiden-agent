@@ -189,3 +189,13 @@ test("runtime admission includes non-secret name and enabled changes", () => {
     "an in-flight enabled admission cannot survive an external disable",
   );
 });
+
+
+test("changing OAuth metadata authority rotates the credential identity and survives cleanup journal parsing", () => {
+  const target = { ...server, authServerMetadataUrl: "https://identity.test/metadata" };
+  const pending = pendingMcpCredentialCleanupForSave(server, target);
+  assert.ok(pending);
+  assert.deepEqual(parsePendingMcpCredentialCleanup(pending), pending);
+  assert.equal(sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(server), mcpRuntimeConnectionSnapshot(target)), false);
+  assert.deepEqual(mcpCredentialCleanupAfterConfig(pending!, target), { resolved: true, clearOAuth: true, clearPresetKey: true });
+});

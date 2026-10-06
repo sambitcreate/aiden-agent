@@ -1,3 +1,4 @@
+import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { googleThinkingLevelsForModel } from "../../../renderer/shared/google-thinking.js";
 import { anthropicThinkingLevelsForModel } from "../../../renderer/shared/anthropic-thinking.js";
 import { codexThinkingLevelsForModel } from "../../../renderer/shared/codex-thinking.js";
@@ -34,6 +35,7 @@ export async function importProviders(agentDir: string, value: unknown) {
 }
 
 export async function createCliModelRuntime(agentDir: string) {
+  migrateCliAzureConfig(agentDir);
   const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), modelsStorePath: join(agentDir, "models-store.json"), allowModelNetwork: false });
   for (const provider of runtime.getProviders()) {
     if (isPiRemoteCatalogProvider(provider)) runtime.registerNativeProvider(withPiRemoteCatalog(provider));
