@@ -15,7 +15,7 @@ import {
 import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
 import { createModels } from "@earendil-works/pi-ai";
-import { appendPiMessages } from "./pi-compaction-session-store.js";
+import { appendPiMessages, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
 import { buildAgentRuntimeOptions } from "./generation-runtime.js";
 import {
@@ -2444,7 +2444,7 @@ async function admittedInputFixture(responses: Parameters<typeof managedTestHarn
   const { tool, atTool, release } = steerWaitTool();
   const visibleChat: Array<{ id: string; role: string; content: string }> = [];
   let projectedIds = 0;
-  const { harness, session } = await managedTestHarness(responses, {
+  const { core, harness, session } = await managedTestHarness(responses, {
     tools: [tool],
     beforeQueuedUser: async (message) => {
       const id = `projected-${++projectedIds}`;
@@ -2468,7 +2468,7 @@ async function admittedInputFixture(responses: Parameters<typeof managedTestHarn
     readChat: async () => null,
     newMessageId: () => "committed-steer",
   });
-  return { harness, session, admission, visibleChat, atTool, release };
+  return { core, harness, session, admission, visibleChat, atTool, release };
 }
 
 test("admitted steering appears once in the visible chat and journals its committed id", async () => {
@@ -2524,6 +2524,67 @@ test("Stop before Pi reads admitted steering keeps it as history, not undelivere
   assert.equal((await running).kind, "app_cancelled");
   assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
   assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+});
+
+test("Stop after a queued follow-up is admitted keeps it as history and never runs it", async () => {
+  // Remote "Queue to run next" enters Pi's follow-up queue through the shared
+  // admission. Stop must not run it later, return it to a draft, or duplicate it.
+  const fixture = await admittedInputFixture([
+    fauxAssistantMessage([fauxToolCall("wait_for_steer", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("answered the next turn"),
+  ]);
+  const running = fixture.harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: 1 },
+  });
+  await fixture.atTool;
+  assert.deepEqual(
+    await fixture.admission.admit({ streamId: "stream-1", mode: "queue", text: "then do this" }),
+    { admitted: true, queue: "follow-up", committed: true, messageId: "committed-steer" },
+  );
+  await fixture.harness.cancelAndSettle();
+  assert.equal((await running).kind, "app_cancelled");
+  assert.equal(fixture.core.state.callCount, 1);
+  assert.deepEqual(fixture.visibleChat, [
+    { id: "committed-steer", role: "user", content: "then do this" },
+  ]);
+  assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+
+  // Production starts the next turn by syncing the persisted chat into Pi.
+  // Pi never read the stopped follow-up, so it has no journal marker and
+  // enters the model's context once, as earlier history. It is never run as
+  // its own turn: the next request costs exactly one more model call, and the
+  // only new answer responds to that request.
+  fixture.harness.reset();
+  await syncChatMessagesToPiSession(
+    fixture.session,
+    fixture.visibleChat.map((message) => ({
+      id: message.id,
+      role: "user" as const,
+      content: message.content,
+      createdAt: 2,
+    })),
+    fixture.core.getModel(),
+    true,
+  );
+  const next = await fixture.harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "new request", timestamp: 3 },
+  });
+  assert.equal(next.kind, "completed");
+  assert.equal(fixture.core.state.callCount, 2);
+  const context = (await fixture.session.buildContext()).messages;
+  assert.deepEqual(
+    context.filter((message) => message.role === "user").map((message) => message.content),
+    ["start", "then do this", "new request"],
+  );
+  const last = context[context.length - 1];
+  assert.equal(last?.role, "assistant");
+  assert.deepEqual(
+    last?.role === "assistant" ? last.content.filter((part) => part.type === "text").map((part) => part.text) : [],
+    ["answered the next turn"],
+  );
+  assert.deepEqual(fixture.visibleChat.map(({ id }) => id), ["committed-steer"]);
 });
 
 test("a failed visible projection of queued input is a managed session failure with recovery", async () => {

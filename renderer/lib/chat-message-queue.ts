@@ -272,6 +272,22 @@ export function steerRejectionMessage(reason: ChatRunInputRejectionReason | unde
   }
 }
 
+/**
+ * User-facing copy for run input main saved to the transcript but the run
+ * never took (it ended, was stopped, or was full). iOS and Android show the
+ * same receipts for the same Remote outcomes, so keep the three in step.
+ */
+export function committedRunInputNotice(reason: ChatRunInputRejectionReason | undefined): string {
+  switch (reason) {
+    case "cancelled":
+      return "Saved to the chat — the run was cancelled before it could use it";
+    case "capacity":
+      return "Saved to the chat — the run queue was full";
+    default:
+      return "Saved to the chat — the run ended before it could use it";
+  }
+}
+
 export type SteerQueuedMessageOutcome =
   /** Pi accepted the guidance; the transcript already shows it. */
   | { kind: "admitted" }
