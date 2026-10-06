@@ -25,6 +25,12 @@ struct AidenSSEFrameParser {
     private var dataLines: [String] = []
     private var frameBytes = 0
 
+    // Explicit because Swift 6.2 makes the memberwise init private when any
+    // stored property is private.
+    init(minimumEventID: Int = 1) {
+        self.minimumEventID = minimumEventID
+    }
+
     mutating func consume(line: String) throws -> AidenSSERawFrame? {
         frameBytes += line.utf8.count + 1
         guard frameBytes <= AidenRemoteProtocol.maxSSEFrameBytes else {
