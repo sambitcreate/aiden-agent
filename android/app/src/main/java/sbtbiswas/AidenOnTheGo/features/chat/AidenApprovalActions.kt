@@ -65,7 +65,7 @@ internal fun AidenApprovalActions(
             onMenuExpandedChange = { scopeMenuOpen = it },
             menuContentDescription = "More allow options",
             enabled = enabled,
-            containerColor = if (enabled) palette.accent else palette.accent.copy(alpha = 0.38f)
+            containerColor = palette.accent
         ) {
             broaderScopes.forEach { scope ->
                 DropdownMenuItem(

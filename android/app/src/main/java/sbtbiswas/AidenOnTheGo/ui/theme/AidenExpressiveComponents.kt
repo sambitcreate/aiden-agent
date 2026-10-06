@@ -305,6 +305,7 @@ fun AidenSplitButton(
         animationSpec = AidenMotion.spatial(reduceMotion),
         label = "split_chevron"
     )
+    val fill = if (enabled) containerColor else containerColor.copy(alpha = containerColor.alpha * 0.38f)
     val primaryInteraction = remember { MutableInteractionSource() }
     val menuInteraction = remember { MutableInteractionSource() }
     Row(
@@ -315,7 +316,7 @@ fun AidenSplitButton(
             onClick = onClick,
             enabled = enabled,
             shape = aidenGroupItemShape(0, 2, AidenShape.SplitOuter, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
-            color = containerColor,
+            color = fill,
             contentColor = contentColor,
             interactionSource = primaryInteraction,
             modifier = Modifier
@@ -339,7 +340,7 @@ fun AidenSplitButton(
                 onClick = { onMenuExpandedChange(!menuExpanded) },
                 enabled = enabled,
                 shape = aidenGroupItemShape(1, 2, AidenShape.SplitOuter, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
-                color = containerColor,
+                color = fill,
                 contentColor = contentColor,
                 interactionSource = menuInteraction,
                 modifier = Modifier

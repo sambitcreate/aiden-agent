@@ -33,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
@@ -139,21 +138,17 @@ private fun AidenReadAloudMiniWaveform(playing: Boolean, reduceMotion: Boolean) 
     } else {
         0.25f
     }
-    // Only the bars are shown; the waveform's own caption belongs to voice input.
-    Box(
+    AidenVoiceWaveform(
+        amplitude = amplitude,
+        barCount = 5,
+        color = AidenTheme.palette.accent,
         modifier = Modifier
             .width(48.dp)
             .height(32.dp)
-            .clipToBounds()
-            .clearAndSetSemantics { }
-    ) {
-        AidenVoiceWaveform(
-            amplitude = amplitude,
-            barCount = 5,
-            color = AidenTheme.palette.accent,
-            modifier = Modifier.width(48.dp)
-        )
-    }
+            .clearAndSetSemantics { },
+        label = null,
+        contained = false
+    )
 }
 
 @Composable
