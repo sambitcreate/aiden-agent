@@ -71,3 +71,53 @@ Plan: `docs/plans/chat-fork-plan.md` (five PRs). This note tracks what has lande
   - `fork-summary-card.test.tsx`: the card states.
   - `chat-copy-view.test.ts`: `withForkLineage` and `forkSummaryRows`.
   - `message-bubble.test.tsx`: the card's placement.
+
+## PR 4 — Remote, peer and `aiden serve` (branches `feat/chat-fork-remote`, `feat/chat-fork-peer`)
+
+- **Shared service.** `ChatForkService` (`main/services/chat-fork-service.ts`) creates forks for the desktop IPC handler, Remote and the CLI daemon. One copy at a time; the source is held idle; `ChatForkCaller` carries per-surface checks (`assertSource` under the copy lock, `assertInstallable` before install, workspace admission). `journalRequired` (set by `aiden serve`, whose model context exists only in the journal) turns a journal failure into `unavailable` and deletes the target journal.
+- **Routes.** Revision 21, features `chat-fork-v1` and `chat-fork-summary-v1`. `POST /chats/{id}/fork` and `/chats/{id}/fork-summary/{retry|skip|cancel}` need `chat:write`, `If-Match` and `Idempotency-Key`. A `before` cut returns `prefill {text, attachments}` with the prompt's attachments restaged for the calling device.
+- **Wire summary.** The desktop keeps `instructions` and `files`; `projectForkSummary` sends `{state, afterMessageId, focus?, text?, error?}`. File paths never leave the Mac, and `error` passes only if it is one of `FORK_SUMMARY_AIDEN_ERRORS`, else "The summary could not be generated.". Requests take `summary: {focus?}`.
+- **Status codes.** Summary actions answer 409 `revision_conflict` only for `ForkSummaryStateError` (the summary moved on); any other error falls through to the router's internal-error path. A fork whose result (chat plus staged prefill) would exceed the durable-operation size limit is refused with 413 before install. Replays of any rejection come back as 409 `internal_error`, because the idempotency ledger stores only contract codes.
+- **Peer.** `peer-operation.ts` `forkBody` accepts only `focus`; `remote-host-adapter.ts` maps the wire `focus` back to the desktop's `instructions`.
+
+## Mobile PR — Android half (branch `feat/chat-fork-android`)
+
+- **Client.** `AidenRemoteClient.forkChat` posts `/chats/{id}/fork` with `If-Match` and an `Idempotency-Key`, expects `201 {chat, prefill?}`, and rejects a result that has no lineage or is the source chat. A blank focus sends `summary: {}`. `retryForkSummary`, `skipForkSummary` and `cancelForkSummary` post to `/fork-summary/{retry|skip|cancel}`. 409 `operation_in_progress` and `revision_conflict` get their own copy in `AidenChatForkErrors`.
+- **Models.** `AidenChat.forkedFrom` (an `AidenChatForkLineage`, optional summary) and `AidenChatSummary.forkedFrom` (lineage only; summary rows never carry the summary). The summary is `{state, afterMessageId, focus?, text?, error?}`; `instructions` is rejected everywhere in chat payloads.
+- **Gating.** `supportsChatFork` (`chat-fork-v1`) and `supportsChatForkSummary` (`chat-fork-summary-v1`) on the installation; `AidenChatForkEligibility` mirrors the Mac's cut rules (settled replies; user prompts that are not the first; no `local-` ids; no running turn).
+- **UI.** `AidenMessageContextMenu` gains Fork from here, Fork with summary… (opens `AidenForkSummaryDialog`, 1,000-character focus) and Edit in fork. After a fork the view model sets `forkNavigation`; the screen pushes the fork, so Back returns to the source. `prefill.text` becomes the fork's draft and its attachments are staged in memory in `AidenChatDraftStore` and taken once by the fork's view model. The transcript shows `AidenForkLineageRow` at the top and `AidenForkSummaryCard` after `afterMessageId`; a pending or failed summary holds sends. Workspace chat rows show a `CallSplit` glyph.
+- **Handoff fencing.** `fork()` captures the pairing `createdAt`, a `reserveChatWrite()` token and `AidenChatDraftStore.purgeAuthority(instanceId)` before the POST, as `send()` does. The cache save, `setDraft(chatId, text, authority)` and `stageAttachments(chatId, attachments, authority)` refuse writes after `purge`, and `forkNavigation` is published only if the client, pairing, cache token and draft authority are still current after the IO, so an unpair during the handoff leaves nothing behind.
+- **Retry keys.** The saved `forkAttempt` key is kept only when `AidenChatForkErrors.isOutcomeUnknown` (no HTTP error response, or `idempotency_in_flight`). Every other error response clears it, because the Mac's idempotency ledger settles that key as a rejection and replaying it would only return `internal_error`.
+- **Tests.** `AidenRemoteClientTest` (fixture request shapes, prefill, summary routes, 409 copy, optional lineage), `AidenChatTest` (eligibility, Edit in fork → navigation → prefill seeding, summary hold and skip, hidden without the features, unpair during the handoff, busy rejection then a fresh key, lost response then the same key) and `AidenBotContractTest` (`focus` accepted and `instructions` rejected under `forkedFrom.summary`). `testFetchedForkDecodesEverySummaryState` decodes the fixture's `chatFork.summaryStates`.
+
+## Mobile PR — iOS half (branch `feat/chat-fork-ios`)
+
+Both halves ship together from `feat/chat-fork-mobile`, which also carries the Android unit-test loopback fix (see `android-unit-test-dns.md`).
+
+- **Client.** `AidenRemoteClient.forkChat` POSTs `chats/{id}/fork` with `If-Match` and `Idempotency-Key`, expecting 201 `{chat, prefill?}`.
+  - A nil `summaryFocus` means a plain fork with no `summary` key. An empty or whitespace string sends `summary: {}`; otherwise `summary: {focus}`.
+  - Focus is trimmed and capped at 1,000 UTF-16 units, matching the Mac.
+  - The result fails closed: it must be a different chat whose lineage records the requested source, message and position, and a prefill is accepted only for `before`.
+  - `retryForkSummary` and `skipForkSummary` return the Chat; `cancelForkSummary` returns `cancelled`.
+- **Private-key scanner.** `AidenBotPrivateResponseValidator` refuses any `instructions` key in a scoped chat read, including under `forkedFrom.summary`; the wire field is `focus`, so no exception is needed. The fork POST result is not scoped.
+- **Gating.** `supportsChatFork` reads `chat-fork-v1`. `supportsChatForkSummary` additionally needs `chat-fork-summary-v1`.
+- **DTOs.**
+  - `AidenChat.forkedFrom` and `AidenChatSummary.forkedFrom` decode leniently: a damaged lineage becomes nil and a damaged summary is dropped on its own.
+  - Rows strip the summary. `CachedChatSummary` persists the row lineage.
+  - iOS has no messages-window DTO, so the window's `forkedFrom` is not consumed.
+- **Retry keys.** `AidenChatForkAttempt` keeps the fork's normalized request (chat, revision, message, position, trimmed focus), its request context and its `Idempotency-Key` in the chat view model. The key is reused only for the same request on the same activation after an unknown outcome: no Aiden error response, a cancellation, a 201 that could not be accepted, or `idempotency_in_flight`. Success or any other error drops it, matching Android and the Mac's ledger.
+- **Navigation.** Forks open through `AidenForkableChatDetailView`, which keeps a per-source `AidenChatForkTrail` and pushes each fork as its own `navigationDestination(isPresented:)` level. The compact stack path holds persisted workspace IDs, so fork routes don't go into it. Back walks fork → fork → source in the compact sidebar, the workspace list and the regular-width detail column, where the sidebar keeps the source selected. A size-class change drops the trail.
+- **UI.** `Features/Chat/AidenChatFork.swift` holds the eligibility rules, the lineage row, `AidenForkSummaryCard`, `AidenForkSummarySheet` and the prefill handoff.
+  - Context-menu and accessibility actions:
+    - settled replies after a prompt: Fork from Here;
+    - replies with a later message: Fork with Summary… (summary feature only);
+    - non-first prompts: Edit in Fork.
+  - `AidenChatDetailView(onOpenChat:)` opens the fork. Bot details pass nothing, so they get no fork actions.
+  - Chat-list rows show `arrow.triangle.branch`.
+- **Edit in fork prefill.**
+  - The text is saved to `AidenChatDraftStore` for the fork, with `isCurrent` checks before and after; a pairing change removes it. The fork's normal draft restore then loads it.
+  - Valid restaged attachments go through the MainActor `AidenChatForkPrefillHandoff`, keyed by instance and chat and purged on unpair. The fork's `load()` adopts them as owned uploads.
+- **Hold.** Sends are not held client-side; the Mac refuses them while a summary is pending or failed. The card polls every 3 seconds while pending.
+- **Tests.**
+  - `AidenRemoteClientTests`: the fixture request and response, summary body shapes, lineage validation, summary actions, lenient decoding, and row stripping. `testForkSummaryStatesDecodeInChatReadsAndChatLists` decodes every `chatFork.summaryStates` entry.
+  - `AidenChatTests`: eligibility, feature gating, and the Edit in fork seeding end to end.

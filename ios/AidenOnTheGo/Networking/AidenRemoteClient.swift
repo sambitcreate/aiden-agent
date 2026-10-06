@@ -90,6 +90,8 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSkillsFeature = "chat-skills-v1"
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
+    static let chatForkFeature = "chat-fork-v1"
+    static let chatForkSummaryFeature = "chat-fork-summary-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -244,6 +246,17 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Row states, unread markers, and `POST /chats/{id}/read` (revision 18).
     var supportsChatReadState: Bool {
         features.contains(Self.chatReadStateFeature)
+    }
+
+    /// `POST /chats/{id}/fork` and fork lineage (revision 21).
+    var supportsChatFork: Bool {
+        features.contains(Self.chatForkFeature)
+    }
+
+    /// Fork with summary and the `fork-summary` retry, skip, and cancel
+    /// actions. Meaningful only alongside chat-fork-v1.
+    var supportsChatForkSummary: Bool {
+        supportsChatFork && features.contains(Self.chatForkSummaryFeature)
     }
 
     private static func isValidFeatureToken(_ value: String) -> Bool {
@@ -579,6 +592,21 @@ final class AidenRemoteClient: @unchecked Sendable {
     private struct ChatMoveRequest: Encodable {
         let workspaceId: String
         let confirmedForeground = true
+    }
+
+    private struct ChatForkRequest: Encodable {
+        struct Summary: Encodable {
+            let focus: String?
+        }
+
+        let messageId: String
+        let position: AidenChatForkPosition
+        /// Present only for Fork with summary; `{}` asks for an unfocused summary.
+        let summary: Summary?
+    }
+
+    private struct ChatForkSummaryCancelResponse: Decodable {
+        let cancelled: Bool
     }
 
     private struct ApprovalRequest: Encodable {
@@ -1160,6 +1188,83 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: ["If-Match": revision],
             acceptedStatus: [204]
         )
+    }
+
+    /// Fork a chat at a settled message (contract revision 21). `after` keeps
+    /// the chosen reply; `before` cuts just before the chosen prompt and
+    /// returns it as `prefill` to edit and resend. A summary focus is sent
+    /// only for Fork with summary; pass an empty string for an unfocused
+    /// summary and nil for a plain fork.
+    func forkChat(
+        chatId: String,
+        revision: String,
+        messageId: String,
+        position: AidenChatForkPosition,
+        summaryFocus: String? = nil,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChatForkResult {
+        try validateRemoteIdentifier(chatId)
+        try validateRemoteIdentifier(messageId)
+        try validateRevision(revision)
+        let summary = summaryFocus.map { raw -> ChatForkRequest.Summary in
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ChatForkRequest.Summary(focus: trimmed.isEmpty ? nil : trimmed)
+        }
+        // The Mac measures in UTF-16 code units, so match it exactly.
+        if let focus = summary?.focus,
+           focus.utf16.count > AidenChatForkSummary.maximumFocusLength {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let result: AidenChatForkResult = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork"],
+            body: ChatForkRequest(messageId: messageId, position: position, summary: summary),
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            acceptedStatus: [201]
+        )
+        // The fork is a new chat that records this source and cut point.
+        guard result.chat.id != chatId,
+              let lineage = result.chat.forkedFrom,
+              lineage.chatId == chatId,
+              lineage.messageId == messageId,
+              lineage.position == position,
+              position == .before || result.prefill == nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
+    }
+
+    /// Ask the Mac to try a failed fork summary again.
+    func retryForkSummary(chatId: String) async throws -> AidenChat {
+        try await forkSummaryAction(chatId: chatId, action: "retry")
+    }
+
+    /// Continue the fork without its summary; queued messages then send.
+    func skipForkSummary(chatId: String) async throws -> AidenChat {
+        try await forkSummaryAction(chatId: chatId, action: "skip")
+    }
+
+    /// Stop a pending fork summary. Returns false when none was running.
+    func cancelForkSummary(chatId: String) async throws -> Bool {
+        try validateRemoteIdentifier(chatId)
+        let response: ChatForkSummaryCancelResponse = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork-summary", "cancel"]
+        )
+        return response.cancelled
+    }
+
+    private func forkSummaryAction(chatId: String, action: String) async throws -> AidenChat {
+        try validateRemoteIdentifier(chatId)
+        let chat: AidenChat = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork-summary", action]
+        )
+        guard chat.id == chatId else { throw AidenRemoteClientError.invalidResponse }
+        return chat
     }
 
     /// Report that the user viewed a chat, clearing its unread marker on every

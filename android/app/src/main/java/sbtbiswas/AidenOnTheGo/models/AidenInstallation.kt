@@ -97,6 +97,14 @@ data class AidenServer(
     val supportsChatReadState: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
 
+    /** `POST /chats/{id}/fork` (revision 21). */
+    val supportsChatFork: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_FORK_FEATURE)
+
+    /** Fork summaries and their retry, skip and cancel actions; only meaningful with chat-fork-v1. */
+    val supportsChatForkSummary: Boolean
+        get() = supportsChatFork && features.contains(AidenRemoteProtocol.CHAT_FORK_SUMMARY_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }
