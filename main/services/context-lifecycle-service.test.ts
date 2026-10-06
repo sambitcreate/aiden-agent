@@ -461,3 +461,38 @@ test("disabling Skills cancels an operator compaction already at the provider", 
     false,
   );
 });
+
+
+test("manual compaction snapshots the saved model's recent budget across provider resolution", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-model-budget-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const providerId = "budget-provider";
+  const modelId = "budget-model";
+  const { faux, model, runtime } = compactionRuntime(providerId, modelId);
+  faux.setResponses(Array.from({ length: 8 }, () => () => fauxAssistantMessage(validSummary("configured checkpoint"))));
+  const chat: Chat = {
+    ...baseChat, providerId, model: modelId,
+    messages: Array.from({ length: 12 }, (_, index) => [
+      { id: `budget-user-${index}`, role: "user" as const, content: `BUDGET_TURN_${index} ${"x".repeat(1_200)}`, createdAt: index * 2 + 10 },
+      { id: `budget-answer-${index}`, role: "assistant" as const, content: `Answer ${index}`, createdAt: index * 2 + 11 },
+    ]).flat(),
+  };
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const session = await store.openChat(chat.id);
+  await syncChatMessagesToPiSession(session, chat.messages, model, false);
+  const overrides = { "budget-provider/budget-model": { reserveTokens: 2_000, keepRecentTokens: 0 } };
+  const { value } = deps({
+    getCompactionPreferences: async () => ({ compactionEngine: "llm", compactionModelOverrides: overrides }),
+    getChat: async () => chat,
+    openSession: async () => session,
+    resolveRuntime: async () => {
+      overrides["budget-provider/budget-model"].keepRecentTokens = 3_000;
+      return runtime;
+    },
+  });
+  const result = await new ContextLifecycleService(value).compactChat(chat.id, { kind: "desktop", ownerId: "renderer:1" }, "operator");
+  assert.equal(result.compacted, true, JSON.stringify(result));
+  const context = JSON.stringify(await session.buildContext());
+  assert.match(context, /configured checkpoint/u);
+  assert.doesNotMatch(context, /BUDGET_TURN_10/u);
+});

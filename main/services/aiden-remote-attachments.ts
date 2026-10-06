@@ -290,8 +290,49 @@ export class AidenRemoteAttachmentStore {
     }
     const now = this.now();
     this.prune(now);
-    const id = this.nextId();
-    const attachment = parseUpload(input, id);
+    return this.retain(deviceId, chatId, parseUpload(input, this.nextId()), now);
+  }
+
+  /**
+   * Hold a chat's stored attachments for one device as if it had uploaded
+   * them, so an edited prompt can resend them. Attachments a device could not
+   * upload, or that no longer fit the temporary capacity, are counted as
+   * omitted instead of failing the whole set.
+   */
+  stage(
+    deviceId: string,
+    chatId: string,
+    attachments: readonly Attachment[],
+  ): { staged: AidenRemoteAttachmentProjection[]; omitted: number } {
+    if (this.deletingChats.has(chatId)) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat is being deleted.", 404);
+    }
+    const now = this.now();
+    this.prune(now);
+    const staged: AidenRemoteAttachmentProjection[] = [];
+    let omitted = 0;
+    for (const attachment of attachments.slice(0, MAX_AIDEN_REMOTE_ATTACHMENTS_PER_TURN)) {
+      try {
+        const upload = attachment.kind === "image"
+          ? { name: attachment.name, mimeType: attachment.mimeType, kind: "image", data: attachment.data }
+          : { name: attachment.name, mimeType: attachment.mimeType, kind: "text", text: attachment.text };
+        staged.push(this.retain(deviceId, chatId, parseUpload(upload, this.nextId()), now));
+      } catch (error) {
+        if (!(error instanceof AidenRemoteServiceError)) throw error;
+        omitted += 1;
+      }
+    }
+    omitted += Math.max(0, attachments.length - MAX_AIDEN_REMOTE_ATTACHMENTS_PER_TURN);
+    return { staged, omitted };
+  }
+
+  private retain(
+    deviceId: string,
+    chatId: string,
+    attachment: Attachment,
+    now: number,
+  ): AidenRemoteAttachmentProjection {
+    const id = attachment.id;
     const representationBytes = attachmentRepresentationBytes([attachment]);
     const maxEntries = this.options.maxEntries ?? MAX_PENDING_ATTACHMENTS;
     const maxRepresentationBytes =

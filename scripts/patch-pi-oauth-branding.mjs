@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PI_AI_VERSION = "0.87.1";
+const PI_AI_VERSION = "1.0.3";
 const PI_PACKAGE_PATH = path.join("node_modules", "@earendil-works", "pi-ai");
 const PI_LOGO_PREFIX = "const LOGO_SVG = `<svg";
 const AIDEN_LOGO_PREFIX = 'const LOGO_SVG = `<img src="data:image/png;base64,';
@@ -38,10 +38,10 @@ const BRANDED_ERROR_FUNCTION = `export function oauthErrorHtml(message, details)
         details,
     });
 }`;
-const OPENAI_SUCCESS_CALL =
-  'oauthSuccessHtml("OpenAI authentication completed. You can close this window.")';
-const AIDEN_OPENAI_SUCCESS_CALL =
-  'oauthSuccessHtml("Your ChatGPT account is connected to Aiden Agent. You can close this window.")';
+const CALLBACK_SUCCESS_CALL =
+  'oauthSuccessHtml(`Signed in to ${providerName}. You may now close this page.`)';
+const AIDEN_CALLBACK_SUCCESS_CALL =
+  'oauthSuccessHtml(`Your ${providerName} account is connected to Aiden Agent. You can close this window.`)';
 
 function replaceExact(source, before, after, label) {
   const beforeCount = source.split(before).length - 1;
@@ -69,8 +69,7 @@ function replaceLogo(source, brandedLogo) {
   return `${source.slice(0, start)}${brandedLogo}${source.slice(end + "</svg>`;".length)}`;
 }
 
-export async function patchPiOAuthBranding(projectRoot) {
-  const packageRoot = path.join(projectRoot, PI_PACKAGE_PATH);
+export async function patchPiOAuthBranding(projectRoot, packageRoot = path.join(projectRoot, PI_PACKAGE_PATH)) {
   const packageJsonPath = path.join(packageRoot, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   if (packageJson.version !== PI_AI_VERSION) {
@@ -81,25 +80,36 @@ export async function patchPiOAuthBranding(projectRoot) {
 
   const icon = await readFile(path.join(projectRoot, "resources", "app-icon.png"));
   const brandedLogo = `const LOGO_SVG = \`<img src="data:image/png;base64,${icon.toString("base64")}" alt="" style="display:block;width:100%;height:100%;border-radius:16px" />\`;`;
-  const oauthPagePath = path.join(packageRoot, "dist", "auth", "oauth", "oauth-page.js");
-  const openAiCodexPath = path.join(packageRoot, "dist", "auth", "oauth", "openai-codex.js");
+  const oauthPagePath = path.join(packageRoot, "dist", "utils", "oauth-page.js");
+  const callbackServerPath = path.join(packageRoot, "dist", "auth", "oauth", "callback-server.js");
 
   const originalPage = await readFile(oauthPagePath, "utf8");
   let page = replaceLogo(originalPage, brandedLogo);
   page = replaceExact(page, SUCCESS_FUNCTION, BRANDED_SUCCESS_FUNCTION, "success page");
   page = replaceExact(page, ERROR_FUNCTION, BRANDED_ERROR_FUNCTION, "error page");
 
-  const originalOpenAi = await readFile(openAiCodexPath, "utf8");
-  const openAi = replaceExact(
-    originalOpenAi,
-    OPENAI_SUCCESS_CALL,
-    AIDEN_OPENAI_SUCCESS_CALL,
-    "ChatGPT success message",
+  const originalCallback = await readFile(callbackServerPath, "utf8");
+  const callback = replaceExact(
+    originalCallback,
+    CALLBACK_SUCCESS_CALL,
+    AIDEN_CALLBACK_SUCCESS_CALL,
+    "shared success message",
   );
 
+  const chatgptPath = path.join(packageRoot, "dist", "auth", "oauth", "openai-chatgpt.js");
+  const originalChatgpt = await readFile(chatgptPath, "utf8");
+  let chatgpt = replaceExact(originalChatgpt,
+    'const AGENT_NAME_HINT = "Pi";', 'const AGENT_NAME_HINT = "Aiden Agent";',
+    "ChatGPT registered agent name");
+  chatgpt = replaceExact(chatgpt,
+    'oauthSuccessHtml("ChatGPT authentication completed. You can close this window.")',
+    'oauthSuccessHtml("Your ChatGPT account is connected to Aiden Agent. You can close this window.")',
+    "ChatGPT success message");
+
   if (page !== originalPage) await writeFile(oauthPagePath, page);
-  if (openAi !== originalOpenAi) await writeFile(openAiCodexPath, openAi);
-  return { changed: page !== originalPage || openAi !== originalOpenAi };
+  if (callback !== originalCallback) await writeFile(callbackServerPath, callback);
+  if (chatgpt !== originalChatgpt) await writeFile(chatgptPath, chatgpt);
+  return { changed: page !== originalPage || callback !== originalCallback || chatgpt !== originalChatgpt };
 }
 
 const invokedDirectly =

@@ -1,7 +1,7 @@
 {
   "name": "aiden-cli",
   "version": "0.1.0",
-  "description": "Aiden Agent CLI — a pi-based headless coding agent with a full TUI",
+  "description": "Aiden Agent CLI \u2014 a pi-based headless coding agent with a full TUI",
   "type": "module",
   "private": true,
   "piConfig": {
@@ -23,17 +23,24 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/chord": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/chord": "1.0.3",
+    "@earendil-works/pi-coding-agent": "1.0.3",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "quickjs-wasi": "3.6.2",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-agent-core": "1.0.3",
+    "@earendil-works/pi-codemode": "1.0.3",
+    "@earendil-works/pi-mcp": "1.0.3",
+    "proper-lockfile": "4.1.2"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
     "@types/qrcode": "^1.5.5",
     "esbuild": "0.28.1",
     "https-proxy-agent": "7.0.6",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@types/proper-lockfile": "4.1.4"
   },
   "engines": {
     "node": ">=22.19.0"
