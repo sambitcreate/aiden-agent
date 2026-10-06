@@ -1531,6 +1531,25 @@ final class AidenChatViewModel {
         }
     }
 
+    /// Local run alert while the user is away; the notifier owns dedupe,
+    /// permission timing, and the inactive-only / Quiet Open Chat policy.
+    private func alertRun(_ kind: AidenRunAlertKind, id: String) {
+        let instanceID = instanceId
+        let chatID = chat.id
+        let title = chat.title
+        let isChatOnScreen = isChatForegrounded
+        Task { @MainActor in
+            await AidenRunAlertNotifier.shared.notify(
+                kind,
+                id: id,
+                instanceID: instanceID,
+                chatID: chatID,
+                chatTitle: title,
+                isChatOnScreen: isChatOnScreen
+            )
+        }
+    }
+
     private func publishLiveActivityStatus(streamID: String, state: AidenStreamState) async {
         guard AidenQuietOpenChat.publishesStatus(
             state,
@@ -3638,6 +3657,19 @@ final class AidenChatViewModel {
               activeStreamID == event.streamId,
               event.shouldApply else { return }
         if event.type == .questionRequired {
+            // Resolving an approval on the Mac emits the surviving question
+            // with no running status in between, so a cached approval may
+            // already be gone. Re-read approval authority first: its nil path
+            // restores the question, and a still-pending approval keeps
+            // precedence while the question card refreshes alongside it.
+            if pendingApproval != nil {
+                await restorePendingApproval(
+                    streamID: event.streamId,
+                    context: context,
+                    announce: feedbackPolicy.allowsFeedback
+                )
+                return
+            }
             await restorePendingQuestion(
                 streamID: event.streamId,
                 context: context,
@@ -3715,6 +3747,7 @@ final class AidenChatViewModel {
             // second generic modal alert.
             presentedError = nil
             streamState = .error
+            alertRun(.failed, id: event.streamId)
             if feedbackPolicy.allowsFeedback {
                 coordinator.haptics.play(
                     .error,
@@ -3745,6 +3778,7 @@ final class AidenChatViewModel {
             pendingApproval = nil
             pendingQuestion = nil
             streamState = .done
+            alertRun(.completed, id: event.streamId)
             await liveActivities.finish(
                 instanceID: instanceId,
                 streamID: event.streamId,
@@ -3781,6 +3815,11 @@ final class AidenChatViewModel {
         pendingApproval = nil
         pendingQuestion = nil
         streamState = status.state
+        switch status.state {
+        case .done: alertRun(.completed, id: streamID)
+        case .error, .interrupted: alertRun(.failed, id: streamID)
+        default: break
+        }
         if feedbackPolicy.allowsFeedback,
            status.state == .error || status.state == .interrupted {
             coordinator.haptics.play(
@@ -3834,6 +3873,7 @@ final class AidenChatViewModel {
             }
             pendingApproval = approval
             streamState = .waitingForApproval
+            alertRun(.needsApproval, id: approval.id)
             if announce {
                 coordinator.haptics.play(
                     .warning,
@@ -3908,7 +3948,16 @@ final class AidenChatViewModel {
             }
             pendingQuestion = question
             streamState = .waitingForApproval
-            await publishLiveActivityStatus(streamID: streamID, state: .waitingForApproval)
+            // The wire projects the question as `waiting_for_approval`; the
+            // phone holds the question snapshot, so it shows "Needs your
+            // answer" unless an approval (which gates the tool) is pending too.
+            if AgentRunBlockingStatus.status(
+                hasPendingApproval: pendingApproval != nil,
+                hasPendingQuestion: true
+            ) == .waitingForAnswer {
+                await liveActivities.questionRequired(instanceID: instanceId, streamID: streamID)
+                alertRun(.needsAnswer, id: question.id)
+            }
             if announce {
                 coordinator.haptics.play(
                     .warning,
@@ -4098,6 +4147,7 @@ final class AidenChatViewModel {
             )
         case .failed:
             streamState = .error
+            alertRun(.failed, id: stream.streamId)
             await liveActivities.finish(
                 instanceID: instanceId,
                 streamID: stream.streamId,
@@ -4106,6 +4156,7 @@ final class AidenChatViewModel {
             )
         case .complete:
             streamState = .done
+            alertRun(.completed, id: stream.streamId)
             await liveActivities.finish(
                 instanceID: instanceId,
                 streamID: stream.streamId,
@@ -4114,6 +4165,7 @@ final class AidenChatViewModel {
             )
         case .interrupted:
             streamState = .interrupted
+            alertRun(.failed, id: stream.streamId)
             await liveActivities.finish(
                 instanceID: instanceId,
                 streamID: stream.streamId,
