@@ -23,6 +23,27 @@ final class AidenChatTests: XCTestCase {
         return try JSONDecoder().decode(AidenRemoteChatAgent.self, from: JSONSerialization.data(withJSONObject: value))
     }
 
+    func testAgentInspectionKeepsHistoricalPathButClearsDisplayedTurnChanges() throws {
+        func roster(turn: String, revision: Int) throws -> AidenRemoteChatAgentRoster {
+            let json = """
+            {"version":1,"chatId":"chat-a","turnId":"\(turn)","previousTurns":[],
+             "availability":"ready","epoch":"epoch-a","revision":\(revision),
+             "updatedAt":"2026-10-05T12:00:00Z","agents":[
+             {"agentId":"root","depth":1,"revision":1,"role":"scout","label":"Root",
+              "taskPreview":"Inspect","state":"running","startedAt":"2026-10-05T12:00:00Z",
+              "updatedAt":"2026-10-05T12:00:00Z","modelId":"model-a","turns":1,"tools":0,"tokens":10}]}
+            """
+            return try JSONDecoder().decode(AidenRemoteChatAgentRoster.self, from: Data(json.utf8))
+        }
+        let historical = try roster(turn: "earlier", revision: 1)
+        let refreshedHistory = try roster(turn: "earlier", revision: 2)
+        XCTAssertEqual(AidenAgentNavigation.reconciledPath(["root"], from: historical, to: refreshedHistory), ["root"])
+        // IDs can be reused: changing the displayed turn must still clear inspection.
+        let nextTurn = try roster(turn: "latest", revision: 3)
+        XCTAssertEqual(AidenAgentNavigation.reconciledPath(["root"], from: historical, to: nextTurn), [])
+        XCTAssertEqual(AidenAgentNavigation.reconciledPath(["root"], from: historical, to: nil), [])
+    }
+
     func testAgentNavigationDirectChildEntryBackAndParentLink() throws {
         let agents = try [navigationAgent("root"), navigationAgent("child", parent: "root"),
                           navigationAgent("leaf", parent: "child"), navigationAgent("sibling", parent: "root")]

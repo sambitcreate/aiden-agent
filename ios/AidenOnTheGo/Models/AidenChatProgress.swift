@@ -121,6 +121,17 @@ struct AidenAgentNavigation: Equatable, Codable {
         return Array(result.prefix(16).reversed())
     }
 
+    /// Reconcile the displayed roster; unrelated live turns must not reset history.
+    static func reconciledPath(_ path: [String], from previous: AidenRemoteChatAgentRoster?,
+                               to roster: AidenRemoteChatAgentRoster?) -> [String] {
+        guard let previous, let roster,
+              previous.chatId == roster.chatId, previous.epoch == roster.epoch,
+              previous.turnId == roster.turnId else { return [] }
+        let ids = Set(roster.agents.map(\.agentId))
+        let surviving = path.prefix { ids.contains($0) }
+        return surviving.last.map { ancestorPath(for: $0, in: roster.agents) } ?? []
+    }
+
     static func children(of agentId: String, in agents: [AidenRemoteChatAgent]) -> [AidenRemoteChatAgent] {
         guard agents.contains(where: { $0.agentId == agentId }) else { return [] }
         return agents.filter { $0.parentAgentId == agentId && $0.agentId != agentId }
@@ -354,11 +365,8 @@ struct AidenChatProgressSheet: View {
                 }
             }
         }
-        .onChange(of: model.agentRoster(for: selectedTurnId)) { _, roster in
-            let agents = roster?.agents ?? []
-            let ids = Set(agents.map(\.agentId))
-            let surviving = agentPath.prefix { ids.contains($0) }
-            agentPath = surviving.last.map { AidenAgentNavigation.ancestorPath(for: $0, in: agents) } ?? []
+        .onChange(of: model.agentRoster(for: selectedTurnId)) { previous, roster in
+            agentPath = AidenAgentNavigation.reconciledPath(agentPath, from: previous, to: roster)
         }
         .onChange(of: model.agentNavigationConnectionIdentity) { _, _ in
             agentPath = []
@@ -366,7 +374,6 @@ struct AidenChatProgressSheet: View {
         }
         .onChange(of: model.agentRoster?.epoch) { _, _ in agentPath = [] }
         .onChange(of: model.chat.id) { _, _ in agentPath = [] }
-        .onChange(of: model.currentAgentTurnId) { _, _ in agentPath = [] }
         .onChange(of: model.canReadAgentRoster) { _, readable in
             if !readable { agentPath = []; if kind == .agents { dismiss() } }
         }
