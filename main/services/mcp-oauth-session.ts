@@ -1,7 +1,11 @@
+import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import type {
   OAuthClientInformationFull,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { randomBytes } from "node:crypto";
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export interface McpOAuthSession {
   /** Normalized protected-resource URL this registration and tokens belong to. */
@@ -9,6 +13,8 @@ export interface McpOAuthSession {
   clientInformation?: OAuthClientInformationFull;
   tokens?: OAuthTokens;
   codeVerifier?: string;
+  /** Last granted scopes survive token invalidation and explicit step-up sign-in. */
+  grantedScope?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,6 +33,9 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
   }
   if (session.codeVerifier !== undefined && typeof session.codeVerifier !== "string") {
     throw new Error("MCP OAuth PKCE verifier is malformed.");
+  }
+  if (session.grantedScope !== undefined && typeof session.grantedScope !== "string") {
+    throw new Error("MCP OAuth granted scope is malformed.");
   }
   if (session.clientInformation !== undefined) {
     if (
@@ -67,11 +76,12 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
  * Start an explicit Settings re-authorization without discarding the dynamic
  * client registration. The caller retains the original snapshot for rollback.
  */
-export function mcpAuthorizationBinding(url: string): string {
+export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, oauthClientName?: string): string {
   const parsed = new URL(url);
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
-  return parsed.toString();
+  const resource = parsed.toString();
+  return authServerMetadataUrl === undefined && oauthClientName === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), oauthClientName?.trim() ?? null]);
 }
 
 export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: string): boolean {
@@ -94,12 +104,84 @@ export function sessionForFreshMcpAuthorization(
   session: McpOAuthSession,
   binding: string,
 ): McpOAuthSession {
-  return sessionMatchesMcpBinding(session, binding) && session.clientInformation
-    ? {
-        authorizationBinding: binding,
-        clientInformation: publicMcpClientInformation(session.clientInformation),
-      }
-    : { authorizationBinding: binding };
+  if (!sessionMatchesMcpBinding(session, binding)) return { authorizationBinding: binding };
+  const grantedScope = session.tokens?.scope || session.grantedScope;
+  return {
+    authorizationBinding: binding,
+    ...(session.clientInformation ? { clientInformation: publicMcpClientInformation(session.clientInformation) } : {}),
+    ...(grantedScope ? { grantedScope } : {}),
+  };
+}
+
+/** Per-attempt state: never persisted or shared with another server's sign-in. */
+export class McpOAuthAuthorizationFlow {
+  readonly state = randomBytes(32).toString("hex");
+  private discovery?: OAuthDiscoveryState;
+  private expectedIssuer?: string;
+  private issuerRequired = false;
+  private started = false;
+  private consumed = false;
+  requestedScope?: string;
+  private observedMetadata?: { url: string; issuer: string; issuerRequired: boolean };
+
+  observeAuthorizationMetadata(url: URL, document: unknown): void {
+    if (!isRecord(document) || typeof document.issuer !== "string") throw new Error("Invalid OAuth metadata issuer.");
+    const supported = document.authorization_response_iss_parameter_supported;
+    if (supported !== undefined && typeof supported !== "boolean") throw new Error("Invalid OAuth issuer response policy.");
+    this.observedMetadata = { url: url.href, issuer: document.issuer, issuerRequired: supported === true };
+  }
+
+  saveDiscovery(state: OAuthDiscoveryState): void {
+    const metadata = state.authorizationServerMetadata;
+    if (metadata && metadata.issuer !== state.authorizationServerUrl) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
+    const discovery = structuredClone(state);
+    const observed = this.observedMetadata;
+    if (metadata && observed?.issuer === metadata.issuer && observed.issuerRequired &&
+        buildDiscoveryUrls(state.authorizationServerUrl).some(({ url }) => url.href === observed.url)) {
+      discovery.authorizationServerMetadata = { ...metadata, authorization_response_iss_parameter_supported: true };
+    }
+    this.discovery = discovery;
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined {
+    return this.discovery ? structuredClone(this.discovery) : undefined;
+  }
+
+  clearDiscovery(): void {
+    this.discovery = undefined;
+    this.observedMetadata = undefined;
+  }
+
+  authorizationUrl(url: URL, grantedScope?: string): URL {
+    if (url.searchParams.get("state") !== this.state) throw new Error("MCP OAuth state was not bound to this sign-in.");
+    const result = new URL(url);
+    const scopes = [...new Set([grantedScope, result.searchParams.get("scope")].filter(Boolean).join(" ").split(/\s+/u).filter(Boolean))];
+    this.requestedScope = scopes.join(" ") || undefined;
+    if (this.requestedScope) result.searchParams.set("scope", this.requestedScope);
+    if (scopes.includes("offline_access") && !result.searchParams.has("prompt")) result.searchParams.set("prompt", "consent");
+    const metadata = this.discovery?.authorizationServerMetadata;
+    this.expectedIssuer = metadata?.issuer ?? this.discovery?.authorizationServerUrl;
+    this.issuerRequired = metadata !== undefined && "authorization_response_iss_parameter_supported" in metadata &&
+      metadata.authorization_response_iss_parameter_supported === true;
+    this.started = true;
+    return result;
+  }
+
+  callback(url: URL): { code: string } | { error: Error } {
+    if (!this.started || this.consumed || url.searchParams.getAll("state").length !== 1 || url.searchParams.get("state") !== this.state) {
+      throw new Error("Invalid OAuth callback state.");
+    }
+    const issuers = url.searchParams.getAll("iss");
+    if (issuers.length > 1 || (this.issuerRequired && issuers.length !== 1) ||
+        (issuers.length === 1 && (!this.expectedIssuer || issuers[0] !== this.expectedIssuer))) {
+      throw new Error("Invalid OAuth callback issuer.");
+    }
+    const codes = url.searchParams.getAll("code");
+    const errors = url.searchParams.getAll("error");
+    if (codes.length + errors.length !== 1 || !(codes[0] || errors[0])) throw new Error("Invalid OAuth callback result.");
+    this.consumed = true;
+    return errors.length ? { error: new Error("Authorization was denied by the provider.") } : { code: codes[0] };
+  }
 }
 
 export function hasMcpOAuthSessionData(session: McpOAuthSession): boolean {

@@ -220,6 +220,7 @@ class MainActivity : ComponentActivity() {
                                     liveNotificationManager = liveNotificationManager,
                                     networkAvailability = networkAvailability,
                                     startVoiceOnOpen = screen.startsVoice,
+                                    onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateBack = navigator::back
                                 )
                             }

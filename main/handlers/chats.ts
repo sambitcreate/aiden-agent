@@ -2,7 +2,6 @@ import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
-import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -13,12 +12,11 @@ import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import {
+  artifactRecoveryMessage,
   exportStoredHtmlArtifact,
   unresolvedGuiArtifactMessage,
   wrapStoredHtmlArtifact,
 } from "../services/gui-artifact-recovery.js";
-import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
-import { selectedHtmlArtifactMediaIds } from "../services/chat-copy-artifacts.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -60,6 +58,7 @@ import { chatActivityRegistry } from "../services/chat-activity.js";
 import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
 import { forkSummaryService } from "../services/fork-summary-service-main.js";
+import { chatForkService } from "../services/chat-fork-service-main.js";
 import {
   cancelDesktopCompaction,
   compactDesktopChat,
@@ -81,14 +80,6 @@ function asString(value: unknown, name: string): string {
     throw new Error(`Expected non-empty string for "${name}".`);
   }
   return value;
-}
-
-function artifactRecoveryMessage(unresolved: string, recoveredMessage: string): string {
-  if (unresolved.includes("could not be recovered")) return recoveredMessage;
-  return unresolved.replace(
-    "Open Aiden's developer log to locate",
-    "Open Settings → About → Diagnostics and choose Reveal to locate",
-  );
 }
 
 export function registerChatHistoryHandlers(): void {
@@ -139,7 +130,6 @@ export function registerChatHistoryHandlers(): void {
       return chatForRenderer(chat);
     });
   });
-  let chatCopyActive = false;
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:readMarkers", () => chatReadMarkers.snapshot());
@@ -319,182 +309,67 @@ export function registerChatHistoryHandlers(): void {
       throw new Error(appendReconciliationFailureMessage("blocked"));
     }
     const parsed = parseChatCopyRequest(input);
-    if (chatCopyActive) {
-      throw new Error("Another chat copy is already in progress.");
-    }
-    chatCopyActive = true;
-    let finishCopy: (() => void) | null = null;
+    const assertOwnerCurrent = (message: string) => () => {
+      if (owner.isDestroyed()) throw new Error(message);
+      if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+        throw new Error(appendReconciliationFailureMessage("blocked"));
+      }
+    };
     try {
-      finishCopy = llmClient.beginChatCopy(parsed.chatId);
-      if (!finishCopy) {
-        throw new Error(
-          "Finish the current response or approval before copying this chat.",
-        );
-      }
-      const source = await chatStore.get(parsed.chatId);
-      if (!source) throw new Error("The chat is no longer available.");
-      const unresolved = await unresolvedGuiArtifactMessage(parsed.chatId);
-      if (unresolved) {
-        throw new Error(
-          artifactRecoveryMessage(
-            unresolved,
-            "A previous visual artifact could not be recovered. Delete this chat to discard it before copying.",
-          ),
-        );
-      }
-      const runCopy = async () => {
-        if (source.botId) {
-          if (!hostPlatformCapabilities().bots) {
-            throw new Error("Bot chats are not available on this platform.");
-          }
-          const assertCurrent = () => {
-            if (owner.isDestroyed()) {
-              throw new Error("The application changed before the Bot chat was copied.");
-            }
-            if (llmClient.requiresAppendReconciliation(owner.documentId)) {
-              throw new Error(appendReconciliationFailureMessage("blocked"));
-            }
-          };
-          if (parsed.forkAt?.position === "before") {
-            throw new Error("Bot chats can only be forked after a reply.");
-          }
-          if (parsed.summary) {
-            throw new Error("Bot chat forks cannot carry a summary.");
-          }
-          const copied = await botApplicationService.copyChat({
-            botId: source.botId,
-            sourceChatId: parsed.chatId,
-            throughAssistantMessageId: parsed.forkAt?.messageId,
-            assertCurrent,
-          });
-          ipcMain.broadcast("chats:metadata-updated", {
-            chatId: copied.id,
-            title: copied.title,
-            workspaceId: persistedChatWorkspaceId(copied.workspaceId),
-            updatedAt: copied.updatedAt,
-          });
-          return chatForRenderer(copied);
-        }
-
-        const workspaceId = persistedChatWorkspaceId(source.workspaceId);
-        if (workspaceId === ASSISTANT_WORKSPACE_ID) {
-          throw new Error(
-            "Assistant chats cannot be copied into the main chat surface.",
-          );
-        }
-        const mutationAdmission = workspaceMutationGate.admit(workspaceId);
-        const workspaceOperation = admitRendererOwnedWorkspaceOperation(
-          workspaceOperationRegistry,
-          owner,
-          workspaceId,
-        );
-        const assertCurrent = () => {
-          if (
-            owner.isDestroyed() ||
-            mutationAdmission.signal.aborted ||
-            workspaceOperation.signal.aborted
-          ) {
-            throw new Error("The workspace changed before the chat was copied.");
-          }
-          if (llmClient.requiresAppendReconciliation(owner.documentId)) {
-            throw new Error(appendReconciliationFailureMessage("blocked"));
-          }
-        };
-        try {
-          if (!(await configStore.getWorkspace(workspaceId))) {
-            throw new Error("The chat workspace is no longer available.");
-          }
-          const htmlMediaIds = selectedHtmlArtifactMediaIds(source.messages, parsed.forkAt);
-          const targetChatId = randomUUID();
-          let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
-          let journalForked = false;
-          const copied = await (async () => {
+      const copied = await chatForkService.fork(
+        { chatId: parsed.chatId, forkAt: parsed.forkAt, summary: parsed.summary },
+        {
+          admitWorkspace: (workspaceId) => {
+            const mutationAdmission = workspaceMutationGate.admit(workspaceId);
             try {
-              return await chatStore.copyVisibleHistory({
-                sourceChatId: parsed.chatId,
-                targetChatId,
-                expectedWorkspaceId: workspaceId,
-                forkAt: parsed.forkAt,
-                ...(parsed.summary ? { forkSummary: parsed.summary } : {}),
-                assertCurrent,
-                beforeInstall: async (chat, sourceMessageIds) => {
-                  if (htmlMediaIds.length > 0) {
-                    preparedHtmlArtifacts = await generativeUiArtifactStore.prepareSelectedCopy(
-                      source.id,
-                      targetChatId,
-                      htmlMediaIds,
-                    );
-                  }
-                  // Carry the source's model-side journal (tool results and
-                  // compactions) up to the cut. Without it the fork still
-                  // works; it rebuilds model context from visible history.
-                  try {
-                    journalForked = await piCompactionSessionStore.forkChat({
-                      sourceChatId: source.id,
-                      targetChatId,
-                      targetCreatedAt: chat.createdAt,
-                      messages: chat.messages.map((message, index) => ({
-                        sourceId: sourceMessageIds[index]!,
-                        id: message.id,
-                      })),
-                    });
-                  } catch {
-                    writeDiagnosticEvent({
-                      level: "warn",
-                      area: "chat",
-                      event: "chat-degraded",
-                      outcome: "degraded",
-                      code: "internal-error",
-                    });
-                  }
+              const workspaceOperation = admitRendererOwnedWorkspaceOperation(
+                workspaceOperationRegistry,
+                owner,
+                workspaceId,
+              );
+              return {
+                isAborted: () =>
+                  mutationAdmission.signal.aborted || workspaceOperation.signal.aborted,
+                release: () => {
+                  workspaceOperation.release();
+                  mutationAdmission.release();
                 },
-              });
+              };
             } catch (error) {
-              if (!isChatCreateReconciliationRequiredError(error)) {
-                if (preparedHtmlArtifacts.length > 0) {
-                  await generativeUiArtifactStore.deleteChat(targetChatId).catch(() => undefined);
-                }
-                if (journalForked) {
-                  await piCompactionSessionStore.deleteChat(targetChatId).catch(() => undefined);
-                }
-              }
+              mutationAdmission.release();
               throw error;
             }
-          })();
-          if (copied.forkedFrom?.summary?.state === "pending") {
-            void forkSummaryService.run(copied.id);
-          }
-          if (preparedHtmlArtifacts.length > 0) {
-            await generativeUiArtifactStore.commit(
-              copied.id,
-              preparedHtmlArtifacts.map((artifact) => artifact.mediaId),
-            );
-          }
-          ipcMain.broadcast("chats:metadata-updated", {
-            chatId: copied.id,
-            title: copied.title,
-            workspaceId: persistedChatWorkspaceId(copied.workspaceId),
-            updatedAt: copied.updatedAt,
-          });
-          return chatForRenderer(copied);
-        } catch (error) {
-          if (isChatCreateReconciliationRequiredError(error)) {
-            llmClient.markAppendReconciliationRequired(owner.documentId);
-            owner.onInvalidated(() => {
-              llmClient.clearAppendReconciliationRequired(owner.documentId);
+          },
+          assertCurrent: assertOwnerCurrent("The workspace changed before the chat was copied."),
+          copyBotChat: async (source) => {
+            if (!hostPlatformCapabilities().bots) {
+              throw new Error("Bot chats are not available on this platform.");
+            }
+            if (parsed.forkAt?.position === "before") {
+              throw new Error("Bot chats can only be forked after a reply.");
+            }
+            if (parsed.summary) {
+              throw new Error("Bot chat forks cannot carry a summary.");
+            }
+            return botApplicationService.copyChat({
+              botId: source.botId!,
+              sourceChatId: parsed.chatId,
+              throughAssistantMessageId: parsed.forkAt?.messageId,
+              assertCurrent: assertOwnerCurrent("The application changed before the Bot chat was copied."),
             });
-            throw new Error(appendReconciliationFailureMessage("blocked"));
-          }
-          throw error;
-        } finally {
-          workspaceOperation.release();
-          mutationAdmission.release();
-        }
-      };
-      return runCopy();
-    } finally {
-      finishCopy?.();
-      chatCopyActive = false;
+          },
+        },
+      );
+      return chatForRenderer(copied);
+    } catch (error) {
+      if (isChatCreateReconciliationRequiredError(error)) {
+        llmClient.markAppendReconciliationRequired(owner.documentId);
+        owner.onInvalidated(() => {
+          llmClient.clearAppendReconciliationRequired(owner.documentId);
+        });
+        throw new Error(appendReconciliationFailureMessage("blocked"));
+      }
+      throw error;
     }
   });
 

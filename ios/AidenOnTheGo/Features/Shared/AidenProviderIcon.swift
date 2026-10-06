@@ -58,6 +58,7 @@ enum AidenProviderIconResolver {
     ]
 
     private static let aliases = [
+        "azure": "azure-openai-responses",
         "gemini": "google",
         "lm-studio": "lmstudio",
         "moonshot": "moonshotai",

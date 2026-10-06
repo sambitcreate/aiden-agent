@@ -34,6 +34,13 @@ import {
 import { piModelMetadataFor } from "./pi-model-metadata.js";
 import { withBotProviderInventoryMutation } from "./bot-runtime-inventory-publication.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
+import { app } from "../platform.js";
+import { join } from "node:path";
+import { createProviderLoginDeviceId } from "./provider-login-identity.js";
+
+const getProviderLoginDeviceId = createProviderLoginDeviceId(
+  () => join(app.getPath("userData"), "provider-login-device-id"),
+);
 
 /** IDs used by Aiden before Pi became the provider authority. */
 const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
@@ -198,7 +205,7 @@ export class ProviderRegistry {
         auth.login!({
           ...interaction,
           signal: interaction.signal ?? new AbortController().signal,
-        }),
+        }, { getDeviceId: getProviderLoginDeviceId }),
       commitCredential: async (credential: unknown) => {
         await this.credentials.modify(providerId, async () => credential as Credential);
         // Credential setup is an explicit network action. Publish this

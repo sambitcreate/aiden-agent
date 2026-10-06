@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.ArrowForwardIos
@@ -1022,6 +1023,14 @@ private fun AidenWorkspaceChatRow(
             verticalAlignment = Alignment.Top,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
         ) {
+            if (chat.forkedFrom != null) {
+                Icon(
+                    Icons.AutoMirrored.Filled.CallSplit,
+                    contentDescription = "Forked chat",
+                    tint = palette.secondary,
+                    modifier = Modifier.padding(top = 3.dp, end = 6.dp).size(16.dp)
+                )
+            }
             Column(Modifier.weight(1f)) {
                 Text(
                     chat.title.ifBlank { "New Chat" },

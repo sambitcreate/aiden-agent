@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import protocol from "../../protocol/aiden-remote/v1/openapi.json";
+import contract from "../../protocol/aiden-remote/v1/fixtures/contract.json";
 import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
 
 type Endpoint = {
@@ -196,4 +197,108 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     await assert.rejects(
       peerOperationResult({ operation: "attachmentContent" }, invalid),
     );
+});
+
+test("fork operations reach the contract's fork routes with the headers each one declares", () => {
+  const fork = peerOperationRequest({
+    operation: "forkChat",
+    resourceId: "chat_1",
+    body: contract.chatFork.fork.request,
+    idempotencyKey: KEY,
+    revision: "rev_1",
+  });
+  const route = contractRoute(fork.method ?? "GET", fork.path);
+  assert.equal(route?.operationId, "forkChat");
+  assert.equal(fork.method, "POST");
+  assert.ok(route?.idempotent && route.conditional, "the contract keys and conditions a fork");
+  assert.equal(fork.idempotencyKey, KEY);
+  assert.equal(fork.revision, "rev_1");
+  assert.deepEqual(fork.body, contract.chatFork.fork.request);
+
+  for (const [operation, action] of [
+    ["forkSummaryRetry", "retry"],
+    ["forkSummarySkip", "skip"],
+    ["forkSummaryCancel", "cancel"],
+  ] as const) {
+    const request = peerOperationRequest({ operation, resourceId: "chat_1" });
+    assert.equal(request.path, `/chats/chat_1/fork-summary/${action}`);
+    const summaryRoute = contractRoute(request.method ?? "GET", request.path);
+    assert.equal(summaryRoute?.operationId, "chatForkSummaryAction", operation);
+    // The contract declares neither header, and the host reads no body.
+    assert.equal(summaryRoute?.idempotent, false);
+    assert.equal(summaryRoute?.conditional, false);
+    assert.equal(request.idempotencyKey, undefined);
+    assert.equal(request.revision, undefined);
+    assert.deepEqual(request.body, {});
+  }
+});
+
+test("a fork without its key, revision or a well-formed cut point never leaves this Mac", () => {
+  const valid = {
+    operation: "forkChat",
+    resourceId: "chat_1",
+    body: { messageId: "m1", position: "before" },
+    idempotencyKey: KEY,
+    revision: "rev_1",
+  };
+  assert.doesNotThrow(() => peerOperationRequest(valid));
+  const { idempotencyKey: _key, ...unkeyed } = valid;
+  const { revision: _revision, ...unconditional } = valid;
+  for (const invalid of [
+    unkeyed,
+    unconditional,
+    { ...valid, idempotencyKey: "short" },
+    { ...valid, body: undefined },
+    { ...valid, body: { messageId: "m1" } },
+    { ...valid, body: { messageId: "m1", position: "middle" } },
+    { ...valid, body: { messageId: "../m1", position: "after" } },
+    { ...valid, body: { messageId: "m1", position: "after", extra: true } },
+    // The desktop's internal name for the focus is not part of the wire.
+    { ...valid, body: { messageId: "m1", position: "after", summary: { instructions: "x" } } },
+    { ...valid, body: { messageId: "m1", position: "after", summary: { focus: "   " } } },
+    { ...valid, body: { messageId: "m1", position: "after", summary: { focus: "x".repeat(1001) } } },
+    { ...valid, resourceId: "../server" },
+    { operation: "forkSummaryRetry", resourceId: "chat_1", body: { force: true } },
+  ])
+    assert.throws(() => peerOperationRequest(invalid), JSON.stringify(invalid));
+  // At the bound, and with no focus at all, a summary request is accepted.
+  for (const summary of [{}, { focus: "x".repeat(1000) }])
+    assert.deepEqual(
+      peerOperationRequest({ ...valid, body: { messageId: "m1", position: "after", summary } }).body,
+      { messageId: "m1", position: "after", summary },
+    );
+});
+
+test("fork answers are parsed into the contract's chat and prefill shapes", async () => {
+  // Restaged attachments carry IDs the host minted for uploads.
+  const restaged = `att_${"B".repeat(43)}`;
+  const editFork = contract.chatFork.editFork.response;
+  const edited = (await peerOperationResult(
+    { operation: "forkChat" },
+    {
+      ...editFork,
+      prefill: { ...editFork.prefill, attachments: editFork.prefill.attachments.map((entry) => ({ ...entry, id: restaged })) },
+    },
+  )) as { chat: { id: string; forkedFrom?: { position: string } }; prefill?: { text: string; attachments?: { id: string }[] } };
+  assert.equal(edited.chat.id, "chat_fixture_fork_02");
+  assert.equal(edited.chat.forkedFrom?.position, "before");
+  assert.equal(edited.prefill?.text, "Now check the error codes.");
+  assert.deepEqual(edited.prefill?.attachments?.map((attachment) => attachment.id), [restaged]);
+
+  const summarized = (await peerOperationResult(
+    { operation: "forkSummaryRetry" },
+    contract.chatFork.fork.response.chat,
+  )) as { forkedFrom?: { summary?: { state: string } } };
+  assert.equal(summarized.forkedFrom?.summary?.state, "pending");
+  assert.deepEqual(
+    await peerOperationResult({ operation: "forkSummaryCancel" }, contract.chatFork.summaryCancel),
+    { cancelled: true },
+  );
+
+  // A fork answer without lineage, or a cancel answer that is not a chat or {cancelled}, is refused.
+  const { forkedFrom: _lineage, ...plain } = contract.chatFork.fork.response.chat;
+  await assert.rejects(peerOperationResult({ operation: "forkChat" }, { chat: plain }));
+  for (const operation of ["forkChat", "forkSummaryRetry", "forkSummarySkip", "forkSummaryCancel"])
+    await assert.rejects(peerOperationResult({ operation }, {}), operation);
+  await assert.rejects(peerOperationResult({ operation: "forkSummaryCancel" }, { cancelled: "yes" }));
 });

@@ -46,8 +46,8 @@ let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 
 /** Tools whose effects mutate the folder or system — gated behind approval in "ask" mode. */
 export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command"]);
-/** Sharing a local file is an outbound disclosure and always needs attended approval. */
-export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image"]);
+/** Outbound disclosure or paid model operations always need attended approval. */
+export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image", "generate_image", "classify"]);
 
 function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
@@ -862,7 +862,7 @@ function rejectEnvironmentSecret(root: string, fullPath: string): void {
   }
 }
 
-/** Build a short human summary of a mutating tool call for the approval prompt. */
+/** Build approval disclosure; image prompts must remain complete before provider dispatch. */
 export function summarizeToolCall(toolName: string, args: unknown): string {
   const a = (args ?? {}) as Record<string, unknown>;
   switch (toolName) {
@@ -872,6 +872,10 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
+    case "generate_image":
+      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
+    case "classify":
+      return `Send structured data and questions to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} for classification (may incur charges)`;
     case "share_image":
       return `Share image in chat: ${String(a.path ?? "?")}`;
     default:

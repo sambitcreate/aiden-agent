@@ -21,6 +21,8 @@ interface StoredCredential {
 interface CredentialDocument {
   version: 1;
   entries: Record<string, StoredCredential>;
+  /** Collision recovery only; never exposed as an active credential. */
+  retiredAzureCredential?: StoredCredential;
 }
 
 interface EncryptedPiCredentialStoreOptions {
@@ -168,6 +170,12 @@ function parseDocument(text: string): CredentialDocument {
     }
     entries[providerId] = { type: entry.type, ciphertext: entry.ciphertext };
   }
+  const retired = candidate.retiredAzureCredential;
+  if (retired !== undefined) {
+    // Reuse the entry validator so a restart cannot silently discard recovery data.
+    const parsed = parseDocument(JSON.stringify({ version: 1, entries: { azure: retired } }));
+    return { version: 1, entries, retiredAzureCredential: parsed.entries.azure };
+  }
   return { version: 1, entries };
 }
 
@@ -230,6 +238,29 @@ export class EncryptedPiCredentialStore implements CredentialStore {
     }
   }
 
+  private async migrateAzureCredential(options?: AuthOperationOptions): Promise<void> {
+    // Serialize with refresh/delete publication across all store instances. The
+    // ciphertext moves intact: OS encryption need not be unlocked for migration.
+    const mutex = await this.mutex("document");
+    await mutex.run(async () => {
+      options?.signal?.throwIfAborted();
+      const document = await this.readDocument();
+      const legacy = document.entries["azure-openai-responses"];
+      if (!legacy) return;
+      if (document.entries.azure) {
+        if (document.retiredAzureCredential &&
+            JSON.stringify(document.retiredAzureCredential) !== JSON.stringify(legacy)) {
+          throw new Error("Azure credential migration has conflicting recovery data. Reconcile the credential store before continuing.");
+        }
+        document.retiredAzureCredential = legacy;
+      } else {
+        document.entries.azure = legacy;
+      }
+      delete document.entries["azure-openai-responses"];
+      await this.writeDocument(document, () => options?.signal?.throwIfAborted());
+    });
+  }
+
   private async ensureEncryption(): Promise<void> {
     if (!(await this.options.cipher.isEncryptionAvailable())) {
       throw new Error("Secure storage is unavailable; provider credentials cannot be accessed.");
@@ -266,6 +297,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
   async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
     validateProviderId(providerId);
     return credentialOperation(options, async () => {
+      if (providerId === "azure") await this.migrateAzureCredential(options);
       const entry = (await this.readDocument()).entries[providerId];
       options?.signal?.throwIfAborted();
       return entry ? this.decrypt(entry) : undefined;
@@ -274,6 +306,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
 
   async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
     return credentialOperation(options, async () => {
+      await this.migrateAzureCredential(options);
       const document = await this.readDocument();
       return Object.entries(document.entries)
         .map(([providerId, entry]) => ({ providerId, type: entry.type }))
@@ -316,6 +349,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
 
   async delete(providerId: string, options?: AuthOperationOptions): Promise<void> {
     validateProviderId(providerId);
+    if (providerId === "azure") await this.migrateAzureCredential(options);
     return credentialOperation(options, async (beginPublication) => {
       const providerMutex = await this.mutex(`provider:${providerId}`);
       await providerMutex.run(

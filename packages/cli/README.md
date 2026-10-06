@@ -2,7 +2,7 @@
 
 A headless Aiden Agent: the full pi coding agent TUI, rebranded and themed as Aiden, deployable on macOS and Linux with Node.js ≥ 22.19, including servers with no display.
 
-Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `0.87.1` — the same line the Aiden desktop app uses). The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
+Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.0.3` — the same line the Aiden desktop app uses). The desktop's `renderer/shared/appearance.ts` is the single source of truth for the terminal palettes.
 
 ## Build and run
 
@@ -44,6 +44,16 @@ The CLI bundles Aiden's own extension cores (imported from `main/services/` — 
 
 Settings for these live in `~/.aiden/agent/aiden.json` (device-local; shapes mirror the desktop's `AppSettings` subsets).
 
+## Pi 1.0 capabilities
+
+The CLI includes Pi 1.0's codemode, deferred tool search, image generation and classifier model APIs, virtual-model extensions, provider stream events, richer themes, and session/HTML export improvements. Enable codemode with `"defaultTools": ["+codemode"]` in settings, or pass `--tools read,bash,edit,write,codemode`. Its JavaScript sandbox batches calls through the same workspace approval hooks as direct tools; revoking workspace access also blocks subsequent nested calls. Image generation and classification use explicitly configured provider credentials and contribute usage to the session.
+
+Native `/mcp` and `aiden pi-mcp add|remove|list|login|logout` use Pi's `mcpServers` object configuration in `mcp.json`. Existing Aiden servers continue through `/aiden-mcp` and `aiden mcp`; their array configuration migrates to `aiden-mcp.json`, with an exact private backup in `mcp.pre-pi-1.json`. The source inode is retained under a private `.mcp-migration-*/mcp.json` recovery directory so concurrent writers cannot lose their data. A native object configuration is never migrated or overwritten, and conflicting legacy/new Aiden inventories stop with a reconciliation error. Existing Aiden encrypted MCP credentials remain separate from native MCP authentication.
+
+`aiden auth login openai` and native `/login` share the installation identity in global settings for Sign in with ChatGPT. Legacy OpenAI Codex credentials continue to work. Anthropic supports its browser and copy-code login flows.
+
+Daemon and delegated worker sessions retain Aiden's bounded extension inventories; enabling native interactive capabilities does not grant them additional tools.
+
 ## No telemetry
 
 The CLI ships without pi telemetry, enforced three ways: the entry forces `PI_TELEMETRY=0` (which gates both the pi.dev `report-install` ping and pi's attribution headers, and overrides settings), the settings default is flipped off, and the build patches the ping's call sites and endpoint out of the bundle — asserted by `tests/bundle.test.mjs`.
@@ -59,7 +69,7 @@ The CLI ships without pi telemetry, enforced three ways: the entry forces `PI_TE
 
 ## Theming
 
-Eight Aiden presets ship as built-ins — Aiden, Slate, Berry, Moss × light/dark — and pi's own palettes are deliberately not shipped. The Aiden dark/light palettes replace pi's stock `dark`/`light`, so terminal background auto-detection lands on Aiden by default. Switch with `--use-theme <name>`, the `/theme` command, or first-run setup.
+Eight Aiden presets ship as built-ins — Aiden, Slate, Berry, Moss × light/dark — and pi's own palettes are deliberately not shipped. The Aiden dark/light palettes replace pi's stock `dark`/`light`, so terminal background auto-detection lands on Aiden by default. The native `system` theme is also available to follow the terminal palette. Switch with `--use-theme <name>`, the `/theme` command, or first-run setup.
 
 Regenerate the theme JSONs after changing `renderer/shared/appearance.ts`:
 
@@ -72,6 +82,8 @@ npm run themes   # in packages/cli — a fidelity test fails if committed files 
 pi reads its identity (`APP_NAME`, config dir, env var names) from the `package.json` nearest its running code. The build bundles pi's code into `dist/app/cli.js` and writes a generated `dist/app/package.json` with `piConfig: { name: "aiden", configDir: ".aiden" }` — that is the entire rebrand mechanism, and `tests/bundle.test.mjs` pins it. The bundle script is a port of pi's own `build-coding-agent-bundle.mjs` (same externals and lazy-loader emission); runtime externals (`chord`, `jiti`, `photon-node`) resolve from this package's `node_modules`.
 
 The entry (`src/cli.ts`) disables pi.dev's version feed (`PI_SKIP_VERSION_CHECK=1`, overridable) because this CLI versions independently, registers the bundled theme presets through pi's public `--theme` flag, and defaults the TUI to pi's fullscreen alt-screen renderer — an explicit `--tui-mode` flag or any `tuiMode` saved in settings (e.g. via `/config`) always wins over that default.
+
+The native `quietStartup: "header"` setting is the default, keeping the Aiden header while hiding loaded-resource details. Set it to `false` or pass `--verbose` to show details.
 
 Because the CLI is a rebrand, not stock pi: `scripts/patch-branding.mjs` (run inside every build) rewrites pi's installed dist so the agent identifies as Aiden — the startup header's Pi self-promotion line is removed, and the system prompt says "operating inside Aiden". The shipped bundle is asserted Pi-free by `tests/bundle.test.mjs`.
 
@@ -99,6 +111,7 @@ require explicit Full workspace access. Schedules also retain their own read-onl
 selection and exact MCP connection bindings.
 
 - `/search`, `/name`, `/attach`, `/export-aiden`, `aiden import`, and `aiden export` manage conversations. Imports copy into new journals; never point desktop and CLI at the same writable journal.
+- pi's built-in `/fork` starts a new session from an earlier prompt, and `/tree` switches between branches of the current session. For daemon chats, paired phones fork with the Remote `chat-fork-v1` feature: the fork's journal is seeded from the copied visible messages, so tool results before the cut are not carried. The daemon does not offer Fork with summary (`chat-fork-summary-v1`).
 - `aiden git`, `aiden files`, and `aiden worktree` use the shared workspace and Git services. Managed removal uses the bundled native helper.
 - `aiden provider import <models.json>` configures custom compatible providers. `aiden catalog refresh` refreshes inference catalogs. `catalog models-dev fetch` and `insights aa|openrouter fetch` are explicit display-only network actions.
 - `aiden mcp presets`, `mcp add <file>`, and `mcp login <id>` configure MCP. Tool schemas are paginated, bounded, and rechecked before execution; failed servers do not silently gain tools.

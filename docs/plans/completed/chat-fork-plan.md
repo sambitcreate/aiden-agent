@@ -1,6 +1,6 @@
 # Fork a chat from any message
 
-Status: **Planned (decisions approved 2026-10-05)**. Not implemented yet. Written against `main` at `7e339cf1d` (0.53.0).
+Status: **Complete (2026-10-05)**. Shipped in #343, #344, #345, #349, #350 and #360. Written against `main` at `7e339cf1d` (0.53.0); the Remote wire summary uses `focus` instead of `instructions` and omits file lists (#349). Open follow-ups are listed in `docs/plans/README.md`.
 
 ## Goal
 

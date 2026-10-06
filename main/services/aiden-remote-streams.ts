@@ -1157,7 +1157,9 @@ export class AidenRemoteStreamService {
         summary,
         toolCallId,
         toolName,
-        canAllow: !claimsStructuredDetails || details !== undefined,
+        // These model operations require complete payload inspection on the owning desktop.
+        // Remote summaries are bounded and cannot establish disclosure consent.
+        canAllow: toolName !== "classify" && toolName !== "generate_image" && (!claimsStructuredDetails || details !== undefined),
         ...(scopes ? { scopes } : {}),
         ...(details ? { details } : {}),
         expiresAt,
