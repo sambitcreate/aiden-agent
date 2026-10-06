@@ -151,6 +151,16 @@ class AidenChatViewModel(
     private val _presentedError = MutableStateFlow<String?>(null)
     val presentedError: StateFlow<String?> = _presentedError.asStateFlow()
 
+    /** The Mac holds visible messages older than the transcript on screen (`chat-messages-window-v1`). */
+    private val _hasOlderMessages = MutableStateFlow(false)
+    val hasOlderMessages: StateFlow<Boolean> = _hasOlderMessages.asStateFlow()
+
+    private val _isLoadingEarlierMessages = MutableStateFlow(false)
+    val isLoadingEarlierMessages: StateFlow<Boolean> = _isLoadingEarlierMessages.asStateFlow()
+
+    /** Set once a network transcript has been admitted; later reads fold into the pages on screen. */
+    private var hasSettledTranscriptWindow = false
+
     private val _taskProgress = MutableStateFlow<AidenChatTaskProgress?>(null)
     val taskProgress: StateFlow<AidenChatTaskProgress?> = _taskProgress.asStateFlow()
 
@@ -1125,9 +1135,9 @@ class AidenChatViewModel(
             _isLoading.value = true
             try {
                 val writeToken = chatCache.reserveChatWrite()
-                val remote = client.chat(chatId)
+                val latest = fetchLatestTranscript(client)
                 if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return@launch
-                acceptRemoteChat(remote, writeToken)
+                acceptLatestTranscript(latest, writeToken)
             } catch (e: Exception) {
                 if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                     _presentedError.value = e.localizedMessage
@@ -2319,9 +2329,9 @@ class AidenChatViewModel(
         val client = activeClient() ?: return false
         return try {
             val writeToken = chatCache.reserveChatWrite()
-            val remote = client.chat(chatId)
+            val latest = fetchLatestTranscript(client)
             if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return false
-            if (!acceptRemoteChat(remote, writeToken)) return false
+            if (!acceptLatestTranscript(latest, writeToken)) return false
             clearRecoveryWarning()
             true
         } catch (e: Exception) {
@@ -2332,7 +2342,125 @@ class AidenChatViewModel(
         }
     }
 
-    private suspend fun acceptRemoteChat(remote: AidenChat, writeToken: Long, scheduleTitleRefresh: Boolean = true): Boolean {
+    /**
+     * The newest transcript a refresh read. [mergeWindow] is the newest page
+     * to fold into the transcript on screen when it is published; null when
+     * [chat] already replaces the transcript.
+     */
+    private data class LatestTranscript(
+        val chat: AidenChat,
+        val hasOlder: Boolean,
+        val mergeWindow: AidenChatMessagesWindow? = null
+    )
+
+    /**
+     * Read the newest transcript. With `chat-messages-window-v1` and its
+     * revision-23 metadata this is the newest page, carrying the chat's
+     * current title, timestamps and model like a whole-chat read; it is folded
+     * into earlier pages already on screen when it is published (or replaces
+     * them when [replacing]). Without the window, or from a page that lacks
+     * metadata, it is the whole chat as before.
+     */
+    private suspend fun fetchLatestTranscript(client: AidenRemoteClient, replacing: Boolean = false): LatestTranscript {
+        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true) {
+            return LatestTranscript(client.chat(chatId), hasOlder = false)
+        }
+        val window = client.messagesWindow(chatId, limit = AidenTranscriptWindowing.PAGE_SIZE)
+        val windowChat = window.chat()?.takeIf { it.id == chatId }
+            ?: return LatestTranscript(client.chat(chatId), hasOlder = false)
+        if (replacing || !hasSettledTranscriptWindow) {
+            return LatestTranscript(windowChat, window.hasOlder)
+        }
+        // Cache the page folded into what is on screen now; publication folds
+        // it again into whatever is on screen by then.
+        val presentation = AidenTranscriptWindowing.mergingLatest(
+            window,
+            _chat.value?.messages.orEmpty(),
+            _hasOlderMessages.value
+        )
+        return LatestTranscript(windowChat.copy(messages = presentation.messages), presentation.hasOlder, window)
+    }
+
+    private suspend fun acceptLatestTranscript(
+        latest: LatestTranscript,
+        writeToken: Long,
+        scheduleTitleRefresh: Boolean = true
+    ): Boolean {
+        var hasOlder = latest.hasOlder
+        val accepted = acceptRemoteChat(latest.chat, writeToken, scheduleTitleRefresh) { admitted ->
+            // Merge against the transcript on screen now, not when the read
+            // began: an earlier page loaded while the cache write was pending
+            // stays in front of the newest page.
+            val window = latest.mergeWindow
+            if (window == null || admitted.revision != window.revision) return@acceptRemoteChat admitted
+            val presentation = AidenTranscriptWindowing.mergingLatest(
+                window,
+                _chat.value?.messages.orEmpty(),
+                _hasOlderMessages.value
+            )
+            hasOlder = presentation.hasOlder
+            admitted.copy(messages = presentation.messages)
+        }
+        if (!accepted) return false
+        _hasOlderMessages.value = hasOlder
+        hasSettledTranscriptWindow = true
+        return true
+    }
+
+    /**
+     * Page back one window from the oldest message on screen. If the Mac no
+     * longer has that message (`revision_conflict`), reload from the newest.
+     */
+    fun loadEarlierMessages() {
+        if (isReadOnlyPresentation || !_hasOlderMessages.value || _isLoadingEarlierMessages.value) return
+        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true) return
+        val client = activeClient() ?: return
+        val cursor = AidenTranscriptWindowing.earlierCursor(_chat.value?.messages.orEmpty()) ?: return
+        _isLoadingEarlierMessages.value = true
+        viewModelScope.launch {
+            try {
+                val page = client.messagesWindow(chatId, before = cursor, limit = AidenTranscriptWindowing.PAGE_SIZE)
+                val current = _chat.value ?: return@launch
+                // A reload that replaced the transcript meanwhile owns the screen.
+                if (activeClient() !== client || AidenTranscriptWindowing.earlierCursor(current.messages) != cursor) return@launch
+                val presentation = AidenTranscriptWindowing.prepending(page, current.messages)
+                _chat.value = current.copy(messages = presentation.messages)
+                _hasOlderMessages.value = presentation.hasOlder
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (activeClient() !== client) return@launch
+                val serverError = e as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server
+                if (serverError?.body?.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.REVISION_CONFLICT) {
+                    reloadLatestTranscriptWindow(client)
+                } else {
+                    _presentedError.value = e.localizedMessage
+                }
+            } finally {
+                _isLoadingEarlierMessages.value = false
+            }
+        }
+    }
+
+    private suspend fun reloadLatestTranscriptWindow(client: AidenRemoteClient) {
+        if (_isStarting.value) return
+        val generation = transcriptGeneration
+        try {
+            val writeToken = chatCache.reserveChatWrite()
+            val latest = fetchLatestTranscript(client, replacing = true)
+            if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return
+            acceptLatestTranscript(latest, writeToken)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (activeClient() === client) _presentedError.value = e.localizedMessage
+        }
+    }
+
+    private suspend fun acceptRemoteChat(
+        remote: AidenChat,
+        writeToken: Long,
+        scheduleTitleRefresh: Boolean = true,
+        beforePublishing: (AidenChat) -> AidenChat = { it }
+    ): Boolean {
         if (_isStarting.value) return false
         val generation = transcriptGeneration
         val client = activeClient()
@@ -2347,12 +2475,13 @@ class AidenChatViewModel(
         if (admitted == null) return false
         // A send or newer reconcile may have started while the cache was on disk.
         if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
-        _chat.value = admitted
+        val presented = beforePublishing(admitted)
+        _chat.value = presented
         resolveModelSelection()
-        if (scheduleTitleRefresh && admitted.isTitlePending) {
+        if (scheduleTitleRefresh && presented.isTitlePending) {
             schedulePendingTitleRefresh()
         }
-        reportChatViewed(admitted)
+        reportChatViewed(presented)
         return true
     }
 
@@ -2393,7 +2522,8 @@ class AidenChatViewModel(
                     val writeToken = chatCache.reserveChatWrite()
                     val remote = client.chat(chatId)
                     if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) continue
-                    acceptRemoteChat(remote, writeToken, scheduleTitleRefresh = false)
+                    // A whole-chat read carries the title and every message.
+                    acceptLatestTranscript(LatestTranscript(remote, hasOlder = false), writeToken, scheduleTitleRefresh = false)
                     if (_chat.value?.isTitlePending == false) return@launch
                 } catch (e: Exception) {
                     if (e is CancellationException) return@launch

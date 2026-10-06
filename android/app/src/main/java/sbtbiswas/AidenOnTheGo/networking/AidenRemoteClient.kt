@@ -696,6 +696,34 @@ class AidenRemoteClient(
         c
     }
 
+    /**
+     * One page of a chat's visible messages, oldest first. Without [before]
+     * the page ends at the newest message; otherwise it ends just before that
+     * message. A [before] the Mac no longer has is `409 revision_conflict`.
+     */
+    suspend fun messagesWindow(
+        chatId: String,
+        before: String? = null,
+        limit: Int = AidenChatMessagesWindow.DEFAULT_LIMIT
+    ): AidenChatMessagesWindow {
+        if (limit !in 1..AidenChatMessagesWindow.MAXIMUM_LIMIT) throw AidenRemoteClientException.InvalidResponse()
+        val path = buildString {
+            append("/chats/").append(chatId).append("/messages?limit=").append(limit)
+            if (before != null) {
+                append("&before=").append(URLEncoder.encode(before, Charsets.UTF_8.name()).replace("+", "%20"))
+            }
+        }
+        return executeRequest(path, botScope = AidenBotPrivateResponseScope.MessagesWindowProjection) { bytes ->
+            val window = json.decodeFromString<AidenChatMessagesWindow>(String(bytes, Charsets.UTF_8))
+            if (window.chatId != chatId || window.messages.size > limit ||
+                (before != null && window.messages.any { it.id == before })
+            ) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            window
+        }
+    }
+
     suspend fun chatTasks(id: String): AidenChatTaskProgress = executeRequest(
         "/chats/$id/tasks",
         botScope = AidenBotPrivateResponseScope.ChatProgressProjection,
