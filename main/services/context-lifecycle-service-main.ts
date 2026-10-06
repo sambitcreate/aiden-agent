@@ -39,8 +39,10 @@ export const contextLifecycleService = new ContextLifecycleService({
   },
   resolveRuntime: resolveModelRuntime,
   resolveLocalModel: resolveCompactionModelMetadata,
-  getCompactionEngine: async () =>
-    compactionEngineFrom((await configStore.getSettings()).compactionEngine),
+  getCompactionPreferences: async () => {
+    const settings = await configStore.getSettings();
+    return { compactionEngine: compactionEngineFrom(settings.compactionEngine), compactionModelOverrides: settings.compactionModelOverrides };
+  },
   recordUsage: (message, runtime) =>
     usageStore.record(
       assistantUsageRecord({

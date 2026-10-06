@@ -1,4 +1,5 @@
-import { isCompactionEngine } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { randomBytes } from "node:crypto";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
@@ -257,6 +258,11 @@ function hasProviderCache(
 
 export type ConfigStore = ReturnType<typeof createConfigStore>;
 
+/** Parsed compaction preferences; invalid stored overrides read as absent, as in `getSettings`. */
+export type CompactionSettingsSnapshot = Readonly<{
+  compactionEngine: CompactionEngine;
+  compactionModelOverrides: CompactionModelOverrides | undefined;
+}>;
 
 /** Notify change listeners; a throwing listener never fails the write that triggered it. */
 function notifyListeners(listeners: ReadonlySet<() => void>): void {
@@ -488,14 +494,28 @@ export function createConfigStore(
             activeProviderIds.has(targetId),
         );
         secretMigrationAliases = cacheAliasEntries;
-        for (const [legacyId, targetId] of cacheAliasEntries) {
-          hiddenModelsByProvider = remapHiddenModelProvider(
-            hiddenModelsByProvider,
-            legacyId,
-            targetId,
-          );
+        // Apply identity changes to provider/model keyed preferences too. Custom
+        // aliases retain precedence over the built-in Azure rename.
+        const providerThinkingByModel = { ...currentSettings.providerThinkingByModel };
+        const compactionModelOverrides = { ...currentSettings.compactionModelOverrides };
+        const preferenceRoutes = new Map(cacheAliasEntries);
+        if (!preferenceRoutes.has("azure-openai-responses")) preferenceRoutes.set("azure-openai-responses", "azure");
+        for (const [legacyId, targetId] of preferenceRoutes) {
+          hiddenModelsByProvider = remapHiddenModelProvider(hiddenModelsByProvider, legacyId, targetId);
+          if (Object.prototype.hasOwnProperty.call(providerThinkingByModel, legacyId)) {
+            providerThinkingByModel[targetId] = { ...providerThinkingByModel[legacyId], ...providerThinkingByModel[targetId] };
+            delete providerThinkingByModel[legacyId];
+          }
+          for (const key of Object.keys(compactionModelOverrides)) {
+            if (!key.startsWith(`${legacyId}/`)) continue;
+            const target = `${targetId}/${key.slice(legacyId.length + 1)}`;
+            if (!Object.prototype.hasOwnProperty.call(compactionModelOverrides, target)) compactionModelOverrides[target] = compactionModelOverrides[key]!;
+            delete compactionModelOverrides[key];
+          }
         }
         if (
+          JSON.stringify(providerThinkingByModel) !== JSON.stringify(currentSettings.providerThinkingByModel ?? {}) ||
+          JSON.stringify(compactionModelOverrides) !== JSON.stringify(currentSettings.compactionModelOverrides ?? {}) ||
           lastProviderId !== currentSettings.lastProviderId ||
           JSON.stringify(hiddenModelsByProvider) !==
             JSON.stringify(currentSettings.hiddenModelsByProvider)
@@ -503,6 +523,8 @@ export function createConfigStore(
           await settingsStore.update((config) => {
             config.settings.lastProviderId = lastProviderId;
             config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
+            if (Object.keys(providerThinkingByModel).length) config.settings.providerThinkingByModel = providerThinkingByModel;
+            if (Object.keys(compactionModelOverrides).length) config.settings.compactionModelOverrides = compactionModelOverrides;
           });
         }
         secretMigrationTargets = [
@@ -629,6 +651,8 @@ export function createConfigStore(
     }, isCurrent);
   }
 
+  let compactionSnapshot: { source: SettingsShape; value: CompactionSettingsSnapshot } | undefined;
+
   async function mutateSettings<R>(
     mutation: (draft: SettingsShape) => R | Promise<R>,
     isCurrent: () => boolean = () => true,
@@ -710,6 +734,18 @@ export function createConfigStore(
       );
     },
 
+    /**
+     * Configured providers without credential presence. Callers that only need
+     * labels or deployment shape use this so a turn never walks the keychain.
+     */
+    async listStoredProviders(): Promise<StoredProvider[]> {
+      const config = await readPortable();
+      const cache = await readModelCache();
+      return config.providers.map((intent) =>
+        composeStoredProvider(intent, ownRecordEntry(cache.byProvider, intent.id)),
+      );
+    },
+
     async getProvider(id: string): Promise<StoredProvider | undefined> {
       const config = await readPortable();
       const intent = config.providers.find((p) => p.id === id);
@@ -722,6 +758,7 @@ export function createConfigStore(
       provider: StoredProvider,
       isCurrent: () => boolean = () => true,
     ): Promise<Provider> {
+      validateLocalClassifierPreference(provider);
       const { intent, cache } = splitStoredProvider(provider);
       const stored = await mutatePortable((config) => {
         const idx = config.providers.findIndex((p) => p.id === intent.id);
@@ -771,6 +808,29 @@ export function createConfigStore(
     async getSettings(): Promise<AppSettings> {
       await ensureSeeded();
       return runtimeSettingsFrom((await settingsStore.load()).settings);
+    },
+
+    /**
+     * The compaction preferences alone, for hot read paths such as the
+     * composer's context meter. The settings store replaces its cached document
+     * on every write or external reload, so the parsed snapshot is reused until
+     * the document identity changes instead of cloning all settings per call.
+     */
+    async getCompactionSettings(): Promise<CompactionSettingsSnapshot> {
+      await ensureSeeded();
+      const document = await settingsStore.load();
+      if (compactionSnapshot?.source !== document) {
+        let compactionModelOverrides: CompactionModelOverrides | undefined;
+        if (document.settings.compactionModelOverrides !== undefined) {
+          try { compactionModelOverrides = parseCompactionModelOverrides(document.settings.compactionModelOverrides); }
+          catch { compactionModelOverrides = undefined; }
+        }
+        compactionSnapshot = {
+          source: document,
+          value: Object.freeze({ compactionEngine: compactionEngineFrom(document.settings.compactionEngine), compactionModelOverrides }),
+        };
+      }
+      return compactionSnapshot.value;
     },
 
     /** Read the normalized Web Search document after startup migration. */
@@ -853,6 +913,10 @@ export function createConfigStore(
     ): Promise<AppSettings> {
       if (patch.compactionEngine !== undefined && !isCompactionEngine(patch.compactionEngine)) {
         throw new Error("Invalid compaction engine.");
+      }
+      if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (patch.compactionModelOverrides !== undefined) {
+        patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }
       // Aliases live in the portable store, so the alias lookup and the settings
       // write are no longer one transaction. Safe: providerIdAliases is an
@@ -1016,6 +1080,30 @@ export function createConfigStore(
           modelId,
           level,
         );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /**
+     * Atomically set or clear one model's compaction budget against the stored
+     * overrides, so concurrent edits to other models are never lost. Stored
+     * overrides that no longer validate are left for the user to repair.
+     */
+    async setCompactionModelBudget(modelKey: string, budget: CompactionModelBudget | undefined): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        const stored = config.settings.compactionModelOverrides;
+        let current: CompactionModelOverrides = {};
+        if (stored !== undefined) {
+          try { current = parseCompactionModelOverrides(stored); }
+          catch { throw new Error("Model compaction budgets are invalid; repair settings.json before changing them."); }
+        }
+        const next: Record<string, CompactionModelBudget> = { ...current };
+        if (budget === undefined || Object.keys(budget).length === 0) delete next[modelKey];
+        else next[modelKey] = budget;
+        const parsed = parseCompactionModelOverrides(next);
+        if (Object.keys(parsed).length === 0) delete config.settings.compactionModelOverrides;
+        else config.settings.compactionModelOverrides = parsed;
         return structuredClone(config.settings);
       });
       return runtimeSettingsFrom(saved);

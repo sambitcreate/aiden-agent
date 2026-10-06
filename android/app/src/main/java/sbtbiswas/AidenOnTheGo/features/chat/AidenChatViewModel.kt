@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -39,12 +41,16 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenDebouncedDraftWriter
+import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
+import sbtbiswas.AidenOnTheGo.networking.AidenStreamNetworkRecovery
 import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
+import sbtbiswas.AidenOnTheGo.notifications.AgentRunBlockingStatus
 import sbtbiswas.AidenOnTheGo.notifications.throttleLatest
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
@@ -57,7 +63,8 @@ class AidenChatViewModel(
     private val draftStore: AidenChatDraftStore,
     val initialChat: AidenChat? = null,
     private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -80,6 +87,11 @@ class AidenChatViewModel(
 
     private val _streamState = MutableStateFlow<AidenStreamState?>(null)
     val streamState: StateFlow<AidenStreamState?> = _streamState.asStateFlow()
+
+    /** True while the active stream is parked offline, waiting for the network to return. */
+    private val _isWaitingForNetwork = MutableStateFlow(false)
+    val isWaitingForNetwork: StateFlow<Boolean> = _isWaitingForNetwork.asStateFlow()
+    private var networkWaitStreamId: String? = null
 
     private val _liveText = MutableStateFlow("")
     val liveText: StateFlow<String> = _liveText.asStateFlow()
@@ -105,6 +117,10 @@ class AidenChatViewModel(
 
     private val _isSubmittingRunInput = MutableStateFlow(false)
     val isSubmittingRunInput: StateFlow<Boolean> = _isSubmittingRunInput.asStateFlow()
+
+    private val _runInputMode = MutableStateFlow(AidenRunInputPresentation.defaultMode)
+    /** The busy composer's sticky Queue/Steer mode; back to Queue when the run ends. */
+    val runInputMode: StateFlow<AidenStreamInputMode> = _runInputMode.asStateFlow()
 
     private val _runInputReceipt = MutableStateFlow<String?>(null)
     val runInputReceipt: StateFlow<String?> = _runInputReceipt.asStateFlow()
@@ -138,6 +154,16 @@ class AidenChatViewModel(
 
     private val _presentedError = MutableStateFlow<String?>(null)
     val presentedError: StateFlow<String?> = _presentedError.asStateFlow()
+
+    /** The Mac holds visible messages older than the transcript on screen (`chat-messages-window-v1`). */
+    private val _hasOlderMessages = MutableStateFlow(false)
+    val hasOlderMessages: StateFlow<Boolean> = _hasOlderMessages.asStateFlow()
+
+    private val _isLoadingEarlierMessages = MutableStateFlow(false)
+    val isLoadingEarlierMessages: StateFlow<Boolean> = _isLoadingEarlierMessages.asStateFlow()
+
+    /** Set once a network transcript has been admitted; later reads fold into the pages on screen. */
+    private var hasSettledTranscriptWindow = false
 
     private val _taskProgress = MutableStateFlow<AidenChatTaskProgress?>(null)
     val taskProgress: StateFlow<AidenChatTaskProgress?> = _taskProgress.asStateFlow()
@@ -281,7 +307,251 @@ class AidenChatViewModel(
         get() = !isReadOnlyPresentation && isConnected && !_isStarting.value && activeStreamId == null &&
                 _preparingAttachmentBatches.value == 0 && !_isUploadingAttachment.value &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
+                !isHeldByForkSummary &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
+
+    // --- Fork (contract revision 21) ---
+
+    /** A fork waits for a pending summary, and a failed one blocks turns until retried or skipped. */
+    val isHeldByForkSummary: Boolean
+        get() = _chat.value?.forkedFrom?.summary?.holdsTurns == true
+
+    private val _isForking = MutableStateFlow(false)
+    val isForking: StateFlow<Boolean> = _isForking.asStateFlow()
+
+    private val _forkNavigation = MutableStateFlow<String?>(null)
+    /** The new fork to open. The screen navigates, then calls [consumeForkNavigation]. */
+    val forkNavigation: StateFlow<String?> = _forkNavigation.asStateFlow()
+
+    private val _isUpdatingForkSummary = MutableStateFlow(false)
+    val isUpdatingForkSummary: StateFlow<Boolean> = _isUpdatingForkSummary.asStateFlow()
+
+    private val _forkSource = MutableStateFlow<AidenChatForkSource?>(null)
+    /** How the lineage row names the source; null when this chat is not a fork. */
+    val forkSource: StateFlow<AidenChatForkSource?> = _forkSource.asStateFlow()
+
+    private var forkAttempt: Pair<AidenChatForkAttempt, UUID>? = null
+    private var forkSummaryPollJob: Job? = null
+    private var forkSourceJob: Job? = null
+    private var resolvedForkSourceId: String? = null
+
+    private fun canWriteChats(): Boolean {
+        if (isReadOnlyPresentation || !isConnected) return false
+        val installation = coordinator.installationStore.activeInstallation
+            ?.takeIf { it.instanceId == instanceId && it.deviceId == deviceId } ?: return false
+        return installation.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE)
+    }
+
+    /** Bot chats are never forked, and nothing forks while this device runs a turn here. */
+    val canFork: Boolean
+        get() {
+            val currentChat = _chat.value ?: return false
+            return !currentChat.isBotChat && coordinator.serverInfo.value?.supportsChatFork == true &&
+                canWriteChats() && !_isStarting.value && activeStreamId == null &&
+                (_streamState.value == null || _streamState.value!!.isTerminal)
+        }
+
+    val canForkWithSummary: Boolean
+        get() = canFork && coordinator.serverInfo.value?.supportsChatForkSummary == true
+
+    /** Retry, Continue without summary, and Cancel on this fork's summary card. */
+    val canManageForkSummary: Boolean
+        get() = _chat.value?.forkedFrom?.summary != null &&
+            coordinator.serverInfo.value?.supportsChatForkSummary == true && canWriteChats()
+
+    /**
+     * Forks this chat at [messageId]. Once the Mac created the fork, this
+     * caches it, seeds its composer from any `prefill`, and publishes it to
+     * [forkNavigation]. Retrying a fork whose outcome is unknown (the response
+     * was lost) reuses its idempotency key, so it cannot create a second copy;
+     * any error response the Mac settled starts the next try with a new key.
+     */
+    fun fork(
+        messageId: String,
+        position: AidenChatForkPosition,
+        withSummary: Boolean = false,
+        summaryFocus: String? = null
+    ) {
+        if (_isForking.value || !canFork || (withSummary && !canForkWithSummary)) return
+        val client = activeClient() ?: return
+        val source = _chat.value ?: return
+        val eligible = when (position) {
+            AidenChatForkPosition.AFTER -> if (withSummary) {
+                AidenChatForkEligibility.canForkWithSummary(source.messages, messageId)
+            } else {
+                AidenChatForkEligibility.canForkFrom(source.messages, messageId)
+            }
+            AidenChatForkPosition.BEFORE ->
+                !withSummary && AidenChatForkEligibility.canEditInFork(source.messages, messageId)
+        }
+        if (!eligible) return
+        // Persistence authority is fixed before the request, like send(): an
+        // unpair (or a re-pair of the same Mac) while it is in flight retires
+        // it, so the handoff cannot recreate the removed pairing's fork,
+        // draft or staged attachments.
+        val pairingCreatedAt = pairingCreatedAt() ?: return
+        val writeToken = chatCache.reserveChatWrite()
+        val draftAuthority = draftStore.purgeAuthority(instanceId)
+        val focus = summaryFocus?.trim()
+            ?.takeIf { withSummary && it.isNotEmpty() }
+            ?.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH)
+        val attempt = AidenChatForkAttempt(source.revision, messageId, position, withSummary, focus)
+        val idempotencyKey = forkAttempt?.takeIf { it.first == attempt }?.second ?: UUID.randomUUID()
+        forkAttempt = attempt to idempotencyKey
+        _isForking.value = true
+        _presentedError.value = null
+        viewModelScope.launch {
+            try {
+                val result = client.forkChat(
+                    chatId, source.revision, messageId, position,
+                    withSummary = withSummary,
+                    summaryFocus = focus,
+                    idempotencyKey = idempotencyKey
+                )
+                forkAttempt = null
+                val fork = result.chat
+                fun handoffRetained() = activeClient() === client &&
+                    isPairingRetained(pairingCreatedAt) &&
+                    chatCache.isChatWriteRetained(instanceId, fork.id, writeToken) &&
+                    draftStore.isCurrent(draftAuthority)
+                if (!handoffRetained()) return@launch
+                withContext(ioDispatcher) {
+                    runCatching { chatCache.saveChat(fork, instanceId, writeToken) }
+                    result.prefill?.let { prefill ->
+                        runCatching {
+                            if (prefill.text.isNotEmpty()) draftStore.setDraft(fork.id, prefill.text, draftAuthority)
+                            draftStore.stageAttachments(fork.id, prefill.attachments, draftAuthority)
+                        }
+                    }
+                }
+                // The pairing may have been removed while the writes ran.
+                if (!handoffRetained()) return@launch
+                _forkNavigation.value = fork.id
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (!AidenChatForkErrors.isOutcomeUnknown(e)) forkAttempt = null
+                if (activeClient() !== client) return@launch
+                _presentedError.value = AidenChatForkErrors.forkMessage(e)
+                if (AidenChatForkErrors.isRevisionConflict(e)) loadChat()
+            } finally {
+                _isForking.value = false
+            }
+        }
+    }
+
+    /** When this view's pairing was created; a re-pair of the same Mac has a new one. */
+    private fun pairingCreatedAt(): Instant? = coordinator.installationStore.installations.value
+        .firstOrNull { it.instanceId == instanceId && it.deviceId == deviceId }?.createdAt
+
+    private fun isPairingRetained(createdAt: Instant): Boolean =
+        coordinator.installationStore.installations.value.any {
+            it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == createdAt
+        }
+
+    fun consumeForkNavigation(forkChatId: String) {
+        if (_forkNavigation.value == forkChatId) _forkNavigation.value = null
+    }
+
+    fun retryForkSummary() = runForkSummaryAction { client -> client.retryForkSummary(chatId) }
+
+    fun skipForkSummary() = runForkSummaryAction { client -> client.skipForkSummary(chatId) }
+
+    /** A cancelled summary fails; the refreshed chat then offers Retry and Continue without summary. */
+    fun cancelForkSummary() = runForkSummaryAction { client ->
+        client.cancelForkSummary(chatId)
+        null
+    }
+
+    private fun runForkSummaryAction(action: suspend (AidenRemoteClient) -> AidenChat?) {
+        if (_isUpdatingForkSummary.value || !canManageForkSummary) return
+        val client = activeClient() ?: return
+        _isUpdatingForkSummary.value = true
+        _presentedError.value = null
+        viewModelScope.launch {
+            try {
+                val writeToken = chatCache.reserveChatWrite()
+                val updated = action(client) ?: client.chat(chatId)
+                if (activeClient() !== client) return@launch
+                acceptRemoteChat(updated, writeToken, scheduleTitleRefresh = false)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (activeClient() !== client) return@launch
+                // The summary already moved on (finished, retried or skipped
+                // elsewhere), so the current chat is the answer.
+                if (AidenChatForkErrors.isSummaryMovedOn(e)) {
+                    reconcileChat()
+                } else {
+                    _presentedError.value = e.localizedMessage
+                }
+            } finally {
+                _isUpdatingForkSummary.value = false
+            }
+        }
+    }
+
+    /** A pending summary settles on the Mac; poll the chat until it does. */
+    private fun ensureForkSummaryPolling() {
+        if (forkSummaryPollJob?.isActive == true) return
+        val client = activeClient() ?: return
+        forkSummaryPollJob = viewModelScope.launch {
+            var attempt = 0
+            while (_chat.value?.forkedFrom?.summary?.state == AidenChatForkSummaryState.PENDING &&
+                activeClient() === client
+            ) {
+                delay(FORK_SUMMARY_POLL_MILLIS[attempt.coerceAtMost(FORK_SUMMARY_POLL_MILLIS.lastIndex)])
+                attempt++
+                if (_isStarting.value || _isUpdatingForkSummary.value) continue
+                val generation = transcriptGeneration
+                try {
+                    val writeToken = chatCache.reserveChatWrite()
+                    val remote = client.chat(chatId)
+                    if (generation != transcriptGeneration || activeClient() !== client) continue
+                    acceptRemoteChat(remote, writeToken, scheduleTitleRefresh = false)
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    // A transient read failure keeps polling on the backoff.
+                }
+            }
+        }
+    }
+
+    /** Names the source from the local cache, else asks the Mac once. A 404 means it was deleted. */
+    private fun resolveForkSource(lineage: AidenChatForkLineage?) {
+        val sourceId = lineage?.chatId
+        if (sourceId == null) {
+            forkSourceJob?.cancel()
+            resolvedForkSourceId = null
+            _forkSource.value = null
+            return
+        }
+        if (resolvedForkSourceId == sourceId) return
+        resolvedForkSourceId = sourceId
+        forkSourceJob?.cancel()
+        _forkSource.value = AidenChatForkSource.Resolving(sourceId)
+        forkSourceJob = viewModelScope.launch {
+            val cachedTitle = withContext(ioDispatcher) {
+                chatCache.getChat(sourceId)?.title
+                    ?: instanceId.takeIf { it.isNotEmpty() }?.let { id ->
+                        runCatching { chatCache.loadSummaries(id) }.getOrNull()
+                            ?.firstOrNull { it.id == sourceId }?.title
+                    }
+            }
+            if (cachedTitle != null) {
+                _forkSource.value = AidenChatForkSource.Named(sourceId, cachedTitle)
+                return@launch
+            }
+            val client = activeClient()
+            _forkSource.value = if (client == null) {
+                AidenChatForkSource.Unknown(sourceId)
+            } else try {
+                AidenChatForkSource.Named(sourceId, client.chat(sourceId).title)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (AidenChatForkErrors.isNotFound(e)) AidenChatForkSource.Deleted(sourceId)
+                else AidenChatForkSource.Unknown(sourceId)
+            }
+        }
+    }
 
     init {
         val currentInstanceId = instanceId
@@ -296,17 +566,44 @@ class AidenChatViewModel(
             if (cachedChat != null) {
                 _chat.value = cachedChat
             }
+            // "Edit in fork" restaged these for this new chat. Expired ones
+            // can no longer be sent and are dropped.
+            val staged = draftStore.takeStagedAttachments(currentInstanceId, chatId)
+                .filter { it.isValid() }
+                .take(AidenRemoteProtocol.MAX_FORK_PREFILL_ATTACHMENTS)
+            if (staged.isNotEmpty()) _pendingAttachments.value = staged
+        }
+        viewModelScope.launch {
+            _chat.map { it?.forkedFrom }.distinctUntilChanged().collect { lineage ->
+                resolveForkSource(lineage)
+                if (lineage?.summary?.state == AidenChatForkSummaryState.PENDING) ensureForkSummaryPolling()
+            }
         }
         loadChat()
         loadCatalog()
         resumeActiveStreamIfNeeded()
         viewModelScope.launch {
-            combine(_streamState, _liveText, _activityTimeline) { state, text, timeline ->
-                Triple(state, text, timeline)
-            }.throttleLatest(LIVE_NOTIFICATION_PERIOD_MILLIS) { (state, _, _) ->
+            _streamState.collect { state ->
+                _runInputMode.value = AidenRunInputPresentation.stickyMode(
+                    _runInputMode.value,
+                    isStreaming = state != null && !state.isTerminal
+                )
+            }
+        }
+        viewModelScope.launch {
+            combine(
+                _streamState,
+                _liveText,
+                _activityTimeline,
+                _pendingApproval,
+                _pendingQuestion
+            ) { state, text, timeline, approval, question ->
+                LiveNotificationInput(state, text, timeline, approval != null, question != null)
+            }.throttleLatest(LIVE_NOTIFICATION_PERIOD_MILLIS) { input ->
+                val state = input.state
                 state == null || state.isTerminal || state == AidenStreamState.WAITING_FOR_APPROVAL
-            }.collect { (state, text, timeline) ->
-                publishLiveNotification(state, text, timeline)
+            }.collect { input ->
+                publishLiveNotification(input)
             }
         }
     }
@@ -698,21 +995,33 @@ class AidenChatViewModel(
         streamJob?.cancel()
         titleRefreshJob?.cancel()
         terminalReconciliationJob?.cancel()
+        forkSummaryPollJob?.cancel()
+        forkSourceJob?.cancel()
         // The last keystrokes may still be inside the debounce window.
         draftWriter?.flush()
         draftWriteScope.cancel()
         super.onCleared()
     }
 
-    private fun publishLiveNotification(
-        state: AidenStreamState?,
-        responseText: String,
-        timeline: AidenGenerationTimeline?
-    ) {
+    /** Pending prompt presence tells approval and question waits apart. */
+    private data class LiveNotificationInput(
+        val state: AidenStreamState?,
+        val responseText: String,
+        val timeline: AidenGenerationTimeline?,
+        val hasPendingApproval: Boolean,
+        val hasPendingQuestion: Boolean
+    )
+
+    private fun publishLiveNotification(input: LiveNotificationInput) {
+        val state = input.state
+        val responseText = input.responseText
         if (state == null || instanceId.isEmpty()) return
-        val activeStep = timeline?.steps?.lastOrNull { it.isActive }
+        val activeStep = input.timeline?.steps?.lastOrNull { it.isActive }
         val status = when {
-            state == AidenStreamState.WAITING_FOR_APPROVAL -> AgentRunActivityStatus.WAITING_FOR_APPROVAL
+            state == AidenStreamState.WAITING_FOR_APPROVAL -> AgentRunBlockingStatus.status(
+                hasPendingApproval = input.hasPendingApproval,
+                hasPendingQuestion = input.hasPendingQuestion
+            )
             state == AidenStreamState.DONE -> AgentRunActivityStatus.COMPLETE
             state == AidenStreamState.ERROR || state == AidenStreamState.INTERRUPTED -> AgentRunActivityStatus.FAILED
             state == AidenStreamState.CANCELLED -> AgentRunActivityStatus.CANCELLED
@@ -729,10 +1038,9 @@ class AidenChatViewModel(
             }
             AidenQuietOpenChat.Decision.POST -> Unit
         }
+        val blockingLine = AgentRunBlockingStatus.activityLine(status)
         val activity = when {
-            state == AidenStreamState.WAITING_FOR_APPROVAL && _pendingQuestion.value != null ->
-                "Aiden needs your input"
-            state == AidenStreamState.WAITING_FOR_APPROVAL -> "Waiting for your approval"
+            blockingLine != null -> blockingLine
             activeStep?.label?.isNotBlank() == true -> activeStep.label
             activeStep?.toolName?.isNotBlank() == true -> activeStep.toolName
             responseText.isNotBlank() -> "Writing a response"
@@ -839,9 +1147,9 @@ class AidenChatViewModel(
             _isLoading.value = true
             try {
                 val writeToken = chatCache.reserveChatWrite()
-                val remote = client.chat(chatId)
+                val latest = fetchLatestTranscript(client)
                 if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return@launch
-                acceptRemoteChat(remote, writeToken)
+                acceptLatestTranscript(latest, writeToken)
             } catch (e: Exception) {
                 if (e !is CancellationException && generation == transcriptGeneration && !_isStarting.value && activeClient() === client) {
                     _presentedError.value = e.localizedMessage
@@ -950,8 +1258,7 @@ class AidenChatViewModel(
 
         val idempotencyKey = turnAttempts.key(request)
         val requestToken = chatCache.reserveChatWrite()
-        val pairingCreatedAt = coordinator.installationStore.installations.value
-            .firstOrNull { it.instanceId == instanceId && it.deviceId == deviceId }?.createdAt
+        val pairingCreatedAt = pairingCreatedAt()
 
         viewModelScope.launch {
             try {
@@ -967,9 +1274,7 @@ class AidenChatViewModel(
 
                 turnAttempts.reset()
                 _selectedSkill.value = null
-                val retainedInstallation = coordinator.installationStore.installations.value.any {
-                    it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == pairingCreatedAt
-                }
+                val retainedInstallation = pairingCreatedAt?.let(::isPairingRetained) == true
                 if (!retainedInstallation) {
                     _chat.value = withContext(ioDispatcher) { chatCache.admittedChat(instanceId, chatId) }
                     _streamState.value = null
@@ -1185,7 +1490,8 @@ class AidenChatViewModel(
         streamJob = viewModelScope.launch {
             var stream = originalStream
             val terminalReplayGate = AidenTerminalReplayGate()
-            var retryAttempt = 0
+            val recovery = AidenStreamNetworkRecovery(networkAvailability)
+            val onWaiting: (Boolean) -> Unit = { waiting -> setWaitingForNetwork(waiting, stream.streamId) }
 
             while (activeStreamId == stream.streamId) {
                 try {
@@ -1204,9 +1510,13 @@ class AidenChatViewModel(
                     }
                     if (terminal != null || activeStreamId != stream.streamId) return@launch
 
+                    // A stream that ended without a terminal frame is a lost
+                    // stream too: offline, park before any status probe.
+                    if (!recovery.shouldProbeAfterStreamFailure(onWaiting)) continue
+                    if (activeStreamId != stream.streamId) return@launch
                     val status = client.streamStatus(chatId, stream.streamId)
                     if (activeStreamId != stream.streamId) return@launch
-                    retryAttempt = 0
+                    recovery.recordHealthy()
                     clearRecoveryWarning()
                     apply(status, stream.streamId)
                     if (status.state.isTerminal) {
@@ -1217,10 +1527,14 @@ class AidenChatViewModel(
                     delay(500)
                 } catch (e: Exception) {
                     if (e is CancellationException) return@launch
+                    // Offline: park without probing, warning, or spending backoff,
+                    // then reopen after the last applied sequence.
+                    if (!recovery.shouldProbeAfterStreamFailure(onWaiting)) continue
+                    if (activeStreamId != stream.streamId) return@launch
                     try {
                         val status = client.streamStatus(chatId, stream.streamId)
                         if (activeStreamId != stream.streamId) return@launch
-                        retryAttempt = 0
+                        recovery.recordHealthy()
                         clearRecoveryWarning()
                         apply(status, stream.streamId)
                         if (status.state.isTerminal) {
@@ -1234,14 +1548,27 @@ class AidenChatViewModel(
                         if (AidenTerminalReconciliation.isDefinitiveMissingStream(inner)) {
                             if (reconcileMissingStream(stream)) return@launch
                         }
-                        showRecoveryWarning(inner.localizedMessage)
-                        val retryDelay = AidenTerminalReconciliation.retryDelayMilliseconds(retryAttempt)
-                        retryAttempt++
-                        delay(retryDelay)
+                        recovery.recoverAfterProbeFailure(
+                            onBackoff = { showRecoveryWarning(inner.localizedMessage) },
+                            onWaiting = onWaiting
+                        )
                         continue
                     }
                 }
             }
+        }
+    }
+
+    private fun setWaitingForNetwork(waiting: Boolean, streamId: String) {
+        if (waiting) {
+            if (activeStreamId != streamId) return
+            // Losing the network is not an error: drop any stale recovery warning.
+            clearRecoveryWarning()
+            networkWaitStreamId = streamId
+            _isWaitingForNetwork.value = true
+        } else if (networkWaitStreamId == streamId) {
+            networkWaitStreamId = null
+            _isWaitingForNetwork.value = false
         }
     }
 
@@ -1305,7 +1632,16 @@ class AidenChatViewModel(
                 restorePendingApproval(event.streamId)
             }
             AidenRemoteEventType.QUESTION_REQUIRED -> {
-                restorePendingQuestion(event.streamId)
+                // Resolving an approval on the Mac emits the surviving question
+                // with no running status in between, so a cached approval may
+                // already be gone. Re-read approval authority first: its null
+                // path restores the question, and a still-pending approval
+                // keeps precedence while the question card refreshes with it.
+                if (_pendingApproval.value != null) {
+                    restorePendingApproval(event.streamId)
+                } else {
+                    restorePendingQuestion(event.streamId)
+                }
             }
             AidenRemoteEventType.ERROR -> {
                 _pendingApproval.value = null
@@ -1483,27 +1819,24 @@ class AidenChatViewModel(
         }
     }
 
-    /** Suspends until the cancel request resolves. True when the server
-     * accepted the cancel for the displayed stream; false leaves the draft
-     * and stream untouched so callers like Redirect can bail safely. */
-    private suspend fun cancelStreamOnce(client: AidenRemoteClient, streamId: String): Boolean {
-        return try {
+    /** Suspends until the cancel request resolves. A mismatched or failed
+     * cancel leaves the draft and stream untouched and reports the error. */
+    private suspend fun cancelStreamOnce(client: AidenRemoteClient, streamId: String) {
+        try {
             val status = client.cancelStream(streamId)
             if (activeClient() !== client || activeStreamId != streamId ||
-                _streamState.value?.isTerminal == true) return false
+                _streamState.value?.isTerminal == true) return
             if (status.streamId != streamId || status.chatId != chatId) {
                 _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
-                return false
+                return
             }
             apply(status, streamId)
-            true
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             if (activeClient() === client && activeStreamId == streamId &&
                 _streamState.value?.isTerminal != true) {
                 _presentedError.value = "Stop was not confirmed. Check the current run before trying again."
             }
-            false
         }
     }
 
@@ -1513,19 +1846,29 @@ class AidenChatViewModel(
     private val isStreamingNow: Boolean
         get() = _streamState.value != null && !_streamState.value!!.isTerminal
 
-    /** The busy composer shows Steer/Queue/Redirect only when the server
-     * negotiated the feature and the composer holds text. Old servers keep
-     * the Stop-only control. */
+    /** The busy composer shows the Queue/Steer pill whenever the server
+     * negotiated the feature, even with an empty draft (dimmed) so a mode can
+     * be picked before typing. Old servers keep the Stop-only control. */
     val showsRunInputOptions: Boolean
         get() = AidenRunInputPresentation.offersRunInput(
             isStreaming = isStreamingNow,
             canControl = canControlCurrentRun,
-            supports = supportsRunInput,
-            hasDraft = _draft.value.trim().isNotEmpty()
+            supports = supportsRunInput
         )
 
     val canSubmitRunInput: Boolean
-        get() = showsRunInputOptions && !_isSubmittingRunInput.value && !_isStopping.value
+        get() = AidenRunInputPresentation.canSubmitRunInput(
+            offered = showsRunInputOptions,
+            hasDraft = _draft.value.trim().isNotEmpty(),
+            isSubmitting = _isSubmittingRunInput.value,
+            isStopping = _isStopping.value
+        )
+
+    /** Picks the busy composer's mode for the rest of the current run. */
+    fun setRunInputMode(mode: AidenStreamInputMode) {
+        if (!isStreamingNow) return
+        _runInputMode.value = mode
+    }
 
     fun submitRunInput(mode: AidenStreamInputMode) {
         val text = _draft.value.trim()
@@ -1785,41 +2128,6 @@ class AidenChatViewModel(
         }
     }
 
-    /** Destructive: stop the current run, then send the composer contents as
-     * a new turn once the stream is confirmed terminal. The draft is only
-     * consumed by the new send; a failed cancel leaves it untouched. */
-    fun redirectRun() {
-        if (!canControlCurrentRun || _isStopping.value || _isSubmittingRunInput.value) return
-        val client = activeClient() ?: return
-        val streamId = activeStreamId ?: return
-        _isStopping.value = true
-        viewModelScope.launch {
-            try {
-                if (!cancelStreamOnce(client, streamId)) return@launch
-                var waited = 0
-                while (isStreamingNow && activeStreamId == streamId &&
-                    activeClient() === client && waited < 50) {
-                    delay(100)
-                    waited++
-                }
-                if (activeClient() !== client) return@launch
-                if (isStreamingNow) {
-                    _presentedError.value =
-                        "The run is still stopping. Send your message once it finishes."
-                    return@launch
-                }
-                if (!canSend) {
-                    _presentedError.value =
-                        "The run stopped, but your message could not be sent. Check your connection and try again."
-                    return@launch
-                }
-                send()
-            } finally {
-                _isStopping.value = false
-            }
-        }
-    }
-
     private fun consumeRunInputDraft(text: String) {
         val remaining = AidenRunInputPresentation.consumedDraft(text, _draft.value)
         if (remaining != _draft.value) {
@@ -2005,9 +2313,9 @@ class AidenChatViewModel(
         val client = activeClient() ?: return false
         return try {
             val writeToken = chatCache.reserveChatWrite()
-            val remote = client.chat(chatId)
+            val latest = fetchLatestTranscript(client)
             if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return false
-            if (!acceptRemoteChat(remote, writeToken)) return false
+            if (!acceptLatestTranscript(latest, writeToken)) return false
             clearRecoveryWarning()
             true
         } catch (e: Exception) {
@@ -2018,7 +2326,125 @@ class AidenChatViewModel(
         }
     }
 
-    private suspend fun acceptRemoteChat(remote: AidenChat, writeToken: Long, scheduleTitleRefresh: Boolean = true): Boolean {
+    /**
+     * The newest transcript a refresh read. [mergeWindow] is the newest page
+     * to fold into the transcript on screen when it is published; null when
+     * [chat] already replaces the transcript.
+     */
+    private data class LatestTranscript(
+        val chat: AidenChat,
+        val hasOlder: Boolean,
+        val mergeWindow: AidenChatMessagesWindow? = null
+    )
+
+    /**
+     * Read the newest transcript. With `chat-messages-window-v1` and its
+     * revision-23 metadata this is the newest page, carrying the chat's
+     * current title, timestamps and model like a whole-chat read; it is folded
+     * into earlier pages already on screen when it is published (or replaces
+     * them when [replacing]). Without the window, or from a page that lacks
+     * metadata, it is the whole chat as before.
+     */
+    private suspend fun fetchLatestTranscript(client: AidenRemoteClient, replacing: Boolean = false): LatestTranscript {
+        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true) {
+            return LatestTranscript(client.chat(chatId), hasOlder = false)
+        }
+        val window = client.messagesWindow(chatId, limit = AidenTranscriptWindowing.PAGE_SIZE)
+        val windowChat = window.chat()?.takeIf { it.id == chatId }
+            ?: return LatestTranscript(client.chat(chatId), hasOlder = false)
+        if (replacing || !hasSettledTranscriptWindow) {
+            return LatestTranscript(windowChat, window.hasOlder)
+        }
+        // Cache the page folded into what is on screen now; publication folds
+        // it again into whatever is on screen by then.
+        val presentation = AidenTranscriptWindowing.mergingLatest(
+            window,
+            _chat.value?.messages.orEmpty(),
+            _hasOlderMessages.value
+        )
+        return LatestTranscript(windowChat.copy(messages = presentation.messages), presentation.hasOlder, window)
+    }
+
+    private suspend fun acceptLatestTranscript(
+        latest: LatestTranscript,
+        writeToken: Long,
+        scheduleTitleRefresh: Boolean = true
+    ): Boolean {
+        var hasOlder = latest.hasOlder
+        val accepted = acceptRemoteChat(latest.chat, writeToken, scheduleTitleRefresh) { admitted ->
+            // Merge against the transcript on screen now, not when the read
+            // began: an earlier page loaded while the cache write was pending
+            // stays in front of the newest page.
+            val window = latest.mergeWindow
+            if (window == null || admitted.revision != window.revision) return@acceptRemoteChat admitted
+            val presentation = AidenTranscriptWindowing.mergingLatest(
+                window,
+                _chat.value?.messages.orEmpty(),
+                _hasOlderMessages.value
+            )
+            hasOlder = presentation.hasOlder
+            admitted.copy(messages = presentation.messages)
+        }
+        if (!accepted) return false
+        _hasOlderMessages.value = hasOlder
+        hasSettledTranscriptWindow = true
+        return true
+    }
+
+    /**
+     * Page back one window from the oldest message on screen. If the Mac no
+     * longer has that message (`revision_conflict`), reload from the newest.
+     */
+    fun loadEarlierMessages() {
+        if (isReadOnlyPresentation || !_hasOlderMessages.value || _isLoadingEarlierMessages.value) return
+        if (coordinator.serverInfo.value?.supportsChatMessagesWindow != true) return
+        val client = activeClient() ?: return
+        val cursor = AidenTranscriptWindowing.earlierCursor(_chat.value?.messages.orEmpty()) ?: return
+        _isLoadingEarlierMessages.value = true
+        viewModelScope.launch {
+            try {
+                val page = client.messagesWindow(chatId, before = cursor, limit = AidenTranscriptWindowing.PAGE_SIZE)
+                val current = _chat.value ?: return@launch
+                // A reload that replaced the transcript meanwhile owns the screen.
+                if (activeClient() !== client || AidenTranscriptWindowing.earlierCursor(current.messages) != cursor) return@launch
+                val presentation = AidenTranscriptWindowing.prepending(page, current.messages)
+                _chat.value = current.copy(messages = presentation.messages)
+                _hasOlderMessages.value = presentation.hasOlder
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (activeClient() !== client) return@launch
+                val serverError = e as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server
+                if (serverError?.body?.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.REVISION_CONFLICT) {
+                    reloadLatestTranscriptWindow(client)
+                } else {
+                    _presentedError.value = e.localizedMessage
+                }
+            } finally {
+                _isLoadingEarlierMessages.value = false
+            }
+        }
+    }
+
+    private suspend fun reloadLatestTranscriptWindow(client: AidenRemoteClient) {
+        if (_isStarting.value) return
+        val generation = transcriptGeneration
+        try {
+            val writeToken = chatCache.reserveChatWrite()
+            val latest = fetchLatestTranscript(client, replacing = true)
+            if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return
+            acceptLatestTranscript(latest, writeToken)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (activeClient() === client) _presentedError.value = e.localizedMessage
+        }
+    }
+
+    private suspend fun acceptRemoteChat(
+        remote: AidenChat,
+        writeToken: Long,
+        scheduleTitleRefresh: Boolean = true,
+        beforePublishing: (AidenChat) -> AidenChat = { it }
+    ): Boolean {
         if (_isStarting.value) return false
         val generation = transcriptGeneration
         val client = activeClient()
@@ -2033,12 +2459,13 @@ class AidenChatViewModel(
         if (admitted == null) return false
         // A send or newer reconcile may have started while the cache was on disk.
         if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
-        _chat.value = admitted
+        val presented = beforePublishing(admitted)
+        _chat.value = presented
         resolveModelSelection()
-        if (scheduleTitleRefresh && admitted.isTitlePending) {
+        if (scheduleTitleRefresh && presented.isTitlePending) {
             schedulePendingTitleRefresh()
         }
-        reportChatViewed(admitted)
+        reportChatViewed(presented)
         return true
     }
 
@@ -2079,7 +2506,8 @@ class AidenChatViewModel(
                     val writeToken = chatCache.reserveChatWrite()
                     val remote = client.chat(chatId)
                     if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) continue
-                    acceptRemoteChat(remote, writeToken, scheduleTitleRefresh = false)
+                    // A whole-chat read carries the title and every message.
+                    acceptLatestTranscript(LatestTranscript(remote, hasOlder = false), writeToken, scheduleTitleRefresh = false)
                     if (_chat.value?.isTitlePending == false) return@launch
                 } catch (e: Exception) {
                     if (e is CancellationException) return@launch
@@ -2102,6 +2530,8 @@ class AidenChatViewModel(
         if (activeStreamId == expectedStreamId) {
             transcriptGeneration++
             activeStreamId = null
+            networkWaitStreamId = null
+            _isWaitingForNetwork.value = false
             liveTranscript.reset()
             _tools.value = emptyList()
             _activityTimeline.value = null
@@ -2160,13 +2590,16 @@ class AidenChatViewModel(
         private const val MAX_AGENT_ROSTER_HISTORY = 8
         /** Ongoing-notification cadence; terminal and approval states skip it. */
         private const val LIVE_NOTIFICATION_PERIOD_MILLIS = 1_000L
+        /** Backoff while a fork summary is pending; the last step repeats. */
+        private val FORK_SUMMARY_POLL_MILLIS = longArrayOf(1_500L, 2_000L, 3_000L, 5_000L)
 
         fun factory(
             chatId: String,
             coordinator: AidenRemoteCoordinator,
             chatCache: AidenChatCache,
             draftStore: AidenChatDraftStore,
-            liveNotificationManager: AidenRemoteLiveNotificationManager? = null
+            liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
+            networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -2175,7 +2608,8 @@ class AidenChatViewModel(
                     coordinator,
                     chatCache,
                     draftStore,
-                    liveNotificationManager = liveNotificationManager
+                    liveNotificationManager = liveNotificationManager,
+                    networkAvailability = networkAvailability
                 ) as T
             }
         }

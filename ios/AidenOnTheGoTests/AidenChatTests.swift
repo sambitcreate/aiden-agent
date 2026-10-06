@@ -3,10 +3,20 @@ import Foundation
 import Photos
 import SwiftUI
 import UIKit
+import UserNotifications
 import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testWorkspaceCodemodeActivityKeepsParentAndNestedToolIdentitiesDistinct() throws {
+        let data = Data(#"{"version":3,"generationId":"generation-codemode","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"codemode","label":"Codemode","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":0}]}"#.utf8)
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: data)
+        XCTAssertTrue(timeline.isRendererSafe)
+        XCTAssertEqual(timeline.steps.map(\.toolCallId), ["call-1", "call-2"])
+        XCTAssertEqual(timeline.steps.map(\.toolName), ["codemode", "read_file"])
+        XCTAssertEqual(Set(timeline.steps.map(\.id)).count, 2)
+    }
+
     func testReadAloudEligibilityRejectsProjectedFailuresAndCancellation() {
         for status in [AidenMessageOutcomeStatus.failed, .cancelled] {
             let message = AidenChatMessage(id: "a", role: .assistant, text: "partial answer",
@@ -570,6 +580,29 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testApprovalResolvedOnMacHandsTheWaitToTheSurvivingQuestion() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-question-handoff-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .questions, cache: cache)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        // Both prompts pending: the approval gates the tool and wins.
+        try await waitUntil { model.pendingApproval?.id == "approval-current" && model.pendingQuestion?.id == "question-current" }
+        try await waitUntil { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+
+        // The Mac resolves the approval itself and journals only the surviving
+        // question on the open stream: no running status, no reconnect.
+        AidenChatProgressLifecycleURLProtocol.resolveApproval()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            "id: 1\nevent: question_required\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"question_required\",\"terminal\":false,\"payload\":{\"promptId\":\"question-current\",\"questions\":\(AidenChatProgressLifecycleURLProtocol.questionList),\"expiresAt\":\"2099-01-01T00:00:00Z\"}}\n\n"
+        )
+        try await waitUntil { model.pendingApproval == nil }
+        XCTAssertEqual(model.pendingQuestion?.id, "question-current")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    @MainActor
     func testMismatchedApprovalReceiptCannotReplaceNewerRequest() async throws {
         try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .mismatchedApproval)
     }
@@ -799,6 +832,7 @@ final class AidenChatTests: XCTestCase {
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         initialChat: AidenChat? = nil,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
+        networkPath: AidenNetworkPathSource? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
@@ -860,8 +894,258 @@ final class AidenChatTests: XCTestCase {
             cache: cache,
             draftStore: draftStore,
             modelPreferenceStore: modelPreferenceStore,
+            networkPath: networkPath ?? AidenNetworkAvailability(),
             onChatUpdated: onChatUpdated
         )
+    }
+
+    func testForkActionsFollowSettledTurnsAndFeatureSupport() {
+        let now = Date()
+        let messages = [
+            AidenChatMessage(id: "u1", role: .user, text: "Review the protocol.", createdAt: now),
+            AidenChatMessage(id: "a1", role: .assistant, text: "Starting.", createdAt: now),
+            AidenChatMessage(id: "u2", role: .user, text: "Now the error codes.", createdAt: now),
+            AidenChatMessage(id: "a2", role: .assistant, text: "Done.", createdAt: now),
+        ]
+
+        let withSummary = AidenChatForkEligibility.actions(for: messages, supportsSummary: true)
+        XCTAssertNil(withSummary["u1"], "Editing the first prompt would leave an empty fork.")
+        XCTAssertEqual(withSummary["a1"], [.forkHere, .forkWithSummary])
+        XCTAssertEqual(withSummary["u2"], [.editInFork])
+        XCTAssertEqual(withSummary["a2"], [.forkHere], "The last reply leaves nothing to summarize.")
+
+        let plain = AidenChatForkEligibility.actions(for: messages, supportsSummary: false)
+        XCTAssertEqual(plain["a1"], [.forkHere])
+
+        // A reply with no prompt before it cannot be forked.
+        let orphan = AidenChatForkEligibility.actions(for: [messages[1], messages[0]], supportsSummary: true)
+        XCTAssertTrue(orphan.isEmpty)
+
+        XCTAssertEqual(AidenChatForkEligibility.forkedFromLabel(nil), "Forked from a deleted chat")
+        XCTAssertEqual(AidenChatForkEligibility.forkedFromLabel(" Plan "), "Forked from “Plan”")
+    }
+
+    @MainActor
+    func testEditInForkSeedsTheForkComposerWithThePromptAndItsAttachments() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-prefill-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let draftStore = AidenChatDraftStore(root: root.appending(path: "drafts"))
+        let attachmentID = "att_\(String(repeating: "F", count: 43))"
+        let sourceJSON = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[{"id":"message-u1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-a1","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"},{"id":"message-u2","role":"user","text":"Now check the error codes.","createdAt":"2026-09-14T12:00:02Z"},{"id":"message-a2","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:03Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:03Z","revision":"revision-7"}"#
+        let forkChatJSON = #"{"id":"chat-fork-edit","workspaceId":"workspace-1","title":"Progress lifecycle (fork)","messages":[{"id":"message-f1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-f2","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"}],"createdAt":"2026-09-14T12:05:00Z","updatedAt":"2026-09-14T12:05:00Z","revision":"revision-fork-1","forkedFrom":{"chatId":"chat-progress-lifecycle","messageId":"message-u2","position":"before","at":"2026-09-14T12:05:00Z"}}"#
+        let forkResultJSON = #"{"chat":\#(forkChatJSON),"prefill":{"text":"Now check the error codes.","attachments":[{"id":"\#(attachmentID)","name":"codes.txt","mimeType":"text/plain","kind":"text","size":42,"expiresAt":"2099-01-01T00:00:00Z"}]}}"#
+        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-fork-v1","chat-fork-summary-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+        let source = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(sourceJSON.utf8))
+        let fixture = AidenStreamRecoveryFixture(chat: source)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            draftStore: draftStore,
+            onCoordinator: { coordinator = $0 },
+            initialChat: source,
+            responseOverride: { request in
+                switch (request.httpMethod, request.url?.path) {
+                case (_, "/api/aiden/v1/server"):
+                    return (200, "application/json", Data(serverJSON.utf8))
+                case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/fork"):
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "revision-7")
+                    XCTAssertNotNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
+                    return (201, "application/json", Data(forkResultJSON.utf8))
+                case ("GET", "/api/aiden/v1/chats/chat-fork-edit"):
+                    return (200, "application/json", Data(forkChatJSON.utf8))
+                default:
+                    return fixture.response(request)
+                }
+            }
+        )
+
+        let availability = try XCTUnwrap(model.forkAvailability)
+        XCTAssertTrue(availability.supportsSummary)
+        let forked = await model.fork(messageId: "message-u2", action: .editInFork)
+        XCTAssertNil(model.presentedError)
+        let fork = try XCTUnwrap(forked)
+        XCTAssertEqual(fork.id, "chat-fork-edit")
+        XCTAssertEqual(model.chat.id, "chat-progress-lifecycle", "Forking never rewrites the source chat.")
+
+        // Opening the fork restores the edited prompt and its attachments.
+        let forkModel = AidenChatViewModel(
+            coordinator: coordinator,
+            chat: fork,
+            cache: cache,
+            draftStore: draftStore,
+            modelPreferenceStore: .shared,
+            onChatUpdated: { _ in }
+        )
+        await forkModel.load(observeProgress: false)
+        XCTAssertEqual(forkModel.draft, "Now check the error codes.")
+        XCTAssertEqual(forkModel.pendingAttachments.map(\.id), [attachmentID])
+        XCTAssertEqual(forkModel.chat.forkedFrom?.messageId, "message-u2")
+
+        // A prompt that is not eligible never reaches the Mac.
+        let refused = await model.fork(messageId: "message-u1", action: .editInFork)
+        XCTAssertNil(refused)
+    }
+
+    @MainActor
+    func testForkIsUnavailableWhenTheMacDoesNotAdvertiseIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-gated-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: AidenChatCache(root: root))
+        XCTAssertNil(model.forkAvailability)
+    }
+
+    @MainActor
+    func testForkReplaysItsKeyAfterALostResponseAndOpensTheOriginalFork() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-lost-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.commitButLoseResponse])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let lost = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(lost)
+        XCTAssertNotNil(model.presentedError)
+        XCTAssertEqual(mac.createdForkIDs, ["chat-fork-1"], "The Mac created the fork before the response was lost.")
+
+        model.presentedError = nil
+        let retried = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(model.presentedError)
+        XCTAssertEqual(retried?.id, "chat-fork-1", "The retry opens the fork the lost request created.")
+        XCTAssertEqual(mac.createdForkIDs, ["chat-fork-1"], "Retrying never makes a second copy.")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertEqual(Set(mac.keys).count, 1, "The retry replays the same Idempotency-Key.")
+
+        // Once the Mac has answered, forking again is a new request.
+        let next = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertEqual(next?.id, "chat-fork-2")
+        XCTAssertEqual(Set(mac.keys).count, 2)
+    }
+
+    @MainActor
+    func testForkKeepsItsKeyWhileTheMacReportsTheSameRequestInFlight() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-in-flight-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.inFlight])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let pending = await model.fork(messageId: "message-a2", action: .forkWithSummary, summaryFocus: " errors ")
+        XCTAssertNil(pending)
+        let settled = await model.fork(messageId: "message-a2", action: .forkWithSummary, summaryFocus: "errors")
+        XCTAssertEqual(settled?.id, "chat-fork-1")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertEqual(Set(mac.keys).count, 1, "The same normalized request keeps its key while its outcome is unknown.")
+    }
+
+    @MainActor
+    func testForkMintsAFreshKeyAfterTheMacRejectsItAsBusy() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-busy-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.busy])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let busy = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(busy)
+        XCTAssertEqual(model.presentedError, "Another fork is being created.")
+        XCTAssertTrue(mac.createdForkIDs.isEmpty)
+
+        model.presentedError = nil
+        let retried = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertEqual(retried?.id, "chat-fork-1")
+        XCTAssertEqual(mac.ifMatchRevisions, ["revision-7", "revision-7"], "The source revision is unchanged.")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertNotEqual(mac.keys.first, mac.keys.last, "A rejected key is never reused.")
+    }
+
+    func testForkTrailPushesEachForkOverItsSourceAndBackReturnsOneLevel() throws {
+        let source = try forkTrailChat(id: "chat-source")
+        let fork1 = try forkTrailChat(id: "chat-fork-1")
+        let fork2 = try forkTrailChat(id: "chat-fork-2")
+        var trail = AidenChatForkTrail()
+        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
+        XCTAssertFalse(trail.presentsFork(over: 0))
+
+        // Each fork opens from the chat on top and becomes a new level.
+        trail.open(fork1, fromDepth: 0)
+        trail.open(fork2, fromDepth: 1)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), fork2.id)
+        XCTAssertEqual(trail.fork(atDepth: 1)?.id, fork1.id)
+        XCTAssertEqual(trail.fork(atDepth: 2)?.id, fork2.id)
+        XCTAssertTrue(trail.presentsFork(over: 0))
+        XCTAssertTrue(trail.presentsFork(over: 1))
+        XCTAssertFalse(trail.presentsFork(over: 2))
+
+        // Back from fork 2 shows fork 1; Back again shows the source.
+        trail.dismissFork(over: 1)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), fork1.id)
+        trail.dismissFork(over: 0)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
+        XCTAssertNil(trail.fork(atDepth: 1))
+
+        // A second fork of the source pushes over the source, not over an
+        // earlier fork, and Back still lands on the source.
+        trail.open(fork1, fromDepth: 0)
+        trail.dismissFork(over: 0)
+        trail.open(fork2, fromDepth: 0)
+        XCTAssertEqual(trail.forks.map(\.id), [fork2.id])
+        trail.dismissFork(over: 0)
+        XCTAssertEqual(trail.visibleChatID(root: source.id), source.id)
+    }
+
+    func testForkTrailReplacesLevelsAboveTheForkingChatAndKeepsForksCurrent() throws {
+        let fork1 = try forkTrailChat(id: "chat-fork-1")
+        let fork2 = try forkTrailChat(id: "chat-fork-2")
+        let fork3 = try forkTrailChat(id: "chat-fork-3")
+        var trail = AidenChatForkTrail()
+        trail.open(fork1, fromDepth: 0)
+        trail.open(fork2, fromDepth: 1)
+
+        // Forking fork 1 again while fork 2 is above it replaces fork 2.
+        trail.open(fork3, fromDepth: 1)
+        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
+
+        // A depth the trail never reached changes nothing.
+        trail.open(fork2, fromDepth: 5)
+        trail.dismissFork(over: 7)
+        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
+
+        let renamed = try forkTrailChat(id: "chat-fork-1", title: "Renamed fork")
+        trail.accept(renamed)
+        XCTAssertEqual(trail.fork(atDepth: 1)?.title, "Renamed fork")
+        let unrelated = try forkTrailChat(id: "chat-elsewhere")
+        trail.accept(unrelated)
+        XCTAssertEqual(trail.forks.map(\.id), [fork1.id, fork3.id])
+    }
+
+    private func forkTrailChat(id: String, title: String = "Chat") throws -> AidenChat {
+        let json = #"{"id":"\#(id)","workspaceId":"workspace-1","title":"\#(title)","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"revision-1"}"#
+        return try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(json.utf8))
+    }
+
+    @MainActor
+    private func makeForkLedgerModel(mac: AidenForkLedgerMac, root: URL) async throws -> AidenChatViewModel {
+        let sourceJSON = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[{"id":"message-u1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-a1","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"},{"id":"message-u2","role":"user","text":"Now check the error codes.","createdAt":"2026-09-14T12:00:02Z"},{"id":"message-a2","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:03Z"},{"id":"message-u3","role":"user","text":"Thanks.","createdAt":"2026-09-14T12:00:04Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:04Z","revision":"revision-7"}"#
+        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-fork-v1","chat-fork-summary-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+        let source = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(sourceJSON.utf8))
+        let fixture = AidenStreamRecoveryFixture(chat: source)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            initialChat: source,
+            responseOverride: { request in
+                switch (request.httpMethod, request.url?.path) {
+                case (_, "/api/aiden/v1/server"):
+                    return (200, "application/json", Data(serverJSON.utf8))
+                case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/fork"):
+                    return mac.respond(to: request)
+                default:
+                    return fixture.response(request)
+                }
+            }
+        )
+        XCTAssertNotNil(model.forkAvailability)
+        return model
     }
 
     @MainActor
@@ -2587,6 +2871,55 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testStreamLostOfflineWaitsForNetworkWithoutProbingThenResumesOnceFromLastSequence() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-network-wait-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let path = AidenNetworkAvailability(isNetworkAvailable: false)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, networkPath: path)
+        var final = model.chat
+        final.messages.append(AidenChatMessage(id: "final-reply", role: .assistant, text: "prefix suffix", createdAt: Date()))
+        let fixture = AidenNetworkWaitFixture(chat: model.chat, finalChat: final)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await cache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-network", turnId: "turn-network", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite()
+        )
+
+        // The first stream delivers sequence 1 and ends without a terminal
+        // frame while the device is offline.
+        await model.load(observeProgress: false)
+        for _ in 0..<400 {
+            if model.isWaitingForNetwork { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.isWaitingForNetwork)
+        XCTAssertTrue(model.isStreaming)
+        XCTAssertEqual(model.liveText, "prefix ")
+        XCTAssertNil(model.presentedError, "losing the network is not an error")
+        let restorationProbes = try XCTUnwrap(fixture.statusReadsBeforeFirstEvents)
+        XCTAssertEqual(fixture.statusReads, restorationProbes, "the stream ending offline parks before any status probe")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(fixture.statusReads, restorationProbes, "no status probe is spent while offline")
+        XCTAssertEqual(fixture.eventCursors, [0], "no reconnect is attempted while offline")
+        XCTAssertNil(model.presentedError)
+
+        // A flapping return wakes the one parked consumer exactly once.
+        path.setAvailable(true)
+        path.setAvailable(false)
+        path.setAvailable(true)
+        for _ in 0..<400 {
+            if model.chat.messages.last?.id == "final-reply" && !model.isStreaming { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.chat.messages.last?.id, "final-reply")
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertFalse(model.isWaitingForNetwork)
+        XCTAssertNil(model.presentedError)
+        XCTAssertEqual(fixture.eventCursors, [0, 1], "one reconnect, resumed after the last applied sequence")
+    }
+
+    @MainActor
     func testStopStillCancelsAnInMemoryRecoveredStream() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-recovery-stop-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -3209,6 +3542,19 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.draft, expected, "Completing the attachment action must not revive the old draft")
         // Cancel the debounce before removing this test's temporary directory.
         model.setAllowsMutations(false)
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        for _ in 0..<500 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for condition.", file: file, line: line)
     }
 
     @MainActor
@@ -4120,6 +4466,7 @@ final class AidenChatTests: XCTestCase {
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "azure"), "azure-openai-responses")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "openai"), "openai")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "tailscale"), "tailscale")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "concentrate"), "concentrate")
@@ -5364,6 +5711,25 @@ final class AidenChatTests: XCTestCase {
             ifStreamId: "stream-new"
         )
         XCTAssertTrue(currentRemoval)
+    }
+
+    func testModelOperationApprovalsRequireDesktopInspection() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        for toolName in ["generate_image", "classify"] {
+            let approval = try XCTUnwrap(AidenPendingApprovalResolution.resolve(
+                .init(approvalId: "model-approval", streamId: "stream-1", chatId: "chat-1",
+                      summary: "Review the complete payload on desktop", toolCallId: "model-call",
+                      toolName: toolName, expiresAt: now.addingTimeInterval(60), canAllow: false),
+                streamId: "stream-1", chatId: "chat-1", capabilities: .unrestricted, now: now
+            ))
+            XCTAssertFalse(approval.canAllow)
+            XCTAssertEqual(AidenApprovalResponseAuthorization.resolve(
+                approval: approval, decision: .allow, capabilities: .unrestricted
+            ), .hostApprovalRequired)
+            XCTAssertEqual(AidenApprovalResponseAuthorization.resolve(
+                approval: approval, decision: .deny, capabilities: .unrestricted
+            ), .allowed)
+        }
     }
 
     func testApprovalSnapshotMustBeLiveAndBoundToTheExactStreamAndChat() {
@@ -6831,9 +7197,15 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case revokedControls
         case unsupportedControls
         case agentInterrupt
+        /// Controls plus question prompts, with a live event stream the test
+        /// can push frames into.
+        case questions
     }
 
     typealias Override = @Sendable (URLRequest) -> (Int, String, Data)?
+    /// An override status that drops the connection instead of answering,
+    /// as when the Mac commits a write but its response is lost.
+    static let connectionLostStatus = -1
     nonisolated(unsafe) private static var responseOverride: Override?
     static func setResponseOverride(_ handler: @escaping Override) {
         lock.withLock { responseOverride = handler }
@@ -6848,6 +7220,13 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     static var approvalReadCount: Int { lock.withLock { _approvalReadCount } }
     static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
     static func setApprovalID(_ id: String) { lock.withLock { approvalID = id } }
+    nonisolated(unsafe) private static var approvalResolved = false
+    /// The Mac resolved the approval: later approval reads return none.
+    static func resolveApproval() { lock.withLock { approvalResolved = true } }
+    nonisolated(unsafe) private static var eventSink: (@Sendable (Data) -> Void)?
+    static var hasOpenEventStream: Bool { lock.withLock { eventSink != nil } }
+    /// Delivers one frame on the open (unfinished) stream-control event stream.
+    static func pushEvent(_ frame: String) { lock.withLock { eventSink }?(Data(frame.utf8)) }
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
@@ -6899,6 +7278,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         _controlWriteCount = 0
         approvalID = "approval-current"
         approvalReadFails = false
+        approvalResolved = false
+        eventSink = nil
         responseOverride = nil
         _approvalReadCount = 0
         _progressRequestCount = 0
@@ -6924,6 +7305,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         let result: (HTTPURLResponse, Data)
         var shouldFinish = true
         if let custom = Self.lock.withLock({ Self.responseOverride })?(request) {
+            if custom.0 == Self.connectionLostStatus {
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                return
+            }
             result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
         } else {
         switch path {
@@ -6942,6 +7327,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             if Self.lock.withLock({ Self.mode == .agentInterrupt }) {
                 body["features"] = ["chat-tasks-v1", "chat-agents-v1", "chat-agent-interrupt-v1"]
             }
+            if Self.lock.withLock({ Self.mode == .questions }) {
+                body["features"] = ["chat-tasks-v1", "chat-agents-v1", "chat-question-prompts-v1"]
+            }
             if Self.lock.withLock({ Self.mode == .legacyControls }) {
                 body.removeValue(forKey: "serverCapabilities")
                 body["features"] = [String]()
@@ -6952,7 +7340,16 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
         case "/api/aiden/v1/streams/stream-control/events":
             shouldFinish = false
+            if Self.lock.withLock({ Self.mode == .questions }) {
+                Self.lock.withLock {
+                    Self.eventSink = { [self] data in client?.urlProtocol(self, didLoad: data) }
+                }
+            }
             result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
+        case "/api/aiden/v1/streams/stream-control/question" where Self.lock.withLock({ Self.mode == .questions }):
+            result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
+                {"question":{"promptId":"question-current","streamId":"stream-control","chatId":"chat-progress-lifecycle","toolCallId":"tool-question","questions":\(Self.questionList),"expiresAt":"2099-01-01T00:00:00Z"}}
+                """.utf8))
         case "/api/aiden/v1/streams/stream-control/approval":
             Self.lock.withLock { Self._approvalReadCount += 1 }
             if Self.lock.withLock({ Self.approvalReadFails }) {
@@ -6960,6 +7357,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 return
             }
             let id = Self.lock.withLock { Self.approvalID }
+            if Self.lock.withLock({ Self.approvalResolved }) {
+                result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"approval":null}"#.utf8))
+                break
+            }
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
                 {"approval":{"approvalId":"\(id)","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}
                 """.utf8))
@@ -7133,6 +7534,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
 
     override func stopLoading() {}
 
+    static let questionList = #"[{"question":"Which branch?","header":"Branch","multiSelect":false,"options":[{"label":"main","description":"Default"},{"label":"dev","description":"Work"}]}]"#
+
     private static let taskSnapshot = Data(
         """
         {"version":1,"chatId":"chat-progress-lifecycle","availability":"ready","epoch":"epoch-lifecycle","revision":1,"updatedAt":"2026-09-14T12:00:00Z","tasks":[{"id":1,"subject":"Observe lifecycle","status":"in_progress","activeForm":"Observing lifecycle"}]}
@@ -7260,6 +7663,132 @@ private final class AidenChatReadStateHTTPFixture: @unchecked Sendable {
             }
             lock.withLock { readMessageIDs.append(messageID) }
             return (204, "application/json", Data())
+        }
+    }
+}
+
+/// A Mac that serves `GET /chats/{chatId}/messages` pages over a transcript
+/// it can rewrite between reads, and records which reads the phone made.
+private final class AidenChatMessagesWindowHTTPFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var messages: [AidenChatMessage]
+    private var revision: String
+    private let advertisesWindow: Bool
+    private let advertisesWindowMetadata: Bool
+    private var conflictsOnCursor = false
+    private var windowQueries: [[String: String]] = []
+    private var fullReadCount = 0
+    private var title = "Windowed"
+    private var selection: (providerId: String, modelId: String)?
+    private var updatedAt = "2026-09-27T12:00:00Z"
+
+    init(
+        messages: [AidenChatMessage],
+        revision: String,
+        advertisesWindow: Bool,
+        advertisesWindowMetadata: Bool = true
+    ) {
+        self.messages = messages
+        self.revision = revision
+        self.advertisesWindow = advertisesWindow
+        self.advertisesWindowMetadata = advertisesWindowMetadata
+    }
+
+    /// The desktop renames the chat and picks another model; the transcript
+    /// is untouched, so only the revision and metadata move.
+    func changeMetadata(title: String, providerId: String, modelId: String, updatedAt: String, revision: String) {
+        lock.withLock {
+            self.title = title
+            self.selection = (providerId, modelId)
+            self.updatedAt = updatedAt
+            self.revision = revision
+        }
+    }
+
+    var windowRequests: [[String: String]] { lock.withLock { windowQueries } }
+    var fullChatReads: Int { lock.withLock { fullReadCount } }
+
+    func replaceTranscript(_ messages: [AidenChatMessage], revision: String) {
+        lock.withLock {
+            self.messages = messages
+            self.revision = revision
+        }
+    }
+
+    /// The next cursor read answers `409 revision_conflict`, as when the Mac
+    /// no longer has the message the phone paged from.
+    func conflictNextCursorRead() { lock.withLock { conflictsOnCursor = true } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        guard let url = request.url else { return nil }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        switch url.path {
+        case "/api/aiden/v1/server":
+            let body: [String: Any] = [
+                "protocolVersion": 1,
+                "instanceId": "instance-progress-lifecycle",
+                "name": "Window Mac",
+                "appVersion": "1.0",
+                "capabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
+                "serverCapabilities": ["server:read", "workspace:read", "chat:read", "chat:write"],
+                "features": !advertisesWindow ? []
+                    : advertisesWindowMetadata ? ["chat-messages-window-v1", "chat-messages-window-metadata-v1"]
+                    : ["chat-messages-window-v1"],
+                "connectionMode": "lan",
+                "serverTime": "2026-09-27T12:00:00Z",
+            ]
+            return (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
+        case "/api/aiden/v1/models":
+            return (200, "application/json", Data(#"{"providers":[],"defaults":{}}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            let snapshot = lock.withLock { () -> AidenChat in
+                fullReadCount += 1
+                let date = ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z")!
+                return AidenChat(
+                    id: "chat-progress-lifecycle", workspaceId: "workspace-1", title: title,
+                    providerId: selection?.providerId, modelId: selection?.modelId, messages: messages,
+                    createdAt: date, updatedAt: ISO8601DateFormatter().date(from: updatedAt)!, revision: revision
+                )
+            }
+            return (200, "application/json", try! encoder.encode(snapshot))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/messages":
+            guard advertisesWindow else { return (404, "application/json", Data()) }
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            var query: [String: String] = [:]
+            for item in items { query[item.name] = item.value ?? "" }
+            return lock.withLock { () -> (Int, String, Data) in
+                windowQueries.append(query)
+                let limit = Int(query["limit"] ?? "") ?? 50
+                var end = messages.count
+                if let before = query["before"] {
+                    guard !conflictsOnCursor, let index = messages.firstIndex(where: { $0.id == before }) else {
+                        conflictsOnCursor = false
+                        return (409, "application/json", Data(#"{"error":{"code":"revision_conflict","message":"The transcript changed.","requestId":"window","retryable":false}}"#.utf8))
+                    }
+                    end = index
+                }
+                let start = max(0, end - limit)
+                var page: [String: Any] = [
+                    "chatId": "chat-progress-lifecycle",
+                    "revision": revision,
+                    "messages": try! JSONSerialization.jsonObject(with: encoder.encode(Array(messages[start..<end]))),
+                    "hasOlder": start > 0,
+                ]
+                if advertisesWindowMetadata {
+                    page["workspaceId"] = "workspace-1"
+                    page["title"] = title
+                    page["createdAt"] = "2026-09-27T12:00:00Z"
+                    page["updatedAt"] = updatedAt
+                    if let selection {
+                        page["providerId"] = selection.providerId
+                        page["modelId"] = selection.modelId
+                    }
+                }
+                return (200, "application/json", try! JSONSerialization.data(withJSONObject: page))
+            }
+        default:
+            return nil
         }
     }
 }
@@ -8344,23 +8873,19 @@ final class AidenAppearanceTests: XCTestCase {
         )
     }
 
-    func testRunInputOptionsRequireBusyControlledSupportedDraft() {
+    func testRunInputPillRequiresBusyControlledSupportedRun() {
         XCTAssertTrue(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: true, supports: true, hasDraft: true
+            isStreaming: true, canControl: true, supports: true
         ))
         // Old servers keep the Stop-only control.
         XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: true, supports: false, hasDraft: true
+            isStreaming: true, canControl: true, supports: false
         ))
         XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: false, canControl: true, supports: true, hasDraft: true
+            isStreaming: false, canControl: true, supports: true
         ))
         XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: false, supports: true, hasDraft: true
-        ))
-        // An empty composer can never offer a submission.
-        XCTAssertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming: true, canControl: true, supports: true, hasDraft: false
+            isStreaming: true, canControl: false, supports: true
         ))
     }
 
@@ -8665,6 +9190,242 @@ final class AidenQuietOpenChatTests: XCTestCase {
     }
 }
 
+private final class FakeRunAlertCenter: AidenRunAlertCenter {
+    var status: UNAuthorizationStatus
+    var grantsAuthorization: Bool
+    private(set) var authorizationRequests = 0
+    private(set) var posted: [UNNotificationRequest] = []
+
+    init(status: UNAuthorizationStatus = .authorized, grantsAuthorization: Bool = true) {
+        self.status = status
+        self.grantsAuthorization = grantsAuthorization
+    }
+
+    /// Runs while the authorization lookup is suspended, so a test can move
+    /// the app between foreground and background across the await.
+    var duringStatusLookup: (@MainActor () -> Void)?
+
+    func currentAuthorizationStatus() async -> UNAuthorizationStatus {
+        if let duringStatusLookup { await duringStatusLookup() }
+        return status
+    }
+
+    func requestAlertAuthorization() async -> Bool {
+        authorizationRequests += 1
+        status = grantsAuthorization ? .authorized : .denied
+        return grantsAuthorization
+    }
+
+    func add(_ request: UNNotificationRequest) async throws { posted.append(request) }
+}
+
+@MainActor
+final class AidenRunAlertTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private var suiteName: String!
+    private var appState = AidenRunAlertAppState.background
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "AidenRunAlertTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        appState = .background
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        super.tearDown()
+    }
+
+    private func notifier(_ center: FakeRunAlertCenter) -> AidenRunAlertNotifier {
+        AidenRunAlertNotifier(defaults: defaults, center: center, appState: { [unowned self] in self.appState })
+    }
+
+    private func notify(
+        _ notifier: AidenRunAlertNotifier,
+        _ kind: AidenRunAlertKind,
+        id: String = "prompt-1",
+        instanceID: String = "mac-a",
+        chatID: String = "chat-1",
+        isChatOnScreen: Bool = false
+    ) async {
+        await notifier.notify(
+            kind,
+            id: id,
+            instanceID: instanceID,
+            chatID: chatID,
+            chatTitle: "Ship the release",
+            isChatOnScreen: isChatOnScreen
+        )
+    }
+
+    func testBlockingPromptPostsOneTimeSensitiveAlertThatOpensItsChat() async throws {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+        await notify(notifier, .needsAnswer, id: "question-7")
+        await notify(notifier, .needsAnswer, id: "question-7")
+
+        XCTAssertEqual(center.posted.count, 1, "a prompt alerts once, however often the wait is re-reported")
+        let content = try XCTUnwrap(center.posted.first?.content)
+        XCTAssertEqual(content.title, "Ship the release")
+        XCTAssertEqual(content.body, "Needs your answer")
+        XCTAssertEqual(content.interruptionLevel, .timeSensitive)
+        let url = try XCTUnwrap(AidenRunAlertNotifier.deepLink(from: content.userInfo))
+        let request = try XCTUnwrap(AidenDeepLink.request(from: url))
+        XCTAssertEqual(request.destination, .chat("chat-1"))
+        XCTAssertEqual(request.instanceId, "mac-a")
+    }
+
+    func testDedupeIsPerPromptAndPerInstanceAndSurvivesANewNotifier() async {
+        let center = FakeRunAlertCenter()
+        await notify(notifier(center), .needsApproval, id: "approval-1")
+        await notify(notifier(center), .needsApproval, id: "approval-1")
+        XCTAssertEqual(center.posted.count, 1, "the delivered set persists across notifier instances")
+
+        await notify(notifier(center), .needsApproval, id: "approval-2")
+        await notify(notifier(center), .needsApproval, id: "approval-1", instanceID: "mac-b")
+        XCTAssertEqual(center.posted.count, 3)
+        XCTAssertEqual(center.posted.map(\.content.body), Array(repeating: "Needs your approval", count: 3))
+    }
+
+    func testAlertsPostOnlyWhileTheUserIsAwayAndStayQuietForTheOpenChat() async {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+
+        appState = .active
+        await notify(notifier, .needsApproval, id: "a-active")
+        await notify(notifier, .failed, id: "stream-active")
+        XCTAssertTrue(center.posted.isEmpty, "the active app already shows the prompt and result")
+
+        appState = .inactive
+        await notify(notifier, .needsApproval, id: "a-overlay", isChatOnScreen: true)
+        XCTAssertTrue(center.posted.isEmpty, "an overlay over the open chat returns straight to it")
+        await notify(notifier, .needsApproval, id: "a-other", chatID: "chat-2", isChatOnScreen: false)
+        XCTAssertEqual(center.posted.count, 1)
+
+        appState = .background
+        await notify(notifier, .needsAnswer, id: "q-bg", isChatOnScreen: true)
+        XCTAssertEqual(center.posted.count, 2, "a backgrounded app alerts even for the chat left open")
+
+        // A prompt suppressed while active can still alert once the user leaves.
+        await notify(notifier, .needsApproval, id: "a-active")
+        XCTAssertEqual(center.posted.count, 3)
+    }
+
+    func testCompletionAndFailureAlertsNameTheChatWithoutTimeSensitivity() async throws {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+        await notify(notifier, .completed, id: "stream-1")
+        await notify(notifier, .completed, id: "stream-1")
+        await notify(notifier, .failed, id: "stream-2")
+
+        XCTAssertEqual(center.posted.map(\.content.body), ["Response complete", "Response failed"])
+        for request in center.posted {
+            XCTAssertEqual(request.content.title, "Ship the release")
+            XCTAssertEqual(request.content.interruptionLevel, .active)
+            XCTAssertNotNil(AidenRunAlertNotifier.deepLink(from: request.content.userInfo))
+        }
+    }
+
+    func testPermissionIsRequestedOnceAfterTheFirstCompletedRunWhileInApp() async {
+        let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: false)
+        let notifier = notifier(center)
+
+        appState = .active
+        await notify(notifier, .needsApproval, id: "a-1")
+        await notify(notifier, .failed, id: "stream-0")
+        appState = .background
+        await notify(notifier, .completed, id: "stream-1")
+        XCTAssertEqual(center.authorizationRequests, 0, "never for prompts, failures, or while away")
+        XCTAssertTrue(center.posted.isEmpty, "nothing posts without authorization")
+
+        appState = .active
+        await notify(notifier, .completed, id: "stream-2")
+        XCTAssertEqual(center.authorizationRequests, 1)
+
+        // Declined once: a later completion never asks again, even if iOS
+        // still reports the permission as undetermined.
+        center.status = .notDetermined
+        await notify(notifier, .completed, id: "stream-3")
+        XCTAssertEqual(center.authorizationRequests, 1)
+        XCTAssertTrue(center.posted.isEmpty)
+    }
+
+    func testGrantedPermissionLetsLaterAwayAlertsPost() async {
+        let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: true)
+        let notifier = notifier(center)
+        appState = .active
+        await notify(notifier, .completed, id: "stream-1")
+        XCTAssertEqual(center.authorizationRequests, 1)
+        XCTAssertTrue(center.posted.isEmpty, "the in-app completion itself stays silent")
+
+        appState = .background
+        await notify(notifier, .needsApproval, id: "a-1")
+        XCTAssertEqual(center.posted.count, 1)
+    }
+
+    func testReturningToTheAppDuringTheAuthorizationLookupKeepsTheAlertQuiet() async {
+        let center = FakeRunAlertCenter()
+        center.duringStatusLookup = { [unowned self] in self.appState = .active }
+        appState = .background
+        await notify(notifier(center), .needsAnswer, id: "q-returning")
+        XCTAssertTrue(center.posted.isEmpty, "the user is back in the app before the alert could post")
+
+        // The prompt was not consumed: leaving again still alerts once.
+        center.duringStatusLookup = nil
+        appState = .background
+        await notify(notifier(center), .needsAnswer, id: "q-returning")
+        XCTAssertEqual(center.posted.count, 1)
+    }
+
+    func testLeavingTheAppDuringTheAuthorizationLookupNeverPromptsForPermission() async {
+        let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: true)
+        center.duringStatusLookup = { [unowned self] in self.appState = .background }
+        appState = .active
+        await notify(notifier(center), .completed, id: "stream-leaving")
+        XCTAssertEqual(center.authorizationRequests, 0, "the system prompt needs the user in the app")
+
+        // The one-time request is still available for a later in-app completion.
+        center.duringStatusLookup = nil
+        appState = .active
+        await notify(notifier(center), .completed, id: "stream-in-app")
+        XCTAssertEqual(center.authorizationRequests, 1)
+    }
+
+    func testRunAlertsArrivingInTheActiveAppPresentNothingWhileScheduledRunsStillShow() {
+        let run = "\(AidenRunAlertNotifier.identifierPrefix)completed.mac-a.stream-1"
+        XCTAssertEqual(
+            AidenNotificationPresentationDelegate.presentationOptions(identifier: run, appState: .active),
+            []
+        )
+        XCTAssertEqual(
+            AidenNotificationPresentationDelegate.presentationOptions(identifier: run, appState: .inactive),
+            [.banner, .list],
+            "an overlay over another chat still surfaces the alert"
+        )
+        XCTAssertEqual(
+            AidenNotificationPresentationDelegate.presentationOptions(identifier: "aiden.schedule.run-1", appState: .active),
+            [.banner, .sound, .list]
+        )
+    }
+
+    func testDisabledNotifierNeverAsksOrPosts() async {
+        let center = FakeRunAlertCenter(status: .notDetermined)
+        let notifier = AidenRunAlertNotifier(isEnabled: false, defaults: defaults, center: center, appState: { .active })
+        await notifier.notify(.completed, id: "s", instanceID: "mac-a", chatID: "chat-1", chatTitle: "Chat", isChatOnScreen: false)
+        XCTAssertEqual(center.authorizationRequests, 0)
+        XCTAssertTrue(center.posted.isEmpty)
+    }
+
+    func testTappedAlertOnlyOpensValidAidenLinks() {
+        XCTAssertNil(AidenRunAlertNotifier.deepLink(from: [:]))
+        XCTAssertNil(AidenRunAlertNotifier.deepLink(from: ["aidenURL": "https://example.com/chat"]))
+        XCTAssertNil(AidenRunAlertNotifier.deepLink(from: ["aidenURL": 42]))
+        let link = AidenDeepLink.chatURL(instanceId: "mac-a", chatId: "chat-1")?.absoluteString
+        XCTAssertNotNil(AidenRunAlertNotifier.deepLink(from: ["aidenURL": link as Any]))
+    }
+}
+
 final class AidenChatReadAdmissionTests: XCTestCase {
     func testLateDetailUpdatesCannotRestoreAnOldSidebarSelection() {
         XCTAssertTrue(AidenChatReadAdmission.acceptsSelectedChatUpdate(
@@ -8764,6 +9525,61 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
     }
 }
 
+/// Stream `stream-network`: the first events read delivers sequence 1 and
+/// ends without a terminal frame; the next one finishes the turn.
+private final class AidenNetworkWaitFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let chat: AidenChat
+    private let finalChat: AidenChat
+    private var chatReads = 0
+    private var statuses = 0
+    private var cursors: [Int] = []
+    private var statusesBeforeEvents: Int?
+    var statusReads: Int { lock.withLock { statuses } }
+    /// Status reads made before the first events request (the restoration probe).
+    var statusReadsBeforeFirstEvents: Int? { lock.withLock { statusesBeforeEvents } }
+    var eventCursors: [Int] { lock.withLock { cursors } }
+    init(chat: AidenChat, finalChat: AidenChat) { self.chat = chat; self.finalChat = finalChat }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            let path = request.url!.path
+            if path.hasSuffix("/models") {
+                return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+            }
+            if path.hasSuffix("/chats/" + chat.id) {
+                chatReads += 1
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                return (200, "application/json", try! encoder.encode(chatReads > 1 ? finalChat : chat))
+            }
+            if path.hasSuffix("/streams/stream-network") {
+                statuses += 1
+                return (200, "application/json", Data("""
+                {"streamId":"stream-network","chatId":"\(chat.id)","turnId":"turn-network","state":"running","lastSequence":1,"updatedAt":"2026-10-04T00:00:00Z"}
+                """.utf8))
+            }
+            if path.hasSuffix("/streams/stream-network/events") {
+                let after = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "after" }?.value
+                cursors.append(Int(after ?? "0") ?? -1)
+                if statusesBeforeEvents == nil { statusesBeforeEvents = statuses }
+                switch cursors.count {
+                case 1:
+                    return (200, "text/event-stream", Data(event(1, "text_delta", #"{"text":"prefix "}"#).utf8))
+                default:
+                    let body = event(2, "text_delta", #"{"text":"suffix"}"#) + event(3, "done", #"{"messageId":"final-reply"}"#, terminal: true)
+                    return (200, "text/event-stream", Data(body.utf8))
+                }
+            }
+            return nil
+        }
+    }
+
+    private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-network\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-04T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
 private final class AidenHeldChatCacheFileManager: FileManager, @unchecked Sendable {
     private let lock = NSLock()
     private let release = DispatchSemaphore(value: 0)
@@ -8813,4 +9629,396 @@ private final class AidenRenameRequestLog: @unchecked Sendable {
     func record(_ request: URLRequest) { lock.lock(); defer { lock.unlock() }; requests.append(request) }
     func count(_ method: String) -> Int { lock.lock(); defer { lock.unlock() }; return requests.filter { $0.httpMethod == method }.count }
     func lastRevision() -> String? { lock.lock(); defer { lock.unlock() }; return requests.last { $0.httpMethod == "PATCH" }?.value(forHTTPHeaderField: "If-Match") }
+}
+
+extension AidenChatTests {
+    private static let windowDate = ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z")!
+
+    private func windowMessages(_ range: ClosedRange<Int>, prefix: String = "m") -> [AidenChatMessage] {
+        range.map { index in
+            AidenChatMessage(
+                id: "\(prefix)\(index)",
+                role: index.isMultiple(of: 2) ? .assistant : .user,
+                text: "Message \(index)",
+                createdAt: Self.windowDate
+            )
+        }
+    }
+
+    @MainActor
+    private func windowedChatModel(
+        fixture: AidenChatMessagesWindowHTTPFixture,
+        cacheGate: AidenChatWriteTestGate? = nil
+    ) async throws -> (AidenChatViewModel, URL) {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-window-\(UUID())")
+        let initial = AidenChat(
+            id: "chat-progress-lifecycle", workspaceId: "workspace-1", title: "Windowed",
+            providerId: nil, modelId: nil, messages: [],
+            createdAt: Self.windowDate, updatedAt: Self.windowDate, revision: "window-r0"
+        )
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root, beforeChatWrite: { await cacheGate?.waitIfArmed() }),
+            initialChat: initial,
+            responseOverride: { fixture.response($0) }
+        )
+        return (model, root)
+    }
+
+    func testMergingLatestWindowKeepsEarlierPagesOnlyWhenTheWindowOverlaps() {
+        let onScreen = windowMessages(1...8)
+        let refreshed = AidenChatMessagesWindow(
+            chatId: "c", revision: "r2",
+            messages: windowMessages(5...9),
+            hasOlder: true
+        )
+        let merged = AidenTranscriptWindowing.mergingLatest(refreshed, into: onScreen, currentHasOlder: true)
+        XCTAssertEqual(merged.messages.map(\.id), (1...9).map { "m\($0)" })
+        XCTAssertTrue(merged.hasOlder, "pages above the loaded ones are still on the Mac")
+
+        let disjoint = AidenChatMessagesWindow(
+            chatId: "c", revision: "r3",
+            messages: windowMessages(20...24),
+            hasOlder: true
+        )
+        let replaced = AidenTranscriptWindowing.mergingLatest(disjoint, into: onScreen, currentHasOlder: false)
+        XCTAssertEqual(replaced.messages.map(\.id), (20...24).map { "m\($0)" })
+        XCTAssertTrue(replaced.hasOlder)
+
+        let whole = AidenChatMessagesWindow(chatId: "c", revision: "r4", messages: windowMessages(1...3), hasOlder: false)
+        let short = AidenTranscriptWindowing.mergingLatest(whole, into: onScreen, currentHasOlder: true)
+        XCTAssertEqual(short.messages.map(\.id), ["m1", "m2", "m3"], "a complete window is the whole transcript")
+        XCTAssertFalse(short.hasOlder)
+    }
+
+    func testPrependingEarlierPageSkipsDuplicatesAndPagesFromTheOldestServerMessage() {
+        let onScreen = [AidenChatMessage(id: "local-pending", role: .user, text: "Draft", createdAt: Self.windowDate)]
+            + windowMessages(4...6)
+        XCTAssertEqual(AidenTranscriptWindowing.earlierCursor(in: onScreen), "m4")
+
+        let page = AidenChatMessagesWindow(chatId: "c", revision: "r", messages: windowMessages(1...4), hasOlder: false)
+        let combined = AidenTranscriptWindowing.prepending(page, to: windowMessages(4...6))
+        XCTAssertEqual(combined.messages.map(\.id), (1...6).map { "m\($0)" })
+        XCTAssertFalse(combined.hasOlder)
+    }
+
+    @MainActor
+    func testOpeningAWindowedChatShowsTheLatestPageAndPagesBackToTheStart() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (71...120).map { "m\($0)" })
+        XCTAssertTrue(model.hasOlderMessages)
+        XCTAssertEqual(model.chat.revision, "window-r1")
+        XCTAssertEqual(model.chat.title, "Windowed")
+        XCTAssertEqual(fixture.fullChatReads, 0, "a windowed Mac is never asked for the whole transcript")
+        XCTAssertEqual(fixture.windowRequests.first, ["limit": "50"])
+
+        await model.loadEarlierMessages()
+        XCTAssertEqual(fixture.windowRequests.last, ["limit": "50", "before": "m71"])
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...120).map { "m\($0)" })
+        XCTAssertTrue(model.hasOlderMessages)
+
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...120).map { "m\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+        XCTAssertFalse(model.isLoadingEarlierMessages)
+
+        let requestsBefore = fixture.windowRequests.count
+        await model.loadEarlierMessages()
+        XCTAssertEqual(fixture.windowRequests.count, requestsBefore, "the start of the chat needs no further page")
+    }
+
+    @MainActor
+    func testRefreshingAWindowedChatKeepsEarlierPagesAndAppendsNewMessages() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.count, 100)
+
+        fixture.replaceTranscript(windowMessages(1...121), revision: "window-r2")
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...121).map { "m\($0)" })
+        XCTAssertEqual(model.chat.revision, "window-r2")
+        XCTAssertTrue(model.hasOlderMessages)
+    }
+
+    @MainActor
+    func testRevisionConflictWhilePagingReloadsTheLatestWindow() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.first?.id, "m21")
+
+        // The Mac rewrote the chat (an edit or fork removed earlier turns).
+        fixture.replaceTranscript(windowMessages(1...80, prefix: "n"), revision: "window-r9")
+        await model.loadEarlierMessages()
+
+        XCTAssertEqual(model.chat.messages.map(\.id), (31...80).map { "n\($0)" })
+        XCTAssertEqual(model.chat.revision, "window-r9")
+        XCTAssertTrue(model.hasOlderMessages)
+        XCTAssertNil(model.presentedError, "a conflict recovers without an error")
+        XCTAssertEqual(fixture.windowRequests.last, ["limit": "50"], "the reload starts from the newest message")
+
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...80).map { "n\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+    }
+
+    func testWindowMetadataDecodesAsTheChatAndFailsClosedWhenPartial() throws {
+        func page(_ extra: String) -> Data {
+            Data(#"{"chatId":"chat-1","revision":"r1","messages":[],"hasOlder":false\#(extra)}"#.utf8)
+        }
+        let metadata = #","workspaceId":"workspace-1","title":"Renamed","providerId":"p","modelId":"m","createdAt":"2026-09-27T12:00:00Z","updatedAt":"2026-09-27T13:00:00Z""#
+        let chat = try XCTUnwrap(
+            try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: page(metadata)).chat
+        )
+        XCTAssertEqual(chat.id, "chat-1")
+        XCTAssertEqual(chat.title, "Renamed")
+        XCTAssertEqual(chat.providerId, "p")
+        XCTAssertEqual(chat.modelId, "m")
+        XCTAssertEqual(chat.revision, "r1")
+        XCTAssertFalse(chat.isTitlePending)
+        XCTAssertNil(try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: page("")).chat)
+
+        // A fork's page carries its lineage, so a windowed refresh keeps the lineage row.
+        let lineage = #","forkedFrom":{"chatId":"chat-source","messageId":"message-2","position":"after","at":"2026-09-27T11:00:00Z"}"#
+        let forked = try XCTUnwrap(
+            try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: page(metadata + lineage)).chat
+        )
+        XCTAssertEqual(forked.forkedFrom?.chatId, "chat-source")
+        XCTAssertEqual(forked.forkedFrom?.messageId, "message-2")
+        XCTAssertNil(chat.forkedFrom)
+
+        let partial = [
+            #","title":"Renamed""#,
+            metadata.replacingOccurrences(of: #","modelId":"m""#, with: ""),
+            metadata.replacingOccurrences(of: "13:00:00Z", with: "11:00:00Z"),
+            metadata + #","titlePending":false"#,
+        ]
+        for extra in partial {
+            XCTAssertThrowsError(
+                try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: page(extra)),
+                extra
+            )
+        }
+
+        // A Bot transcript never carries reasoning, on a page as in a chat read.
+        let botPage = Data(#"{"chatId":"chat-1","revision":"r1","hasOlder":false,"botId":"bot-1"\#(metadata),"messages":[{"id":"m1","role":"assistant","text":"Hi","createdAt":"2026-09-27T12:00:00Z","reasoning":"private"}]}"#.utf8)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: botPage))
+        let regularPage = Data(String(decoding: botPage, as: UTF8.self)
+            .replacingOccurrences(of: #","botId":"bot-1""#, with: "").utf8)
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decode(AidenChatMessagesWindow.self, from: regularPage))
+    }
+
+    @MainActor
+    func testRefreshingAWindowedChatAdoptsADesktopRenameAndModelChange() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        await model.loadEarlierMessages()
+        XCTAssertNil(model.chat.modelId)
+
+        fixture.changeMetadata(
+            title: "Renamed on the Mac", providerId: "provider-2", modelId: "model-2",
+            updatedAt: "2026-09-27T13:00:00Z", revision: "window-r2"
+        )
+        await model.load(observeProgress: false)
+
+        XCTAssertEqual(model.chat.displayTitle, "Renamed on the Mac")
+        XCTAssertEqual(model.chat.providerId, "provider-2")
+        XCTAssertEqual(model.chat.modelId, "model-2")
+        XCTAssertEqual(model.chat.updatedAt, ISO8601DateFormatter().date(from: "2026-09-27T13:00:00Z"))
+        XCTAssertEqual(model.chat.revision, "window-r2")
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...120).map { "m\($0)" }, "loaded pages survive the refresh")
+        XCTAssertEqual(fixture.fullChatReads, 0, "the newest page alone carries the metadata")
+    }
+
+    @MainActor
+    func testAWindowWithoutMetadataKeepsTheWholeChatRead() async throws {
+        // A revision-19 to 22 Mac pages messages but cannot say the chat's title
+        // or model, so the phone keeps reading whole chats from it.
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1",
+            advertisesWindow: true, advertisesWindowMetadata: false
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...120).map { "m\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+
+        fixture.changeMetadata(
+            title: "Renamed on the Mac", providerId: "provider-2", modelId: "model-2",
+            updatedAt: "2026-09-27T13:00:00Z", revision: "window-r2"
+        )
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.displayTitle, "Renamed on the Mac")
+        XCTAssertEqual(model.chat.modelId, "model-2")
+        XCTAssertEqual(fixture.fullChatReads, 2)
+        XCTAssertTrue(fixture.windowRequests.isEmpty)
+    }
+
+    @MainActor
+    func testAnEarlierPageLoadedWhileARefreshIsPublishingIsKept() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: true
+        )
+        let gate = AidenChatWriteTestGate()
+        let (model, root) = try await windowedChatModel(fixture: fixture, cacheGate: gate)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.first?.id, "m71")
+
+        // A refresh reads the newest page, then waits on its cache write while
+        // the reader loads the page before the one on screen.
+        fixture.replaceTranscript(windowMessages(1...121), revision: "window-r2")
+        await gate.arm()
+        let refreshing = Task { await model.load(observeProgress: false) }
+        await waitForChatWrite(gate)
+        await model.loadEarlierMessages()
+        XCTAssertEqual(model.chat.messages.first?.id, "m21")
+        await gate.release()
+        await refreshing.value
+
+        XCTAssertEqual(model.chat.messages.map(\.id), (21...121).map { "m\($0)" })
+        XCTAssertTrue(model.hasOlderMessages)
+        XCTAssertEqual(model.chat.revision, "window-r2")
+    }
+
+    @MainActor
+    func testAMacWithoutTheWindowFeatureServesTheWholeTranscript() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: windowMessages(1...120), revision: "window-r1", advertisesWindow: false
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.messages.map(\.id), (1...120).map { "m\($0)" })
+        XCTAssertFalse(model.hasOlderMessages)
+        XCTAssertEqual(fixture.fullChatReads, 1)
+
+        await model.loadEarlierMessages()
+        XCTAssertTrue(fixture.windowRequests.isEmpty, "an older Mac is never asked for message pages")
+    }
+}
+
+/// A Mac with an idempotency ledger for `POST /chats/{id}/fork`: a key it
+/// has already committed replays the fork it created instead of making
+/// another. Unscripted requests create a new fork.
+private final class AidenForkLedgerMac: @unchecked Sendable {
+    enum Reply {
+        /// Creates the fork, then the connection drops before the response.
+        case commitButLoseResponse
+        /// 409 `idempotency_in_flight`: this key's request is still running.
+        case inFlight
+        /// 409 `operation_in_progress`: a different fork holds the source.
+        case busy
+    }
+
+    private let lock = NSLock()
+    private var plan: [Reply]
+    private var ledger: [String: String] = [:]
+    private var created: [String] = []
+    private var receivedKeys: [String] = []
+    private var receivedRevisions: [String] = []
+
+    init(plan: [Reply]) { self.plan = plan }
+
+    var createdForkIDs: [String] { lock.withLock { created } }
+    var keys: [String] { lock.withLock { receivedKeys } }
+    var ifMatchRevisions: [String] { lock.withLock { receivedRevisions } }
+
+    func respond(to request: URLRequest) -> (Int, String, Data) {
+        lock.withLock { () -> (Int, String, Data) in
+            let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
+            receivedKeys.append(key)
+            receivedRevisions.append(request.value(forHTTPHeaderField: "If-Match") ?? "")
+            if let replay = ledger[key] {
+                return (201, "application/json", Self.result(forkID: replay, request: request))
+            }
+            let reply = plan.isEmpty ? nil : plan.removeFirst()
+            switch reply {
+            case .busy:
+                return (409, "application/json", Self.error(code: "operation_in_progress", message: "Another fork is being created."))
+            case .inFlight:
+                return (409, "application/json", Self.error(code: "idempotency_in_flight", message: "This request is still running."))
+            case .commitButLoseResponse, nil:
+                let forkID = "chat-fork-\(created.count + 1)"
+                created.append(forkID)
+                ledger[key] = forkID
+                if reply == .commitButLoseResponse {
+                    return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                return (201, "application/json", Self.result(forkID: forkID, request: request))
+            }
+        }
+    }
+
+    private static func result(forkID: String, request: URLRequest) -> Data {
+        let body = request.httpBody ?? request.httpBodyStream.map(readStream) ?? Data()
+        let fields = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        let messageID = fields["messageId"] as? String ?? ""
+        let json = #"{"chat":{"id":"\#(forkID)","workspaceId":"workspace-1","title":"Progress lifecycle (fork)","messages":[],"createdAt":"2026-09-14T12:05:00Z","updatedAt":"2026-09-14T12:05:00Z","revision":"revision-fork-1","forkedFrom":{"chatId":"chat-progress-lifecycle","messageId":"\#(messageID)","position":"after","at":"2026-09-14T12:05:00Z"}}}"#
+        return Data(json.utf8)
+    }
+
+    private static func error(code: String, message: String) -> Data {
+        Data(#"{"error":{"code":"\#(code)","message":"\#(message)","requestId":"request-fork","retryable":true}}"#.utf8)
+    }
+
+    private static func readStream(_ stream: InputStream) -> Data {
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }

@@ -19,6 +19,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Text,
   toast,
   type DialogLayer,
@@ -73,6 +74,9 @@ export function ProviderEditor({
   const [deployment, setDeployment] = React.useState<ProviderDeployment>(
     resolveProviderDeployment(provider),
   );
+  const [llamaCppClassifierEnabled, setLlamaCppClassifierEnabled] = React.useState(
+    provider.llamaCppClassifierEnabled === true,
+  );
   const [keyDraft, setKeyDraft] = React.useState("");
   const [models, setModels] = React.useState<string[]>(provider.models);
   const [modelMetadata, setModelMetadata] = React.useState<
@@ -125,6 +129,7 @@ export function ProviderEditor({
       setBaseUrl(provider.baseUrl);
       setKind(provider.kind);
       setNeedsKey(provider.needsKey);
+      setLlamaCppClassifierEnabled(provider.llamaCppClassifierEnabled === true);
       setDeployment(resolveProviderDeployment(provider));
       setKeyDraft("");
       setModels(provider.models);
@@ -153,6 +158,7 @@ export function ProviderEditor({
     defaultModel: defaultModel || undefined,
     needsKey,
     deployment,
+    llamaCppClassifierEnabled: kind === "openai" && deployment === "local" && llamaCppClassifierEnabled,
     isPreset: false,
     isBuiltin: false,
   });
@@ -503,6 +509,7 @@ export function ProviderEditor({
               disabled={testing}
               onValueChange={(v) => {
                 setKind(v as ProviderKind);
+                if (v !== "openai") setLlamaCppClassifierEnabled(false);
                 markDiscoveryStale();
               }}
             >
@@ -529,6 +536,7 @@ export function ProviderEditor({
               disabled={testing}
               onValueChange={(value) => {
                 setDeployment(value as ProviderDeployment);
+                if (value !== "local") setLlamaCppClassifierEnabled(false);
               }}
             >
               <SelectTrigger size="small">
@@ -605,6 +613,19 @@ export function ProviderEditor({
       </Button>
       {moreOptions ? (
         <section id="custom-model-options" className="mt-3 min-w-0">
+          <FieldSet>
+            <Field
+              label="llama.cpp classification"
+              description="Enable only for an existing llama-server. Saved models become available to the classifier tool with your approval. No models are downloaded or loaded by this option."
+            >
+              <Switch
+                aria-label="Enable llama.cpp classification"
+                checked={llamaCppClassifierEnabled}
+                onCheckedChange={setLlamaCppClassifierEnabled}
+                disabled={saving || testing || kind !== "openai" || deployment !== "local"}
+              />
+            </Field>
+          </FieldSet>
           <CustomModelOptionsEditor
             models={models}
             metadata={modelMetadata}

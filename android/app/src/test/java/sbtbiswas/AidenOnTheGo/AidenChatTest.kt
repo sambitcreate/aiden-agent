@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineStart
@@ -38,9 +39,12 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkEligibility
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkSource
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
@@ -50,6 +54,16 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
+    @Test
+    fun workspaceCodemodeActivityKeepsParentAndNestedToolIdentitiesDistinct() {
+        val payload = """{"version":3,"generationId":"generation-codemode","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"codemode","label":"Codemode","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":0}]}"""
+        val timeline = json.decodeFromString<AidenGenerationTimeline>(payload)
+        assertTrue(timeline.isRendererSafe())
+        assertEquals(listOf("call-1", "call-2"), timeline.steps.map { it.toolCallId })
+        assertEquals(listOf("codemode", "read_file"), timeline.steps.map { it.toolName })
+        assertEquals(2, timeline.steps.map { it.id }.toSet().size)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun backgroundChatRefreshReportsReadOnlyAfterReturningToChat() {
@@ -815,6 +829,105 @@ class AidenChatTest {
     fun approvalSnapshotHeldAcrossUnpairCannotRestoreCard() = exerciseRunControl("approval-snapshot-revoked")
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun approvalResolvedOnMacHandsTheWaitToTheSurvivingQuestion() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-question-handoff-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val approvalResolved = java.util.concurrent.atomic.AtomicBoolean(false)
+        val eventConnections = java.util.concurrent.atomic.AtomicInteger()
+        val resolve = CountDownLatch(1)
+        val eventsOpened = CountDownLatch(1)
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val grants = listOf(
+            AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE,
+            AidenRemoteCapability.APPROVAL_RESPOND, AidenRemoteCapability.QUESTIONS_RESPOND
+        )
+        val chat = AidenChat(id = "chat-control", workspaceId = "workspace-control", title = "Controls",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "revision-control")
+        val questions = """[{"question":"Which branch?","header":"Branch","multiSelect":false,"options":[{"label":"main","description":"Default"},{"label":"dev","description":"Work"}]}]"""
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path.orEmpty()
+                return when {
+                    path == "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-control","name":"Control Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-question-prompts-v1"],"connectionMode":"lan","serverTime":"2026-09-22T12:00:00Z"}""")
+                    path == "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                    path == "/api/aiden/v1/chats/chat-control" -> MockResponse().setBody(json.encodeToString(chat))
+                    path.startsWith("/api/aiden/v1/streams/stream-control/events") -> {
+                        // The first connection ends so the status read restores
+                        // both prompts. On the next live connection the Mac
+                        // resolves the approval itself and journals only the
+                        // surviving question: no running status, no reconnect.
+                        val connection = eventConnections.incrementAndGet()
+                        if (connection == 1) {
+                            return MockResponse().setHeader("Content-Type", "text/event-stream").setBody("")
+                        }
+                        val first = connection == 2
+                        if (first) {
+                            eventsOpened.countDown()
+                            check(resolve.await(10, TimeUnit.SECONDS))
+                        }
+                        val event = if (first) {
+                            "id: 1\nevent: question_required\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-control\",\"sequence\":1,\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"question_required\",\"terminal\":false,\"payload\":{\"promptId\":\"question-current\",\"questions\":$questions,\"expiresAt\":\"2099-01-01T00:00:00Z\"}}\n\n"
+                        } else ": keepalive\n\n"
+                        // Throttled padding holds the stream open for the test
+                        // without blocking shutdown once the client disconnects.
+                        val chunk = maxOf(event.toByteArray().size, 256)
+                        MockResponse().setHeader("Content-Type", "text/event-stream")
+                            .setBody(event + ": open\n\n".repeat(chunk * 20 / 8))
+                            .throttleBody(chunk.toLong(), 500, TimeUnit.MILLISECONDS)
+                    }
+                    path == "/api/aiden/v1/streams/stream-control" -> MockResponse().setBody("""{"streamId":"stream-control","chatId":"chat-control","turnId":"turn-control","state":"waiting_for_approval","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}""")
+                    path == "/api/aiden/v1/streams/stream-control/approval" -> MockResponse().setBody(
+                        if (approvalResolved.get()) """{"approval":null}"""
+                        else """{"approval":{"approvalId":"approval-current","streamId":"stream-control","chatId":"chat-control","summary":"Review current action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}"""
+                    )
+                    path == "/api/aiden/v1/streams/stream-control/question" -> MockResponse().setBody(
+                        """{"question":{"promptId":"question-current","streamId":"stream-control","chatId":"chat-control","toolCallId":"tool-question","questions":$questions,"expiresAt":"2099-01-01T00:00:00Z"}}"""
+                    )
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        val scopeJob = Job()
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-control", deviceId = "device-control", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic-credential", capabilities = grants), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-control", "stream-control", "turn-control", 0), "instance-control", chat.id)
+                val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
+                viewModels.put("control", model)
+                // Both prompts pending: the approval gates the tool and wins.
+                withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
+                withTimeout(5_000) { model.pendingQuestion.first { it?.id == "question-current" } }
+
+                withContext(Dispatchers.IO) { assertTrue(eventsOpened.await(5, TimeUnit.SECONDS)) }
+                approvalResolved.set(true)
+                resolve.countDown()
+                withTimeout(5_000) { model.pendingApproval.first { it == null } }
+                assertEquals("question-current", model.pendingQuestion.value?.id)
+                assertEquals(AidenStreamState.WAITING_FOR_APPROVAL, model.streamState.value)
+            }
+        } finally {
+            resolve.countDown()
+            runBlocking(dispatcher) { viewModels.clearAndJoin(); scopeJob.cancelAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun exerciseRunControl(scenario: String) {
         val directory = kotlin.io.path.createTempDirectory("aiden-control-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -1571,6 +1684,23 @@ class AidenChatTest {
     }
 
     @Test
+    fun testModelOperationApprovalsRequireDesktopInspection() {
+        val now = Instant.ofEpochSecond(10_000)
+        for (toolName in listOf("generate_image", "classify")) {
+            val wire = AidenStreamPendingApproval(
+                approvalId = "model-approval", streamId = "stream-1", chatId = "chat-1",
+                summary = "Review the complete payload on desktop", toolCallId = "model-call",
+                toolName = toolName, expiresAt = now.plusSeconds(60), canAllow = false
+            )
+            val approval = AidenPendingApprovalResolution.resolve(wire, "stream-1", "chat-1", now = now)!!
+            assertTrue(approval.canRespond)
+            assertFalse(approval.canAllow)
+            assertFalse(approval.hostCanAllow)
+            assertEquals(listOf(AidenApprovalScope.ONCE), approval.scopes)
+        }
+    }
+
+    @Test
     fun testPendingApprovalResolution() {
         val now = Instant.ofEpochSecond(10_000)
         val valid = AidenStreamPendingApproval(
@@ -1989,5 +2119,435 @@ class AidenChatTest {
         assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(listOf(step, step.copy(id = "compact-2", order = 1))))
         assertFalse(AidenAgentActivityPresentation.isCompactContextOnly(emptyList()))
         assertEquals(step.detail, json.decodeFromString<AidenAgentStep>(json.encodeToString(step)).detail)
+    }
+
+    // --- Chat fork (contract revision 21) ---
+
+    @Test
+    fun forkEligibilityOffersOnlyTheCutsTheMacAccepts() {
+        val at = Instant.EPOCH
+        val running = AidenGenerationTimeline(
+            version = 3, generationId = "stream-running", status = AidenGenerationTimelineStatus.RUNNING,
+            startedAt = 1.0, steps = emptyList()
+        )
+        val messages = listOf(
+            AidenChatMessage("assistant-greeting", AidenChatRole.ASSISTANT, "Hello", createdAt = at),
+            AidenChatMessage("user-1", AidenChatRole.USER, "One", createdAt = at),
+            AidenChatMessage("assistant-1", AidenChatRole.ASSISTANT, "Reply one", createdAt = at),
+            AidenChatMessage("user-2", AidenChatRole.USER, "Two", createdAt = at),
+            AidenChatMessage("assistant-2", AidenChatRole.ASSISTANT, "Reply two", createdAt = at),
+            AidenChatMessage("local-user-3", AidenChatRole.USER, "Three", createdAt = at),
+            AidenChatMessage("assistant-3", AidenChatRole.ASSISTANT, "Working", timeline = running, createdAt = at)
+        )
+        val eligibility = AidenChatForkEligibility
+
+        assertFalse("A reply before any prompt keeps nothing", eligibility.canForkFrom(messages, "assistant-greeting"))
+        assertTrue(eligibility.canForkFrom(messages, "assistant-1"))
+        assertTrue(eligibility.canForkWithSummary(messages, "assistant-1"))
+        assertFalse("A running reply is not settled", eligibility.canForkFrom(messages, "assistant-3"))
+        assertFalse(eligibility.canForkFrom(messages, "user-2"))
+        assertFalse(eligibility.canForkFrom(messages, "missing"))
+
+        assertFalse("The first prompt has nothing before it", eligibility.canEditInFork(messages, "user-1"))
+        assertTrue(eligibility.canEditInFork(messages, "user-2"))
+        assertFalse("An unsent prompt is not on the Mac", eligibility.canEditInFork(messages, "local-user-3"))
+        assertFalse(eligibility.canEditInFork(messages, "assistant-1"))
+
+        val settled = messages.take(5)
+        assertTrue(eligibility.canForkFrom(settled, "assistant-2"))
+        assertFalse("Nothing follows the last reply to summarize", eligibility.canForkWithSummary(settled, "assistant-2"))
+    }
+
+    @Test
+    fun editInForkOpensTheForkWithItsPromptAndAttachmentsStaged() {
+        val attachment = AidenAttachmentReference(
+            id = "att_" + "A".repeat(43), name = "notes.txt", mimeType = "text/plain",
+            kind = AidenAttachmentKind.TEXT, size = 12, expiresAt = Instant.now().plusSeconds(600)
+        )
+        val expired = attachment.copy(id = "att_" + "B".repeat(43), expiresAt = Instant.now().minusSeconds(60))
+        val fork = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "user-2", position = AidenChatForkPosition.BEFORE, at = Instant.EPOCH
+        ))
+        val forkRequests = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        withForkHarness(listOf("chat-fork-v1", "chat-fork-summary-v1"), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                    forkRequests.add(request)
+                    MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(
+                        AidenChatForkResult(fork, AidenChatForkPrefill("Try the streaming parser.", listOf(attachment, expired)))
+                    ))
+                }
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                "/api/aiden/v1/chats/${fork.id}" -> MockResponse().setBody(forkWireJson.encodeToString(fork))
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            assertTrue(model.canFork)
+
+            model.fork("user-2", AidenChatForkPosition.BEFORE)
+
+            assertEquals(fork.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+            val request = withContext(Dispatchers.IO) { forkRequests.poll(5, TimeUnit.SECONDS) }!!
+            assertEquals("source-r1", request.getHeader("If-Match"))
+            val body = json.parseToJsonElement(request.body.readUtf8()).jsonObject
+            assertEquals("user-2", body.getValue("messageId").jsonPrimitive.content)
+            assertEquals("before", body.getValue("position").jsonPrimitive.content)
+            assertFalse("Edit in fork never asks for a summary", body.containsKey("summary"))
+            model.consumeForkNavigation(fork.id)
+            assertNull(model.forkNavigation.value)
+
+            // The fork's composer opens with the prompt and its still-valid attachments.
+            val forkModel = harness.open(fork.id)
+            assertEquals("Try the streaming parser.", forkModel.draft.value)
+            assertEquals(listOf(attachment.id), forkModel.pendingAttachments.value.map { it.id })
+            assertEquals(
+                AidenChatForkSource.Named(forkSource.id, forkSource.title),
+                withTimeout(5_000) { forkModel.forkSource.first { it is AidenChatForkSource.Named } }
+            )
+            // Staged attachments belong to that one composer.
+            val reopened = harness.open(fork.id)
+            assertTrue(reopened.pendingAttachments.value.isEmpty())
+        }
+    }
+
+    @Test
+    fun aPendingForkSummaryHoldsTurnsUntilItIsSkipped() {
+        val pending = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "assistant-1", position = AidenChatForkPosition.AFTER, at = Instant.EPOCH,
+            summary = AidenChatForkSummary(
+                state = AidenChatForkSummaryState.PENDING, afterMessageId = "fork-assistant-1", focus = "the parser"
+            )
+        ))
+        val remoteFork = java.util.concurrent.atomic.AtomicReference(pending)
+        val forkBodies = java.util.concurrent.LinkedBlockingQueue<String>()
+        withForkHarness(listOf("chat-fork-v1", "chat-fork-summary-v1"), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                    forkBodies.add(request.body.readUtf8())
+                    MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(AidenChatForkResult(pending)))
+                }
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                "/api/aiden/v1/chats/${pending.id}" -> MockResponse().setBody(forkWireJson.encodeToString(remoteFork.get()))
+                "/api/aiden/v1/chats/${pending.id}/fork-summary/skip" -> {
+                    val skipped = remoteFork.get().let { it.copy(revision = "fork-r2", forkedFrom = it.forkedFrom!!.copy(summary = null)) }
+                    remoteFork.set(skipped)
+                    MockResponse().setBody(forkWireJson.encodeToString(skipped))
+                }
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            assertTrue(model.canForkWithSummary)
+            model.fork("assistant-1", AidenChatForkPosition.AFTER, withSummary = true, summaryFocus = "  the parser  ")
+            assertEquals(pending.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+            val body = json.parseToJsonElement(withContext(Dispatchers.IO) { forkBodies.poll(5, TimeUnit.SECONDS) }!!).jsonObject
+            assertEquals(
+                Json.parseToJsonElement("""{"focus":"the parser"}"""),
+                body.getValue("summary")
+            )
+
+            val forkModel = harness.open(pending.id)
+            forkModel.updateDraft("Carry on")
+            assertTrue(forkModel.isHeldByForkSummary)
+            assertFalse("A pending summary holds new turns", forkModel.canSend)
+            assertTrue(forkModel.canManageForkSummary)
+
+            forkModel.skipForkSummary()
+            withTimeout(5_000) { forkModel.chat.first { it?.forkedFrom?.summary == null } }
+            assertFalse(forkModel.isHeldByForkSummary)
+            assertTrue(forkModel.canSend)
+        }
+    }
+
+    @Test
+    fun forkActionsStayHiddenWithoutTheMacFeatures() {
+        withForkHarness(listOf("chat-fork-v1"), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            assertTrue(model.canFork)
+            assertFalse("Summaries need chat-fork-summary-v1", model.canForkWithSummary)
+            // fork() marks itself busy before it sends, so a refused request is visible at once.
+            model.fork("assistant-1", AidenChatForkPosition.AFTER, withSummary = true)
+            assertFalse(model.isForking.value)
+            assertFalse(harness.paths().any { it.endsWith("/fork") })
+        }
+        withForkHarness(emptyList(), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            assertFalse("An older Mac cannot fork", model.canFork)
+        }
+    }
+
+    @Test
+    fun unpairingDuringTheForkHandoffLeavesNothingOfTheFork() {
+        val attachment = AidenAttachmentReference(
+            id = "att_" + "C".repeat(43), name = "notes.txt", mimeType = "text/plain",
+            kind = AidenAttachmentKind.TEXT, size = 12, expiresAt = Instant.now().plusSeconds(600)
+        )
+        val fork = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "user-2", position = AidenChatForkPosition.BEFORE, at = Instant.EPOCH
+        ))
+        val io = HoldableDispatcher()
+        try {
+            withForkHarness(listOf("chat-fork-v1"), { request ->
+                when (request.requestUrl!!.encodedPath) {
+                    "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                        // Hold the view model's IO from the moment the Mac answers.
+                        io.hold()
+                        MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(
+                            AidenChatForkResult(fork, AidenChatForkPrefill("Try the streaming parser.", listOf(attachment)))
+                        ))
+                    }
+                    "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                    else -> null
+                }
+            }) { harness ->
+                val model = harness.open(forkSource.id, forkSource, ioDispatcher = io)
+                model.fork("user-2", AidenChatForkPosition.BEFORE)
+                assertTrue(
+                    "The fork handoff reached its IO",
+                    withContext(Dispatchers.IO) { io.awaitHeld(5, TimeUnit.SECONDS) }
+                )
+
+                harness.unpair()
+                io.release()
+                withTimeout(5_000) { model.isForking.first { !it } }
+
+                assertNull("A removed pairing opens no fork", model.forkNavigation.value)
+                assertNull(harness.cache.loadChat("instance-fork", fork.id))
+                assertNull(harness.cache.admittedChat("instance-fork", fork.id))
+                assertNull(harness.drafts.getDraft("instance-fork", fork.id))
+                assertTrue(harness.drafts.takeStagedAttachments("instance-fork", fork.id).isEmpty())
+            }
+        } finally {
+            io.close()
+        }
+    }
+
+    @Test
+    fun aForkTheMacRejectedRetriesWithAFreshIdempotencyKey() {
+        val fork = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "assistant-1", position = AidenChatForkPosition.AFTER, at = Instant.EPOCH
+        ))
+        val forkRequests = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        withForkHarness(listOf("chat-fork-v1"), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                    forkRequests.add(request)
+                    if (forkRequests.size == 1) {
+                        MockResponse().setResponseCode(409).setBody(
+                            """{"error":{"code":"operation_in_progress","message":"Busy","requestId":"request-busy","retryable":true}}"""
+                        )
+                    } else {
+                        MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(AidenChatForkResult(fork)))
+                    }
+                }
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            withTimeout(5_000) { model.isForking.first { !it } }
+            assertEquals("This chat is busy on your Mac. Try forking again in a moment.", model.presentedError.value)
+            assertNull(model.forkNavigation.value)
+
+            // Same source revision, same cut: only the key may differ.
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            assertEquals(fork.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+
+            val first = forkRequests.poll()!!
+            val second = forkRequests.poll()!!
+            assertEquals(first.getHeader("If-Match"), second.getHeader("If-Match"))
+            assertNotEquals(
+                "The Mac settled the busy key as a rejection, so replaying it can never succeed",
+                first.getHeader("Idempotency-Key"), second.getHeader("Idempotency-Key")
+            )
+        }
+    }
+
+    @Test
+    fun aForkWhoseResponseWasLostReplaysItsIdempotencyKey() {
+        val fork = forkChat(lineage = AidenChatForkLineage(
+            chatId = forkSource.id, messageId = "assistant-1", position = AidenChatForkPosition.AFTER, at = Instant.EPOCH
+        ))
+        val dropResponses = java.util.concurrent.atomic.AtomicBoolean(true)
+        val forkKeys = java.util.concurrent.LinkedBlockingQueue<String>()
+        withForkHarness(listOf("chat-fork-v1"), { request ->
+            when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/chats/${forkSource.id}/fork" -> {
+                    forkKeys.add(request.getHeader("Idempotency-Key")!!)
+                    if (dropResponses.get()) {
+                        MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                    } else {
+                        MockResponse().setResponseCode(201).setBody(forkWireJson.encodeToString(AidenChatForkResult(fork)))
+                    }
+                }
+                "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            withTimeout(5_000) { model.isForking.first { !it } }
+            assertNull(model.forkNavigation.value)
+            assertNotNull("The lost response is reported", model.presentedError.value)
+
+            dropResponses.set(false)
+            model.fork("assistant-1", AidenChatForkPosition.AFTER)
+            assertEquals(fork.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+
+            val keys = forkKeys.toList()
+            assertTrue("The retry reached the Mac", keys.size >= 2)
+            assertEquals(
+                "The Mac may have created the first fork, so the retry replays its key",
+                setOf(keys.first()), keys.toSet()
+            )
+        }
+    }
+
+    /** Runs IO normally until [hold]; held work waits for [release]. */
+    private class HoldableDispatcher : CoroutineDispatcher() {
+        private val executor = Executors.newCachedThreadPool()
+        private val held = java.util.concurrent.LinkedBlockingQueue<Runnable>()
+        private val firstHeld = CountDownLatch(1)
+        @Volatile private var holding = false
+
+        fun hold() {
+            holding = true
+        }
+
+        fun awaitHeld(timeout: Long, unit: TimeUnit): Boolean = firstHeld.await(timeout, unit)
+
+        @Synchronized
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+            if (holding) {
+                held.add(block)
+                firstHeld.countDown()
+            } else {
+                executor.execute(block)
+            }
+        }
+
+        @Synchronized
+        fun release() {
+            holding = false
+            while (true) executor.execute(held.poll() ?: break)
+        }
+
+        fun close() {
+            executor.shutdown()
+        }
+    }
+
+    private val forkWireJson = Json(json) { explicitNulls = false }
+
+    private val forkSource = AidenChat(
+        id = "chat-source", workspaceId = "workspace-fork", title = "Parser review",
+        messages = listOf(
+            AidenChatMessage("user-1", AidenChatRole.USER, "Review the parser.", createdAt = Instant.EPOCH),
+            AidenChatMessage("assistant-1", AidenChatRole.ASSISTANT, "Starting.", createdAt = Instant.EPOCH),
+            AidenChatMessage("user-2", AidenChatRole.USER, "Use a regex.", createdAt = Instant.EPOCH),
+            AidenChatMessage("assistant-2", AidenChatRole.ASSISTANT, "Done.", createdAt = Instant.EPOCH)
+        ),
+        createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "source-r1"
+    )
+
+    private fun forkChat(lineage: AidenChatForkLineage) = AidenChat(
+        id = "chat-fork", workspaceId = "workspace-fork", title = "Parser review",
+        messages = listOf(
+            AidenChatMessage("fork-user-1", AidenChatRole.USER, "Review the parser.", createdAt = Instant.EPOCH),
+            AidenChatMessage("fork-assistant-1", AidenChatRole.ASSISTANT, "Starting.", createdAt = Instant.EPOCH)
+        ),
+        createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "fork-r1", forkedFrom = lineage
+    )
+
+    private class ForkHarness(
+        val server: MockWebServer,
+        private val requests: java.util.concurrent.ConcurrentLinkedQueue<String>,
+        private val coordinator: AidenRemoteCoordinator,
+        val cache: AidenChatCache,
+        val drafts: AidenChatDraftStore,
+        private val viewModels: ViewModelStore
+    ) {
+        private var opened = 0
+
+        fun paths(): List<String> = requests.toList()
+
+        /** Removes the pairing the way Settings and credential revocation do. */
+        fun unpair() = coordinator.removeInstallation(coordinator.installationStore.activeInstallation!!.id)
+
+        suspend fun open(
+            chatId: String,
+            initial: AidenChat? = null,
+            ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+        ): AidenChatViewModel {
+            val model = AidenChatViewModel(chatId, coordinator, cache, drafts, initial, ioDispatcher = ioDispatcher)
+            viewModels.put("fork-${opened++}", model)
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            withTimeout(5_000) { model.chat.first { it != null } }
+            return model
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun withForkHarness(
+        features: List<String>,
+        route: (RecordedRequest) -> MockResponse?,
+        block: suspend CoroutineScope.(ForkHarness) -> Unit
+    ) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-fork-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val paths = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                paths.add(request.requestUrl!!.encodedPath)
+                return when (request.requestUrl!!.encodedPath) {
+                    "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-fork","name":"Fork Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":${json.encodeToString(features)},"connectionMode":"lan","serverTime":"2026-10-05T12:00:00Z"}""")
+                    "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                    else -> route(request) ?: MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-fork", deviceId = "device-fork", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                try {
+                    block(ForkHarness(server, paths, coordinator, cache, drafts, viewModels))
+                } finally {
+                    viewModels.clearAndJoin()
+                }
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
     }
 }

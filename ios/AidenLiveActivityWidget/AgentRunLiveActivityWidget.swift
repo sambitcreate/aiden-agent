@@ -73,13 +73,27 @@ private struct AgentRunExpandedIslandBottomView: View {
     let state: AgentRunActivityAttributes.ContentState
     let systemMarkedStale: Bool
 
+    /// A stale run that is still waiting on the user keeps its ask here,
+    /// ahead of any older reply text.
+    private var staleAnswerLine: String? {
+        guard let copy = AgentRunStalePresentation.copy(for: state, systemMarkedStale: systemMarkedStale),
+              let action = copy.action else { return nil }
+        return "\(copy.lead) · \(action)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             AgentRunProgressRail(status: state.status)
 
             AgentRunFreshnessChips(state: state, systemMarkedStale: systemMarkedStale)
 
-            if !state.responseExcerpt.isEmpty {
+            if let staleAnswerLine {
+                Text(staleAnswerLine)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            } else if !state.responseExcerpt.isEmpty {
                 Text(state.responseExcerpt)
                     .font(.caption2)
                     .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
@@ -118,9 +132,13 @@ private struct AgentRunLockScreenView: View {
         AgentRunFreshness.isStale(context.state, systemMarkedStale: context.isStale)
     }
 
+    private var staleCopy: AgentRunStalePresentation.Copy? {
+        AgentRunStalePresentation.copy(for: context.state, systemMarkedStale: context.isStale)
+    }
+
     private var activityText: String {
-        if isStale {
-            return "Latest status shown"
+        if let staleCopy {
+            return staleCopy.lead
         }
 
         if let errorSummary = context.state.errorSummary, !errorSummary.isEmpty {
@@ -176,11 +194,18 @@ private struct AgentRunLockScreenView: View {
     }
 
     private var transcriptPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 2) {
+            if let action = staleCopy?.action {
+                Text(action)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AgentRunLiveActivityTheme.primaryText)
+                    .lineLimit(1)
+            }
+
             Text(excerptText)
                 .font(.caption)
                 .foregroundStyle(AgentRunLiveActivityTheme.secondaryText)
-                .lineLimit(2)
+                .lineLimit(staleCopy?.action == nil ? 2 : 1)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
@@ -388,7 +413,7 @@ private struct AgentRunProgressRail: View {
             0.3
         case .usingTool, .searchingFiles, .readingFiles, .runningCommand:
             0.52
-        case .waitingForApproval:
+        case .waitingForApproval, .waitingForAnswer:
             0.62
         case .responding:
             0.78
@@ -478,7 +503,7 @@ private enum AgentRunStatusStyle {
             return Color(red: 0.58, green: 0.78, blue: 1.0)
         case .runningCommand:
             return Color(red: 0.76, green: 0.55, blue: 1.0)
-        case .waitingForApproval:
+        case .waitingForApproval, .waitingForAnswer:
             return Color(red: 1.0, green: 0.58, blue: 0.24)
         case .complete:
             return Color(red: 0.35, green: 0.95, blue: 0.55)
@@ -505,6 +530,8 @@ private enum AgentRunStatusStyle {
             "text.bubble"
         case .waitingForApproval:
             "checkmark.shield"
+        case .waitingForAnswer:
+            "questionmark.bubble"
         case .complete:
             "checkmark"
         case .failed:

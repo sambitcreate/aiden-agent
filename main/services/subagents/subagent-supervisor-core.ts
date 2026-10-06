@@ -1,4 +1,5 @@
-import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
+import { parseCompactionModelOverrides } from "../../../renderer/shared/compaction.js";
+import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { WorkspacePermission } from "../types.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -107,6 +108,7 @@ export interface PreparedSubagentRun {
 
 export interface SubagentSupervisorInput {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
   generationId: string;
   chatId: string;
   workspaceId: string;
@@ -325,6 +327,8 @@ export class SubagentSupervisor {
   private readonly terminalHealthRuns = new Set<string>();
 
   constructor(private readonly input: SubagentSupervisorInput) {
+    this.input = { ...input, compactionModelOverrides: input.compactionModelOverrides
+      ? parseCompactionModelOverrides(input.compactionModelOverrides) : undefined };
     this.now = input.now ?? (() => performance.now());
     this.startedAt = this.now();
     this.childDeadlineMs =
@@ -574,6 +578,7 @@ export class SubagentSupervisor {
                   runtime: this.input.runtime,
                   thinkingLevel: authority.thinkingLevel,
                   compactionEngine: this.input.compactionEngine,
+                  compactionModelOverrides: this.input.compactionModelOverrides,
                   workspaceRoot: this.input.workspaceRoot,
                   permission: this.input.permission,
                   inheritedCeiling: this.input.inheritedCeiling,
@@ -1117,6 +1122,7 @@ export class SubagentSupervisor {
               runtime: this.input.runtime,
               thinkingLevel: this.input.thinkingLevel,
               compactionEngine: this.input.compactionEngine,
+                  compactionModelOverrides: this.input.compactionModelOverrides,
               workspaceRoot: this.input.workspaceRoot,
               permission: this.input.permission,
               inheritedCeiling: this.input.inheritedCeiling,

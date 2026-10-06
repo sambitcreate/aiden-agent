@@ -12185,7 +12185,12 @@
       },
       "ChatMessagesWindow": {
         "type": "object",
+        "description": "Contract revision 23 (chat-messages-window-metadata-v1) adds the chat metadata a whole-chat read returns: workspaceId, botId, title, titlePending, providerId/modelId, createdAt and updatedAt. A host advertising chat-messages-window-metadata-v1 always includes workspaceId, title, createdAt and updatedAt; a client that refreshes from a window falls back to GET /chats/{chatId} when they are absent.",
         "x-aiden-max-json-response-bytes": 1048576,
+        "dependentRequired": {
+          "providerId": ["modelId"],
+          "modelId": ["providerId"]
+        },
         "required": [
           "chatId",
           "revision",
@@ -12213,6 +12218,45 @@
           "hasOlder": {
             "type": "boolean",
             "description": "True when older visible messages exist before the first returned message."
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "titlePending": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           },
           "forkedFrom": {
             "description": "Additive in contract revision 21: present on a fork, with its summary.",

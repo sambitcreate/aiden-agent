@@ -1684,3 +1684,35 @@ test("the summary index records when assistant output was last persisted", async
   assert.equal(afterUser?.lastAssistantAt, assistant?.createdAt);
   assert.equal(afterUser?.lastAssistantSequence, 1);
 });
+
+
+test("loads legacy Azure chat identities through the renamed native provider", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-google-migration-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chat = {
+    id: "legacy-chat",
+    title: "Legacy Gemini",
+    workspaceId: "default",
+    providerId: "azure-openai-responses",
+    model: "deployment",
+    createdAt: 10,
+    updatedAt: 20,
+    messages: [],
+  };
+  await fs.writeFile(
+    path.join(directory, "index.json"),
+    JSON.stringify([chat]),
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(directory, "legacy-chat.json"),
+    JSON.stringify(chat),
+    "utf-8",
+  );
+  const store = createChatStore(async () => directory);
+
+  assert.equal((await store.list())[0]?.providerId, "azure");
+  assert.equal((await store.get("legacy-chat"))?.providerId, "azure");
+});

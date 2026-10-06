@@ -557,6 +557,20 @@ export interface AidenRemoteChatMessagesWindow {
   messages: AidenRemoteMessageProjection[];
   /** Older visible messages exist before the first returned message. */
   hasOlder: boolean;
+  /**
+   * Additive (contract revision 23, `chat-messages-window-metadata-v1`): the
+   * chat's mutable metadata, exactly as `GET /chats/{chatId}` projects it, so
+   * a windowed reader learns renames and model changes without reading the
+   * whole transcript. `revision` covers these fields as well as the messages.
+   */
+  workspaceId: string;
+  botId?: string;
+  title: string;
+  providerId?: string;
+  modelId?: string;
+  createdAt: string;
+  updatedAt: string;
+  titlePending?: true;
   /** Additive (protocol revision 21): present on a fork, with its summary. */
   forkedFrom?: AidenRemoteChatForkLineageProjection;
 }
@@ -570,6 +584,7 @@ export interface AidenRemoteChatMessagesWindow {
 export function projectAidenRemoteChatMessagesWindow(
   chat: Chat,
   input: { before?: string; limit: number },
+  options: { titlePending?: boolean } = {},
 ): AidenRemoteChatMessagesWindow {
   const visible = visibleChatMessages(chat);
   let end = visible.length;
@@ -592,6 +607,15 @@ export function projectAidenRemoteChatMessagesWindow(
       revision: chatRevision(chat),
       messages,
       hasOlder: true,
+      workspaceId: persistedChatWorkspaceId(chat.workspaceId),
+      ...(chat.botId ? { botId: chat.botId } : {}),
+      title: boundedUnicodeScalarPrefix(chat.title, 1_024),
+      ...(chat.providerId && chat.model
+        ? { providerId: chat.providerId, modelId: chat.model }
+        : {}),
+      createdAt: new Date(chat.createdAt).toISOString(),
+      updatedAt: new Date(chat.updatedAt).toISOString(),
+      ...(options.titlePending === true ? { titlePending: true as const } : {}),
       ...(forkedFrom ? { forkedFrom } : {}),
     };
     const size = () => Buffer.byteLength(JSON.stringify(window), "utf8");
@@ -1488,7 +1512,10 @@ export class AidenRemoteChatService {
     chatId: string,
     input: { before?: string; limit: number },
   ): Promise<AidenRemoteChatMessagesWindow> {
-    return projectAidenRemoteChatMessagesWindow(await this.chat(chatId), input);
+    const chat = await this.chat(chatId);
+    return projectAidenRemoteChatMessagesWindow(chat, input, {
+      titlePending: this.options.isTitlePending?.(chat.id) === true,
+    });
   }
 
   async uploadAttachment(

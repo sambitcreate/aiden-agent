@@ -2017,6 +2017,23 @@ test("event count and byte trimming keep exact accounting and contiguous newest 
   }
 });
 
+test("classifier approvals remain deny-only remotely even when details are missing or forged", async () => {
+  const { classifierApprovalFor } = await import("./pi-model-tools.js");
+  const complete = classifierApprovalFor({ provider: "research", model: "judge", state: { private: "never project to Remote" }, questions: { safe: { type: "bool", instructions: "Inspect", criteria: { true: "Yes", false: "No" } } } });
+  for (const details of [undefined, complete, { kind: "model-classification", payloadComplete: false }, { kind: "invalid" }]) {
+    const app = fixture();
+    const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+    owner.owner.send("chat:approval", { approvalId: "classifier-approval", toolName: "classify", summary: "Review complete classification inputs on desktop", ...(details ? { details } : {}) });
+    assert.equal(app.service.pendingApproval("device-1", "stream-1")?.canAllow, false);
+    assert.equal(app.service.pendingApproval("device-1", "stream-1")?.details, undefined);
+    await assert.rejects(app.service.respondApproval("device-1", "classifier-approval", "allow", "classifier-forged-allow", inputPassthrough), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied");
+    assert.deepEqual(app.approvals, []);
+    await app.service.respondApproval("device-1", "classifier-approval", "deny", "classifier-valid-deny", inputPassthrough);
+    assert.equal(app.approvals.length, 1);
+    assert.match(app.approvals[0]!, /:deny:/u);
+  }
+});
+
 function persistenceFixture(persistCoalesceMs: number) {
   const writes: ReturnType<AidenRemoteStreamService["snapshot"]>[] = [];
   const service = new AidenRemoteStreamService({
@@ -2132,4 +2149,22 @@ test("settling persistence flushes a pending coalesced write exactly once", asyn
   );
   await app.service.settlePersistence();
   assert.equal(app.writes.length, settledWrites + 1, "a settled journal is not rewritten");
+});
+
+
+test("image prompts cannot be authorized through a truncated Remote summary", async () => {
+  const { summarizeToolCall } = await import("./coding-tools.js");
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", { approvalId: "image-approval", toolName: "generate_image",
+    summary: summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "x".repeat(2400) + "PRIVATE-LATE-PROMPT" }) });
+  const pending = app.service.pendingApproval("device-1", "stream-1")!;
+  assert.equal(pending.canAllow, false);
+  assert.doesNotMatch(pending.summary, /PRIVATE-LATE-PROMPT/);
+  await assert.rejects(app.service.respondApproval("device-1", "image-approval", "allow", "image-forged-allow", inputPassthrough),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied");
+  assert.deepEqual(app.approvals, []);
+  await app.service.respondApproval("device-1", "image-approval", "deny", "image-valid-deny", inputPassthrough);
+  assert.equal(app.approvals.length, 1);
+  assert.match(app.approvals[0]!, /:deny:/u);
 });
