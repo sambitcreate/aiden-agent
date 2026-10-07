@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import type { AcpHarnessStatus } from "../../shared/acp-harness.js";
+import { HarnessRuntimeSection } from "./harness-runtime-section.js";
+
+function render(runtime: AcpHarnessStatus["runtime"], busy = false): string {
+  return renderToStaticMarkup(
+    <HarnessRuntimeSection
+      providerId="antigravity"
+      label="Google Antigravity"
+      status={{ providerId: "antigravity", runtime, signedIn: false, busy }}
+    />,
+  );
+}
+
+test("before installing, the size, source and consent are stated next to Install", () => {
+  const html = render({ status: "not_installed", version: "1.3.0", downloadBytes: 111_456_962, requiredBytes: 900_000_000 });
+  assert.match(html, /downloads 111 MB from dl\.google\.com and needs about 900 MB free\./u);
+  assert.match(html, /Nothing is\s+downloaded until you choose Install\./u);
+  assert.match(html, />Install Google Antigravity</u);
+  assert.doesNotMatch(html, /role="progressbar"/u);
+});
+
+test("installing shows determinate progress and a cancel action, but no install button", () => {
+  const html = render({ status: "installing", phase: "downloading", receivedBytes: 55_000_000, totalBytes: 110_000_000 });
+  assert.match(html, /role="progressbar"[^>]*aria-valuenow="50"/u);
+  assert.match(html, />Cancel installation</u);
+  assert.doesNotMatch(html, />Install Google Antigravity</u);
+});
+
+test("an installed runtime can be removed, except while chats are using it", () => {
+  const idle = render({ status: "installed", version: "1.3.0" });
+  assert.match(idle, /Version 1\.3\.0 installed\./u);
+  assert.match(idle, /<button[^>]*>.*Remove runtime/u);
+  assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*>[^<]*<svg[^>]*>.*Remove runtime/u);
+  const busy = render({ status: "installed", version: "1.3.0" }, true);
+  assert.match(busy, /<button[^>]*disabled=""[^>]*title="Stop running Google Antigravity chats first\."/u);
+});
+
+test("unsupported computers get an explanation and no actions; failures offer a retry", () => {
+  const unsupported = render({ status: "unsupported", message: "Google does not publish this runtime for this computer." });
+  assert.match(unsupported, /does not publish this runtime/u);
+  assert.doesNotMatch(unsupported, /<button/u);
+  const failed = render({ status: "failed", message: "Installation cancelled. Nothing was changed.", downloadBytes: 1, requiredBytes: 2 });
+  assert.match(failed, /Installation cancelled/u);
+  assert.match(failed, />Retry installation</u);
+  const update = render({ status: "update_available", installedVersion: "1.2.1", version: "1.3.0", downloadBytes: 1, requiredBytes: 2 });
+  assert.match(update, />Update Google Antigravity</u);
+});

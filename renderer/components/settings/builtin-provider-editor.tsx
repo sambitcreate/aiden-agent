@@ -10,6 +10,8 @@ import {
   type ProviderAuthSession,
 } from "../../lib/provider-auth-session";
 import type { Provider, ProviderAuthEvent, ProviderAuthPrompt } from "../../lib/types";
+import { isAcpHarnessProvider } from "../../shared/acp-harness";
+import { HarnessRuntimeSection, useHarnessStatus } from "./harness-runtime-section";
 import { ProviderModelVisibility } from "./provider-model-visibility";
 
 interface BuiltinProviderEditorProps {
@@ -52,6 +54,10 @@ export function BuiltinProviderEditor({
   const [starting, setStarting] = React.useState(false);
   const [responding, setResponding] = React.useState(false);
   const [authLink, setAuthLink] = React.useState<string | null>(null);
+  const harness = isAcpHarnessProvider(provider.id);
+  const harnessStatus = useHarnessStatus(harness ? provider.id : undefined);
+  // Agent-backed providers sign in through their runtime, so it must exist first.
+  const harnessReady = !harness || harnessStatus?.runtime.status === "installed";
   const interactiveMethods = (provider.authMethods ?? []).filter(
     (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin,
   );
@@ -107,7 +113,8 @@ export function BuiltinProviderEditor({
     try {
       const session = createProviderAuthSession(providersApi, provider.id, authType, {
         onPrompt: (nextPrompt) => {
-          setAuthLink(null);
+          // A pasted redirect is a fallback for an open sign-in page; keep its link.
+          if (nextPrompt.type !== "manual_code") setAuthLink(null);
           setPrompt(nextPrompt);
           setValue("");
           setMessage(null);
@@ -201,7 +208,11 @@ export function BuiltinProviderEditor({
       onOpenChange={close}
       layer={layer}
       title={`Set up ${provider.label}`}
-      description="Pi owns this provider's endpoint, models, credentials, and request transport."
+      description={
+        harness
+          ? `${provider.label} runs Google's agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
+          : "Pi owns this provider's endpoint, models, credentials, and request transport."
+      }
       confirmLabel="Continue"
       confirmHidden={!needsValue}
       confirmDisabled={responding || !value.trim()}
@@ -209,6 +220,9 @@ export function BuiltinProviderEditor({
       onConfirm={() => void respond(value)}
     >
       <div className="grid gap-4">
+        {harness ? (
+          <HarnessRuntimeSection providerId={provider.id} label={provider.label} status={harnessStatus} />
+        ) : null}
         {prompt?.type === "select" ? (
           <div className="grid gap-2" aria-label={prompt.message}>
             <Text variant="small" color="secondary">
@@ -258,12 +272,17 @@ export function BuiltinProviderEditor({
               <Button
                 key={method.type}
                 variant="muted"
-                disabled={starting}
+                disabled={starting || !harnessReady}
                 onClick={() => void start(method.type)}
               >
                 {method.label}
               </Button>
             ))}
+            {!harnessReady ? (
+              <Text variant="small" color="tertiary">
+                Install the runtime above before signing in.
+              </Text>
+            ) : null}
           </div>
         ) : (
           <Text variant="small" color="secondary">

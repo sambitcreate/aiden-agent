@@ -245,3 +245,12 @@ test("provider guardrail warns only for LLM tasks without a provider or usable a
   assert.equal(scheduledTaskProviderGuardrail("script", undefined, undefined, [provider()]), false);
   assert.equal(scheduledTaskProviderGuardrail("llm", undefined, undefined, undefined), true);
 });
+
+test("scheduled tasks never pin, or silently fall back to, an agent-backed provider", () => {
+  const antigravity = provider({ id: "antigravity", models: ["gemini-3.8-flash"] });
+  assert.equal(
+    scheduledTaskProviderPin([antigravity], { providerId: "antigravity", model: "gemini-3.8-flash" }, undefined),
+    undefined,
+  );
+  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, "antigravity", [antigravity]), true);
+});
