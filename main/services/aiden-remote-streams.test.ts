@@ -2193,8 +2193,9 @@ test("an older client's stream cancel stops a running Bot chat turn without the 
   assert.equal(cancelled.state, "cancelled");
   assert.equal(service.status("device-1", "stream-bot-1").state, "cancelled");
   const events = service.snapshot().streams[0]?.events ?? [];
-  assert.equal(events.at(-1)?.type, "cancelled");
-  assert.deepEqual(events.at(-1)?.payload, { source: "device" });
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "cancelled");
+  assert.deepEqual(terminal?.payload, { source: "device" });
   // The stopped run's owner is closed, so output it produces afterwards is refused.
   assert.throws(() => run!.owner.send("chat:delta", { streamId: "stream-bot-1", delta: " late" }));
   assert.equal(service.status("device-1", "stream-bot-1").state, "cancelled");
