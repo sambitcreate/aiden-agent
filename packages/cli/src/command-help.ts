@@ -21,6 +21,6 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   speech status|download|select|delete <id>|transcribe <pcm16-file> <model-id>
   serve [--remote] [--daemon] | stop | status   Scheduling, Telegram, and Remote daemon
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
-  bots list|get|catalog|notice|acknowledge|create|update|archive|restore|access|chat|chat-access
+  bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access
   reset                                     Reset first-run onboarding only
 `;

@@ -13,7 +13,10 @@ export type BotLifecycleKind =
   | "copy_chat"
   | "delete_chat"
   | "update_model"
+  | "delete_bot"
+  /** Legacy: written by releases that archived Bots. Only read, never begun. */
   | "archive_bot"
+  /** Legacy: written by releases that archived Bots. Only read, never begun. */
   | "restore_bot";
 
 export type BotLifecycleStage =
@@ -28,7 +31,8 @@ export type BotLifecycleStage =
   | "policy_removed"
   | "identity_archived"
   | "identity_restored"
-  | "authority_restored";
+  | "authority_restored"
+  | "identity_deleted";
 
 export type BotLifecycleSubject =
   | { workspaceId: string; workspaceCreatedAt: number }
@@ -36,7 +40,8 @@ export type BotLifecycleSubject =
   | { chatId: string; workspaceId: string }
   | { chatId: string; expectedRevision: string }
   | { chatId: string }
-  | { expectedRevision: string };
+  | { expectedRevision: string }
+  | Record<string, never>;
 
 export interface BotLifecycleOperation {
   operationId: string;
@@ -97,9 +102,9 @@ export type BotLifecycleBeginInput =
     }
   | {
       operationId: string;
-      kind: "archive_bot" | "restore_bot";
+      kind: "delete_bot";
       botId: string;
-      subject: { expectedRevision: string };
+      subject: Record<string, never>;
     };
 
 export type BotLifecycleLookup =
@@ -133,6 +138,9 @@ const STAGES: Readonly<Record<BotLifecycleKind, readonly BotLifecycleStage[]>> =
   copy_chat: ["prepared", "policy_committed", "chat_committed"],
   delete_chat: ["prepared", "authority_fenced", "chat_deleted", "policy_removed"],
   update_model: ["prepared", "policy_committed", "chat_committed"],
+  // Delete erases photo, home, access and chats, then the Bot record last.
+  // Every step is idempotent, so recovery always rolls a delete forward.
+  delete_bot: ["prepared", "identity_deleted"],
   archive_bot: ["prepared", "authority_archived", "identity_archived"],
   restore_bot: ["prepared", "identity_restored", "authority_restored"],
 };
@@ -179,6 +187,7 @@ function parseKind(value: unknown): BotLifecycleKind {
     value === "copy_chat" ||
     value === "delete_chat" ||
     value === "update_model" ||
+    value === "delete_bot" ||
     value === "archive_bot" ||
     value === "restore_bot"
   ) {
@@ -234,6 +243,11 @@ function parseSubject(kind: BotLifecycleKind, value: unknown): BotLifecycleSubje
         throw new BotLifecycleJournalStateError("Bot model-update lifecycle subject is corrupt.");
       }
       return { chatId: value.chatId, expectedRevision: value.expectedRevision };
+    case "delete_bot":
+      if (!hasExactKeys(value, [])) {
+        throw new BotLifecycleJournalStateError("Bot delete lifecycle subject is corrupt.");
+      }
+      return {};
     case "archive_bot":
     case "restore_bot":
       if (
@@ -388,6 +402,9 @@ function parseBeginInput(input: BotLifecycleBeginInput): BotLifecycleBeginInput 
     throw new BotLifecycleJournalStateError("Bot lifecycle operation is invalid.");
   }
   const base = parseBase(input);
+  if (base.kind === "archive_bot" || base.kind === "restore_bot") {
+    throw new BotLifecycleJournalStateError("Bots can no longer be archived or restored.");
+  }
   return base as BotLifecycleBeginInput;
 }
 

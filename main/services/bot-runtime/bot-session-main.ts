@@ -81,7 +81,7 @@ async function withAdmission<T>(botId: string, action: (admission: BotRuntimeAut
 
 async function loadBot(botId: string): Promise<BotDefinition> {
   const bot = await botStore.get(botId);
-  if (!bot || bot.archivedAt !== undefined) throw new Error("This Bot no longer exists.");
+  if (!bot) throw new Error("This Bot no longer exists.");
   return bot;
 }
 
@@ -202,14 +202,9 @@ async function deleteRoutines(botId: string): Promise<void> {
   await botRoutineService.deleteRoutinesForBot(botId);
 }
 
-/**
- * Retire the Bot record last. Bot storage has no hard delete yet, so the
- * record is archived: its authority is fenced and it leaves every list.
- */
-async function retireBotRecord(botId: string): Promise<void> {
-  const bot = await botStore.get(botId);
-  if (!bot || bot.archivedAt !== undefined) return;
-  await botApplicationService.archiveBot({ botId, expectedRevision: bot.revision });
+/** Photo, managed home, access, chat rows, then the Bot record last. */
+async function eraseBotData(botId: string): Promise<void> {
+  await botApplicationService.deleteBot({ botId });
 }
 
 async function unbindTelegram(botId: string): Promise<void> {
@@ -227,16 +222,14 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     models: runtimeModels.models,
     extension,
     resolveModel,
-    // Deleted Bots are archived records; their sessions are orphans.
-    knownBotIds: async () =>
-      new Set((await botStore.list(true)).filter((bot) => bot.archivedAt === undefined).map(({ id }) => id)),
+    knownBotIds: async () => new Set((await botStore.list()).map(({ id }) => id)),
     deleteEffects: [
       (botId) => toolSources.forgetBot(botId),
       deleteRoutines,
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
       removeArchivedBotFavorite,
-      retireBotRecord,
+      eraseBotData,
     ],
     onStateChange: broadcastState,
     onReport: (botId, error) => logger.warn("bots", `Bot ${botId} runtime report.`, error),

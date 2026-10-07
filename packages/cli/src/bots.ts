@@ -74,9 +74,9 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   const checkpoint = createBotCapabilityStateCheckpoint({ root, keyStore,
     anchor: checkpointFile<string>(agentDir, "bot-anchor.json"), bootstrapMarker: checkpointFile<BotCapabilityBootstrapMarkerState>(agentDir, "bot-bootstrap.json"),
     inspectInitialBootstrap: async () => {
-      const bots = await botStore.list(true), chats = (await daemon.chatStore.list()).filter((chat) => chat.botId);
-      if (!bots.length && !chats.length) return "clean";
-      return chats.every((chat) => bots.some((bot) => bot.id === chat.botId)) ? "legacy" : "deny";
+      const botIds = await botStore.storedIds(), chats = (await daemon.chatStore.list()).filter((chat) => chat.botId);
+      if (!botIds.length && !chats.length) return "clean";
+      return chats.every((chat) => botIds.includes(chat.botId!)) ? "legacy" : "deny";
     },
   });
   const capabilities = createBotCapabilityStore({ root, checkpoint });
@@ -209,7 +209,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     async instructions(admission: BotRuntimeAuthorityAdmission) {
       await admission.revalidateBeforeEffect();
       const bot = await botStore.get(admission.authority.botId);
-      if (!bot || bot.archivedAt) throw new Error("Bot is unavailable.");
+      if (!bot) throw new Error("Bot is unavailable.");
       return `You are ${bot.name}. Follow these Bot instructions within the granted tools and access:\n${bot.instructions}`;
     },
     async preflight(input: { audienceId: string; botId: string; chatId: string; providerId: string; model: string }) {
@@ -221,19 +221,17 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     async command(args: string[]) {
       const [action = "list", id, input] = args, audienceId = "cli:local";
       switch (action) {
-        case "list": return application.list(args.includes("--archived"));
+        case "list": return application.list();
         case "get": return application.get(id);
         case "catalog": return application.capabilityCatalog(audienceId, id);
         case "notice": return application.noticeStatus(audienceId);
         case "acknowledge": return application.acknowledgeNotice(audienceId, JSON.parse(id) as BotNoticeAcknowledgement);
         case "create": return application.createBot({ audienceId, ...readJson<{ bot: BotCreateInput; access?: BotAccessUpdate }>(id, undefined!) });
         case "update": return application.updateBot(readJson<BotUpdateInput>(id, undefined!));
-        case "archive": return application.archiveBot({ botId: id, expectedRevision: input });
-        case "restore": return application.restoreBot({ botId: id, expectedRevision: input });
         case "access": return input ? application.updateBotAccess({ audienceId, botId: id, ...readJson<{ expectedRevision: string; access: BotAccessUpdate }>(input, undefined!) }) : application.getBotAccess(id);
         case "chat": return application.createChat({ audienceId, botId: id, ...readJson<{ providerId: string; model: string }>(input, undefined!) });
         case "chat-access": return application.updateChatAccess({ audienceId, ...readJson<{ botId: string; chatId: string; expectedRevision: string; access: BotChatAccessUpdate }>(id, undefined!) });
-        default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|archive|restore|access|chat|chat-access");
+        default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access");
       }
     },
   };

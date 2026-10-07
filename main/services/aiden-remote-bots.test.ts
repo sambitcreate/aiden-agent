@@ -99,7 +99,6 @@ function fixture(
     beforeSaveFavorites?: (
       snapshot: AidenRemoteBotFavoritesSnapshot,
     ) => Promise<void>;
-    onArchiveBot?: (botId: string) => Promise<void>;
     updateBotAccessError?: unknown;
     capabilityCatalog?: (
       audienceId: string,
@@ -162,42 +161,6 @@ function fixture(
       });
       bots[index] = updated;
       return structuredClone(updated);
-    },
-    async archiveBot(input: { botId: string; expectedRevision: string }) {
-      const action = async () => {
-        const index = bots.findIndex(({ id }) => id === input.botId);
-        const existing = bots[index]!;
-        if (existing.revision !== input.expectedRevision) {
-          throw new BotIdentityRevisionConflictError(existing.revision);
-        }
-        const archived = {
-          ...existing,
-          revision: `${existing.revision}_archived`,
-          updatedAt: existing.updatedAt + 1,
-          archivedAt: existing.updatedAt + 1,
-        };
-        bots[index] = archived;
-        await options.onArchiveBot?.(input.botId);
-        return structuredClone(archived);
-      };
-      return options.withBotMutation
-        ? options.withBotMutation(input.botId, action)
-        : action();
-    },
-    async restoreBot(input: { botId: string; expectedRevision: string }) {
-      const index = bots.findIndex(({ id }) => id === input.botId);
-      const existing = bots[index]!;
-      if (existing.revision !== input.expectedRevision) {
-        throw new BotIdentityRevisionConflictError(existing.revision);
-      }
-      const { archivedAt: _archivedAt, ...active } = existing;
-      const restored = {
-        ...active,
-        revision: `${existing.revision}_restored`,
-        updatedAt: existing.updatedAt + 1,
-      };
-      bots[index] = restored;
-      return structuredClone(restored);
     },
     async createChat(input: {
       audienceId: string;
@@ -364,6 +327,10 @@ function fixture(
     chatPolicies,
     policies,
     bots: () => structuredClone(bots),
+    /** A Bot deleted on the Mac: its record is gone. */
+    deleteBotUnsafe(botId: string) {
+      bots = bots.filter(({ id }) => id !== botId);
+    },
     pruneFavoriteUnsafe(botId: string) {
       favorites = {
         version: 1,
@@ -371,48 +338,6 @@ function fixture(
       };
       savedFavorites += 1;
     },
-  };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-}
-
-function serializedLane() {
-  let tail: Promise<void> = Promise.resolve();
-  return async function run<Result>(action: () => Promise<Result>): Promise<Result> {
-    const result = tail.then(action, action);
-    tail = result.then(() => undefined, () => undefined);
-    return result;
-  };
-}
-
-function serializedBotGate(events: string[]) {
-  const tails = new Map<string, Promise<void>>();
-  return async function run<Result>(
-    botId: string,
-    action: () => Promise<Result>,
-  ): Promise<Result> {
-    const previous = tails.get(botId) ?? Promise.resolve();
-    const result = previous.then(async () => {
-      events.push(`enter:${botId}`);
-      try {
-        return await action();
-      } finally {
-        events.push(`exit:${botId}`);
-      }
-    }, async () => {
-      events.push(`enter:${botId}`);
-      try {
-        return await action();
-      } finally {
-        events.push(`exit:${botId}`);
-      }
-    });
-    tails.set(botId, result.then(() => undefined, () => undefined));
-    return result;
   };
 }
 
@@ -630,15 +555,15 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
   assert.equal(narrowed.mode, "custom");
   assert.equal(narrowed.custom.shellEnabled, false);
 
-  const archived = await app.service.archive(created.id, updated.revision);
-  assert.equal(archived.health, "archived");
-  const restored = await app.service.restore(
-    "device_1",
-    created.id,
-    archived.revision,
-    "bot-restore-key-001",
+  // Archive and restore were removed; the routes refuse without changing the Bot.
+  const retired = (error: unknown) => (error as { code?: string }).code === "invalid_request";
+  await assert.rejects(app.service.archive(created.id, updated.revision), retired);
+  await assert.rejects(
+    app.service.restore("device_1", created.id, updated.revision, "bot-restore-key-001"),
+    retired,
   );
-  assert.equal(restored.health, "ready");
+  assert.equal((await app.service.get(created.id)).health, "ready");
+  assert.equal((await app.service.get(created.id)).revision, updated.revision);
   assert.ok(app.notifications.includes(`bot:${created.id}`));
   assert.ok(app.notifications.includes(`chat:${chat.id}`));
 });
@@ -775,82 +700,6 @@ test("an omitted first-chat pair inherits Bot authority without resolving a new 
   assert.equal(app.resolvedSelections.length, 0);
 });
 
-test("Mac archive and Remote favorites updates are linearizable through Bot gates then the shared favorites lane", async () => {
-  {
-    const gateEvents: string[] = [];
-    const withBotMutation = serializedBotGate(gateEvents);
-    const withFavoritesMutation = serializedLane();
-    const saveEntered = deferred();
-    const releaseSave = deferred();
-    let blockFavoriteSave = true;
-    let app!: ReturnType<typeof fixture>;
-    app = fixture([bot("bot_1"), bot("bot_2")], {
-      withBotMutation,
-      withFavoritesMutation,
-      beforeSaveFavorites: async (snapshot) => {
-        if (blockFavoriteSave && snapshot.botIds.length > 0) {
-          blockFavoriteSave = false;
-          saveEntered.resolve();
-          await releaseSave.promise;
-        }
-      },
-      onArchiveBot: (botId) => withFavoritesMutation(async () => {
-        app.pruneFavoriteUnsafe(botId);
-      }),
-    });
-    const empty = await app.service.favorites();
-    const update = app.service.updateFavorites(empty.revision, {
-      botIds: ["bot_2", "bot_1"],
-    });
-    await saveEntered.promise;
-    const detail = await app.service.get("bot_1");
-    const archive = app.service.archive("bot_1", detail.revision);
-    releaseSave.resolve();
-
-    assert.deepEqual((await update).botIds, ["bot_2", "bot_1"]);
-    assert.equal((await archive).health, "archived");
-    assert.deepEqual((await app.service.favorites()).botIds, ["bot_2"]);
-    assert.deepEqual(gateEvents.slice(0, 6), [
-      "enter:bot_1",
-      "enter:bot_2",
-      "exit:bot_2",
-      "exit:bot_1",
-      "enter:bot_1",
-      "exit:bot_1",
-    ]);
-  }
-
-  {
-    const withFavoritesMutation = serializedLane();
-    const archiveHookEntered = deferred();
-    const releaseArchiveHook = deferred();
-    let app!: ReturnType<typeof fixture>;
-    app = fixture([bot("bot_1")], {
-      withBotMutation: serializedBotGate([]),
-      withFavoritesMutation,
-      onArchiveBot: (botId) => withFavoritesMutation(async () => {
-        archiveHookEntered.resolve();
-        await releaseArchiveHook.promise;
-        app.pruneFavoriteUnsafe(botId);
-      }),
-    });
-    const empty = await app.service.favorites();
-    const detail = await app.service.get("bot_1");
-    const archive = app.service.archive("bot_1", detail.revision);
-    await archiveHookEntered.promise;
-    const update = app.service.updateFavorites(empty.revision, { botIds: ["bot_1"] });
-    releaseArchiveHook.resolve();
-
-    assert.equal((await archive).health, "archived");
-    await assert.rejects(
-      update,
-      (error: unknown) =>
-        error instanceof AidenRemoteServiceError && error.code === "bot_archived",
-    );
-    assert.deepEqual((await app.service.favorites()).botIds, []);
-  }
-});
-
 test("stale identity, policy, and favorites revisions return authoritative conflicts", async () => {
   const app = fixture();
   const detail = await app.service.get("bot_1");
@@ -901,7 +750,7 @@ test("stale capability validation maps to a retryable operation conflict", async
   );
 });
 
-test("favorites preserve order, reject duplicates and archived Bots, and prune on archive", async () => {
+test("favorites preserve order, reject duplicates, and prune deleted Bots", async () => {
   const app = fixture([bot("bot_1"), bot("bot_2")]);
   const empty = await app.service.favorites();
   const ordered = await app.service.updateFavorites(empty.revision, {
@@ -912,8 +761,7 @@ test("favorites preserve order, reject duplicates and archived Bots, and prune o
     app.service.updateFavorites(ordered.revision, { botIds: ["bot_1", "bot_1"] }),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
-  const detail = await app.service.get("bot_2");
-  await app.service.archive("bot_2", detail.revision);
+  app.deleteBotUnsafe("bot_2");
   assert.deepEqual((await app.service.favorites()).botIds, ["bot_1"]);
   assert.ok(app.savedFavorites() >= 2);
 });

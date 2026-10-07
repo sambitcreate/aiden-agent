@@ -116,11 +116,8 @@ export function registerBotHandlers(): void {
       );
     },
   );
-  ipcMain.handle("bots:list", async (_event, includeArchived: unknown) => {
-    if (includeArchived !== undefined && typeof includeArchived !== "boolean")
-      throw new Error("Invalid bot list fields.");
-    return botApplicationService.list(includeArchived === true);
-  });
+  // Bots are deleted, never archived; a legacy include-archived flag is ignored.
+  ipcMain.handle("bots:list", async () => botApplicationService.list());
   ipcMain.handle("bots:get", async (_event, id: unknown) =>
     botApplicationService.get(parseBotId(id)),
   );
@@ -398,11 +395,7 @@ function botAccessUpdateRendererError(error: unknown): unknown {
     return new Error("Bot capabilities kept changing. Review the latest choices and try again.");
   }
   if (error instanceof BotApplicationUnavailableError) {
-    return new Error(
-      error.reason === "archived"
-        ? "Restore this Bot before making changes."
-        : "This Bot no longer exists.",
-    );
+    return new Error("This Bot no longer exists.");
   }
   if (
     error instanceof BotCapabilityRevisionConflictError ||
