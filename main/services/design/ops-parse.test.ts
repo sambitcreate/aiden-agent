@@ -170,3 +170,13 @@ test("text fields reject Unicode controls, line separators, bidi overrides and l
   // Well-formed astral characters and ordinary punctuation stay valid.
   assert.equal(parseDesignTitle("Checkout 🎨 – naïve"), "Checkout 🎨 – naïve");
 });
+
+test("a raw chip list beyond 20 items is rejected even when it collapses", () => {
+  const screen = { kind: "screen", screenId: "s1", revisionId: "r1" };
+  assert.deepEqual(parseDesignContextChips(Array.from({ length: 20 }, () => screen)), [screen]);
+  assert.equal(parseDesignContextChips(Array.from({ length: 21 }, () => screen)), undefined);
+});
+
+test("directional marks used in right-to-left text are allowed", () => {
+  assert.equal(parseDesignTitle("مرحبا\u200f Cart\u200e"), "مرحبا\u200f Cart\u200e");
+});

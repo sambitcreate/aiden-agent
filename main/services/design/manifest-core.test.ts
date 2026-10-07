@@ -33,12 +33,12 @@ function manifestFixture() {
     revisions: {
       "rev-1": {
         id: "rev-1", screenId: "screen-1", runId: "run-1", toolCallId: "call_1", title: "Cart",
-        bytes: 120, sha256: SHA, state: "published", createdAt: 1_100, model: MODEL,
+        bytes: 120, sha256: SHA, state: "published", createdAt: 1_100, model: { ...MODEL },
       },
       "rev-2": {
         id: "rev-2", screenId: "screen-1", parentRevisionId: "rev-1", runId: "run-2",
         toolCallId: "call_2|fc_2", title: "Cart", bytes: 140, sha256: SHA, state: "draft",
-        createdAt: 1_200, model: MODEL,
+        createdAt: 1_200, model: { ...MODEL },
       },
     },
     directionSets: {
@@ -58,6 +58,16 @@ function manifestFixture() {
       },
     },
   };
+}
+
+/** Adds extra revisions to screen-1; they belong to `runId` (a run that may not exist). */
+function addRevisions(m: ReturnType<typeof manifestFixture>, count: number, runId = "run-9", offset = 3): void {
+  for (let n = offset; n < offset + count; n += 1) {
+    const id = `rev-${n}`;
+    m.revisions[id as "rev-1"] = { ...m.revisions["rev-1"]!, id, runId, toolCallId: `call_${n}` };
+    m.screens["screen-1"]!.revisionIds.push(id);
+    if (m.runs[runId as "run-1"]) m.runs[runId as "run-1"]!.revisionIds.push(id);
+  }
 }
 
 test("a v1 manifest round-trips through JSON unchanged", () => {
@@ -82,9 +92,8 @@ test("broken cross references and foreign shapes are rejected, never repaired", 
     ["Screen lists a missing revision", (m) => { m.screens["screen-1"]!.revisionIds.push("rev-9"); }],
     ["active revision outside its Screen", (m) => { m.screens["screen-1"]!.activeRevisionId = "rev-9"; }],
     ["record key differs from id", (m) => {
-      const revisions = m.revisions as Record<string, unknown>;
-      revisions["rev-x"] = revisions["rev-1"];
-      delete revisions["rev-1"];
+      // Every reference still resolves; only the key of the copy disagrees with its id.
+      (m.revisions as Record<string, unknown>)["rev-x"] = m.revisions["rev-1"];
     }],
     ["chosen Screen outside its set", (m) => { (m.directionSets["set-1"] as Record<string, unknown>).chosenScreenId = "screen-9"; }],
     ["run claims another run's revision", (m) => { m.runs["run-1"]!.revisionIds.push("rev-2"); }],
@@ -96,6 +105,33 @@ test("broken cross references and foreign shapes are rejected, never repaired", 
     ["unknown end reason", (m) => { (m.runs["run-1"] as Record<string, unknown>).endReason = "bored"; }],
     ["run fills a missing direction set", (m) => { m.runs["run-1"]!.directionSetId = "set-9"; }],
     ["Refine run with a direction set", (m) => { (m.runs["run-2"] as Record<string, unknown>).directionSetId = "set-1"; }],
+    ["node points at an inherited-name Screen", (m) => {
+      m.canvas.nodes.push({ id: "node-2", kind: "screen", screenId: "constructor", x: 0, y: 0 });
+    }],
+    ["direction set lists an inherited-name Screen", (m) => { m.directionSets["set-1"]!.screenIds.push("constructor"); }],
+    ["Screen points at an inherited-name direction set", (m) => {
+      (m.screens["screen-1"] as Record<string, unknown>).directionSetId = "toString";
+    }],
+    ["run fills an inherited-name direction set", (m) => {
+      (m.runs["run-1"] as Record<string, unknown>).directionSetId = "valueOf";
+    }],
+    ["revision belongs to an inherited-name Screen", (m) => {
+      m.revisions["rev-3" as "rev-1"] = { ...m.revisions["rev-1"]!, id: "rev-3", screenId: "constructor" };
+    }],
+    ["Screen points at a set that does not list it", (m) => { m.directionSets["set-1"]!.screenIds = []; }],
+    ["set lists a Screen that points elsewhere", (m) => {
+      delete (m.screens["screen-1"] as Record<string, unknown>).directionSetId;
+    }],
+    ["revision names a run that does not list it", (m) => { m.runs["run-1"]!.revisionIds = []; }],
+    ["revision is its own parent", (m) => { m.revisions["rev-2"]!.parentRevisionId = "rev-2"; }],
+    ["Screen holds more than 100 revisions", (m) => { addRevisions(m, 99); }],
+    ["run holds more revisions than its output cap", (m) => {
+      addRevisions(m, 1, "run-1");
+      addRevisions(m, 1, "run-1", 4);
+    }],
+    ["Refine run with an output cap above one", (m) => { m.runs["run-2"]!.outputCap = 2; }],
+    ["running run with an end time", (m) => { m.runs["run-2"]!.status = "running"; }],
+    ["run ends before it starts", (m) => { m.runs["run-2"]!.endedAt = 1_189; }],
     ["tool call id with a C1 control", (m) => { m.revisions["rev-1"]!.toolCallId = "call\u0085_1"; }],
     ["title with a bidi override", (m) => { m.screens["screen-1"]!.title = "Cart\u202e"; }],
     ["model id with a lone surrogate", (m) => { m.revisions["rev-1"]!.model.model = "model\ud800"; }],
@@ -104,5 +140,27 @@ test("broken cross references and foreign shapes are rejected, never repaired", 
     const manifest = manifestFixture();
     corrupt(manifest);
     assert.equal(parseDesignProjectManifestV1(manifest), undefined, label);
+  }
+});
+
+test("lenient cases the store owns stay readable", () => {
+  const accepts: Array<[string, (m: ReturnType<typeof manifestFixture>) => void]> = [
+    ["a parent revision that no longer exists", (m) => { m.revisions["rev-2"]!.parentRevisionId = "rev-9"; }],
+    ["a revision whose run was trimmed", (m) => {
+      m.revisions["rev-1"]!.runId = "run-9";
+      m.runs["run-1"]!.revisionIds = [];
+    }],
+    ["exactly 100 revisions on one Screen", (m) => { addRevisions(m, 98); }],
+    ["a run at its output cap", (m) => { addRevisions(m, 1, "run-1"); }],
+    ["a running run without an end time", (m) => {
+      m.runs["run-2"]!.status = "running";
+      delete (m.runs["run-2"] as Record<string, unknown>).endedAt;
+    }],
+    ["a run that ends the moment it starts", (m) => { m.runs["run-2"]!.endedAt = 1_190; }],
+  ];
+  for (const [label, change] of accepts) {
+    const manifest = manifestFixture();
+    change(manifest);
+    assert.deepEqual(parseDesignProjectManifestV1(JSON.parse(JSON.stringify(manifest))), manifest, label);
   }
 });

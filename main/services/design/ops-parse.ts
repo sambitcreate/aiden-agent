@@ -32,6 +32,8 @@ export function isDesignId(value: unknown): value is string {
 /**
  * True for text that must never reach a title, label or prompt: ASCII and C1 controls, line and
  * paragraph separators, bidi embedding/override/isolate controls, and malformed UTF-16.
+ * The directional marks U+200E, U+200F and U+061C are intentionally allowed: they occur in
+ * legitimate right-to-left text.
  */
 export function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

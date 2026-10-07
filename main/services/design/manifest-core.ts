@@ -4,6 +4,7 @@ import { hasExactKeys, isRecord } from "../../shared/guards.js";
 import {
   MAX_DESIGN_REVISION_BYTES,
   MAX_DESIGN_REVISIONS_PER_PROJECT,
+  MAX_DESIGN_REVISIONS_PER_SCREEN,
   MAX_DESIGN_RUN_RECORDS,
   MAX_DESIGN_SCREENS_PER_PROJECT,
 } from "../../../renderer/shared/design/limits.js";
@@ -128,7 +129,7 @@ function parseScreen(value: unknown): DesignScreen | undefined {
   }
   const title = exactTitle(value.title);
   const frame = parseDesignScreenFrame(value.frame);
-  const revisionIds = idList(value.revisionIds, MAX_DESIGN_REVISIONS_PER_PROJECT);
+  const revisionIds = idList(value.revisionIds, MAX_DESIGN_REVISIONS_PER_SCREEN);
   if (!isDesignId(value.id) || title === undefined || !frame || !revisionIds || revisionIds.length === 0) {
     return undefined;
   }
@@ -231,6 +232,7 @@ function parseRun(value: unknown): DesignRunRecord | undefined {
   if (typeof outputCap !== "number" || !Number.isSafeInteger(outputCap) || outputCap < 1 || outputCap > 4) {
     return undefined;
   }
+  if (revisionIds.length > outputCap || (request.op === "refine" && outputCap !== 1)) return undefined;
   if (typeof value.status !== "string" || !RUN_STATUSES.has(value.status)) return undefined;
   // An end reason explains a partial run and nothing else.
   if (
@@ -244,6 +246,9 @@ function parseRun(value: unknown): DesignRunRecord | undefined {
   }
   if (value.promptMessageId !== undefined && !isDesignId(value.promptMessageId)) return undefined;
   if (!timestamp(value.startedAt) || (value.endedAt !== undefined && !timestamp(value.endedAt))) {
+    return undefined;
+  }
+  if (value.endedAt !== undefined && (value.status === "running" || value.endedAt < value.startedAt)) {
     return undefined;
   }
   return {
@@ -262,30 +267,46 @@ function parseRun(value: unknown): DesignRunRecord | undefined {
   };
 }
 
+/** Ids are untrusted keys: "constructor" and "toString" are valid ids but must never resolve to inherited members. */
+function own<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
+}
+
 function crossReferencesHold(manifest: DesignProjectManifestV1): boolean {
+  const { screens, revisions, directionSets, runs } = manifest;
   const nodeScreens = new Set<string>();
   for (const node of manifest.canvas.nodes) {
-    if (!manifest.screens[node.screenId] || nodeScreens.has(node.screenId)) return false;
+    if (!own(screens, node.screenId) || nodeScreens.has(node.screenId)) return false;
     nodeScreens.add(node.screenId);
   }
-  for (const screen of Object.values(manifest.screens)) {
+  for (const screen of Object.values(screens)) {
     if (!nodeScreens.has(screen.id) || !screen.revisionIds.includes(screen.activeRevisionId)) return false;
-    if (screen.directionSetId !== undefined && !manifest.directionSets[screen.directionSetId]) return false;
+    if (screen.directionSetId !== undefined) {
+      // The Screen and its set must name each other.
+      if (!own(directionSets, screen.directionSetId)?.screenIds.includes(screen.id)) return false;
+    }
     for (const revisionId of screen.revisionIds) {
-      if (manifest.revisions[revisionId]?.screenId !== screen.id) return false;
+      if (own(revisions, revisionId)?.screenId !== screen.id) return false;
     }
   }
-  for (const revision of Object.values(manifest.revisions)) {
-    if (!manifest.screens[revision.screenId]?.revisionIds.includes(revision.id)) return false;
+  for (const revision of Object.values(revisions)) {
+    if (!own(screens, revision.screenId)?.revisionIds.includes(revision.id)) return false;
+    // A parent may be gone (an Explore base on another Screen can be deleted later), but never itself.
+    if (revision.parentRevisionId === revision.id) return false;
+    // Runs are trimmed, so a missing run is fine; an existing run must list what it produced.
+    const run = own(runs, revision.runId);
+    if (run && !run.revisionIds.includes(revision.id)) return false;
   }
-  for (const set of Object.values(manifest.directionSets)) {
-    if (!set.screenIds.every((screenId) => manifest.screens[screenId])) return false;
+  for (const set of Object.values(directionSets)) {
+    for (const screenId of set.screenIds) {
+      if (own(screens, screenId)?.directionSetId !== set.id) return false;
+    }
     if (set.chosenScreenId !== undefined && !set.screenIds.includes(set.chosenScreenId)) return false;
   }
-  for (const run of Object.values(manifest.runs)) {
-    if (!run.revisionIds.every((revisionId) => manifest.revisions[revisionId]?.runId === run.id)) return false;
+  for (const run of Object.values(runs)) {
+    if (!run.revisionIds.every((revisionId) => own(revisions, revisionId)?.runId === run.id)) return false;
     // A run that ended with nothing loses its set and the reference together.
-    if (run.directionSetId !== undefined && !manifest.directionSets[run.directionSetId]) return false;
+    if (run.directionSetId !== undefined && !own(directionSets, run.directionSetId)) return false;
   }
   return true;
 }
