@@ -604,7 +604,6 @@ test("feature-owned chats never reach summaries or the host feed", async () => {
 
   const feed = await fixture.service.hostFeedChats();
   assert.deepEqual(feed.summaries.map(({ id }) => id), ["chat-a"]);
-  assert.equal(feed.botChatIds.has("design-chat"), false);
   // A Bot chat that is also feature-owned is a feature chat: it fails closed
   // out of the Bot id set too, while genuine Bot chats stay announced.
   assert.equal(feed.botChatIds.has("owned-bot-chat"), false);

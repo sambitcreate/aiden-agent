@@ -194,3 +194,15 @@ test("feature-owned chats report not found to progress readers", async () => {
   assert.equal(chatsRead, 0);
   assert.equal(owned.held(), 0);
 });
+
+test("Bot-tagged chats in the Assistant workspace still report not found", async () => {
+  const assistantBot = fixture({
+    device: {
+      capabilities: ["chat:read", "tasks:read", "agents:read", "bot:read"],
+      acceptsProgressCapabilities: true,
+    },
+    metadata: [{ ...meta, workspaceId: "assistant", botId: "bot-1" }],
+    authorizeBot: async () => true,
+  });
+  await assert.rejects(assistantBot.authorize("device-1", "chat-1", "tasks:read"), /unavailable/);
+});
