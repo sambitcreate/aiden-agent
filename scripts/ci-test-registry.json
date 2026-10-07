@@ -685,6 +685,7 @@
         "renderer/shared/provider-deployment.test.ts",
         "renderer/shared/provider-thinking.test.ts",
         "renderer/shared/slash-commands.test.ts",
+        "renderer/shared/studio-routes.test.ts",
         "renderer/shared/subagent-management-v2.test.ts",
         "renderer/shared/subagent-runs-v2.test.ts",
         "renderer/shared/todo.test.ts",

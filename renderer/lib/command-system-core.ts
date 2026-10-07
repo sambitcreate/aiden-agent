@@ -5,6 +5,7 @@ import {
   type KeyboardEventLike,
   type KeyboardPlatform,
 } from "../shared/keybindings";
+import { isStudioPath } from "../shared/studio-routes";
 
 export interface CommandDispatchContext {
   editable: boolean;
@@ -43,7 +44,7 @@ export function workspaceCommandVisibility(pathname: string): {
   terminal: boolean;
 } {
   return {
-    environment: pathname !== "/settings",
+    environment: pathname !== "/settings" && !isStudioPath(pathname),
     terminal:
       pathname === "/" ||
       pathname.startsWith("/chat/") ||

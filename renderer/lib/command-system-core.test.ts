@@ -155,3 +155,12 @@ test("modal, terminal, repeat, and composition guards are deterministic", () => 
     null,
   );
 });
+
+test("studio surfaces hide the Environment and terminal commands", () => {
+  for (const pathname of ["/design", "/design/project-1", "/images", "/images/workflow-1"]) {
+    assert.deepEqual(workspaceCommandVisibility(pathname), { environment: false, terminal: false }, pathname);
+  }
+  assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), { environment: true, terminal: true });
+  assert.deepEqual(workspaceCommandVisibility("/settings"), { environment: false, terminal: false });
+  assert.deepEqual(workspaceCommandVisibility("/scheduled"), { environment: true, terminal: false });
+});
