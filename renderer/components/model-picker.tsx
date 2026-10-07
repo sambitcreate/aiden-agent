@@ -41,7 +41,7 @@ import type { ModelInfo, Provider } from "../lib/types";
 import { Check, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
-import { isAcpHarnessProvider } from "../shared/acp-harness";
+import { providerDeploymentLabel } from "../shared/provider-deployment";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -102,20 +102,14 @@ function formatCapabilities(info: ModelInfo | undefined): string {
   return hasKnownCapability ? "Standard generation" : "Unknown";
 }
 
-/** Agent-backed providers run their own tools on this computer; say so next to the provider. */
 function deploymentSuffix(entry: Pick<ModelEntry, "providerId" | "isLocal">): string {
-  if (isAcpHarnessProvider(entry.providerId)) return " · Agent";
-  return entry.isLocal ? " · Local" : " · Hosted";
+  return ` · ${providerDeploymentLabel(entry.providerId, entry.isLocal).tag}`;
 }
 
 function describeModel(entry: ModelEntry): string {
   const details = [
     `Provider ${entry.providerLabel}`,
-    isAcpHarnessProvider(entry.providerId)
-      ? "Agent running on this computer"
-      : entry.isLocal
-        ? "Deployment local"
-        : "Deployment hosted",
+    providerDeploymentLabel(entry.providerId, entry.isLocal).description,
     `Inputs ${formatInputs(entry.info)}`,
     `Capabilities ${formatCapabilities(entry.info)}`,
   ];

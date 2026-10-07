@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   isLocalProviderDeployment,
   isLoopbackProviderBaseUrl,
+  providerDeploymentLabel,
   resolveProviderDeployment,
 } from "./provider-deployment.js";
 
@@ -72,4 +73,12 @@ test("infers hosted for remote and non-loopback hosts", () => {
     }),
     false,
   );
+});
+
+test("the picker tag and its spoken description agree on where a model runs", () => {
+  assert.deepEqual(providerDeploymentLabel("openai", false), { tag: "Hosted", description: "Deployment hosted" });
+  assert.deepEqual(providerDeploymentLabel("custom:ollama", true), { tag: "Local", description: "Deployment local" });
+  // An agent harness runs on this computer but is not a local model; it reads in the same "Deployment …" form.
+  assert.deepEqual(providerDeploymentLabel("antigravity", true), { tag: "Agent", description: "Deployment agent on this computer" });
+  assert.deepEqual(providerDeploymentLabel("antigravity", false), { tag: "Agent", description: "Deployment agent on this computer" });
 });
