@@ -842,7 +842,7 @@ function rejectProtectedCredential(
 }
 
 /** Preserve the parent agent's established narrow `.env*` read/search exclusion. */
-function isEnvironmentSecretPath(relativePath: string): boolean {
+export function isEnvironmentSecretPath(relativePath: string): boolean {
   return relativePath
     .split(/[\\/]/)
     .some((segment) => {

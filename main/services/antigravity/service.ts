@@ -157,9 +157,15 @@ export class AntigravityService {
 
   async signOut(): Promise<void> {
     await this.ready();
-    await this.runtime.reset();
-    const installed = this.installer.state().status === "installed";
-    await signOutOfGoogle(this.stateDir, installed ? () => this.launcher.launch("auth", this.scratchDir()) : undefined);
+    // Every process holding the old account's authority stops before logout,
+    // and none can start until local credentials are gone.
+    const reopen = await this.runtime.closeAdmission();
+    try {
+      const installed = this.installer.state().status === "installed";
+      await signOutOfGoogle(this.stateDir, installed ? () => this.launcher.launch("auth", this.scratchDir()) : undefined);
+    } finally {
+      reopen();
+    }
     this.notify();
   }
 

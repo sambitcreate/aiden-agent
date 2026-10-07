@@ -161,6 +161,9 @@ export class AcpHarnessRuntime {
   private readonly live = new Set<Binding>();
   private readonly options: Required<AcpRuntimeOptions>;
   private disposed = false;
+  /** Closed while signing out: no chat or catalog process may start. */
+  private admissionClosed = false;
+  private readonly shortLived = new Set<AcpLaunchedProcess>();
   /** Called when a chat discovers the saved sign-in stopped working. */
   onSignInLost: (() => void) | undefined;
 
@@ -201,10 +204,14 @@ export class AcpHarnessRuntime {
     this.assertActive();
     if (signal?.aborted) throw abortError();
     const launched = await this.launcher.launch(purpose, cwd);
-    const connection = new AcpConnection(launched.process, undefined, { fileSystem: false });
+    this.shortLived.add(launched);
     try {
+      // Sign-out may have closed admission while this launch was starting.
+      this.assertActive();
+      const connection = new AcpConnection(launched.process, undefined, { fileSystem: false });
       return await operation(connection);
     } finally {
+      this.shortLived.delete(launched);
       await launched.dispose();
     }
   }
@@ -213,6 +220,21 @@ export class AcpHarnessRuntime {
   async reset(): Promise<void> {
     await this.closeAll();
     this.sessions.clear();
+  }
+
+  /**
+   * An authentication boundary: refuse new launches, then stop every running
+   * agent process (chat sessions and short-lived catalog runs) and forget
+   * saved sessions. Returns a function that reopens admission.
+   */
+  async closeAdmission(): Promise<() => void> {
+    this.admissionClosed = true;
+    await this.closeAll();
+    await Promise.allSettled([...this.shortLived].map((launched) => launched.dispose()));
+    this.sessions.clear();
+    return () => {
+      this.admissionClosed = false;
+    };
   }
 
   /** Close every session but stay usable; saved bindings are kept for resume. */
@@ -563,6 +585,10 @@ export class AcpHarnessRuntime {
       },
     });
     pendingLaunch = launched;
+    if (this.admissionClosed || this.disposed) {
+      await launched.dispose();
+      this.assertActive();
+    }
     const connection = new AcpConnection(
       launched.process,
       {
@@ -842,6 +868,10 @@ export class AcpHarnessRuntime {
       const timer = setTimeout(() => {
         if (!binding.pendingTools.delete(invocation.id)) return;
         resolve(toolError("The tool did not finish in time."));
+        // The Aiden tool may still finish later. End the agent's turn now so
+        // that late result starts a clean prompt instead of resuming a turn
+        // that already moved on without it.
+        if (binding.turn) this.requestCancel(binding, binding.turn);
       }, this.options.toolTimeoutMs);
       timer.unref?.();
       binding.pendingTools.set(invocation.id, { invocation, announced: false, resolve, timer });
@@ -939,6 +969,7 @@ export class AcpHarnessRuntime {
 
   private assertActive(): void {
     if (this.disposed) throw new AcpHarnessError("unavailable", `${this.definition.label} is shutting down.`);
+    if (this.admissionClosed) throw new AcpHarnessError("unavailable", `${this.definition.label} is signing out.`);
   }
 }
 

@@ -461,3 +461,35 @@ test("a message owed when the turn is stopped is delivered exactly once by the n
   assert.equal(delivered, 1, text(third));
   await h.runtime.close();
 });
+
+test("signing out stops every agent process and refuses new ones until it finishes", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  await turn(h, [userMessage("echo:before")]);
+  assert.equal(h.runtime.liveCount, 1);
+  const reopen = await h.runtime.closeAdmission();
+  assert.equal(h.runtime.liveCount, 0);
+  assert.ok(h.launcher.processes.every((process) => !process.alive));
+  const refused = await turn(h, [userMessage("echo:during")]);
+  assert.match(refused.errorMessage ?? "", /signing out/u);
+  await assert.rejects(h.runtime.discoverModels(h.dir), /signing out/u);
+  reopen();
+  const after = await turn(h, [userMessage("echo:after")]);
+  assert.equal(text(after), "after");
+  await h.runtime.close();
+});
+
+test("a bridged tool that outlives its timeout ends the agent's turn cleanly; its late result starts a fresh prompt", async () => {
+  const h = harness(undefined, undefined, { toolTimeoutMs: 200 });
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const messages: Message[] = [userMessage("bridge:aiden_lookup")];
+  const first = await turn(h, messages, { tools: lookupTools });
+  assert.equal(first.stopReason, "toolUse");
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  messages.push(first, toolResultFor(first, "late result"));
+  const second = await turn(h, messages, { tools: lookupTools });
+  assert.equal(second.stopReason, "stop", second.errorMessage);
+  assert.doesNotMatch(text(second), /did not finish in time/u, "the abandoned turn's text is not mixed in");
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "prompt").length, 2);
+  await h.runtime.close();
+});

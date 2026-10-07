@@ -7,11 +7,15 @@
  * directly, so every path is confined to the generation's workspace roots.
  * Unlike T3, the workspace permission is enforced here too: a read-only
  * generation refuses writes even when the agent's native mode would allow
- * them.
+ * them. Reads keep Aiden's `.env` exclusion, and all I/O goes through a
+ * descriptor whose identity and location are re-verified before any byte is
+ * read or written, so a symlink swapped in after validation is refused.
  */
-import { lstat, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
+import { lstat, mkdir, open, realpath, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
+import { isEnvironmentSecretPath } from "../coding-tools.js";
 import { AcpHarnessError } from "./errors.js";
 
 export const MAX_CLIENT_READ_BYTES = 8 * 1024 * 1024;
@@ -114,17 +118,75 @@ export async function resolveConfinedPath(
   return resolved;
 }
 
+function sameFile(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+/** Aiden's parent read policy: `.env` and `.env.*` (except examples) stay out of model context. */
+async function rejectEnvironmentSecret(target: string, roots: readonly string[]): Promise<void> {
+  for (const root of await canonicalRoots(roots)) {
+    if (within(target, root) && isEnvironmentSecretPath(path.relative(root, target))) {
+      throw new AcpHarnessError(
+        "invalid_input",
+        "Reading .env files is disabled to keep workspace secrets out of model context.",
+      );
+    }
+  }
+}
+
+/**
+ * Re-check, through an open descriptor, that the path still names the file
+ * that was opened and that it still resolves inside the roots. Runs before any
+ * byte is read or written, so a symlink or parent swap after validation is
+ * refused instead of followed.
+ */
+async function assertStillConfined(
+  requested: string,
+  roots: readonly string[],
+  opened: Stats,
+): Promise<string> {
+  const verified = await resolveConfinedPath(requested, roots);
+  let current: Stats;
+  try {
+    current = await lstat(verified);
+  } catch {
+    throw new AcpHarnessError("invalid_input", "The file changed while it was being opened.");
+  }
+  if (current.isSymbolicLink() || !sameFile(opened, current)) {
+    throw new AcpHarnessError("invalid_input", "The file changed while it was being opened.");
+  }
+  return verified;
+}
+
+const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+
 export async function readClientTextFile(
   params: ReadTextFileParams,
   policy: AcpClientFilePolicy,
 ): Promise<{ content: string }> {
   const target = await resolveConfinedPath(params.path, policy.roots);
-  const info = await stat(target);
-  if (!info.isFile()) throw new AcpHarnessError("invalid_input", "The path is not a file.");
-  if (info.size > MAX_CLIENT_READ_BYTES) {
-    throw new AcpHarnessError("invalid_input", "The file is too large to read (8 MiB limit).");
+  await rejectEnvironmentSecret(target, policy.roots);
+  let handle: FileHandle;
+  try {
+    handle = await open(target, fsConstants.O_RDONLY | NO_FOLLOW | (fsConstants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+      throw new AcpHarnessError("invalid_input", "The file changed while it was being opened.");
+    }
+    throw error;
   }
-  const text = await readFile(target, "utf8");
+  let text: string;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new AcpHarnessError("invalid_input", "The path is not a file.");
+    if (info.size > MAX_CLIENT_READ_BYTES) {
+      throw new AcpHarnessError("invalid_input", "The file is too large to read (8 MiB limit).");
+    }
+    await rejectEnvironmentSecret(await assertStillConfined(params.path, policy.roots, info), policy.roots);
+    text = await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
   const line = params.line ?? undefined;
   const limit = params.limit ?? undefined;
   if (line === undefined && limit === undefined) return { content: text };
@@ -148,21 +210,35 @@ export async function writeClientTextFile(
     throw new AcpHarnessError("invalid_input", "The file is too large to write (8 MiB limit).");
   }
   const target = await resolveConfinedPath(params.path, policy.roots);
+  let handle: FileHandle;
+  let created = false;
+  try {
+    handle = await open(target, fsConstants.O_RDWR | NO_FOLLOW);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") throw new AcpHarnessError("invalid_input", "The file changed while it was being opened.");
+    if (code !== "ENOENT") throw error;
+    await mkdir(path.dirname(target), { recursive: true });
+    // The parent must still resolve inside the roots before a file is created.
+    await resolveConfinedPath(path.dirname(target), policy.roots);
+    handle = await open(target, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | NO_FOLLOW, 0o644);
+    created = true;
+  }
   let before: string | undefined;
   try {
-    const info = await stat(target);
+    const info = await handle.stat();
     if (!info.isFile()) throw new AcpHarnessError("invalid_input", "The path is not a file.");
-    if (info.size <= MAX_CLIENT_READ_BYTES) before = await readFile(target, "utf8");
-  } catch (error) {
-    if (error instanceof AcpHarnessError) throw error;
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const verified = await assertStillConfined(params.path, policy.roots, info);
+    if (!created && info.size <= MAX_CLIENT_READ_BYTES) before = await handle.readFile("utf8");
+    // Recheck right before the write: permission can change mid-turn.
+    if (!policy.canWrite()) {
+      throw new AcpHarnessError("unavailable", "This chat's folder is read-only for the agent.");
+    }
+    await handle.truncate(0);
+    await handle.write(params.content, 0, "utf8");
+    policy.onWrite?.(verified, before, params.content);
+  } finally {
+    await handle.close();
   }
-  // Recheck right before the write: permission can change mid-turn.
-  if (!policy.canWrite()) {
-    throw new AcpHarnessError("unavailable", "This chat's folder is read-only for the agent.");
-  }
-  await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, params.content, "utf8");
-  policy.onWrite?.(target, before, params.content);
   return {};
 }

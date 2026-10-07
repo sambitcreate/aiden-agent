@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -71,4 +71,40 @@ test("no usable root means no file access", async () => {
   mkdirSync(path.join(root, "x"));
   await assert.rejects(readClientTextFile({ path: path.join(root, "a.txt") }, writable([])), /no folder/u);
   await assert.rejects(readClientTextFile({ path: path.join(root, "x") }, writable([root])), /not a file/u);
+});
+
+test("reads keep Aiden's .env exclusion, including through a symlink alias", async () => {
+  const { root } = workspace();
+  writeFileSync(path.join(root, ".env"), "SECRET=1");
+  writeFileSync(path.join(root, ".env.local"), "SECRET=2");
+  writeFileSync(path.join(root, ".env.example"), "SECRET=");
+  symlinkSync(path.join(root, ".env"), path.join(root, "innocent.txt"));
+  const policy = { roots: [root], canWrite: () => false };
+  await assert.rejects(readClientTextFile({ path: path.join(root, ".env") }, policy), /\.env files is disabled/u);
+  await assert.rejects(readClientTextFile({ path: path.join(root, ".env.local") }, policy), /\.env files is disabled/u);
+  await assert.rejects(readClientTextFile({ path: path.join(root, "innocent.txt") }, policy), /\.env files is disabled/u);
+  assert.equal((await readClientTextFile({ path: path.join(root, ".env.example") }, policy)).content, "SECRET=");
+});
+
+test("a symlink swapped in after validation never redirects a write outside the folder", async () => {
+  const { root, outside } = workspace();
+  const target = path.join(root, "a.txt");
+  const victim = path.join(outside, "secret.txt");
+  let checks = 0;
+  await writeClientTextFile(
+    { path: target, content: "agent text" },
+    {
+      roots: [root],
+      canWrite: () => {
+        checks += 1;
+        // Between validation and the write, replace the file with a link out.
+        if (checks === 2) {
+          rmSync(target);
+          symlinkSync(victim, target);
+        }
+        return true;
+      },
+    },
+  ).catch(() => undefined);
+  assert.equal(readFileSync(victim, "utf8"), "secret", "the outside file is untouched");
 });
