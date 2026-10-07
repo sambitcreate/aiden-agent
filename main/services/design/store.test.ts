@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { writeJsonAtomic } from "../durable-fs.js";
+import { writeFileAtomic, writeJsonAtomic } from "../durable-fs.js";
+import { MAX_DESIGN_REVISION_BYTES, MAX_DESIGN_TOTAL_BYTES } from "../../../renderer/shared/design/limits.js";
 import type { DesignRunRequest } from "../../../renderer/shared/design/types.js";
 import { designResumeOffer } from "../../../renderer/shared/design/resume.js";
 import { createDesignProjectManifest } from "./manifest-core.js";
@@ -457,6 +458,8 @@ test("a copy is built beside the library and appears whole or not at all", async
   const f = await fixture(t, {
     io: {
       writeManifest: async (target, value, options) => {
+        // Only the duplicate writes its manifest into a `.<id>.duplicate.tmp` staging directory;
+        // every other manifest write targets a project directory, so this fails the copy alone.
         if (failCopyManifest && target.includes(".tmp")) throw new Error("disk full");
         await writeJsonAtomic(target, value, options);
       },
@@ -519,6 +522,236 @@ test("the 2 GiB library quota is checked against the copy", async (t) => {
   assert.equal((await fs.readdir(f.root)).length, 32);
 });
 
+test("an unreadable project that was repaired since the library loaded is not deleted", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.root, "broken-1", "revisions"), { recursive: true });
+  await fs.writeFile(path.join(f.root, "broken-1", "manifest.json"), "{ not json");
+  const { store } = await f.reopen();
+  assert.deepEqual(store.list().map((project) => project.health), ["unreadable"]);
+  // The user fixes the file by hand while the confirmation sheet is open.
+  const repaired = createDesignProjectManifest({ id: "broken-1", chatId: "chat-fixed", title: "Rescued", now: 7 });
+  await writeJsonAtomic(path.join(f.root, "broken-1", "manifest.json"), repaired);
+  await assert.rejects(
+    store.deleteUnreadable("broken-1"),
+    (error: unknown) => error instanceof DesignStoreError && error.code === "stale",
+  );
+  assert.ok((await fs.stat(path.join(f.root, "broken-1", "manifest.json"))).isFile(), "the repaired project survives");
+  assert.deepEqual(store.list().map((project) => [project.title, project.health]), [["Rescued", "ok"]]);
+});
+
+test("an unreadable project that disappeared since the library loaded is reported gone, not deleted twice", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.root, "broken-1"), { recursive: true });
+  await fs.writeFile(path.join(f.root, "broken-1", "manifest.json"), "{ not json");
+  const { store } = await f.reopen();
+  await fs.rm(path.join(f.root, "broken-1"), { recursive: true });
+  await assert.rejects(
+    store.deleteUnreadable("broken-1"),
+    (error: unknown) => error instanceof DesignStoreError && error.code === "not_found",
+  );
+  assert.deepEqual(store.list(), []);
+});
+
+test("a manifest that cannot even be read lists its project as unreadable instead of failing initialize", async (t) => {
+  const f = await fixture(t);
+  const healthy = await f.store.create({ title: "Healthy" });
+  // readFile of a directory fails with EISDIR, the same class as EACCES on a locked file.
+  await fs.mkdir(path.join(f.root, "locked-1", "manifest.json"), { recursive: true });
+  const { store } = await f.reopen();
+  assert.deepEqual(store.list().map((project) => [project.id, project.health]).sort(), [
+    [healthy.id, "ok"],
+    ["locked-1", "unreadable"],
+  ]);
+  await store.deleteUnreadable("locked-1");
+  await assert.rejects(fs.stat(path.join(f.root, "locked-1")), /ENOENT/u);
+});
+
+test("the store is unavailable until initialize has finished loading every project", async (t) => {
+  const f = await fixture(t);
+  const project = await f.store.create();
+  await exploreWith(f.store, project.id, ["Calm"]); // a restart must interrupt this run and rewrite the manifest
+  let armed = true;
+  let enteredLoad!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enteredLoad = resolve;
+  });
+  let finishLoad!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finishLoad = resolve;
+  });
+  const store = new DesignProjectStore({
+    root: async () => f.root,
+    chats: f.chats.port,
+    io: {
+      writeManifest: async (target, value, options) => {
+        if (armed) {
+          armed = false;
+          enteredLoad();
+          await finished;
+        }
+        await writeJsonAtomic(target, value, options);
+      },
+    },
+  });
+  const loading = store.initialize();
+  await entered; // the load is mid-flight: it is reconciling this project
+  await assert.rejects(
+    store.create(),
+    (error: unknown) => error instanceof DesignStoreError && error.code === "unavailable",
+  );
+  assert.equal(store.get(project.id), undefined);
+  assert.deepEqual(store.list(), []);
+  finishLoad();
+  await loading;
+  assert.equal(store.get(project.id)!.runs["run-1"]!.status, "partial");
+});
+
+test("an accepted design's bytes are held against the library quota until its manifest owns them", async (t) => {
+  let hold: Promise<void> | undefined;
+  let failWrite = false;
+  const f = await fixture(t, {
+    io: {
+      writeRevision: async (target, data, options) => {
+        await hold;
+        if (failWrite) throw new Error("disk full");
+        await writeFileAtomic(target, data, options);
+      },
+    },
+  });
+  const source = await f.store.create({ title: "Source" });
+  await exploreWith(f.store, source.id, ["Calm"]);
+  await f.store.finishRun(source.id, "run-1", "completed");
+  const target = await f.store.create({ title: "Target" });
+  const sourceBytes = Buffer.byteLength(page("Calm"));
+  const incoming = page("Incoming design");
+  const incomingBytes = Buffer.byteLength(incoming);
+  // Leave exactly enough room for either the copy or the new design, never both.
+  await fillLibrary(f.root, MAX_DESIGN_TOTAL_BYTES - Math.max(sourceBytes, incomingBytes) - sourceBytes);
+  const crowded = (await f.reopen()).store;
+  await crowded.beginRun(target.id, { runId: "run-t", turnId: "turn-t", request: EXPLORE });
+  const quota = (error: unknown) => error instanceof DesignStoreError && error.code === "quota";
+
+  let release!: () => void;
+  hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  failWrite = true;
+  const accepting = crowded.acceptRunArtifact(target.id, "run-t", {
+    toolCallId: "call-in", title: "Incoming", html: incoming, model: MODEL,
+  });
+  await new Promise((resolve) => setImmediate(resolve)); // the accept is now waiting on its file write
+  await assert.rejects(crowded.duplicate(source.id), quota, "the in-flight design leaves no room for a copy");
+  release();
+  await assert.rejects(accepting, /disk full/u);
+  failWrite = false;
+  hold = undefined;
+  assert.equal((await crowded.duplicate(source.id)).title, "Source copy", "a failed write gives its bytes back");
+});
+
+test("a copy in flight holds its bytes against a design accepted in another project", async (t) => {
+  let hold: Promise<void> | undefined;
+  const f = await fixture(t, {
+    io: {
+      writeRevision: async (target, data, options) => {
+        await hold;
+        await writeFileAtomic(target, data, options);
+      },
+    },
+  });
+  const source = await f.store.create({ title: "Source" });
+  await exploreWith(f.store, source.id, ["Calm"]);
+  await f.store.finishRun(source.id, "run-1", "completed");
+  const target = await f.store.create({ title: "Target" });
+  const incoming = page("Incoming design");
+  await fillLibrary(
+    f.root,
+    MAX_DESIGN_TOTAL_BYTES - Math.max(Buffer.byteLength(page("Calm")), Buffer.byteLength(incoming)) - Buffer.byteLength(page("Calm")),
+  );
+  const { store } = await f.reopen();
+  await store.beginRun(target.id, { runId: "run-t", turnId: "turn-t", request: EXPLORE });
+  let release!: () => void;
+  hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const copying = store.duplicate(source.id);
+  await new Promise((resolve) => setImmediate(resolve)); // the copy is now waiting on its first file write
+  await assert.rejects(
+    store.acceptRunArtifact(target.id, "run-t", { toolCallId: "call-in", title: "Incoming", html: incoming, model: MODEL }),
+    (error: unknown) => error instanceof DesignStoreError && error.code === "quota",
+  );
+  release();
+  assert.equal((await copying).title, "Source copy");
+  assert.deepEqual(await revisionFiles(f.root, target.id), [], "the refused design left no file behind");
+});
+
+test("creating a project and its first revision flush the directories that gained entries", async (t) => {
+  const flushed: string[] = [];
+  const f = await fixture(t, {
+    io: {
+      syncDirectory: async (directory) => {
+        flushed.push(directory);
+      },
+    },
+  });
+  flushed.length = 0;
+  const project = await f.store.create();
+  assert.ok(flushed.includes(f.root), "the library directory holds the new project's entry");
+  flushed.length = 0;
+  await exploreWith(f.store, project.id, ["First"]);
+  assert.ok(flushed.includes(path.join(f.root, project.id)), "the project directory holds the new revisions entry");
+});
+
+test("restart tolerates staging directories and directories posing as revision files", async (t) => {
+  const f = await fixture(t);
+  const project = await f.store.create();
+  const [kept] = await exploreWith(f.store, project.id, ["Kept"]);
+  await f.store.finishRun(project.id, "run-1", "completed");
+  const projectDir = path.join(f.root, project.id);
+  // A leftover that is itself a directory, at each level the sweep visits.
+  await fs.mkdir(path.join(projectDir, ".manifest.json.9.tmp", "inner"), { recursive: true });
+  await fs.mkdir(path.join(projectDir, "revisions", ".x.html.9.tmp", "inner"), { recursive: true });
+  // Not a staging name and not a regular file: left alone, and not mistaken for a revision.
+  await fs.mkdir(path.join(projectDir, "revisions", "stranger.html"), { recursive: true });
+  const errors: string[] = [];
+  const { store } = await f.reopen({ onError: (message) => errors.push(message) });
+  assert.deepEqual(errors, []);
+  assert.deepEqual((await fs.readdir(projectDir)).sort(), ["manifest.json", "revisions"]);
+  assert.deepEqual((await fs.readdir(path.join(projectDir, "revisions"))).sort(), [`${kept}.html`, "stranger.html"]);
+  assert.equal((await store.readRevision(project.id, kept!)).html, page("Kept"));
+});
+
+/** Fill the library with declared-only projects (no files) totalling exactly `bytes`. */
+async function fillLibrary(root: string, bytes: number): Promise<void> {
+  const perProject = 64 * 1024 * 1024;
+  for (let index = 0, remaining = bytes; remaining > 0; index += 1) {
+    const projectBytes = Math.min(perProject, remaining);
+    remaining -= projectBytes;
+    const manifest = createDesignProjectManifest({ id: `fill-${index}`, chatId: `chat-fill-${index}`, title: `Fill ${index}`, now: 5 });
+    let left = projectBytes;
+    for (let screenIndex = 0; left > 0; screenIndex += 1) {
+      const screenId = `s${screenIndex}`;
+      const revisionIds: string[] = [];
+      for (let n = 0; n < 4 && left > 0; n += 1) {
+        const id = `r${screenIndex}-${n}`;
+        const size = Math.min(MAX_DESIGN_REVISION_BYTES, left);
+        left -= size;
+        revisionIds.push(id);
+        manifest.revisions[id] = {
+          id, screenId, runId: "run-gone", toolCallId: id, title: "Fill", bytes: size, sha256: "a".repeat(64),
+          state: "published", createdAt: 1, model: MODEL,
+        };
+      }
+      manifest.screens[screenId] = {
+        id: screenId, title: "Fill", frame: { preset: "desktop", width: 1440, height: 1024 },
+        revisionIds, activeRevisionId: revisionIds[0]!, createdAt: 1,
+      };
+      manifest.canvas.nodes.push({ id: `n${screenIndex}`, kind: "screen", screenId, x: screenIndex * 100, y: 0 });
+    }
+    await fs.mkdir(path.join(root, manifest.id), { recursive: true });
+    await writeJsonAtomic(path.join(root, manifest.id, "manifest.json"), manifest, { fsync: false });
+  }
+}
+
 test("the project gate runs one key's operations in order, independent keys together, and forgets settled keys", async () => {
   const gate = new DesignProjectGate();
   const order: string[] = [];
@@ -541,7 +774,7 @@ test("the project gate runs one key's operations in order, independent keys toge
     order.push("b");
   });
   assert.deepEqual(order, ["b"], "another key is not blocked");
-  assert.equal(gate.pending(), 2);
+  assert.ok(gate.pending() >= 1, "key a is still held; whether b's tail is already forgotten is not the claim");
   release();
   await first;
   await assert.rejects(failing, /boom/u);

@@ -1,6 +1,7 @@
 // File-backed Design Studio projects: one directory per project, the manifest
 // as the commit point, immutable revision files, one serial gate per project.
 import { createHash, randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { syncDirectory, writeFileAtomic, writeJsonAtomic } from "../durable-fs.js";
@@ -69,7 +70,11 @@ export interface DesignProjectStoreOptions {
   now?: () => number;
   newId?: () => string;
   /** Fault-injection seams for tests; production never passes them. */
-  io?: { writeRevision?: typeof writeFileAtomic; writeManifest?: typeof writeJsonAtomic };
+  io?: {
+    writeRevision?: typeof writeFileAtomic;
+    writeManifest?: typeof writeJsonAtomic;
+    syncDirectory?: typeof syncDirectory;
+  };
 }
 
 type ProjectEntry =
@@ -94,37 +99,59 @@ function isStagingLeftover(name: string): boolean {
   return name.startsWith(".") && name.endsWith(".tmp");
 }
 
+/** A filesystem failure (EACCES, EISDIR, ...) as opposed to a programming error. */
+function isFsError(error: unknown): boolean {
+  return typeof (error as NodeJS.ErrnoException | undefined)?.code === "string";
+}
+
+/** Bytes set aside for an operation whose files are on their way to disk but not yet in a manifest. */
+interface Reservation {
+  /** The project the bytes will land in; `undefined` for a project that does not exist yet. */
+  owner: string | undefined;
+  bytes: number;
+}
+
 export class DesignProjectStore {
   private readonly gate = new DesignProjectGate();
   private readonly entries = new Map<string, ProjectEntry>();
+  private readonly reservations = new Set<Reservation>();
   private rootPath: string | undefined;
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly writeRevisionFile: typeof writeFileAtomic;
   private readonly writeManifestFile: typeof writeJsonAtomic;
+  private readonly syncDirectoryFn: typeof syncDirectory;
 
   constructor(private readonly options: DesignProjectStoreOptions) {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.writeRevisionFile = options.io?.writeRevision ?? writeFileAtomic;
     this.writeManifestFile = options.io?.writeManifest ?? writeJsonAtomic;
+    this.syncDirectoryFn = options.io?.syncDirectory ?? syncDirectory;
   }
 
-  /** Load every manifest, reconcile crash leftovers, and report deletions to resume. */
+  /**
+   * Load every manifest, reconcile crash leftovers, and report deletions to resume. The store
+   * becomes usable only once every project has been classified; a project that cannot be read
+   * is listed as unreadable rather than failing the whole library.
+   */
   async initialize(): Promise<{ deleting: string[] }> {
     const root = await this.options.root();
     await fs.mkdir(root, { recursive: true, mode: DIRECTORY_MODE });
-    this.rootPath = root;
-    this.entries.clear();
+    const loaded = new Map<string, ProjectEntry>();
     for (const entry of await fs.readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       if (isDesignId(entry.name)) {
-        await this.loadProject(entry.name);
+        const project = await this.loadProject(root, entry.name);
+        if (project) loaded.set(entry.name, project);
       } else if (isStagingLeftover(entry.name)) {
         // A duplicate that never reached its final name.
-        await fs.rm(path.join(root, entry.name), { recursive: true, force: true });
+        await this.removeStagingLeftover(path.join(root, entry.name));
       }
     }
+    this.entries.clear();
+    for (const [id, entry] of loaded) this.entries.set(id, entry);
+    this.rootPath = root;
     return {
       deleting: this.manifests().filter((manifest) => manifest.state === "deleting").map((manifest) => manifest.id),
     };
@@ -176,6 +203,8 @@ export class DesignProjectStore {
         now: this.now(),
       });
       await fs.mkdir(this.projectDir(manifest.id), { recursive: true, mode: DIRECTORY_MODE });
+      // The directory entry must outlive power loss before a manifest is committed inside it.
+      await this.syncDirectoryFn(this.root());
       await this.commit(manifest);
       await this.createChatOrDefer(manifest);
       return structuredClone(manifest);
@@ -195,29 +224,38 @@ export class DesignProjectStore {
         if (this.totalsExcluding(undefined).otherProjectsBytes + designProjectBytes(source) > MAX_DESIGN_TOTAL_BYTES) {
           throw new DesignStoreError("quota", "Duplicating this project would exceed the 2 GiB design storage limit.");
         }
-        const files = await this.readVerifiedRevisions(source);
-        const { manifest: copy, revisionIds } = buildDesignProjectCopy(source, {
-          newId: this.newId,
-          now: this.now(),
-          intactRevisionIds: new Set(files.keys()),
-        });
-        assertDesignManifestWritable(copy);
-        const staging = path.join(this.root(), `.${copy.id}.duplicate.tmp`);
+        // The copy is not in the library until it is renamed into place; hold its bytes meanwhile.
+        const release = this.reserve(undefined, designProjectBytes(source));
+        let copy: DesignProjectManifestV1;
         try {
-          for (const [revisionId, bytes] of files) {
-            await this.writeRevisionFile(path.join(staging, "revisions", `${revisionIds.get(revisionId)}.html`), bytes, {
-              mode: FILE_MODE,
-              mkdirMode: DIRECTORY_MODE,
-            });
+          const files = await this.readVerifiedRevisions(source);
+          const built = buildDesignProjectCopy(source, {
+            newId: this.newId,
+            now: this.now(),
+            intactRevisionIds: new Set(files.keys()),
+          });
+          copy = built.manifest;
+          assertDesignManifestWritable(copy);
+          const staging = path.join(this.root(), `.${copy.id}.duplicate.tmp`);
+          try {
+            for (const [revisionId, bytes] of files) {
+              await this.writeRevisionFile(
+                path.join(staging, "revisions", `${built.revisionIds.get(revisionId)}.html`),
+                bytes,
+                { mode: FILE_MODE, mkdirMode: DIRECTORY_MODE },
+              );
+            }
+            await this.writeManifest(copy, staging, true);
+            await fs.rename(staging, this.projectDir(copy.id));
+          } catch (error) {
+            await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+            throw error;
           }
-          await this.writeManifest(copy, staging);
-          await fs.rename(staging, this.projectDir(copy.id));
-        } catch (error) {
-          await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
-          throw error;
+          this.entries.set(copy.id, { kind: "ok", manifest: copy });
+        } finally {
+          release();
         }
-        this.entries.set(copy.id, { kind: "ok", manifest: copy });
-        await syncDirectory(this.root()).catch((error: unknown) =>
+        await this.syncDirectoryFn(this.root()).catch((error: unknown) =>
           this.options.onError?.("Could not flush the design library after duplicating a project.", error),
         );
         this.options.onChanged?.(copy.id);
@@ -284,6 +322,16 @@ export class DesignProjectStore {
       if (entry.kind !== "unreadable") {
         throw new DesignStoreError("invalid", "This project can be opened. Delete it from the library instead.");
       }
+      // The classification may be old: re-read the directory now, and delete only what is still unreadable.
+      const current = await this.loadProject(this.root(), projectId);
+      if (current?.kind !== "unreadable") {
+        if (current) this.entries.set(projectId, current);
+        else this.entries.delete(projectId);
+        this.options.onChanged?.(projectId);
+        throw current
+          ? new DesignStoreError("stale", "This project can be opened now. Review it before deleting.")
+          : new DesignStoreError("not_found", "This design project no longer exists.");
+      }
       await fs.rm(this.projectDir(projectId), { recursive: true, force: true });
       this.entries.delete(projectId);
       this.options.onChanged?.(projectId);
@@ -341,15 +389,22 @@ export class DesignProjectStore {
         this.totalsExcluding(projectId),
         this.now(),
       );
-      // A manifest that would be refused must not leave its revision file behind.
-      assertDesignManifestWritable(result.manifest);
-      // Revision file first, manifest second. The manifest is the commit point,
-      // and startup collects any file the manifest does not reference.
-      await this.writeRevisionFile(this.revisionPath(projectId, revisionId), bytes, {
-        mode: FILE_MODE,
-        mkdirMode: DIRECTORY_MODE,
-      });
-      await this.commit(result.manifest, result.deletedRevisionIds);
+      // Hold the bytes until the manifest owns them, so a concurrent duplicate or accept elsewhere sees them.
+      const release = this.reserve(projectId, bytes.byteLength);
+      try {
+        // A manifest that would be refused must not leave its revision file behind.
+        assertDesignManifestWritable(result.manifest);
+        await this.ensureRevisionsDirectory(projectId);
+        // Revision file first, manifest second. The manifest is the commit point,
+        // and startup collects any file the manifest does not reference.
+        await this.writeRevisionFile(this.revisionPath(projectId, revisionId), bytes, {
+          mode: FILE_MODE,
+          mkdirMode: DIRECTORY_MODE,
+        });
+        await this.commit(result.manifest, result.deletedRevisionIds, true);
+      } finally {
+        release();
+      }
       return { revisionId };
     });
   }
@@ -433,20 +488,51 @@ export class DesignProjectStore {
       otherProjectsBytes += bytes;
       if (bytes > 0 && (!largest || bytes > largest.bytes)) largest = { title: manifest.title, bytes };
     }
+    for (const reservation of this.reservations) {
+      if (projectId === undefined || reservation.owner !== projectId) otherProjectsBytes += reservation.bytes;
+    }
     return largest ? { otherProjectsBytes, largestOtherProjectTitle: largest.title } : { otherProjectsBytes };
   }
 
-  /** Refuse any manifest the loader would not reopen, then publish it atomically. */
-  private async writeManifest(manifest: DesignProjectManifestV1, directory = this.projectDir(manifest.id)): Promise<void> {
-    assertDesignManifestWritable(manifest);
+  private reserve(owner: string | undefined, bytes: number): () => void {
+    const reservation: Reservation = { owner, bytes };
+    this.reservations.add(reservation);
+    return () => {
+      this.reservations.delete(reservation);
+    };
+  }
+
+  /** Create `revisions/` and make its directory entry durable before a file goes inside it. */
+  private async ensureRevisionsDirectory(projectId: string): Promise<void> {
+    const created = await fs.mkdir(path.join(this.projectDir(projectId), "revisions"), {
+      recursive: true,
+      mode: DIRECTORY_MODE,
+    });
+    if (created !== undefined) await this.syncDirectoryFn(this.projectDir(projectId));
+  }
+
+  /**
+   * Refuse any manifest the loader would not reopen, then publish it atomically.
+   * `validated` means the caller already checked this exact manifest, so it is not parsed twice.
+   */
+  private async writeManifest(
+    manifest: DesignProjectManifestV1,
+    directory = this.projectDir(manifest.id),
+    validated = false,
+  ): Promise<void> {
+    if (!validated) assertDesignManifestWritable(manifest);
     await this.writeManifestFile(path.join(directory, "manifest.json"), manifest, {
       mode: FILE_MODE,
       mkdirMode: DIRECTORY_MODE,
     });
   }
 
-  private async commit(manifest: DesignProjectManifestV1, deletedRevisionIds: readonly string[] = []): Promise<void> {
-    await this.writeManifest(manifest);
+  private async commit(
+    manifest: DesignProjectManifestV1,
+    deletedRevisionIds: readonly string[] = [],
+    validated = false,
+  ): Promise<void> {
+    await this.writeManifest(manifest, this.projectDir(manifest.id), validated);
     this.entries.set(manifest.id, { kind: "ok", manifest });
     for (const revisionId of deletedRevisionIds) {
       // The manifest no longer references the file, so a failure here only leaves an orphan for the next start.
@@ -492,50 +578,88 @@ export class DesignProjectStore {
     this.options.onChanged?.(manifest.id);
   }
 
-  private async revisionFiles(projectId: string): Promise<Map<string, number>> {
-    const directory = path.join(this.projectDir(projectId), "revisions");
-    const files = new Map<string, number>();
+  /** Remove one staging leftover (a file or a whole directory); a failure is reported, never fatal. */
+  private async removeStagingLeftover(target: string): Promise<void> {
+    try {
+      await fs.rm(target, { recursive: true, force: true });
+    } catch (error) {
+      this.options.onError?.("Could not remove a design staging leftover; it is retried at the next start.", error);
+    }
+  }
+
+  private async sweepStagingLeftovers(directory: string): Promise<void> {
     let names: string[];
     try {
       names = await fs.readdir(directory);
     } catch (error) {
-      if (isMissing(error)) return files;
+      if (isFsError(error)) return; // classification reports what cannot be listed
       throw error;
     }
     for (const name of names) {
-      const match = REVISION_FILE.exec(name);
-      if (match) {
-        files.set(match[1]!, (await fs.stat(path.join(directory, name))).size);
-      } else if (isStagingLeftover(name)) {
-        await fs.rm(path.join(directory, name), { force: true });
-      }
+      if (isStagingLeftover(name)) await this.removeStagingLeftover(path.join(directory, name));
+    }
+  }
+
+  /** Size of every regular revision file in `directory`; a missing directory has none. */
+  private async revisionFiles(directory: string): Promise<Map<string, number>> {
+    const files = new Map<string, number>();
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (isMissing(error)) return files;
+      throw error;
+    }
+    for (const entry of entries) {
+      const match = entry.isFile() ? REVISION_FILE.exec(entry.name) : null;
+      if (match) files.set(match[1]!, (await fs.stat(path.join(directory, entry.name))).size);
     }
     return files;
   }
 
-  private async loadProject(projectId: string): Promise<void> {
-    const directory = this.projectDir(projectId);
-    for (const name of await fs.readdir(directory)) {
-      if (isStagingLeftover(name)) await fs.rm(path.join(directory, name), { force: true });
+  private async unreadableEntry(projectId: string, ...mtimeSources: string[]): Promise<ProjectEntry> {
+    for (const source of mtimeSources) {
+      try {
+        return { kind: "unreadable", id: projectId, updatedAt: Math.trunc((await fs.stat(source)).mtimeMs) };
+      } catch {
+        // Try the next source.
+      }
     }
-    const files = await this.revisionFiles(projectId);
+    return { kind: "unreadable", id: projectId, updatedAt: this.now() };
+  }
+
+  /**
+   * Classify one project directory: sweep its staging leftovers, read and reconcile its manifest,
+   * and collect orphan revision files. Nothing unreadable is ever deleted here. Returns
+   * `undefined` for a directory that holds nothing (a create that crashed before its first commit).
+   */
+  private async loadProject(root: string, projectId: string): Promise<ProjectEntry | undefined> {
+    const directory = path.join(root, projectId);
+    const revisionsDirectory = path.join(directory, "revisions");
     const manifestPath = path.join(directory, "manifest.json");
+    await this.sweepStagingLeftovers(directory);
+    await this.sweepStagingLeftovers(revisionsDirectory);
+    let files: Map<string, number>;
+    try {
+      files = await this.revisionFiles(revisionsDirectory);
+    } catch (error) {
+      if (!isFsError(error)) throw error;
+      return this.unreadableEntry(projectId, manifestPath, directory);
+    }
     let raw: string;
     try {
       raw = await fs.readFile(manifestPath, "utf8");
     } catch (error) {
-      if (!isMissing(error)) throw error;
-      // A create that crashed before its first commit leaves an empty directory.
-      if (files.size === 0) {
-        await fs.rm(directory, { recursive: true, force: true });
-        return;
+      if (!isFsError(error)) throw error;
+      if (isMissing(error)) {
+        if (files.size === 0) {
+          await fs.rm(directory, { recursive: true, force: true });
+          return undefined;
+        }
+        return this.unreadableEntry(projectId, directory);
       }
-      this.entries.set(projectId, {
-        kind: "unreadable",
-        id: projectId,
-        updatedAt: Math.trunc((await fs.stat(directory)).mtimeMs),
-      });
-      return;
+      // EACCES, EISDIR, ...: the manifest exists but cannot be read.
+      return this.unreadableEntry(projectId, manifestPath, directory);
     }
     let manifest: DesignProjectManifestV1 | undefined;
     try {
@@ -547,32 +671,23 @@ export class DesignProjectStore {
       if (!(error instanceof SyntaxError)) throw error;
       manifest = undefined;
     }
-    if (!manifest || manifest.id !== projectId) {
-      // Shown as Unreadable and never deleted automatically (ADR-DS §2).
-      this.entries.set(projectId, {
-        kind: "unreadable",
-        id: projectId,
-        updatedAt: Math.trunc((await fs.stat(manifestPath)).mtimeMs),
-      });
-      return;
-    }
+    // Shown as Unreadable and never deleted automatically (ADR-DS §2).
+    if (!manifest || manifest.id !== projectId) return this.unreadableEntry(projectId, manifestPath, directory);
     const reconciled = reconcileDesignManifest(manifest, files, this.now());
     try {
       assertDesignManifestWritable(reconciled.manifest);
     } catch (error) {
       if (!(error instanceof DesignStoreError)) throw error;
       // Parses, but no transition could have written it: treat it like damage and never delete it.
-      this.entries.set(projectId, {
-        kind: "unreadable",
-        id: projectId,
-        updatedAt: Math.trunc((await fs.stat(manifestPath)).mtimeMs),
-      });
-      return;
+      return this.unreadableEntry(projectId, manifestPath, directory);
     }
-    if (reconciled.changed) await this.writeManifest(reconciled.manifest);
+    if (reconciled.changed) await this.writeManifest(reconciled.manifest, directory, true);
     for (const orphan of orphanRevisionIds(reconciled.manifest, files)) {
-      await fs.rm(this.revisionPath(projectId, orphan), { force: true });
+      // An orphan is a plain file; failing to collect it now only leaves it for the next start.
+      await fs.rm(path.join(revisionsDirectory, `${orphan}.html`), { force: true }).catch((error: unknown) =>
+        this.options.onError?.("Could not remove an orphan design file; it is collected at the next start.", error),
+      );
     }
-    this.entries.set(projectId, { kind: "ok", manifest: reconciled.manifest });
+    return { kind: "ok", manifest: reconciled.manifest };
   }
 }
