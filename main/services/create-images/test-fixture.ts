@@ -11,7 +11,9 @@ import {
   type MutableModels,
   type Usage,
 } from "@earendil-works/pi-ai";
+import type { WorkflowDocV1 } from "../../../renderer/shared/images/schema.js";
 import { pngBytes } from "../studio-assets/test-fixture.js";
+import type { ImageWorkflowStore } from "./workflow-store.js";
 
 export interface FakeImageCall {
   model: string;
@@ -113,5 +115,46 @@ export function fakeImageModels(
       for (const release of [...held]) release();
       held.clear();
     },
+  };
+}
+
+export const NANO_BANANA = { provider: "openrouter", id: "google/gemini-3.1-flash-image" } as const;
+
+export async function until(condition: () => boolean, label = "condition"): Promise<void> {
+  for (let attempt = 0; attempt < 2_000; attempt += 1) {
+    if (condition()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`Timed out waiting for ${label}.`);
+}
+
+/** Creates a blank workflow, applies `build`, and saves it through the real store. */
+export async function saveWorkflow(
+  workflows: ImageWorkflowStore,
+  build: (doc: WorkflowDocV1) => WorkflowDocV1,
+): Promise<WorkflowDocV1> {
+  const created = await workflows.create("blank");
+  const saved = await workflows.save(created.id, created.revision, build(structuredClone(created)));
+  if (!saved.ok) throw new Error(`The fixture workflow is invalid: ${JSON.stringify(saved)}`);
+  return (await workflows.get(created.id))!;
+}
+
+/** One prompt feeding `count` Generate → Output chains. */
+export function generateChains(count: number, prompt = "A red bicycle at dawn") {
+  return (doc: WorkflowDocV1): WorkflowDocV1 => {
+    const at = { x: 0, y: 0 };
+    doc.nodes = [{ id: "p", type: "prompt", position: at, data: { text: prompt } }];
+    doc.edges = [];
+    for (let index = 1; index <= count; index += 1) {
+      doc.nodes.push(
+        { id: `g${index}`, type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 } },
+        { id: `o${index}`, type: "output", position: at, data: {} },
+      );
+      doc.edges.push(
+        { id: `p-g${index}`, source: "p", sourcePort: "text", target: `g${index}`, targetPort: "prompt" },
+        { id: `g${index}-o${index}`, source: `g${index}`, sourcePort: "images", target: `o${index}`, targetPort: "images" },
+      );
+    }
+    return doc;
   };
 }

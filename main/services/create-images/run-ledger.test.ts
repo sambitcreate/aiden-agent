@@ -174,9 +174,9 @@ test("output sequence orders nodes by their newest output, and image counts de-d
   assert.deepEqual(ledger.latestOutputSequence("other"), {});
 
   // Images a, b (shared with g2) and c: three distinct images, however many attempts hold them.
-  assert.deepEqual(ledger.imageCounts(), { wf: 3 });
+  assert.deepEqual(ledger.imageAssetIds(), { wf: ["a", "b", "c"].map((seed) => seed.repeat(64)) });
   ledger.deleteWorkflowRuns("wf");
-  assert.deepEqual(ledger.imageCounts(), {});
+  assert.deepEqual(ledger.imageAssetIds(), {});
 });
 
 test("retention keeps the newest runs plus every run holding a node's latest output", async (t) => {

@@ -122,6 +122,20 @@ export class ImageWorkflowStore {
     return [...this.index.values()].sort((left, right) => right.updatedAt - left.updatedAt);
   }
 
+  /**
+   * Distinct Image Input assets per workflow, read from the stored documents. A workflow whose
+   * graph is invalid still counts, because its images are still held; an unreadable file does not.
+   */
+  async imageInputAssets(): Promise<Record<string, string[]>> {
+    const found: Record<string, string[]> = {};
+    for (const id of this.index.keys()) {
+      const doc = await this.readDocument(id);
+      const assets = doc ? [...new Set(imageInputAssets(doc))].sort() : [];
+      if (assets.length > 0) found[id] = assets;
+    }
+    return found;
+  }
+
   async create(
     template: ImageWorkflowTemplate,
     options: { title?: string; model?: ImageModelRef } = {},

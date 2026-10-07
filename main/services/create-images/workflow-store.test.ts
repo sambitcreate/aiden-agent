@@ -313,3 +313,25 @@ test("delete releases the workflow's holds even if the index cannot be rewritten
   assert.equal(await reopened.delete(unreadable.id), false);
   assert.equal(await reopened.delete("../escape"), false);
 });
+
+test("imageInputAssets lists each workflow's distinct Image Input assets and skips workflows without any", async (t) => {
+  const { store, assets } = await fixture(t);
+  const first = await assets.put({ bytes: pngBytes(4, 4, 11) });
+  const second = await assets.put({ bytes: pngBytes(4, 4, 12) });
+  const at = { x: 0, y: 0 };
+  const withImages = await store.create("blank");
+  assert.deepEqual(
+    await store.save(withImages.id, 1, {
+      ...withImages,
+      nodes: [
+        { id: "a", type: "image-input", position: at, data: { assetId: first.assetId } },
+        { id: "b", type: "image-input", position: at, data: { assetId: first.assetId } },
+        { id: "c", type: "image-input", position: at, data: { assetId: second.assetId } },
+      ],
+      edges: [],
+    }),
+    { ok: true, revision: 2 },
+  );
+  await store.create("blank");
+  assert.deepEqual(await store.imageInputAssets(), { [withImages.id]: [first.assetId, second.assetId].sort() });
+});

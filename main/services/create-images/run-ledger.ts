@@ -414,7 +414,8 @@ export class ImageRunLedger {
     return latest;
   }
 
-  imageCounts(): Record<string, number> {
+  /** Distinct generated image assets per workflow, however many attempts hold them. */
+  imageAssetIds(): Record<string, string[]> {
     this.requireOpen();
     const seen = new Map<string, Set<string>>();
     for (const row of this.sql.imageOutputs.all() as unknown as { workflow_id: string; output: string }[]) {
@@ -422,7 +423,7 @@ export class ImageRunLedger {
       for (const ref of parseOutput(row.output)) ids.add(ref.assetId);
       seen.set(row.workflow_id, ids);
     }
-    return Object.fromEntries([...seen].filter(([, ids]) => ids.size > 0).map(([workflowId, ids]) => [workflowId, ids.size]));
+    return Object.fromEntries([...seen].filter(([, ids]) => ids.size > 0).map(([workflowId, ids]) => [workflowId, [...ids].sort()]));
   }
 
   /** The single restart sweep: unfinished work becomes history, never a queue. */
