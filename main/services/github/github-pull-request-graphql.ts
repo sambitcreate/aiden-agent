@@ -134,7 +134,7 @@ function checkNode(node: unknown): Record<string, unknown> | undefined {
 
 function rollupNodes(node: Record<string, unknown>): unknown[] {
   const commits = isRecord(node.commits) && Array.isArray(node.commits.nodes) ? node.commits.nodes : [];
-  const last = commits.at(-1);
+  const last = commits[commits.length - 1];
   const commit = isRecord(last) && isRecord(last.commit) ? last.commit : undefined;
   const rollup = commit && isRecord(commit.statusCheckRollup) ? commit.statusCheckRollup : undefined;
   const contexts = rollup && isRecord(rollup.contexts) && Array.isArray(rollup.contexts.nodes) ? rollup.contexts.nodes : [];

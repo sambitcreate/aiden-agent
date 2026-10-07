@@ -29,8 +29,9 @@ test("polling waits out a pause longer than its interval", () => {
 });
 
 test("a paused answer keeps the last pull request; other answers replace it", () => {
+  type Status = { availability: string; retryAt?: number; pullRequest?: { number: number } };
   const pullRequest = { number: 7 };
-  const previous = { availability: "ready", pullRequest };
+  const previous: Status = { availability: "ready", pullRequest };
   assert.deepEqual(keepPullRequestWhilePaused(previous, { availability: "rate-limited", retryAt: NOW }), {
     availability: "rate-limited",
     retryAt: NOW,
@@ -39,7 +40,7 @@ test("a paused answer keeps the last pull request; other answers replace it", ()
   assert.deepEqual(keepPullRequestWhilePaused(previous, { availability: "no-pull-request" }), {
     availability: "no-pull-request",
   });
-  assert.deepEqual(keepPullRequestWhilePaused(undefined, { availability: "rate-limited" }), { availability: "rate-limited" });
+  assert.deepEqual(keepPullRequestWhilePaused<Status>(undefined, { availability: "rate-limited" }), { availability: "rate-limited" });
 });
 
 test("the pause is worded with the local time, and the day when it is not today", () => {

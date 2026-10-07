@@ -43,6 +43,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDashed,
+  Clock3,
   ExternalLink,
   Folder,
   FolderPlus,

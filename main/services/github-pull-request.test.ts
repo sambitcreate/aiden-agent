@@ -438,8 +438,9 @@ test("explicit selectors read the named repository, including on enterprise host
   const found = await service.findForBranch("/repo", "feature/login", undefined, "github.com/me/app");
   assert.deepEqual(found.pullRequests?.map((entry) => entry.number), [9]);
   await service.getPullRequest("/repo", "ghe.example/acme/app", 1);
-  assert.equal(requests.at(-1)!.url, "https://ghe.example/api/graphql");
-  assert.equal(requests.at(-1)!.headers.Authorization, "Bearer token-b");
+  const last = requests[requests.length - 1]!;
+  assert.equal(last.url, "https://ghe.example/api/graphql");
+  assert.equal(last.headers.Authorization, "Bearer token-b");
 });
 
 test("a pasted URL is read by its repository and number; unknown PRs are errors", async () => {

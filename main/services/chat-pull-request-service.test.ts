@@ -806,7 +806,7 @@ test("refresh reads every link together and announces only real changes", async 
     directory,
     {
       getPullRequestByUrl: async (_cwd: string, url: string) =>
-        ready({ pullRequest: summary(Number(url.split("/").at(-1))) }) as GitHubPullRequestStatus,
+        ready({ pullRequest: summary(Number(url.split("/").pop())) }) as GitHubPullRequestStatus,
       getPullRequest: async (_cwd: string, _repo: string, number: number) => {
         inFlight += 1;
         maxInFlight = Math.max(maxInFlight, inFlight);
