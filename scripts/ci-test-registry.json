@@ -66,6 +66,8 @@
         "main/services/create-images/run-ledger.test.ts",
         "main/services/create-images/scheduler-core.test.ts",
         "main/services/create-images/run-executor.test.ts",
+        "main/services/create-images/image-port.test.ts",
+        "main/services/pi-model-image-output.test.ts",
         "main/services/custom-model-options.test.ts",
         "main/services/custom-schemes-core.test.ts",
         "renderer/components/settings/custom-model-options.test.tsx",
