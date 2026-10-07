@@ -102,15 +102,13 @@ import type {
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
 } from "../shared/diagnostics";
+import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service";
 import type {
-  BotAvatarSuggestion,
-  BotAvatarSuggestionInput,
   BotCreateInput,
   BotDefinition,
   BotRendererCanonicalPhoto,
   BotUpdateInput,
 } from "../shared/bots";
-import { botAvatarSuggestionErrorMessage } from "../shared/bots";
 import type {
   BotAccessUpdate,
   BotAccessView,
@@ -1090,7 +1088,8 @@ export const chatsApi = {
   createWithFirstMessage: (input: {
     draftId: string;
     title?: string;
-    workspaceId: string;
+    /** Ignored by main: a Bot chat always lives in its managed home. */
+    workspaceId?: string;
     providerId?: string;
     model?: string;
     computerUseEnabled?: boolean;
@@ -1200,32 +1199,21 @@ export const botsApi = {
     invoke<BotRendererCanonicalPhoto | null>("bots:getCanonicalPhoto", id),
   create: (input: { bot: BotCreateInput; access: BotAccessUpdate }) =>
     invoke<BotDefinition>("bots:create", input),
-  suggestAvatar: async (input: BotAvatarSuggestionInput) => {
-    try {
-      return await invoke<BotAvatarSuggestion>("bots:suggestAvatar", input);
-    } catch (error) {
-      throw new Error(botAvatarSuggestionErrorMessage(error));
-    }
-  },
-  cancelAvatarSuggestion: (requestId: string) =>
-    invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
   getCapabilityCatalog: (botId?: string) =>
     invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
-  archive: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:archive", input),
-  restore: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:restore", input),
-  listChats: (id: string) => invoke<ChatMeta[]>("bots:listChats", id),
-  createChat: (input: {
-    botId: string;
-    workspaceId: string;
-    providerId?: string;
-    model?: string;
-  }) => invokeChatMutation<Chat>("bots:createChat", input),
+  /** Permanently erases the Bot: chat, memory, routines, files, photo, Telegram link. */
+  delete: (botId: string) => invoke<void>("bots:delete", botId),
+  sessionState: (botId: string) => invoke<BotSessionState>("bots:sessionState", botId),
+  /**
+   * The Bot's one chat, created on first open. TEMPORARY bridge: the chat
+   * view renders Bots through ChatStore until it moves to the live projection.
+   */
+  openChat: (botId: string) =>
+    invoke<{ chatId: string; updatedAt: number; title: string }>("bots:openChat", botId),
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>

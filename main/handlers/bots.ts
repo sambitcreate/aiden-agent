@@ -157,6 +157,16 @@ export function registerBotHandlers(): void {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
   });
+  // The desktop chat view still renders a Bot through its one ChatStore chat.
+  // Returns that chat's id, creating it on first open, until the renderer
+  // moves to the live projection (plan Task 1.4/2.3).
+  ipcMain.handle("bots:openChat", async (_event, id: unknown) => {
+    const botId = parseBotId(id);
+    const chat =
+      (await botApplicationService.getCanonicalChat(botId)) ??
+      (await botApplicationService.createChat({ audienceId: desktopAudienceId, botId }));
+    return { chatId: chat.id, updatedAt: chat.updatedAt, title: chat.title };
+  });
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });

@@ -21,7 +21,7 @@ enum AidenRemoteProtocol {
     static let maxErrorMessageLength = 2_000
     static let maxQuestionCount = 4
     static let minQuestionOptions = 2
-    static let maxQuestionOptions = 4
+    static let maxQuestionOptions = 5
     static let maxQuestionHeaderLength = 16
     static let maxQuestionOptionLabelLength = 60
     static let maxQuestionLength = 1_000
