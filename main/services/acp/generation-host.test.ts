@@ -19,6 +19,7 @@ function setup(overrides: Partial<AcpGenerationHostOptions> = {}, outcome: ToolA
     streamId: "stream-1",
     label: "Google Antigravity",
     folderPath: "/work/project",
+    folderIdentity: { path: "/work/project", device: "1", inode: "2" },
     scratchDir: "/scratch",
     permission: () => "ask",
     timeline,
@@ -136,8 +137,10 @@ test("tools the agent already has are not bridged; Aiden-only tools are", () => 
 });
 
 test("folderless or no-access chats give the agent a scratch directory and no file roots", () => {
-  assert.deepEqual(setup().host.roots, ["/work/project"]);
-  const folderless = setup({ folderPath: undefined }).host;
+  assert.deepEqual(setup().host.roots, [{ path: "/work/project", device: "1", inode: "2" }]);
+  // A folder whose identity could not be captured grants nothing.
+  assert.deepEqual(setup({ folderIdentity: undefined }).host.roots, []);
+  const folderless = setup({ folderPath: undefined, folderIdentity: undefined }).host;
   assert.equal(folderless.cwd, "/scratch");
   assert.deepEqual(folderless.roots, []);
   assert.deepEqual(setup({ permission: () => "none" }).host.roots, []);

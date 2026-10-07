@@ -3850,7 +3850,13 @@ export const llmClient = {
               folderPath,
               // Bind file access to this exact directory for the whole turn.
               ...(folderPath
-                ? { folderIdentity: await captureRootIdentity(folderPath).catch(() => undefined) }
+                ? {
+                    folderIdentity: await captureRootIdentity(folderPath).catch((error: unknown) => {
+                      // No identity means no agent file access this turn.
+                      logger.warn("acp", "Could not capture the chat folder identity; agent file access is off.", error);
+                      return undefined;
+                    }),
+                  }
                 : {}),
               scratchDir: await acpScratchDir(params.chatId),
               permission: () => permission,

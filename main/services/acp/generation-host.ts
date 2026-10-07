@@ -48,7 +48,7 @@ export interface AcpGenerationHostOptions {
   label: string;
   /** The chat's folder, or undefined for a chat without one. */
   folderPath: string | undefined;
-  /** The folder's identity, captured when the turn started. */
+  /** The folder's identity, captured when the turn started; required for any file access. */
   folderIdentity?: AcpRootIdentity;
   /** Working directory for chats without a folder; it grants no file access. */
   scratchDir: string;
@@ -137,10 +137,9 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
   return {
     chatId: options.chatId,
     cwd: options.folderPath ?? options.scratchDir,
-    roots:
-      options.folderPath && options.permission() !== "none"
-        ? [options.folderIdentity ?? options.folderPath]
-        : [],
+    // Fail closed: without the identity captured at turn start there is no
+    // file access at all, never a fallback to the mutable pathname.
+    roots: options.folderIdentity && options.permission() !== "none" ? [options.folderIdentity] : [],
     permission: options.permission,
     async requestApproval(request, signal): Promise<AcpApprovalOutcome> {
       const id = request.activityId ?? request.toolCallId;
