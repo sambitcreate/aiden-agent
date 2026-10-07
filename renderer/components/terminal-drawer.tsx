@@ -595,7 +595,7 @@ export function TerminalDrawer() {
       data-state={open ? "open" : "closed"}
       className="terminal-drawer relative shrink-0 overflow-hidden border-t border-separator bg-popover"
       data-placement={placement}
-      style={{ "--terminal-drawer-height": placement === "side" ? "100%" : `${height}px`, display: !requestedOpen || (!present && placement === "bottom") ? "none" : undefined } as React.CSSProperties}
+      style={{ "--terminal-drawer-height": placement === "side" ? "100%" : `${height}px`, display: (placement === "side" ? !requestedOpen : !present) ? "none" : undefined } as React.CSSProperties}
     >
       <div
         hidden={placement === "side"}
