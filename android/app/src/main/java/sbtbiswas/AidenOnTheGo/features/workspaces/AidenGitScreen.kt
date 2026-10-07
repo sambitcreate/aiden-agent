@@ -28,7 +28,15 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import sbtbiswas.AidenOnTheGo.persistence.AidenReadSnapshotKeys
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
@@ -46,11 +54,24 @@ fun AidenGitScreen(
     val scope = rememberCoroutineScope()
     val client = coordinator.client.collectAsStateWithLifecycle().value
 
-    var gitReviewResult by remember { mutableStateOf<AidenGitResult?>(null) }
+    val instanceId = coordinator.activeInstanceId
+    val snapshots = coordinator.readSnapshotCache
+    // The last review of this Workspace renders at once. Its snapshot id is stale until a
+    // fresh read lands, so actions that send it (commit, diffs, checkout, push) wait for that.
+    var gitReviewResult by remember(workspaceId, instanceId) {
+        mutableStateOf(
+            instanceId?.let { snapshots.load(it, AidenReadSnapshotKeys.gitReview(workspaceId), AidenGitResult.serializer()) }
+        )
+    }
+    var reviewIsFresh by remember(workspaceId, instanceId) { mutableStateOf(false) }
     var selectedDiff by remember { mutableStateOf<AidenGitDiff?>(null) }
     BackHandler(enabled = selectedDiff != null) { selectedDiff = null }
     var isLoading by remember { mutableStateOf(true) }
+    var reviewLoadFailed by remember { mutableStateOf(false) }
     var lastError by remember { mutableStateOf<String?>(null) }
+    // Git writes can be refused (conflicts, dirty trees, remotes), so they are never
+    // shown as done early; the branch card carries an in-place pending label instead.
+    var pendingOperation by remember { mutableStateOf<String?>(null) }
 
     // Last operation for retry
     var lastFailedOperation by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -71,16 +92,44 @@ fun AidenGitScreen(
     fun refreshGit() {
         if (client != null) {
             isLoading = true
+            reviewLoadFailed = false
             scope.launch {
                 try {
                     val res = client.gitReview(workspaceId)
                     gitReviewResult = res
+                    reviewIsFresh = true
                     lastError = null
+                    instanceId?.let { snapshots.store(it, AidenReadSnapshotKeys.gitReview(workspaceId), res, AidenGitResult.serializer()) }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    reviewLoadFailed = true
                     lastError = e.localizedMessage
                 } finally {
                     isLoading = false
                 }
+            }
+        } else {
+            isLoading = false
+        }
+    }
+
+    /** Runs one Git write with a pending label, then rereads the review. */
+    fun runGitOperation(label: String, onFailure: (Exception) -> Unit = {}, write: suspend () -> Unit) {
+        if (pendingOperation != null) return
+        pendingOperation = label
+        scope.launch {
+            try {
+                write()
+                lastError = null
+                // The write moved the repository on; snapshot actions wait for the reread.
+                reviewIsFresh = false
+                refreshGit()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                lastError = e.localizedMessage
+                onFailure(e)
+            } finally {
+                pendingOperation = null
             }
         }
     }
@@ -212,6 +261,21 @@ fun AidenGitScreen(
                     }
                 }
 
+                if (review == null) {
+                    if (isLoading || (!reviewLoadFailed && client != null)) {
+                        AidenSkeletonList(count = 6, loadingDescription = "Loading changes")
+                    } else {
+                        AidenEmptyState(
+                            icon = Icons.Default.CloudOff,
+                            title = "Changes unavailable",
+                            body = if (client == null) "Connect to your paired desktop to review this Workspace." else "Aiden couldn't read this Workspace's changes.",
+                            modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
+                            action = if (client != null) {
+                                { AidenTonalButton(text = "Try Again", onClick = { refreshGit() }) }
+                            } else null
+                        )
+                    }
+                }
                 if (review != null) {
                     // Branch & Info Card
                     Card(
@@ -246,13 +310,27 @@ fun AidenGitScreen(
                                 }
                             }
 
+                            val status = pendingOperation ?: if (!reviewIsFresh && isLoading) "Checking for changes…" else null
+                            if (status != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .padding(top = 8.dp)
+                                        .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+                                ) {
+                                    AidenActivityDot(color = palette.secondary, size = 6.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(status, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                                }
+                            }
+
                             Spacer(modifier = Modifier.height(12.dp))
 
                             AidenGitActionBar(
                                 pushInFlight = isCheckingPush,
                                 onBranch = { showBranchSheet = true },
                                 onPush = {
-                                    if (client != null && !isCheckingPush) {
+                                    if (client != null && !isCheckingPush && reviewIsFresh && pendingOperation == null) {
                                         isCheckingPush = true
                                         scope.launch {
                                             try {
@@ -299,13 +377,13 @@ fun AidenGitScreen(
                                 .fillMaxWidth(),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
                         ) {
-                            items(review.files) { file ->
+                            items(review.files, key = { it.id }) { file ->
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(vertical = 3.dp)
                                         .clip(RoundedCornerShape(10.dp))
-                                        .clickable {
+                                        .clickable(enabled = reviewIsFresh) {
                                             scope.launch {
                                                 if (client != null) {
                                                     try {
@@ -368,8 +446,9 @@ fun AidenGitScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             AidenPrimaryButton(
-                                text = "Commit Changes (${review.files.size} files)",
+                                text = pendingOperation ?: "Commit Changes (${review.files.size} files)",
                                 onClick = { showCommitSheet = true },
+                                enabled = reviewIsFresh && pendingOperation == null,
                                 leadingIcon = Icons.Default.Check,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -465,24 +544,24 @@ fun AidenGitScreen(
                         val snapshotId = gitReviewResult?.snapshotId ?: return@confirm
                         val key = UUID.randomUUID()
                         lastIdempotencyKey = key
+                        val message = commitMessage.trim()
                         var op: (() -> Unit)? = null
                         op = {
                             if (client != null) {
                                 isOperating = true
-                                scope.launch {
+                                runGitOperation(
+                                    label = "Committing…",
+                                    onFailure = { lastFailedOperation = op }
+                                ) {
                                     try {
                                         client.commitGit(
                                             workspaceId = workspaceId,
                                             snapshotId = snapshotId,
-                                            message = commitMessage.trim(),
+                                            message = message,
                                             stagedOnly = stagedOnly,
                                             idempotencyKey = key
                                         )
-                                        refreshGit()
-                                        lastError = null
-                                    } catch (e: Exception) {
-                                        lastError = e.localizedMessage
-                                        lastFailedOperation = op
+                                        lastFailedOperation = null
                                     } finally {
                                         isOperating = false
                                     }
@@ -500,7 +579,9 @@ fun AidenGitScreen(
 
     // --- Branch Selector Sheet ---
     if (showBranchSheet) {
-        var branchesResult by remember { mutableStateOf<AidenGitBranches?>(null) }
+        var branchesResult by remember {
+            mutableStateOf(instanceId?.let { snapshots.load(it, AidenReadSnapshotKeys.gitBranches(workspaceId), AidenGitBranches.serializer()) })
+        }
         var showNewBranchDialog by remember { mutableStateOf(false) }
         var branchToCheckout by remember { mutableStateOf<String?>(null) }
 
@@ -509,7 +590,14 @@ fun AidenGitScreen(
                 try {
                     val res = client.gitBranches(workspaceId)
                     branchesResult = res.branches
-                } catch (_: Exception) {}
+                    res.branches?.let { branches ->
+                        instanceId?.let { snapshots.store(it, AidenReadSnapshotKeys.gitBranches(workspaceId), branches, AidenGitBranches.serializer()) }
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    // The saved list stays; a first read that fails says so in the review banner.
+                    if (branchesResult == null) lastError = e.localizedMessage
+                }
             }
         }
 
@@ -548,18 +636,21 @@ fun AidenGitScreen(
                 val branches = branchesResult?.branches ?: emptyList()
                 val current = branchesResult?.current ?: review?.branch ?: ""
 
+                if (branchesResult == null && client != null) {
+                    AidenSkeletonList(count = 4, loadingDescription = "Loading branches")
+                }
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f, fill = false)
                 ) {
-                    items(branches) { branch ->
+                    items(branches, key = { it }) { branch ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 3.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable {
+                                .clickable(enabled = reviewIsFresh && pendingOperation == null) {
                                     if (branch != current) {
                                         branchToCheckout = branch
                                     }
@@ -607,14 +698,9 @@ fun AidenGitScreen(
                         branchToCheckout = null
                         showBranchSheet = false
                         val snapshotId = gitReviewResult?.snapshotId ?: ""
-                        scope.launch {
-                            if (client != null) {
-                                try {
-                                    client.checkoutGitBranch(workspaceId, branch, snapshotId)
-                                    refreshGit()
-                                } catch (e: Exception) {
-                                    lastError = e.localizedMessage
-                                }
+                        if (client != null) {
+                            runGitOperation("Switching to $branch…") {
+                                client.checkoutGitBranch(workspaceId, branch, snapshotId)
                             }
                         }
                     }
@@ -638,14 +724,9 @@ fun AidenGitScreen(
                         if (name.isNotEmpty()) {
                             showNewBranchDialog = false
                             showBranchSheet = false
-                            scope.launch {
-                                if (client != null) {
-                                    try {
-                                        client.createGitBranch(workspaceId, name, start)
-                                        refreshGit()
-                                    } catch (e: Exception) {
-                                        lastError = e.localizedMessage
-                                    }
+                            if (client != null) {
+                                runGitOperation("Creating $name…") {
+                                    client.createGitBranch(workspaceId, name, start)
                                 }
                             }
                         }
@@ -685,14 +766,9 @@ fun AidenGitScreen(
             onConfirm = {
                 showPushDialog = false
                 val snapshotId = gitReviewResult?.snapshotId ?: ""
-                scope.launch {
-                    if (client != null) {
-                        try {
-                            client.pushGit(workspaceId, snapshotId, pushRemote, pushBranch)
-                            refreshGit()
-                        } catch (e: Exception) {
-                            lastError = e.localizedMessage
-                        }
+                if (client != null) {
+                    runGitOperation("Pushing $pushBranch…") {
+                        client.pushGit(workspaceId, snapshotId, pushRemote, pushBranch)
                     }
                 }
             }
@@ -748,8 +824,9 @@ fun AidenGitScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
+                        enabled = !isComparing,
                         onClick = {
-                            if (client != null && baseRef.trim().isNotEmpty()) {
+                            if (client != null && baseRef.trim().isNotEmpty() && !isComparing) {
                                 isComparing = true
                                 scope.launch {
                                     try {
@@ -763,19 +840,24 @@ fun AidenGitScreen(
                                 }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = Color.White),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = palette.accent,
+                            contentColor = palette.onAccent,
+                            disabledContainerColor = palette.accent.copy(alpha = 0.6f),
+                            disabledContentColor = palette.onAccent
+                        ),
                         shape = AidenShape.Button
                     ) {
-                        if (isComparing) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
-                        } else {
-                            Text("Compare")
-                        }
+                        Text(if (isComparing) "Comparing…" else "Compare")
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // A comparison is a read: its result previews as rows, not a spinner.
+                if (isComparing && comparisonResult == null) {
+                    AidenSkeletonList(count = 4, leading = false, loadingDescription = "Comparing branches")
+                }
                 comparisonResult?.let { comp ->
                     Text(
                         text = "${comp.files.size} changed files between ${comp.base} and ${comp.head}:",
@@ -785,7 +867,7 @@ fun AidenGitScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
-                        items(comp.files) { file ->
+                        items(comp.files, key = { it.id }) { file ->
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -820,15 +902,28 @@ fun AidenGitScreen(
 
     // --- Worktrees Sheet ---
     if (showWorktreesSheet) {
-        var worktreesList by remember { mutableStateOf<List<AidenGitWorktree>>(emptyList()) }
+        var worktreesList by remember {
+            mutableStateOf(
+                instanceId?.let { snapshots.load(it, AidenReadSnapshotKeys.gitWorktrees(workspaceId), AidenGitWorktrees.serializer()) }
+                    ?.worktrees
+            )
+        }
         var showNewWorktreeDialog by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
             if (client != null) {
                 try {
                     val res = client.gitWorktrees(workspaceId)
-                    worktreesList = res.worktrees?.worktrees ?: emptyList()
-                } catch (_: Exception) {}
+                    val fresh = res.worktrees ?: AidenGitWorktrees(worktrees = emptyList())
+                    worktreesList = fresh.worktrees
+                    instanceId?.let { snapshots.store(it, AidenReadSnapshotKeys.gitWorktrees(workspaceId), fresh, AidenGitWorktrees.serializer()) }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    if (worktreesList == null) {
+                        worktreesList = emptyList()
+                        lastError = e.localizedMessage
+                    }
+                }
             }
         }
 
@@ -864,8 +959,11 @@ fun AidenGitScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                if (worktreesList == null && client != null) {
+                    AidenSkeletonList(count = 3, loadingDescription = "Loading worktrees")
+                }
                 LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
-                    items(worktreesList) { wt ->
+                    items(worktreesList.orEmpty(), key = { it.id }) { wt ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -925,14 +1023,10 @@ fun AidenGitScreen(
                         if (branch.isNotEmpty() && name.isNotEmpty()) {
                             showNewWorktreeDialog = false
                             showWorktreesSheet = false
-                            scope.launch {
-                                if (client != null) {
-                                    try {
-                                        client.createGitWorktree(workspaceId, branch, name)
-                                        coordinator.refreshWorkspaces()
-                                    } catch (e: Exception) {
-                                        lastError = e.localizedMessage
-                                    }
+                            if (client != null) {
+                                runGitOperation("Creating worktree $name…") {
+                                    client.createGitWorktree(workspaceId, branch, name)
+                                    coordinator.refreshWorkspaces()
                                 }
                             }
                         }
@@ -965,7 +1059,7 @@ fun AidenGitScreen(
 
 /**
  * Connected tonal action bar for the git review card. Each segment keeps its own action;
- * Push shows a progress ring while its capability check is in flight.
+ * Push shows the activity dot while its capability check is in flight.
  */
 @Composable
 internal fun AidenGitActionBar(
