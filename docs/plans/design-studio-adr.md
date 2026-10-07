@@ -4,7 +4,7 @@ Status: Proposed (Phase 0 deliverable; needs owner approval)
 Date: 2026-10-07
 Baseline: `main` @ `bd232b85`
 Parent plan: [Design Studio + Create Images rebuild](design-studio-create-images-rebuild-plan.md) §6 ADR-DS and §8 Track DS
-Depends on: [ADR-F, Studio Foundation](studio-foundation-adr.md). This ADR assumes ADR-F provides the `designStudio` capability, the lazy `/design` root route, the sidebar "Create" row, the `renderer/canvas/` kit (`<StudioCanvas>` on pinned `@xyflow/react`), the content-addressed `studio-assets` store with the `aiden-asset:` protocol, and the central hidden-chat visibility predicate (the chat `owner` field / `isUserVisibleChat()`). This ADR does not redefine any of them.
+Depends on: [ADR-F, Studio Foundation](studio-foundation-adr.md). This ADR assumes ADR-F provides the `designStudio` capability, the lazy `/design` route under the chat layout (Environment panel and terminal suppressed on studio paths), the sidebar "Design" row, the `renderer/canvas/` kit (`<StudioCanvas>` on pinned `@xyflow/react`), the content-addressed `studio-assets` store with the `aiden-asset:` protocol, and the central hidden-chat visibility predicate (the chat `owner` field / `isUserVisibleChat()`). This ADR does not redefine any of them.
 Supersedes: [Designer Mode plan](designer-mode-plan.md), which becomes DS-4. Its Phase 0 GO gate still applies.
 
 ## 1. Project model: a project owns one hidden chat

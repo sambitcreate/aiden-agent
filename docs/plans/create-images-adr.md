@@ -122,7 +122,7 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
   - Attempts with `submitted_at` show "may have been billed". There is no resubmit.
 - **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup.
 - **Assets** go to the shared store (ADR-F). Each output asset is retained by holder `images-run:<runId>`, and each Image Input asset by `images-workflow:<id>`. Prune and delete release holders. If ADR-F lands plain ref-counts, use one increment per output row. GC belongs to F.
-- **Perf target.** A synthetic 500-node run against a zero-latency fake port must spend **< 1 s total** inside ledger calls, measured by wrapping the ledger. It runs in the `create-images` perf lane, not the default pretest. The old branch took 114 s.
+- **Perf target.** A synthetic 500-node run against a zero-latency fake port must spend **< 1 s total** inside ledger calls, measured by wrapping the ledger. It runs as a separate `test:create-images:perf` npm script filed into an existing CI lane (ADR-F: no new lanes), not in the default pretest chain. The old branch took 114 s.
 
 ### 2.4 Scheduler and coordinator (main)
 
