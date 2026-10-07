@@ -1133,6 +1133,8 @@ final class AidenRemoteClientTests: XCTestCase {
                 XCTAssertEqual(request.httpMethod, "DELETE")
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_revision_8")
+            case 18:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-conversations")
             default:
                 XCTFail("Unexpected Bot API request")
             }
@@ -1142,7 +1144,8 @@ final class AidenRemoteClientTests: XCTestCase {
             case 13, 17: status = 204
             default: status = 200
             }
-            if step == 3 {
+            if step == 18 {
+                // The final conversations read returns another Bot's row: refused.
                 return Self.response(for: request, status: 200, data: mismatchData)
             }
             return Self.response(for: request, status: status, data: responses[step - 1])
@@ -1200,7 +1203,7 @@ final class AidenRemoteClientTests: XCTestCase {
 
         try await client.deleteBot(id: botID, revision: "bot_revision_8")
         await assertInvalidResponse { try await client.botConversations(query: query) }
-        XCTAssertEqual(step, 17)
+        XCTAssertEqual(step, 18)
     }
 
     @MainActor

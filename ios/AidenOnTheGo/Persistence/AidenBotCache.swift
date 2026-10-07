@@ -520,8 +520,9 @@ actor AidenBotCache {
     }
 }
 
-/// The cache writes timestamps at millisecond precision, the wire's precision,
-/// so an in-memory snapshot and its reloaded copy compare equal.
+/// The cache encodes dates with `.iso8601` (whole seconds), so a timestamp it
+/// stamps is truncated to whole seconds: an in-memory snapshot and its reloaded
+/// copy compare equal.
 func aidenBotCacheNow() -> Date {
-    Date(timeIntervalSince1970: (Date().timeIntervalSince1970 * 1000).rounded(.down) / 1000)
+    Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
 }
