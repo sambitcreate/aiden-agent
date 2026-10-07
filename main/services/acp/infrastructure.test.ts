@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -89,8 +90,24 @@ test("closing a process stops its whole group, including children that ignore TE
   const grandchild = Number(readFileSync(pidFile, "utf8"));
   await child.close();
   assert.equal(child.alive, false);
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.throws(() => process.kill(grandchild, 0));
+  // A killed process can linger briefly as a zombie until it is reaped; it
+  // no longer runs, so treat that state as stopped.
+  const stopped = () => {
+    try {
+      process.kill(grandchild, 0);
+    } catch {
+      return true;
+    }
+    try {
+      return execFileSync("ps", ["-o", "stat=", "-p", String(grandchild)], { encoding: "utf8" }).trim().startsWith("Z");
+    } catch {
+      return true;
+    }
+  };
+  for (let attempt = 0; attempt < 150 && !stopped(); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(stopped(), "the grandchild that ignored TERM was killed with its group");
 });
 
 test("the pid ledger only stops survivors still running the recorded binary", async () => {

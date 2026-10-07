@@ -47,6 +47,19 @@ export function readAgentLog(env: FakeAgentEnv): Array<Record<string, unknown>> 
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+/** Wait until the fake agent has logged a matching call (no fixed sleeps). */
+export async function waitForAgentLog(
+  env: FakeAgentEnv,
+  predicate: (entry: Record<string, unknown>) => boolean,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!readAgentLog(env).some(predicate)) {
+    if (Date.now() > deadline) throw new Error("The fake agent never logged the expected call.");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 export class FakeLauncher implements AcpProcessLauncher {
   launches: Array<{ purpose: string; cwd: string }> = [];
   processes: AcpProcess[] = [];

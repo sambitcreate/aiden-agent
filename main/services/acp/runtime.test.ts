@@ -16,6 +16,7 @@ import {
   fakeDefinition,
   readAgentLog,
   tempDir,
+  waitForAgentLog,
   transcript,
   userMessage,
 } from "./test-support.js";
@@ -229,7 +230,7 @@ test("Stop cancels the agent's turn and reports an aborted message", async () =>
   h.hosts.register(host);
   const controller = new AbortController();
   const pending = turn(h, [userMessage("slow")], { signal: controller.signal });
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await waitForAgentLog(h.env, (entry) => entry.method === "prompt" && entry.text === "slow");
   controller.abort();
   const result = await pending;
   assert.equal(result.stopReason, "aborted");
@@ -375,7 +376,7 @@ test("after a clean Stop the same agent session continues", async () => {
   h.hosts.register(new RecordingHost("chat-1", h.dir));
   const controller = new AbortController();
   const pending = turn(h, [userMessage("slow")], { signal: controller.signal });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await waitForAgentLog(h.env, (entry) => entry.method === "prompt" && entry.text === "slow");
   controller.abort();
   const stopped = await pending;
   assert.equal(stopped.stopReason, "aborted");
@@ -391,7 +392,7 @@ test("eviction never closes a session that is mid-turn", async () => {
   h.hosts.register(new RecordingHost("chat-b", h.dir));
   const controller = new AbortController();
   const busy = turn(h, [userMessage("slow")], { chatId: "chat-a", signal: controller.signal });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await waitForAgentLog(h.env, (entry) => entry.method === "prompt" && entry.text === "slow");
   await turn(h, [userMessage("echo:b")], { chatId: "chat-b" });
   assert.equal(h.runtime.liveCount, 2);
   controller.abort();
@@ -437,7 +438,7 @@ test("text the agent streams after Stop never appears in the next reply", async 
   h.hosts.register(new RecordingHost("chat-1", h.dir));
   const controller = new AbortController();
   const pending = turn(h, [userMessage("slow")], { signal: controller.signal });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await waitForAgentLog(h.env, (entry) => entry.method === "prompt" && entry.text === "slow");
   controller.abort();
   const stopped = await pending;
   const next = await turn(h, [userMessage("slow"), stopped, userMessage("echo:fresh")]);
@@ -485,7 +486,8 @@ test("a bridged tool that outlives its timeout ends the agent's turn cleanly; it
   const messages: Message[] = [userMessage("bridge:aiden_lookup")];
   const first = await turn(h, messages, { tools: lookupTools });
   assert.equal(first.stopReason, "toolUse");
-  await new Promise((resolve) => setTimeout(resolve, 700));
+  // The bridge timeout cancels the agent's turn; wait for that, not a clock.
+  await waitForAgentLog(h.env, (entry) => entry.method === "cancel");
   messages.push(first, toolResultFor(first, "late result"));
   const second = await turn(h, messages, { tools: lookupTools });
   assert.equal(second.stopReason, "stop", second.errorMessage);
