@@ -19,6 +19,7 @@ import {
   canReplaceGeneratedChatTitle,
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
+import { chatSurface, parseChatOwnerV1, type ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
 import {
   FORK_SUMMARY_HOLD_MESSAGE,
@@ -375,6 +376,8 @@ export function createChatStore(
           meta.botId.length <= 160 &&
           meta.botId.normalize("NFKC") === meta.botId &&
           SAFE_CHAT_ID.test(meta.botId))) &&
+      (meta.owner === undefined ||
+        (parseChatOwnerV1(meta.owner) !== undefined && meta.botId === undefined)) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
       (meta.model === undefined || typeof meta.model === "string") &&
       (meta.preview === undefined ||
@@ -931,6 +934,7 @@ export function createChatStore(
       title: chat.title,
       workspaceId: chat.workspaceId ?? DEFAULT_WORKSPACE_ID,
       ...(chat.botId ? { botId: chat.botId } : {}),
+      ...(chat.owner ? { owner: chat.owner } : {}),
       providerId: chat.providerId,
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
@@ -1073,8 +1077,12 @@ export function createChatStore(
       }));
     },
 
+    /** Chats that may appear in chat listings: ordinary and Assistant chats, never Bot or feature-owned. */
     async listRegular(workspaceId?: string): Promise<ChatMeta[]> {
-      return (await this.list(workspaceId)).filter((chat) => chat.botId === undefined);
+      return (await this.list(workspaceId)).filter((chat) => {
+        const surface = chatSurface(chat);
+        return surface === "regular" || surface === "assistant";
+      });
     },
 
     /** Transcript-free metadata read for bounded Remote summary pages. */
@@ -1177,6 +1185,7 @@ export function createChatStore(
       title?: string;
       workspaceId?: string;
       botId?: string;
+      owner?: ChatOwnerV1;
       providerId?: string;
       model?: string;
       /** Main-owned Bot greeting copied once into the new durable conversation. */
@@ -1186,6 +1195,10 @@ export function createChatStore(
       const id = input.id ?? newId();
       return shared([id], true, async () => {
         input.assertCurrent?.();
+        const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
+        if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
+          throw new Error("Invalid chat owner.");
+        }
         if (
           input.initialAssistantMessage !== undefined &&
           !isBoundedBotText(input.initialAssistantMessage, 2_000)
@@ -1199,6 +1212,7 @@ export function createChatStore(
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
           ...(input.botId ? { botId: input.botId } : {}),
+          ...(owner ? { owner } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
           createdAt: now,
@@ -1247,6 +1261,12 @@ export function createChatStore(
         input.assertCurrent?.();
         const source = await readChat(input.sourceChatId, "owner");
         if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
+        if (source.owner !== undefined) {
+          throw new ChatForkError(
+            "ineligible",
+            "This chat belongs to another Aiden feature and cannot be copied.",
+          );
+        }
         input.assertSource?.(source);
         if (
           input.expectedWorkspaceId !== undefined &&

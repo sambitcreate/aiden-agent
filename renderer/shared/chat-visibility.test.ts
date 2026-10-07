@@ -38,3 +38,28 @@ test("the owner parser accepts only the exact design-project shape", () => {
     assert.equal(parseChatOwnerV1(value), undefined, JSON.stringify(value));
   }
 });
+
+test("a Bot identity cannot override ownership, and an Assistant workspace chat with a Bot stays a Bot", () => {
+  assert.equal(chatSurface({ workspaceId: "workspace-1", botId: "bot-1", owner }), "feature");
+  assert.equal(isUserVisibleChat({ botId: "bot-1", owner }), false);
+  assert.equal(chatSurface({ workspaceId: "assistant", botId: "bot-1" }), "bot");
+});
+
+test("the owner project id is bounded to 128 characters and must start with a letter or digit", () => {
+  const longest = `a${"b".repeat(127)}`;
+  assert.deepEqual(parseChatOwnerV1({ kind: "design-project", projectId: longest }), {
+    kind: "design-project",
+    projectId: longest,
+  });
+  assert.deepEqual(parseChatOwnerV1({ kind: "design-project", projectId: "9a.b-c_d" }), {
+    kind: "design-project",
+    projectId: "9a.b-c_d",
+  });
+  for (const projectId of [".hidden", "-flag", "_under", "a/b", "a b", "a\nb", `a${"b".repeat(128)}`]) {
+    assert.equal(
+      parseChatOwnerV1({ kind: "design-project", projectId }),
+      undefined,
+      JSON.stringify(projectId),
+    );
+  }
+});
