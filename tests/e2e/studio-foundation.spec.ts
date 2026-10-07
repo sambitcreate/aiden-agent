@@ -140,9 +140,9 @@ test.describe("Studio foundation with both flags on", () => {
 
     // Primary navigation sits above the workspace outline, in a fixed order.
     const nav = page.getByRole("navigation", { name: "Primary" });
-    const rowNames = (await nav.getByRole("button").allTextContents()).map((name) => name.trim());
-    expect(rowNames.slice(0, 2)).toEqual(["New Agent", "Scheduled"]);
-    expect(rowNames.slice(-2)).toEqual(["Design", "Images"]);
+    const readRowNames = async () => (await nav.getByRole("button").allTextContents()).map((name) => name.trim());
+    await expect.poll(async () => (await readRowNames()).slice(0, 2)).toEqual(["New Agent", "Scheduled"]);
+    await expect.poll(async () => (await readRowNames()).slice(-2)).toEqual(["Design", "Images"]);
     const designRow = nav.getByRole("button", { name: "Design", exact: true });
     const imagesRow = nav.getByRole("button", { name: "Images", exact: true });
     const workspaces = page.getByText("Workspaces", { exact: true }).first();
@@ -217,12 +217,19 @@ test.describe("Studio foundation with both flags on", () => {
       .not.toBe(before);
 
     // App shortcuts still work while the canvas has focus, and typing in the palette does not trigger canvas keys.
+    // Select is active and the overview map is off, so a leaked "h" or "m" would visibly flip one of them.
     await canvas.focus();
+    await page.keyboard.press("v");
+    await expect(select).toHaveAttribute("aria-pressed", "true");
+    await expect(minimap).toHaveAttribute("aria-pressed", "false");
     const search = await openCommandPalette(page);
     await search.fill("hm");
     await expect(search).toHaveValue("hm");
     await closeCommandPalette(page); // the open palette hides the canvas from the accessibility tree
-    await expect(hand).toHaveAttribute("aria-pressed", "true");
+    await expect(select).toHaveAttribute("aria-pressed", "true");
+    await expect(hand).toHaveAttribute("aria-pressed", "false");
+    await expect(minimap).toHaveAttribute("aria-pressed", "false");
+    await expect(canvas.locator(".react-flow__minimap")).toHaveCount(0);
 
     // Back in a chat, the Environment workbench returns exactly as it was.
     await nav.getByRole("button", { name: "New Agent", exact: true }).click();
