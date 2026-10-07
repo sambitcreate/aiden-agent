@@ -32,6 +32,7 @@ class AidenRemoteLiveNotificationManager(private val context: Context) {
         val safeTitle = AgentRunActivitySanitizer.sessionTitle(sessionTitle)
         val safeActivity = AgentRunActivitySanitizer.activityLine(currentActivity)
         val safeExcerpt = AgentRunActivitySanitizer.responseExcerpt(responseExcerpt)
+        val statusLine = context.getString(R.string.notification_agent_status_line, context.getString(status.titleRes), safeActivity)
         val deepLinkUri = Uri.parse(AidenDeepLink.chatUrl(instanceId, sessionId))
         val intent = Intent(Intent.ACTION_VIEW, deepLinkUri, context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -47,14 +48,14 @@ class AidenRemoteLiveNotificationManager(private val context: Context) {
         val notification = NotificationCompat.Builder(context, AidenOnTheGoApp.AGENT_RUN_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(safeTitle)
-            .setContentText("${status.title}: $safeActivity")
+            .setContentText(statusLine)
             .setStyle(
                 NotificationCompat.BigTextStyle()
                     .bigText(
                         if (safeExcerpt.isNotEmpty()) {
-                            "${status.title}: $safeActivity\n\n$safeExcerpt"
+                            "$statusLine\n\n$safeExcerpt"
                         } else {
-                            "${status.title}: $safeActivity"
+                            statusLine
                         }
                     )
             )

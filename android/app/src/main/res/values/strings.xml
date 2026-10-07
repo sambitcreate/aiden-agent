@@ -826,4 +826,26 @@
 
     <!-- Shared components -->
     <string name="model_picker_close_sheet">Close sheet</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_agent_runs">Aiden Agent Tasks</string>
+    <string name="notification_channel_agent_runs_description">Live progress and notifications for running AI agents and bots</string>
+    <string name="notification_channel_scheduled_runs">Aiden Scheduled Runs</string>
+    <string name="notification_channel_scheduled_runs_description">Completed scheduled-task runs from the paired Aiden instance</string>
+    <string name="notification_agent_status_line">%1$s: %2$s</string>
+    <string name="notification_agent_status_starting">Starting</string>
+    <string name="notification_agent_status_thinking">Thinking</string>
+    <string name="notification_agent_status_using_tool">Using tool</string>
+    <string name="notification_agent_status_searching_files">Searching files</string>
+    <string name="notification_agent_status_reading_files">Reading files</string>
+    <string name="notification_agent_status_running_command">Running command</string>
+    <string name="notification_agent_status_responding">Responding</string>
+    <string name="notification_agent_status_waiting_approval">Waiting for approval</string>
+    <string name="notification_agent_status_waiting_answer">Waiting for answer</string>
+    <string name="notification_agent_status_complete">Complete</string>
+    <string name="notification_agent_status_failed">Failed</string>
+    <string name="notification_agent_status_cancelled">Cancelled</string>
+    <string name="notification_scheduled_failed">Scheduled run failed (%1$s).</string>
+    <string name="notification_scheduled_failed_default_code">error</string>
+    <string name="notification_scheduled_completed">Scheduled run completed.</string>
 </resources>
