@@ -30,7 +30,7 @@ Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Spec: `docs/superpower
 ## Desktop Bot UI on the live projection (Tasks 1.4, 2.3)
 - `main/services/bot-runtime/live-projection.ts`: one `conv.watch` feed per Bot, `(epoch, seq)` events, >100 pending collapses to a snapshot, `[SILENT]` turns hidden, connect cards re-resolved on every subscribe. IPC: `bots:live:subscribe|unsubscribe|summary` (`main/handlers/bot-live.ts`), push `bots:live:event`.
 - `renderer/lib/use-bot-live.ts` applies events and re-subscribes on a gap or epoch change.
-- Chat route is `/bots/$botId/chat` (no chat id). `renderer/main/bots/bot-chat-pane.tsx` renders the transcript, the interrupted card (Resume/Dismiss, access-changed copy) and the composer (`Composer` with a `placeholder` override). Sends use `bots:send` with a UUID per message; Steer/Queue map to `whenBusy`; Stop maps to `bots:stop`. `bots:openChat` is gone. A legacy `/chat/<botChatId>` redirects to the Bot route, but `chat-pane.tsx` still carries its Bot-mode branches (follow-up to delete).
+- Chat route is `/bots/$botId/chat` (no chat id). Tool approvals show as a card in the chat (`bots:pendingApprovals`, `bots:approval`, `bots:approval-settled`, answered with `bots:approve`). `renderer/main/bots/bot-chat-pane.tsx` renders the transcript, the interrupted card (Resume/Dismiss, access-changed copy) and the composer (`Composer` with a `placeholder` override). Sends use `bots:send` with a UUID per message; Steer/Queue map to `whenBusy`; Stop maps to `bots:stop`. `bots:openChat` is gone. A legacy `/chat/<botChatId>` redirects to the Bot route, but `chat-pane.tsx` still carries its Bot-mode branches (follow-up to delete).
 - List previews and state come from `bots:live:summary`, invalidated on `bots:changed`.
 - Create flow: two steps (name and help, then `ConnectionChips`; Skip creates). The self-intro (`bots:introduce`) runs only for a Bot made here with a model.
 - First run: `renderer/main/bots/bot-starter-carousel.tsx` is the empty state of the Bots list (`bots:createFromPreset`). The onboarding step is NOT added yet (onboarding progress is a persisted main-side enum).
@@ -40,7 +40,6 @@ Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Spec: `docs/superpower
 
 ## Not ported yet (open)
 - Subagents on durable Bots are read-only children (no V2 persistence/projection, no write/shell/web/MCP/delegation lanes, thinking level off) owned by `bot:<botId>:<callId>` in the Bot's canonical chat and folder. Form Fill is not offered. Routines (`schedule_task` for Bots) need no approval and are withheld on Telegram turns and without the `schedules` capability.
-- Desktop does not yet show Bot approval prompts in the chat pane (`bots:approval` exists in main; the chat pane needs an approval card).
 - Onboarding "Meet Your First Bot" step (see above), and the Playwright preset-to-quick-reply e2e.
 
 ## Hard delete and Bot data (Task 1.6)
