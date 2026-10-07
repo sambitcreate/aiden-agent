@@ -318,6 +318,23 @@ function cleanupApplication(): void {
   void mcpManager.closeAll();
 }
 
+/** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */
+async function shutdownBotRuntimeWithin(budgetMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const closed = (async () => {
+    const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
+    await shutdownBotSessionRuntime();
+    return true;
+  })();
+  const settled = await Promise.race([
+    closed,
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), budgetMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  if (!settled) logger.warn("bots", "The Bot runtime did not close within the shutdown budget.");
+}
+
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
@@ -416,8 +433,13 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     await Promise.all([
       shutdownProviderAuthFlow(),
       computerUseStatus.shutdown(),
-      scheduleService.stopAndSettle(),
-      telegramService.stopAndSettle(),
+      (async () => {
+        // Stop Bot ingress first so nothing reopens the runtime, then close
+        // every Bot harness: a running turn is left interrupted (Resume on
+        // next start) and the profile lock is released.
+        await Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]);
+        await shutdownBotRuntimeWithin(5_000);
+      })(),
       (async () => {
         await subagentRunStore.flush();
         await subagentRunStore.close();

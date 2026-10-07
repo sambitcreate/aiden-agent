@@ -104,10 +104,10 @@ const capabilityStateCheckpoint = createBotCapabilityStateCheckpoint({
   anchor: capabilityAuthorities.anchor,
   bootstrapMarker: capabilityAuthorities.bootstrapMarker,
   inspectInitialBootstrap: async () => {
-    const [bots, chats] = await Promise.all([botStore.list(true), chatStore.list()]);
-    const botIds = new Set(bots.map(({ id }) => id));
+    const [storedBotIds, chats] = await Promise.all([botStore.storedIds(), chatStore.list()]);
+    const botIds = new Set(storedBotIds);
     const botChats = chats.filter(({ botId }) => botId !== undefined);
-    if (bots.length === 0 && botChats.length === 0) return "clean";
+    if (botIds.size === 0 && botChats.length === 0) return "clean";
     return botChats.every(({ botId }) => botId !== undefined && botIds.has(botId))
       ? "legacy"
       : "deny";

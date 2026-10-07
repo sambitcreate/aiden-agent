@@ -972,33 +972,18 @@ export class BotCapabilityStateEditor {
     }
   }
 
-  private setBotAuthorityStatus(
-    botId: string,
-    authorityStatus: BotCapabilityAuthorityStatus,
-  ): boolean {
-    const policy = this.policy(botId);
-    if (policy.authorityStatus === authorityStatus) return false;
-    if (policy.policyEpoch >= Number.MAX_SAFE_INTEGER) {
-      throw new Error("Bot capability policy epoch is exhausted.");
-    }
-    const timestamp = this.timestamp();
-    const index = this.state.policies.indexOf(policy);
-    this.state.policies[index] = {
-      ...policy,
-      authorityStatus,
-      policyEpoch: policy.policyEpoch + 1,
-      ...this.issueRevision("policy"),
-      updatedAt: Math.max(policy.updatedAt, timestamp),
-    };
+  /**
+   * Bot delete: hard-remove the Bot policy and every chat reduction it owns.
+   * Idempotent; returns false when nothing was stored.
+   */
+  deleteBotAuthority(botId: string): boolean {
+    const id = assertBotIdentity(botId, "bot");
+    const before = this.state.policies.length + this.state.chats.length;
+    this.state.policies = this.state.policies.filter((entry) => entry.botId !== id);
+    this.state.chats = this.state.chats.filter((entry) => entry.botId !== id);
+    if (this.state.policies.length + this.state.chats.length === before) return false;
+    this.issueDeletionCommit();
     return true;
-  }
-
-  archiveBotAuthority(botId: string): boolean {
-    return this.setBotAuthorityStatus(botId, "archived");
-  }
-
-  restoreBotAuthority(botId: string): boolean {
-    return this.setBotAuthorityStatus(botId, "active");
   }
 
   /** Main-only strict clone; never return this through renderer or Remote projections. */
@@ -1486,8 +1471,8 @@ export class BotCapabilityStateEditor {
   }
 
   /**
-   * Create-journal compensation only. Once identity commits, policy deletion is
-   * forbidden; archive and ordinary delete retain the explicit policy.
+   * Create-journal compensation only. A committed Bot is erased through
+   * `deleteBotAuthority` as part of Bot delete.
    */
   rollbackUncommittedBotPolicy(input: { botId: string; identityCommitted: false }): boolean {
     if (input.identityCommitted !== false) {

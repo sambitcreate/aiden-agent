@@ -233,15 +233,14 @@ test("independent authority rejects a valid older capability document", async (t
   );
 });
 
-test("independent authority rejects offline rollback of protected archive state", async (t) => {
+test("independent authority rejects offline rollback that resurrects a deleted Bot's access", async (t) => {
   const root = await temporaryRoot(t);
   const anchor = memoryAnchor();
   const first = protectedStore(root, anchor);
   await first.initialize();
   await addFullPolicy(first);
   const activeState = await readFile(join(serviceRoot(root), stateFile));
-  await first.archiveBotAuthority("bot:one");
-  await first.assertBotAuthorityMatchesIdentity({ botId: "bot:one", archived: true });
+  assert.equal(await first.deleteBotAuthority("bot:one"), true);
   await writeFile(join(serviceRoot(root), stateFile), activeState);
 
   await assert.rejects(

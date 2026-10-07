@@ -30,7 +30,7 @@ import type {
   BotManagedWorkspaceResolution,
 } from "./bot-managed-workspace-core.js";
 import type { BotMutationGate } from "./bot-mutation-gate.js";
-import { BotIdentityRevisionConflictError, type BotStore } from "./bot-store-core.js";
+import type { BotStore } from "./bot-store-core.js";
 import type { ChatStore } from "./chat-store-core.js";
 import type { Chat } from "./types.js";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
@@ -40,16 +40,21 @@ const STAGES = {
   create_chat: ["prepared", "policy_committed", "chat_committed"],
   copy_chat: ["prepared", "policy_committed", "chat_committed"],
   delete_chat: ["prepared", "authority_fenced", "chat_deleted", "policy_removed"],
+  delete_bot: ["prepared", "identity_deleted"],
+  update_model: ["prepared", "policy_committed", "chat_committed"],
+} as const satisfies Partial<Record<BotLifecycleOperation["kind"], readonly BotLifecycleStage[]>>;
+
+/** Stages of the retired archive/restore operations, for closing legacy entries. */
+const STAGES_LEGACY = {
   archive_bot: ["prepared", "authority_archived", "identity_archived"],
   restore_bot: ["prepared", "identity_restored", "authority_restored"],
-  update_model: ["prepared", "policy_committed", "chat_committed"],
 } as const satisfies Partial<Record<BotLifecycleOperation["kind"], readonly BotLifecycleStage[]>>;
 
 const INVENTORY_SAVE_ATTEMPTS = 3;
 
 type BotStorePort = Pick<
   BotStore,
-  "list" | "get" | "createWithId" | "update" | "archive" | "restore"
+  "list" | "get" | "createWithId" | "update" | "delete" | "storedIds" | "legacyArchivedIds"
 >;
 
 type ChatStorePort = Pick<
@@ -59,6 +64,7 @@ type ChatStorePort = Pick<
   | "create"
   | "copyVisibleHistory"
   | "remove"
+  | "clearMessages"
   | "listByBot"
   | "setBotModelSelection"
 >;
@@ -74,8 +80,7 @@ type CapabilityStorePort = Pick<
   | "getBotPolicy"
   | "getBotAuthorityStatus"
   | "assertBotAuthorityMatchesIdentity"
-  | "archiveBotAuthority"
-  | "restoreBotAuthority"
+  | "deleteBotAuthority"
   | "getBotBinding"
   | "getBotModelAuthority"
   | "assertAuthorityBindingsCurrent"
@@ -101,6 +106,7 @@ type ManagedWorkspacePort = Pick<
   | "listBindings"
   | "audit"
   | "rollbackProvision"
+  | "deleteHome"
 >;
 
 type LifecycleJournalPort = Pick<
@@ -137,7 +143,18 @@ export interface BotApplicationDependencies {
     assertCurrent: (chat: Chat | null) => void | Promise<void>,
     onDeletionRollForward?: () => void,
   ) => Promise<void>;
-  onArchiveBot?: (botId: string) => Promise<void>;
+  /** Bot delete: erase the Bot's canonical photo (every revision). Idempotent. */
+  deleteBotPhoto?: (botId: string) => Promise<void>;
+  /**
+   * One-time startup wipe of transcripts written by the retired Bot run path.
+   * Production persists `isDone` in a marker file so it never repeats.
+   */
+  legacyTranscriptWipe?: {
+    isDone(): Promise<boolean>;
+    markDone(): Promise<void>;
+    /** Remove the chat's private Pi JSONL journal. */
+    clearChatJournal(chatId: string): Promise<void>;
+  };
   assertChatDeletionAllowed?: (botId: string, chatId: string) => Promise<void>;
   mintBotId?(): string;
   mintChatId?(): string;
@@ -173,7 +190,7 @@ export interface CopyBotChatApplicationInput {
 export class BotApplicationUnavailableError extends Error {
   readonly name = "BotApplicationUnavailableError";
 
-  constructor(readonly reason: "missing" | "archived") {
+  constructor(readonly reason: "missing") {
     super("This Bot is no longer available.");
   }
 }
@@ -190,7 +207,7 @@ export class BotPersistentChatDeletionError extends Error {
   readonly name = "BotPersistentChatDeletionError";
 
   constructor() {
-    super("A Bot's persistent chat cannot be deleted independently. Archive the Bot instead.");
+    super("A Bot's persistent chat cannot be deleted independently. Delete the Bot instead.");
   }
 }
 
@@ -268,7 +285,8 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     operation: BotLifecycleOperation,
     target: BotLifecycleStage,
   ): Promise<BotLifecycleOperation> => {
-    const stages = STAGES[operation.kind];
+    const stages: readonly BotLifecycleStage[] =
+      operation.kind in STAGES ? STAGES[operation.kind as keyof typeof STAGES] : [];
     let current: BotLifecycleOperation = operation;
     let index = stages.indexOf(current.stage as never);
     const targetIndex = stages.indexOf(target as never);
@@ -564,8 +582,8 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   };
 
   const finishDeleteChat = async (operation: BotLifecycleOperation): Promise<void> => {
-    const bot = await deps.botStore.get(operation.botId);
-    if (!bot) throw new Error("The Bot owning this deleted chat is missing.");
+    // A Bot deleted after this chat delete began erased the chat with it; the
+    // steps below then find nothing left and only close the operation.
     const chatId = lifecycleChatId(operation);
     let current = operation;
     const chat = await deps.chatStore.get(chatId);
@@ -603,64 +621,50 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     await deps.lifecycleJournal.complete(current.operationId, "policy_removed");
   };
 
-  const finishArchive = async (operation: BotLifecycleOperation): Promise<void> => {
-    let current = operation;
-    deps.capabilityStore.invalidateBotAuthority(operation.botId);
-    const bot = await deps.botStore.get(operation.botId);
-    if (!bot) throw new Error("The Bot being archived is missing.");
-    const authorityStatus = await deps.capabilityStore.getBotAuthorityStatus(operation.botId);
-    if (authorityStatus === "active" && bot.archivedAt !== undefined) {
-      throw new Error("Bot identity was archived before its protected authority was narrowed.");
+  /**
+   * Bot delete, after the runtime has destroyed the Bot's session and removed
+   * its routines and bindings. Order: photo, managed home, access, chat rows,
+   * then the Bot record last, so a crash leaves the Bot listed and the pending
+   * operation rolls the delete forward on the next start. Every step is
+   * idempotent.
+   */
+  const finishDeleteBot = async (operation: BotLifecycleOperation): Promise<void> => {
+    const { botId } = operation;
+    deps.capabilityStore.invalidateBotAuthority(botId);
+    await deps.deleteBotPhoto?.(botId);
+    await deps.managedWorkspace.deleteHome(botId);
+    await deps.capabilityStore.deleteBotAuthority(botId);
+    for (const chat of await deps.chatStore.listByBot(botId)) {
+      await removeChat(chat.id, (current) => {
+        if (current && current.botId !== botId) {
+          throw new Error("The Bot chat changed owner before deletion.");
+        }
+      });
     }
-    await deps.capabilityStore.archiveBotAuthority(operation.botId);
-    current = await advance(current, "authority_archived");
-    if (bot.archivedAt === undefined) {
-      const expectedRevision = "expectedRevision" in operation.subject
-        ? operation.subject.expectedRevision
-        : "";
-      if (bot.revision !== expectedRevision) {
-        throw new BotIdentityRevisionConflictError(bot.revision);
-      }
-      await deps.botStore.archive(operation.botId, expectedRevision);
-    }
-    deps.capabilityStore.invalidateBotAuthority(operation.botId);
-    await deps.onArchiveBot?.(operation.botId);
-    current = await advance(current, "identity_archived");
-    await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
-      botId: operation.botId,
-      archived: true,
-    });
-    await deps.lifecycleJournal.complete(current.operationId, "identity_archived");
+    await deps.botStore.delete(botId);
+    deps.capabilityStore.invalidateBotAuthority(botId);
+    const current = await advance(operation, "identity_deleted");
+    await deps.lifecycleJournal.complete(current.operationId, "identity_deleted");
   };
 
-  const finishRestore = async (operation: BotLifecycleOperation): Promise<void> => {
-    let current = operation;
-    let bot = await deps.botStore.get(operation.botId);
-    if (!bot) throw new Error("The Bot being restored is missing.");
-    await deps.managedWorkspace.resolve(operation.botId);
-    await requirePolicyForVisibleBot(operation.botId);
-    const authorityStatus = await deps.capabilityStore.getBotAuthorityStatus(operation.botId);
-    if (authorityStatus === "active" && bot.archivedAt !== undefined) {
-      throw new Error("Bot protected authority was restored before its identity.");
+  const beginOrResumeDelete = async (botId: string): Promise<BotLifecycleOperation> =>
+    (await deps.lifecycleJournal.listPending()).find(
+      (operation) => operation.kind === "delete_bot" && operation.botId === botId,
+    ) ??
+    beginPending({ operationId: mintOperationId(), kind: "delete_bot", botId, subject: {} });
+
+  /**
+   * Archive and restore were removed. An archived Bot is a deleted Bot, so an
+   * operation a previous release left pending erases the Bot and is closed.
+   */
+  const finishLegacyArchiveOperation = async (operation: BotLifecycleOperation): Promise<void> => {
+    await finishDeleteBot(await beginOrResumeDelete(operation.botId));
+    const stages = STAGES_LEGACY[operation.kind as keyof typeof STAGES_LEGACY];
+    if (operation.stage === stages[stages.length - 1]) {
+      await deps.lifecycleJournal.complete(operation.operationId, operation.stage);
+    } else {
+      await deps.lifecycleJournal.rollback(operation.operationId, operation.stage);
     }
-    if (bot.archivedAt !== undefined) {
-      const expectedRevision = "expectedRevision" in operation.subject
-        ? operation.subject.expectedRevision
-        : "";
-      if (bot.revision !== expectedRevision) {
-        throw new BotIdentityRevisionConflictError(bot.revision);
-      }
-      bot = await deps.botStore.restore(operation.botId, expectedRevision);
-    }
-    current = await advance(current, "identity_restored");
-    await deps.capabilityStore.restoreBotAuthority(operation.botId);
-    current = await advance(current, "authority_restored");
-    await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
-      botId: operation.botId,
-      archived: false,
-    });
-    void bot;
-    await deps.lifecycleJournal.complete(current.operationId, "authority_restored");
   };
 
   const finishUpdateModel = async (operation: BotLifecycleOperation): Promise<void> => {
@@ -710,8 +714,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       case "create_chat": return finishCreateChat(operation);
       case "copy_chat": return finishCopyChat(operation);
       case "delete_chat": return finishDeleteChat(operation);
-      case "archive_bot": return finishArchive(operation);
-      case "restore_bot": return finishRestore(operation);
+      case "delete_bot": return finishDeleteBot(operation);
+      case "archive_bot":
+      case "restore_bot":
+        return finishLegacyArchiveOperation(operation);
       case "update_model": return finishUpdateModel(operation);
       default:
         throw new Error(`Unsupported pending Bot lifecycle: ${operation.kind}.`);
@@ -746,8 +752,12 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     for (const operation of await deps.lifecycleJournal.listPending()) {
       await deps.mutationGate.run(operation.botId, () => reconcileOperation(operation));
     }
+    // Releases before hard delete archived Bots. An archived Bot is deleted.
+    for (const botId of await deps.botStore.legacyArchivedIds()) {
+      await deps.mutationGate.run(botId, async () => finishDeleteBot(await beginOrResumeDelete(botId)));
+    }
 
-    const bots = await deps.botStore.list(true);
+    const bots = await deps.botStore.list();
     const botIds = bots.map(({ id }) => id);
     const botChats = (await deps.chatStore.list()).filter(
       (chat): chat is typeof chat & { botId: string } => chat.botId !== undefined,
@@ -771,7 +781,6 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     }
     await deps.capabilityStore.migrateLegacyBotsToFull({
       botIds,
-      archivedBotIds: bots.filter(({ archivedAt }) => archivedAt !== undefined).map(({ id }) => id),
       chats: botChats.map(({ id: chatId, botId }) => ({ chatId, botId })),
       catalogRevision: runtimeCatalog.catalog.revision,
       confirmedExplicitFull: true,
@@ -887,7 +896,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     for (const bot of bots) {
       await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
         botId: bot.id,
-        archived: bot.archivedAt !== undefined,
+        archived: false,
       });
     }
 
@@ -931,6 +940,47 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         throw new Error("Bot chat access storage has the wrong identity.");
       }
     }
+
+    await wipeLegacyBotTranscripts(bots);
+  };
+
+  /**
+   * Durable Bot sessions replaced the ChatStore/Pi JSONL Bot run path. Once,
+   * empty every Bot transcript it wrote: each Bot keeps only its canonical
+   * chat row (the identity its authority admits against) with no messages,
+   * and its historical chats are deleted.
+   */
+  const wipeLegacyBotTranscripts = async (bots: readonly BotDefinition[]): Promise<void> => {
+    const wipe = deps.legacyTranscriptWipe;
+    if (!wipe || (await wipe.isDone())) return;
+    for (const bot of bots) {
+      await deps.mutationGate.run(bot.id, async () => {
+        const chats = await deps.chatStore.listByBot(bot.id);
+        const canonicalId = selectCanonicalBotChat(chats)?.id;
+        for (const chat of chats) {
+          let removable = chat.id !== canonicalId;
+          if (removable && deps.assertChatDeletionAllowed) {
+            removable = await deps.assertChatDeletionAllowed(bot.id, chat.id).then(() => true, () => false);
+          }
+          if (removable) {
+            await finishDeleteChat(await beginPending({
+              operationId: mintOperationId(),
+              kind: "delete_chat",
+              botId: bot.id,
+              subject: { chatId: chat.id },
+            }));
+            continue;
+          }
+          await deps.chatStore.clearMessages(chat.id, (current) => {
+            if (current.botId !== bot.id) {
+              throw new Error("The Bot chat changed owner before its transcript was cleared.");
+            }
+          });
+          await wipe.clearChatJournal(chat.id);
+        }
+      });
+    }
+    await wipe.markDone();
   };
 
   const ensureInitialized = (): Promise<void> => {
@@ -967,9 +1017,6 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   const activeBot = async (botId: string): Promise<BotDefinition> => {
     const bot = await deps.botStore.get(botId);
     if (!bot) throw new BotApplicationUnavailableError("missing");
-    if (bot.archivedAt !== undefined) {
-      throw new BotApplicationUnavailableError("archived");
-    }
     await deps.capabilityStore.assertBotAuthorityMatchesIdentity({ botId, archived: false });
     return bot;
   };
@@ -1111,9 +1158,9 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
   return {
     initialize: ensureOperational,
 
-    async list(includeArchived = false) {
+    async list() {
       await ensureOperational();
-      return deps.botStore.list(includeArchived);
+      return deps.botStore.list();
     },
 
     async get(botId: string) {
@@ -1309,92 +1356,21 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       });
     },
 
-    async archiveBot(input: {
-      botId: string;
-      expectedRevision: string;
-    }): Promise<BotDefinition> {
+    /**
+     * Hard-delete the Bot's photo, managed home, access, chat rows and record
+     * (record last). The durable runtime calls this after it has aborted the
+     * Bot's run, destroyed its session and removed its routines and bindings.
+     * Idempotent: deleting a missing Bot is a no-op, and an interrupted delete
+     * resumes its pending operation.
+     */
+    async deleteBot(input: { botId: string }): Promise<void> {
       await ensureOperational();
       return runBotMutation(input.botId, async () => {
-        const bot = await activeBot(input.botId);
-        if (bot.revision !== input.expectedRevision) {
-          throw new BotIdentityRevisionConflictError(bot.revision);
-        }
-        const operationId = mintOperationId();
-        let operation = await beginPending({
-          operationId,
-          kind: "archive_bot",
-          botId: input.botId,
-          subject: { expectedRevision: input.expectedRevision },
-        });
-        try {
-          await finishArchive(operation);
-          const archived = await deps.botStore.get(input.botId);
-          if (!archived || archived.archivedAt === undefined) {
-            throw new Error("The Bot archive did not reach its visible commit.");
-          }
-          void bot;
-          return archived;
-        } catch {
-          await reconcileVisibleCommit(operation, async () => {
-            const committed = await deps.botStore.get(input.botId);
-            if (!committed || committed.archivedAt === undefined) {
-              throw new Error("The Bot archive did not reach its visible commit.");
-            }
-            await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
-              botId: input.botId,
-              archived: true,
-            });
-          });
-          return (await deps.botStore.get(input.botId))!;
-        }
-      });
-    },
-
-    async restoreBot(input: {
-      botId: string;
-      expectedRevision: string;
-    }): Promise<BotDefinition> {
-      await ensureOperational();
-      return runBotMutation(input.botId, async () => {
-        const existing = await deps.botStore.get(input.botId);
-        if (!existing) throw new Error("This Bot is no longer available.");
-        if (existing.revision !== input.expectedRevision) {
-          throw new BotIdentityRevisionConflictError(existing.revision);
-        }
-        await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
-          botId: input.botId,
-          archived: existing.archivedAt !== undefined,
-        });
-        if (existing.archivedAt === undefined) return existing;
-        await deps.managedWorkspace.resolve(input.botId);
-        await requirePolicyForVisibleBot(input.botId);
-        const operationId = mintOperationId();
-        let operation = await beginPending({
-          operationId,
-          kind: "restore_bot",
-          botId: input.botId,
-          subject: { expectedRevision: input.expectedRevision },
-        });
-        try {
-          await finishRestore(operation);
-          const restored = await deps.botStore.get(input.botId);
-          if (!restored || restored.archivedAt !== undefined) {
-            throw new Error("The Bot restore did not reach its visible commit.");
-          }
-          return restored;
-        } catch {
-          await reconcileVisibleCommit(operation, async () => {
-            const committed = await deps.botStore.get(input.botId);
-            if (!committed || committed.archivedAt !== undefined) {
-              throw new Error("The Bot restore did not reach its visible commit.");
-            }
-            await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
-              botId: input.botId,
-              archived: false,
-            });
-          });
-          return (await deps.botStore.get(input.botId))!;
-        }
+        const pending = (await deps.lifecycleJournal.listPending()).some(
+          (operation) => operation.kind === "delete_bot" && operation.botId === input.botId,
+        );
+        if (!pending && !(await deps.botStore.storedIds()).includes(input.botId)) return;
+        await finishDeleteBot(await beginOrResumeDelete(input.botId));
       });
     },
 
@@ -1623,8 +1599,8 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     /**
      * Authorize a retained external chat handle without exposing whether
      * policy, notice, or exact Custom bindings caused a denial. Historical
-     * reads remain available for archived Bots; every write requires current
-     * active runtime authority and the caller's one-time notice decision.
+     * reads remain available; every write requires current active runtime
+     * authority and the caller's one-time notice decision.
      */
     async authorizeRetainedChat(input: {
       audienceId: string;
@@ -1641,7 +1617,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         if (!bot || !chat || chat.botId !== input.botId) return false;
         await deps.capabilityStore.assertBotAuthorityMatchesIdentity({
           botId: input.botId,
-          archived: bot.archivedAt !== undefined,
+          archived: false,
         });
         const [botPolicy, chatPolicy] = await Promise.all([
           deps.capabilityStore.getBotPolicy(input.botId),
@@ -1654,15 +1630,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         ) {
           return false;
         }
-        // An archived retained handle is still authentic. The chat service's
-        // lifecycle gate returns the stable bot_archived mutation result
-        // before any effect; requiring active turn authority here would turn
-        // that useful state into an indistinguishable not_found response.
         if (input.access === "read") return true;
         if ((await canonicalChatForBot(input.botId))?.id !== input.chatId) {
           return false;
         }
-        if (bot.archivedAt !== undefined) return true;
 
         const binding = botPolicy.accessMode === "custom"
           ? await deps.capabilityStore.getBotBinding(input.botId)

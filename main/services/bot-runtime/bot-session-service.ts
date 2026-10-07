@@ -147,9 +147,10 @@ export interface BotSessionServiceDeps {
   /** Every Bot record that exists. Sessions of other ids are orphans. */
   knownBotIds(): Promise<ReadonlySet<string>>;
   /**
-   * Erase everything else a Bot owns, in order (routines, home workspace,
-   * photo, Telegram binding, summaries, and finally the Bot record). Runs
-   * after the session is aborted and removed.
+   * Erase everything else a Bot owns, in order (routines, dismissals,
+   * Telegram binding, then photo, home, access, chat rows and finally the Bot
+   * record). Runs after the session is aborted and removed. Each effect must
+   * be idempotent: a failed or interrupted delete is retried from the start.
    */
   deleteEffects?: ReadonlyArray<(botId: string) => Promise<void>>;
   settings?: HarnessSettings;
@@ -396,9 +397,12 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
     deleteBot(botId) {
       return serialize(botId, async () => {
+        // Another process holding the profile owns the session; erasing the
+        // Bot's data underneath it would orphan a live harness.
+        const owner = requireHost();
         deleted.add(botId);
         blocked.delete(botId);
-        if (host !== null) await host.destroy(botId);
+        await owner.destroy(botId);
         registries.delete(botId);
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
       });
