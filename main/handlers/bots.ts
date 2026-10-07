@@ -2,13 +2,9 @@ import { ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { configStore } from "../services/config-store.js";
-import { llmClient } from "../services/llm-client.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../services/bot-runtime-authority-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
-import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
-import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
-import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import {
   BotCapabilityValidationError,
   parseBotNoticeAcknowledgement,
@@ -27,6 +23,7 @@ import { botMutationGate } from "../services/bot-mutation-gate.js";
 import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-store-main.js";
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
+import { botSessionRuntime } from "../services/bot-runtime/bot-session-main.js";
 import {
   telegramBotBindingAuthority,
   telegramBotBindings,
@@ -39,10 +36,10 @@ import {
 import { telegramProfileMutationFence } from "../services/telegram/telegram-profile-mutation-fence.js";
 import {
   parseBotAccessUpdateInput,
-  parseBotChatCreate,
   parseBotCreateWithAccess,
   parseBotId,
-  parseBotRevision,
+  parseBotSend,
+  parseBotSessionAction,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -145,6 +142,24 @@ export function registerBotHandlers(): void {
       throw botAccessUpdateRendererError(error);
     }
   });
+  ipcMain.handle("bots:sessionState", async (_event, id: unknown) =>
+    (await botSessionRuntime()).state(parseBotId(id)),
+  );
+  ipcMain.handle("bots:send", async (_event, input: unknown) => {
+    const { botId, ...message } = parseBotSend(input);
+    return (await botSessionRuntime()).send(botId, message);
+  });
+  ipcMain.handle("bots:resume", async (_event, input: unknown) => {
+    const { botId, requestId } = parseBotSessionAction(input, "resume");
+    return (await botSessionRuntime()).resume(botId, requestId);
+  });
+  ipcMain.handle("bots:dismiss", async (_event, input: unknown) => {
+    const { botId, requestId } = parseBotSessionAction(input, "dismiss");
+    return (await botSessionRuntime()).dismiss(botId, requestId);
+  });
+  ipcMain.handle("bots:delete", async (_event, id: unknown) => {
+    await (await botSessionRuntime()).deleteBot(parseBotId(id));
+  });
   ipcMain.handle("bots:update", async (_event, input: unknown) => {
     return botApplicationService.updateBot(parseBotUpdate(input));
   });
@@ -172,43 +187,6 @@ export function registerBotHandlers(): void {
     } catch (error) {
       throw botAccessUpdateRendererError(error);
     }
-  });
-  ipcMain.handle("bots:archive", async (_event, id: unknown) => {
-    if (!id || typeof id !== "object" || Array.isArray(id)) {
-      throw new Error("Invalid bot archive fields.");
-    }
-    const input = id as Record<string, unknown>;
-    if (
-      !Object.keys(input).every(
-        (key) => key === "id" || key === "expectedRevision",
-      )
-    ) {
-      throw new Error("Invalid bot archive fields.");
-    }
-    return botApplicationService.archiveBot({
-      botId: parseBotId(input.id),
-      expectedRevision: parseBotRevision(input.expectedRevision),
-    });
-  });
-  ipcMain.handle("bots:restore", async (_event, id: unknown) => {
-    if (!id || typeof id !== "object" || Array.isArray(id)) {
-      throw new Error("Invalid bot restore fields.");
-    }
-    const input = id as Record<string, unknown>;
-    if (
-      !Object.keys(input).every(
-        (key) => key === "id" || key === "expectedRevision",
-      )
-    ) {
-      throw new Error("Invalid bot restore fields.");
-    }
-    return botApplicationService.restoreBot({
-      botId: parseBotId(input.id),
-      expectedRevision: parseBotRevision(input.expectedRevision),
-    });
-  });
-  ipcMain.handle("bots:listChats", async (_event, id: unknown) => {
-    return botApplicationService.listChats(parseBotId(id));
   });
   ipcMain.handle("bots:getTelegramBinding", async (_event, id: unknown) =>
     telegramBotBindings.get(parseBotId(id)),
@@ -390,44 +368,6 @@ export function registerBotHandlers(): void {
     return botMutationGate.run(botId, () =>
       telegramBotBindingAuthority.disableBot(botId),
     );
-  });
-  ipcMain.handle("bots:createChat", async (event, input: unknown) => {
-    const parsed = parseBotChatCreate(input);
-    const owner = rendererDocumentOwner(
-      event,
-      () =>
-        new Error("Bot conversations require the active application document."),
-    );
-    if (llmClient.requiresAppendReconciliation(owner.documentId))
-      throw new Error(appendReconciliationFailureMessage("blocked"));
-    const assertCurrent = () => {
-      if (owner.isDestroyed())
-        throw new Error(
-          "The application changed before the Bot conversation was created.",
-        );
-      if (llmClient.requiresAppendReconciliation(owner.documentId))
-        throw new Error(appendReconciliationFailureMessage("blocked"));
-    };
-    try {
-      return chatForRenderer(
-        await botApplicationService.createChat({
-          audienceId: desktopAudienceId,
-          botId: parsed.botId,
-          providerId: parsed.providerId,
-          model: parsed.model,
-          assertCurrent,
-        }),
-      );
-    } catch (error) {
-      if (isChatCreateReconciliationRequiredError(error)) {
-        llmClient.markAppendReconciliationRequired(owner.documentId);
-        owner.onInvalidated(() =>
-          llmClient.clearAppendReconciliationRequired(owner.documentId),
-        );
-        throw new Error(appendReconciliationFailureMessage("blocked"));
-      }
-      throw error;
-    }
   });
 }
 

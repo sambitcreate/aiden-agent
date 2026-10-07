@@ -9,7 +9,6 @@ test("bot identity and managed-home chats use the transaction-owned application 
   assert.match(bots, /botApplicationService\.createBot/u);
   assert.match(bots, /parseBotCreateWithAccess/u);
   assert.match(bots, /bot: parsed\.bot,\s*access: parsed\.access/u);
-  assert.match(bots, /botApplicationService\.createChat/u);
   assert.match(bots, /audienceId: desktopAudienceId/u);
   assert.doesNotMatch(bots, /chatStore\.create\(\{ \.\.\.parsed, assertCurrent \}\)/u);
   assert.doesNotMatch(chats, /botId|instructions|systemPrompt/u);

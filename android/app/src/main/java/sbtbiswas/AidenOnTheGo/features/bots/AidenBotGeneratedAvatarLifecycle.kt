@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarUpload
 import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
+import sbtbiswas.AidenOnTheGo.models.AidenBotSummary
 import sbtbiswas.AidenOnTheGo.models.AidenBotSemanticAvatar
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
@@ -44,6 +45,13 @@ sealed class AidenBotGeneratedAvatarError(val messageText: String) : Exception(m
 enum class AidenBotGeneratedAvatarPhase {
     IDLE, LOADING, NORMALIZING, READY, UPLOADING, REVERTING, FAILED
 }
+
+/** The `If-Match` revision for a photo change: the current photo's revision, else the Bot's. */
+fun aidenBotAvatarExpectedRevision(bot: AidenBotSummary): String =
+    bot.avatar.asset?.assetRevision ?: bot.revision
+
+fun aidenBotAvatarExpectedRevision(bot: AidenBotDetail): String =
+    bot.avatar.asset?.assetRevision ?: bot.revision
 
 fun aidenBotAvatarMutationFailureIsAmbiguous(error: Throwable): Boolean {
     return error !is AidenBotGeneratedAvatarError.Unavailable

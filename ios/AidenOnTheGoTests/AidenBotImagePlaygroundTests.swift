@@ -22,39 +22,6 @@ final class AidenBotImagePlaygroundTests: XCTestCase {
         )
     }
 
-    @MainActor
-    func testUnsupportedFallbackRendersAsACompleteNoninteractivePath() throws {
-        var copiedCandidateCount = 0
-        let content = AidenBotImagePlaygroundView(
-            identity: .init(name: "Research Helper", purpose: "Summarize papers"),
-            fallbackOverride: .unsupported
-        ) { _ in
-            copiedCandidateCount += 1
-        }
-        .frame(width: 350, height: 180, alignment: .topLeading)
-        .padding()
-
-        let host = UIHostingController(rootView: content)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 220))
-        window.rootViewController = host
-        window.makeKeyAndVisible()
-        host.view.frame = window.bounds
-        host.view.layoutIfNeeded()
-
-        let image = UIGraphicsImageRenderer(size: window.bounds.size).image { context in
-            window.layer.render(in: context.cgContext)
-        }
-        let png = try XCTUnwrap(image.pngData())
-        XCTAssertGreaterThan(png.count, 1_000)
-        XCTAssertEqual(copiedCandidateCount, 0)
-
-        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
-        attachment.name = "Bot-Image-Playground-Unsupported-Fallback"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        window.isHidden = true
-    }
-
     func testIdentityConceptsUseOnlyBoundedVisibleNameAndPurpose() {
         let identity = AidenBotImagePlaygroundIdentity(
             name: "  Research Helper  ",

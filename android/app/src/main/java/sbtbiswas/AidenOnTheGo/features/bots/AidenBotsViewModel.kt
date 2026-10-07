@@ -19,7 +19,6 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
-import java.util.UUID
 
 class AidenBotsViewModel(
     val coordinator: AidenRemoteCoordinator,
@@ -45,13 +44,6 @@ class AidenBotsViewModel(
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
-    private val _favoriteOverride = MutableStateFlow<List<String>?>(null)
-    val favoriteOverride: StateFlow<List<String>?> = _favoriteOverride.asStateFlow()
-
-    private val _favoriteError = MutableStateFlow<String?>(null)
-    val favoriteError: StateFlow<String?> = _favoriteError.asStateFlow()
-
-    private var activeFavoriteMutation: AidenBotsFavoriteMutation? = null
     private var searchJob: Job? = null
     private var loadedClient: AidenRemoteClient? = null
     private var loadingClient: AidenRemoteClient? = null
@@ -85,7 +77,7 @@ class AidenBotsViewModel(
             _isLoading.value = _botList.value == null
             try {
                 supervisorScope {
-                    val botsRequest = async { request { client.bots(includeArchived = true) } }
+                    val botsRequest = async { request { client.bots(includeArchived = false) } }
                     val conversationsRequest = async { request { client.botConversations() } }
                     val botsResult = botsRequest.await()
                     val conversationsResult = conversationsRequest.await()
@@ -138,72 +130,6 @@ class AidenBotsViewModel(
         }
     }
 
-    fun updateFavorite(botId: String, move: AidenBotFavoriteOrderMove) {
-        val currentList = _botList.value ?: return
-        val currentFavorites = currentList.favorites.botIds
-        val nextFavorites = aidenBotFavoriteOrder(currentFavorites, botId, move)
-        if (nextFavorites == currentFavorites) return
-
-        val mutation = AidenBotsFavoriteMutation(
-            id = UUID.randomUUID(),
-            botID = botId
-        )
-        val previousOverride = _favoriteOverride.value
-        activeFavoriteMutation = mutation
-        _favoriteOverride.value = nextFavorites
-        _favoriteError.value = null
-
-        val client = coordinator.client.value ?: run {
-            finishFavoriteMutation(mutation, previousOverride, "Client not available")
-            return
-        }
-
-        viewModelScope.launch {
-            try {
-                val updated = client.updateFavorites(nextFavorites, currentList.favorites.revision)
-                val updatedList = currentList.copy(favorites = updated)
-                _botList.value = updatedList
-                botCache?.putBotList(updatedList)
-                finishFavoriteMutation(mutation, null)
-            } catch (e: Exception) {
-                if (e is CancellationException) {
-                    finishFavoriteMutation(mutation, previousOverride)
-                    return@launch
-                }
-                // Try authoritative reload
-                try {
-                    val authFavs = client.botFavorites()
-                    val updatedList = currentList.copy(favorites = authFavs)
-                    _botList.value = updatedList
-                    botCache?.putBotList(updatedList)
-                    finishFavoriteMutation(mutation, null, "Aiden refreshed the latest Favorites. Try your change again.")
-                } catch (_: Exception) {
-                    finishFavoriteMutation(mutation, previousOverride, "Aiden couldn’t update Favorites. Reconnect and try again.")
-                }
-            }
-        }
-    }
-
-    fun clearFavoriteError() {
-        _favoriteError.value = null
-    }
-
-    private fun finishFavoriteMutation(
-        mutation: AidenBotsFavoriteMutation,
-        restoring: List<String>?,
-        error: String? = null
-    ) {
-        val finish = aidenBotsFinishFavoriteMutation(
-            current = activeFavoriteMutation,
-            finishing = mutation,
-            restoring = restoring,
-            error = error
-        ) ?: return
-        activeFavoriteMutation = null
-        _favoriteOverride.value = finish.favoriteOverride
-        _favoriteError.value = finish.favoriteError
-    }
-
     suspend fun loadBotDetail(botId: String): AidenBotDetail? {
         val client = coordinator.client.value ?: return botCache?.getBotDetail(botId)
         return try {
@@ -212,6 +138,39 @@ class AidenBotsViewModel(
             detail
         } catch (_: Exception) {
             botCache?.getBotDetail(botId)
+        }
+    }
+
+    /**
+     * Deletes a Bot through [deleter] and drops it from the list and saved snapshot.
+     * Returns null on success, or a plain message the screen can show.
+     */
+    suspend fun deleteBot(botId: String, deleter: AidenBotDeleter): String? {
+        val client = coordinator.client.value ?: return "Reconnect to your Mac to delete this Bot."
+        return try {
+            deleter.delete(client, botId)
+            forgetBot(botId)
+            null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            "Aiden couldn’t delete this Bot. Try again."
+        }
+    }
+
+    private fun forgetBot(botId: String) {
+        _botList.value?.let { list ->
+            val next = list.copy(
+                bots = list.bots.filterNot { it.id == botId },
+                favorites = list.favorites.copy(botIds = list.favorites.botIds.filterNot { it == botId })
+            )
+            _botList.value = next
+            botCache?.putBotList(next)
+        }
+        val remaining = _conversations.value.filterNot { it.botId == botId }
+        _conversations.value = remaining
+        botCache?.botConversations?.value?.let { page ->
+            botCache.putBotConversations(page.copy(conversations = page.conversations.filterNot { it.botId == botId }))
         }
     }
 

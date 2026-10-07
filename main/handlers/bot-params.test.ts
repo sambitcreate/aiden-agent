@@ -5,6 +5,8 @@ import {
   parseBotChatCreate,
   parseBotCreate,
   parseBotCreateWithAccess,
+  parseBotSend,
+  parseBotSessionAction,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -122,4 +124,56 @@ test("bot access update envelope is exact, bounded, and shares the wire parser",
     () => parseBotAccessUpdateInput({ ...custom, access: { ...custom.access, custom: undefined } }),
     /Invalid Bot (access update|Custom access selection)/u,
   );
+});
+
+test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
+  assert.deepEqual(parseBotSessionAction({ botId: "bot:1", requestId: "desk-7f3a" }, "resume"), {
+    botId: "bot:1",
+    requestId: "desk-7f3a",
+  });
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1" }, "resume"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "" }, "dismiss"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "a b" }, "dismiss"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "x".repeat(201) }, "resume"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "../x", requestId: "r" }, "resume"), /bot id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", extra: true }, "resume"), /fields/u);
+  assert.throws(() => parseBotSessionAction(null, "dismiss"), /fields/u);
+});
+
+test("a desktop Bot message carries text or images and its send UUID as request id", () => {
+  assert.deepEqual(parseBotSend({ botId: "bot:1", text: "hi", requestId: "8f1c" }), {
+    botId: "bot:1",
+    text: "hi",
+    requestId: "8f1c",
+  });
+  assert.deepEqual(
+    parseBotSend({
+      botId: "bot:1",
+      text: "",
+      requestId: "r",
+      whenBusy: "steer",
+      attachments: [{ type: "image", mimeType: "image/png", data: "iVBOR" }],
+    }),
+    {
+      botId: "bot:1",
+      text: "",
+      requestId: "r",
+      whenBusy: "steer",
+      attachments: [{ type: "image", mimeType: "image/png", data: "iVBOR" }],
+    },
+  );
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "  ", requestId: "r" }), /text or an image/u);
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi" }), /request id/u);
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", whenBusy: "now" }), /busy/u);
+  assert.throws(
+    () =>
+      parseBotSend({
+        botId: "bot:1",
+        text: "hi",
+        requestId: "r",
+        attachments: [{ type: "image", mimeType: "application/pdf", data: "x" }],
+      }),
+    /attachments/u,
+  );
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", providerId: "x" }), /fields/u);
 });

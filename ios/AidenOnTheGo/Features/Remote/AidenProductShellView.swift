@@ -27,25 +27,24 @@ final class AidenBotPresentationOwner {
     struct Presentation {
         var chat: AidenChat
         let allowsMutations: Bool
-        /// Notice policy a live permission check granted mutations under;
-        /// nil when the grant did not come from such a check.
-        var grantedFullAccessAllowed: Bool? = nil
+        /// Write grant a live permission check made; nil when the grant did not
+        /// come from such a check.
+        var grantedCanWrite: Bool? = nil
 
         static func awaitingPermission(_ chat: AidenChat) -> Self {
             Self(chat: chat, allowsMutations: false)
         }
 
-        static func resolved(_ chat: AidenChat, allowsMutations: Bool, fullAccessAllowed: Bool) -> Self {
-            Self(chat: chat, allowsMutations: allowsMutations,
-                 grantedFullAccessAllowed: allowsMutations ? fullAccessAllowed : nil)
+        static func resolved(_ chat: AidenChat, allowsMutations: Bool) -> Self {
+            Self(chat: chat, allowsMutations: allowsMutations, grantedCanWrite: allowsMutations ? true : nil)
         }
 
-        /// Restoration revalidates an already-presented chat. A live grant made
-        /// under the same write and notice policy stays usable while that check
-        /// runs or fails transiently; any policy change fails closed.
-        func revalidating(canWrite: Bool, fullAccessAllowed: Bool) -> Self {
-            let keeps = allowsMutations && canWrite && grantedFullAccessAllowed == fullAccessAllowed
-            return Self(chat: chat, allowsMutations: keeps, grantedFullAccessAllowed: keeps ? fullAccessAllowed : nil)
+        /// Restoration revalidates an already-presented chat. A live grant
+        /// stays usable while that check runs or fails transiently, as long as
+        /// this phone can still write; losing write access fails closed.
+        func revalidating(canWrite: Bool) -> Self {
+            let keeps = allowsMutations && canWrite && grantedCanWrite == true
+            return Self(chat: chat, allowsMutations: keeps, grantedCanWrite: keeps ? true : nil)
         }
     }
 
@@ -55,7 +54,6 @@ final class AidenBotPresentationOwner {
         let deviceID: String
         let chatID: String
         let writeToken: UInt64
-        let fullAccessAllowed: Bool
         let canWrite: Bool
     }
     private var current: Attempt?
@@ -68,10 +66,9 @@ final class AidenBotPresentationOwner {
         chatID: String,
         cache: AidenChatCache = .shared,
         canWrite: Bool = false,
-        fullAccessAllowed: Bool = false,
         adoptable: Bool = false
     ) -> Attempt {
-        let attempt = Attempt(instanceID: instanceID, deviceID: deviceID, chatID: chatID, writeToken: cache.reserveChatWrite(), fullAccessAllowed: fullAccessAllowed, canWrite: canWrite)
+        let attempt = Attempt(instanceID: instanceID, deviceID: deviceID, chatID: chatID, writeToken: cache.reserveChatWrite(), canWrite: canWrite)
         current = attempt
         currentAdoptable = adoptable
         return attempt
@@ -79,10 +76,10 @@ final class AidenBotPresentationOwner {
 
     /// The path change made by an in-flight open re-runs restoration. It must
     /// not supersede that open when both would load under the same inputs.
-    func adoptsRestoration(instanceID: String, deviceID: String, chatID: String, canWrite: Bool, fullAccessAllowed: Bool) -> Bool {
+    func adoptsRestoration(instanceID: String, deviceID: String, chatID: String, canWrite: Bool) -> Bool {
         guard currentAdoptable, let current else { return false }
         return current.instanceID == instanceID && current.deviceID == deviceID && current.chatID == chatID
-            && current.canWrite == canWrite && current.fullAccessAllowed == fullAccessAllowed
+            && current.canWrite == canWrite
     }
 
     /// A settled open keeps ownership of its published state but no longer
@@ -92,8 +89,8 @@ final class AidenBotPresentationOwner {
     }
 
     func owns(_ attempt: Attempt) -> Bool { current == attempt }
-    func ownsPermission(_ attempt: Attempt, canWrite: Bool, fullAccessAllowed: Bool) -> Bool {
-        owns(attempt) && canWrite && attempt.fullAccessAllowed == fullAccessAllowed
+    func ownsPermission(_ attempt: Attempt, canWrite: Bool) -> Bool {
+        owns(attempt) && canWrite
     }
     func setPath(_ path: [String], store: AidenProductNavigationStore, instanceID: String?, deviceID: String?) {
         retain(instanceID: instanceID, deviceID: deviceID, chatID: path.last)
@@ -249,21 +246,15 @@ func aidenResolvedChatDestination(
 
 func aidenBotSwitcherCoachmarkDetail(canWrite: Bool) -> String {
     if canWrite {
-        return "Before a Bot can act, Aiden shows a one-time Full Access notice. Choose Continue with Full Access or Customize first."
+        return "Bots are helpers you can chat with. Tap one to start."
     }
-    return "This desktop shared Bots as read-only. You can open their conversations here, then change Bot access on your paired desktop if you want to let them act."
+    return "You can read your Bots' chats here. To chat with them from this phone, allow it on your Mac."
 }
 
-func aidenBotChatAllowsMutations(
-    canWrite: Bool,
-    fullAccessActionsAllowed: Bool,
-    botHealth: AidenBotHealth,
-    botAccessMode: AidenBotAccessMode,
-    chatAccessMode: AidenBotChatAccessMode?
-) -> Bool {
-    guard canWrite, botHealth != .archived else { return false }
-    if fullAccessActionsAllowed { return true }
-    return chatAccessMode == .custom || botAccessMode == .custom
+/// A Bot chat accepts messages from this phone only when the phone may write
+/// Bots and the Bot still exists. What the Bot may use is decided on the Mac.
+func aidenBotChatAllowsMutations(canWrite: Bool, botHealth: AidenBotHealth) -> Bool {
+    canWrite && botHealth != .archived
 }
 
 /// Only an exact, Mac-authored Bot chat may cross the fast local-cache path.
@@ -754,7 +745,6 @@ private struct AidenBotShellView: View {
         let chatID: String?
         let isBotSurfaceActive: Bool
         let canWrite: Bool
-        let fullAccessAllowed: Bool
     }
 
     private typealias ChatPresentation = AidenBotPresentationOwner.Presentation
@@ -767,10 +757,8 @@ private struct AidenBotShellView: View {
     let deepLinkedInstanceID: String?
     let deepLinkedDeviceID: String?
     let deepLinkedChatAllowsMutations: Bool
-    let fullAccessActionsAllowed: () -> Bool
     @Binding var isShowingSwitcherCoachmark: Bool
     let onSelectArea: (AidenProductArea) -> Void
-    let onRequestCustomAccess: () -> Void
 
     @Environment(\.aidenPalette) private var palette
     @State private var chatsByScope: [PresentationScope: [String: ChatPresentation]] = [:]
@@ -788,8 +776,7 @@ private struct AidenBotShellView: View {
             connectionState: coordinator.connectionState,
             chatID: path.last,
             isBotSurfaceActive: isBotSurfaceActive,
-            canWrite: currentCanWrite,
-            fullAccessAllowed: fullAccessActionsAllowed()
+            canWrite: currentCanWrite
         )
     }
 
@@ -930,7 +917,6 @@ private struct AidenBotShellView: View {
                 deviceID: scope.deviceID,
                 chatID: item.chatId,
                 canWrite: currentCanWrite,
-                fullAccessAllowed: fullAccessActionsAllowed(),
                 adoptable: true
             )
             capturedAttempt = attempt
@@ -998,9 +984,7 @@ private struct AidenBotShellView: View {
             chatsByScope[scope, default: [:]][chat.id] = .resolved(
                 chatsByScope[scope]?[chat.id]?.chat ?? chat,
                 allowsMutations: allowsMutations && presentationOwner.ownsPermission(attempt,
-                    canWrite: currentCanWrite,
-                    fullAccessAllowed: fullAccessActionsAllowed()),
-                fullAccessAllowed: attempt.fullAccessAllowed
+                    canWrite: currentCanWrite)
             )
         } catch is CancellationError {
             return
@@ -1033,14 +1017,6 @@ private struct AidenBotShellView: View {
             let context = try coordinator.requestContext()
             capturedContext = context
             let client = try coordinator.remoteClient(for: context)
-            if !fullAccessActionsAllowed() {
-                let detail = try await client.bot(id: bot.id)
-                guard coordinator.isCurrent(context) else { return }
-                if detail.access.accessMode == .full {
-                    onRequestCustomAccess()
-                    return
-                }
-            }
             let request = try AidenBotChatCreateRequest()
             let attempt = aidenBotConversationCreateAttempt(
                 retaining: retainedCreateAttempt,
@@ -1095,24 +1071,7 @@ private struct AidenBotShellView: View {
         guard let botID = chat.botId else { return false }
         let bot = try await client.bot(id: botID)
         guard coordinator.isCurrent(context) else { return false }
-        if fullAccessActionsAllowed() {
-            return aidenBotChatAllowsMutations(
-                canWrite: true,
-                fullAccessActionsAllowed: true,
-                botHealth: bot.health,
-                botAccessMode: bot.access.accessMode,
-                chatAccessMode: nil
-            )
-        }
-        let chatAccess = try await client.botChatAccess(chatId: chat.id)
-        guard coordinator.isCurrent(context) else { return false }
-        return aidenBotChatAllowsMutations(
-            canWrite: true,
-            fullAccessActionsAllowed: false,
-            botHealth: bot.health,
-            botAccessMode: bot.access.accessMode,
-            chatAccessMode: chatAccess.mode
-        )
+        return aidenBotChatAllowsMutations(canWrite: true, botHealth: bot.health)
     }
 
     @MainActor
@@ -1131,14 +1090,13 @@ private struct AidenBotShellView: View {
         guard let chatID = path.last,
               let scope = presentationScope else { return }
         let canWrite = currentCanWrite
-        let fullAccessAllowed = fullAccessActionsAllowed()
         // An open that is already loading this chat under the same policy
         // owns it; its own path change must not restart the load.
         if presentationOwner.adoptsRestoration(instanceID: scope.instanceID, deviceID: scope.deviceID, chatID: chatID,
-                                               canWrite: canWrite, fullAccessAllowed: fullAccessAllowed) { return }
+                                               canWrite: canWrite) { return }
         var capturedContext: AidenRemoteRequestContext?
         let attempt = presentationOwner.begin(instanceID: scope.instanceID, deviceID: scope.deviceID, chatID: chatID,
-                                              canWrite: canWrite, fullAccessAllowed: fullAccessAllowed)
+                                              canWrite: canWrite)
         do {
             let context = try coordinator.requestContext()
             capturedContext = context
@@ -1155,10 +1113,7 @@ private struct AidenBotShellView: View {
             guard presentationOwner.owns(attempt), coordinator.isCurrent(context), presentationScope == scope,
                   path.last == chatID else { return }
             if let existing {
-                chatsByScope[scope, default: [:]][chatID] = existing.revalidating(
-                    canWrite: currentCanWrite,
-                    fullAccessAllowed: fullAccessActionsAllowed()
-                )
+                chatsByScope[scope, default: [:]][chatID] = existing.revalidating(canWrite: currentCanWrite)
             } else if let cached {
                 chatsByScope[scope, default: [:]][cached.id] = .awaitingPermission(cached)
             }
@@ -1194,9 +1149,7 @@ private struct AidenBotShellView: View {
             chatsByScope[scope, default: [:]][chat.id] = .resolved(
                 chatsByScope[scope]?[chat.id]?.chat ?? chat,
                 allowsMutations: allowed && presentationOwner.ownsPermission(attempt,
-                    canWrite: currentCanWrite,
-                    fullAccessAllowed: fullAccessActionsAllowed()),
-                fullAccessAllowed: attempt.fullAccessAllowed
+                    canWrite: currentCanWrite)
             )
         } catch is CancellationError {
             return
@@ -1301,87 +1254,17 @@ private struct AidenBotChatSkeletonView: View {
     }
 }
 
-private struct AidenFullAccessNoticeView: View {
-    @Environment(\.aidenPalette) private var palette
-
-    let includesMigrationCopy: Bool
-    let isSaving: Bool
-    let onContinue: () -> Void
-    let onCustomize: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Image(systemName: "macbook.and.iphone")
-                        .font(.system(size: 46, weight: .medium))
-                        .foregroundStyle(.tint)
-                        .accessibilityHidden(true)
-
-                    Text("Bots can use your paired desktop")
-                        .font(.largeTitle.bold())
-
-                    Text("By default, bots can work with files, run commands, and use connections, skills, and AI configured on the paired desktop. Capabilities you enable later in Aiden are also available to Full Access bots. You can choose Custom Access now or reduce access in Bot Settings anytime.")
-                        .font(.body)
-
-                    if includesMigrationCopy {
-                        Text("Your existing bots will keep the capabilities they already use. You can review or reduce each Bot’s access later.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    VStack(spacing: 12) {
-                        Button(action: onContinue) {
-                            Text("Continue with Full Access")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(palette.accent)
-                        .foregroundStyle(palette.onAccent)
-
-                        Button(action: onCustomize) {
-                            Text("Customize first")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .disabled(isSaving)
-
-                    if isSaving {
-                        ProgressView("Saving on your paired desktop…")
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .padding(24)
-            }
-            .navigationTitle("Bot Access")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-        .interactiveDismissDisabled()
-    }
-}
-
-private enum AidenBotNoticeGate: Equatable {
+/// What the Bots area shows over its content. There is no access notice
+/// wall: Bots open straight away, and the Mac keeps its own safety checks.
+private enum AidenBotSurfaceGate: Equatable {
     case inactive
     case coaching
-    case checking
-    case required(AidenBotNoticeStatus)
-    case accepted
-    case customOnly
+    case ready
     case readOnly
     case offline(String)
-    case customizing
-    case failed(String)
-
-    var blocksBotActions: Bool {
-        switch self {
-        case .accepted, .customOnly, .readOnly, .offline: false
-        default: true
-        }
-    }
 }
 
-private struct AidenBotNoticeResolutionID: Equatable {
+private struct AidenBotSurfaceResolutionID: Equatable {
     let instanceID: String?
     let deviceID: String?
     let connectionState: AidenRemoteConnectionState
@@ -1457,10 +1340,7 @@ struct AidenProductShellView: View {
     @State private var deepLinkedBotInstanceID: String?
     @State private var deepLinkedBotDeviceID: String?
     @State private var deepLinkedBotAllowsMutations = false
-    @State private var noticeGate: AidenBotNoticeGate = .inactive
-    @State private var isSavingNotice = false
-    @State private var noticeIncludesMigrationCopy = false
-    @State private var isShowingCustomizePlaceholder = false
+    @State private var botGate: AidenBotSurfaceGate = .inactive
     @State private var isShowingSwitcherCoachmark = false
     @State private var coachmarkScope: CoachmarkScope?
     @State private var navigationStore: AidenProductNavigationStore
@@ -1495,8 +1375,8 @@ struct AidenProductShellView: View {
         }
     }
 
-    private var noticeResolutionID: AidenBotNoticeResolutionID {
-        AidenBotNoticeResolutionID(
+    private var botResolutionID: AidenBotSurfaceResolutionID {
+        AidenBotSurfaceResolutionID(
             instanceID: coordinator.activeInstanceId,
             deviceID: coordinator.installationStore.activeInstallation?.deviceId,
             connectionState: coordinator.connectionState,
@@ -1538,17 +1418,11 @@ struct AidenProductShellView: View {
                 deepLinkedInstanceID: deepLinkedBotInstanceID,
                 deepLinkedDeviceID: deepLinkedBotDeviceID,
                 deepLinkedChatAllowsMutations: deepLinkedBotAllowsMutations,
-                fullAccessActionsAllowed: { noticeGate == .accepted },
                 isShowingSwitcherCoachmark: $isShowingSwitcherCoachmark,
-                onSelectArea: selectArea,
-                onRequestCustomAccess: {
-                    isShowingCustomizePlaceholder = true
-                }
+                onSelectArea: selectArea
             )
             .opacity(area == .bots ? 1 : 0)
-            .allowsHitTesting(
-                area == .bots && (!noticeGate.blocksBotActions || noticeGate == .coaching)
-            )
+            .allowsHitTesting(area == .bots)
             .accessibilityHidden(area != .bots)
         }
         .overlay {
@@ -1556,32 +1430,10 @@ struct AidenProductShellView: View {
                 botGateOverlay
             }
         }
-        .sheet(isPresented: Binding(
-            get: {
-                if case .required = noticeGate { return true }
-                return false
-            },
-            set: { _ in }
-        )) {
-            if case .required = noticeGate {
-                AidenFullAccessNoticeView(
-                    includesMigrationCopy: noticeIncludesMigrationCopy,
-                    isSaving: isSavingNotice,
-                    onContinue: { acknowledgeNotice(.continueFull) },
-                    onCustomize: { acknowledgeNotice(.customizeFirst) }
-                )
-            }
-        }
-        .sheet(isPresented: $isShowingCustomizePlaceholder, onDismiss: {
-            Task { await prepareBotAccess() }
-        }) {
-            AidenBotCustomAccessFlowView(coordinator: coordinator)
-        }
-        .task(id: noticeResolutionID) {
+        .task(id: botResolutionID) {
             coachmarkScope = nil
             isShowingSwitcherCoachmark = false
-            noticeGate = .inactive
-            noticeIncludesMigrationCopy = false
+            botGate = .inactive
             if deepLinkedBotInstanceID != coordinator.activeInstanceId
                 || deepLinkedBotDeviceID != coordinator.installationStore.activeInstallation?.deviceId {
                 deepLinkedBotChat = nil
@@ -1591,7 +1443,7 @@ struct AidenProductShellView: View {
             }
             if area == .bots {
                 if presentSwitcherCoachmarkIfNeeded() { return }
-                await prepareBotAccess()
+                await prepareBotSurface()
             }
         }
         .onChange(of: isShowingSwitcherCoachmark) { wasShowing, isShowing in
@@ -1605,25 +1457,7 @@ struct AidenProductShellView: View {
 
     @ViewBuilder
     private var botGateOverlay: some View {
-        switch noticeGate {
-        case .coaching:
-            EmptyView()
-        case .checking:
-            ProgressView("Checking Bot access on your paired desktop…")
-                .padding()
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        case .failed(let message):
-            ContentUnavailableView {
-                Label("Bot Access Unavailable", systemImage: "exclamationmark.shield")
-            } description: {
-                Text(message)
-            } actions: {
-                Button("Try Again") { Task { await prepareBotAccess() } }
-                Button("Workspaces") { area = .workspaces }
-            }
-            .background(.regularMaterial)
-        case .customizing:
-            Color.clear
+        switch botGate {
         case .offline(let message):
             VStack {
                 Label(message, systemImage: "wifi.slash")
@@ -1634,6 +1468,7 @@ struct AidenProductShellView: View {
                     .padding(.top, 8)
                 Spacer()
             }
+            .allowsHitTesting(false)
         case .inactive where !botsAvailability.canOpen:
             ContentUnavailableView(
                 "Bots Unavailable",
@@ -1655,8 +1490,7 @@ struct AidenProductShellView: View {
         area = selected
         if selected == .bots {
             if presentSwitcherCoachmarkIfNeeded() { return }
-            noticeGate = .checking
-            Task { await prepareBotAccess() }
+            Task { await prepareBotSurface() }
         }
     }
 
@@ -1672,13 +1506,13 @@ struct AidenProductShellView: View {
             instanceID: installation.id,
             deviceID: installation.deviceId
         )
-        noticeGate = .coaching
+        botGate = .coaching
         isShowingSwitcherCoachmark = true
         return true
     }
 
     private func completeSwitcherCoachmark() {
-        guard noticeGate == .coaching, let scope = coachmarkScope else { return }
+        guard botGate == .coaching, let scope = coachmarkScope else { return }
         navigationStore.completeBotSwitcherCoachmark(
             for: scope.instanceID,
             deviceID: scope.deviceID,
@@ -1689,151 +1523,53 @@ struct AidenProductShellView: View {
         guard area == .bots,
               installation?.id == scope.instanceID,
               installation?.deviceId == scope.deviceID else {
-            noticeGate = .inactive
+            botGate = .inactive
             return
         }
-        noticeGate = .checking
-        Task { await prepareBotAccess() }
+        Task { await prepareBotSurface() }
     }
 
+    /// Opens the Bots area without any access wall. A deep-linked chat may
+    /// accept messages once this phone can write and the Bot still exists.
     @MainActor
-    private func prepareBotAccess() async {
-        let expectedResolution = noticeResolutionID
+    private func prepareBotSurface() async {
+        let expectedResolution = botResolutionID
         guard botsAvailability.canOpen else {
-            noticeGate = .inactive
+            botGate = .inactive
             return
         }
         if case .available(canWrite: false) = botsAvailability {
-            noticeGate = .readOnly
+            botGate = .readOnly
             deepLinkedBotAllowsMutations = false
             return
         }
         guard coordinator.connectionState == .connected else {
-            noticeGate = .offline("Offline — showing saved Bots")
+            botGate = .offline("Offline — showing saved Bots")
             return
         }
-        noticeGate = .checking
+        botGate = .ready
+        guard let chat = deepLinkedBotChat, let botID = chat.botId else { return }
         var capturedContext: AidenRemoteRequestContext?
         do {
             let context = try coordinator.requestContext()
             capturedContext = context
-            let client = try coordinator.remoteClient(for: context)
-            let status = try await client.botAccessNotice()
+            guard deepLinkedBotInstanceID == context.instanceId,
+                  deepLinkedBotDeviceID == context.deviceId else { return }
+            let bot = try await coordinator.remoteClient(for: context).bot(id: botID)
             guard coordinator.isCurrent(context),
-                  expectedResolution == noticeResolutionID,
+                  expectedResolution == botResolutionID,
                   area == .bots else { return }
-            if status.requiresAcknowledgement {
-                let list: AidenBotList?
-                do {
-                    list = try await client.bots()
-                } catch {
-                    if await coordinator.handleCredentialRevocation(error, context: context) { return }
-                    list = nil
-                }
-                guard coordinator.isCurrent(context),
-                      expectedResolution == noticeResolutionID,
-                      area == .bots else { return }
-                noticeIncludesMigrationCopy = !(list?.bots.isEmpty ?? true)
-                noticeGate = .required(status)
-                deepLinkedBotAllowsMutations = false
-                return
-            }
-            guard status.acceptedDecision == .customizeFirst else {
-                noticeGate = .accepted
-                if let chat = deepLinkedBotChat,
-                   deepLinkedBotInstanceID == context.instanceId,
-                   deepLinkedBotDeviceID == context.deviceId,
-                   let botID = chat.botId {
-                    let bot = try await client.bot(id: botID)
-                    guard coordinator.isCurrent(context),
-                          expectedResolution == noticeResolutionID,
-                          area == .bots else { return }
-                    deepLinkedBotAllowsMutations = aidenBotChatAllowsMutations(
-                        canWrite: botsAvailability.canWrite,
-                        fullAccessActionsAllowed: true,
-                        botHealth: bot.health,
-                        botAccessMode: bot.access.accessMode,
-                        chatAccessMode: nil
-                    )
-                } else {
-                    deepLinkedBotAllowsMutations = true
-                }
-                return
-            }
-            if let chat = deepLinkedBotChat,
-               let botID = chat.botId,
-               deepLinkedBotInstanceID == context.instanceId,
-               deepLinkedBotDeviceID == context.deviceId {
-                let bot = try await client.bot(id: botID)
-                let chatAccess = try await client.botChatAccess(chatId: chat.id)
-                let usesCustomAccess = chatAccess.mode == .custom
-                    || bot.access.accessMode == .custom
-                guard coordinator.isCurrent(context),
-                      expectedResolution == noticeResolutionID,
-                      area == .bots else { return }
-                if usesCustomAccess {
-                    noticeGate = .customOnly
-                    deepLinkedBotAllowsMutations = aidenBotChatAllowsMutations(
-                        canWrite: botsAvailability.canWrite,
-                        fullAccessActionsAllowed: false,
-                        botHealth: bot.health,
-                        botAccessMode: bot.access.accessMode,
-                        chatAccessMode: chatAccess.mode
-                    )
-                    return
-                }
-                noticeGate = .customizing
-                deepLinkedBotAllowsMutations = false
-                isShowingCustomizePlaceholder = true
-                return
-            }
-            noticeGate = .customOnly
-            deepLinkedBotAllowsMutations = false
+            deepLinkedBotAllowsMutations = aidenBotChatAllowsMutations(
+                canWrite: botsAvailability.canWrite,
+                botHealth: bot.health
+            )
         } catch is CancellationError {
             return
         } catch {
             if let context = capturedContext,
                await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard expectedResolution == noticeResolutionID, area == .bots else { return }
-            noticeGate = .failed(error.localizedDescription)
-        }
-    }
-
-    private func acknowledgeNotice(_ decision: AidenBotNoticeDecision) {
-        guard case .required(let status) = noticeGate, !isSavingNotice else { return }
-        isSavingNotice = true
-        Task { @MainActor in
-            defer { isSavingNotice = false }
-            let expectedResolution = noticeResolutionID
-            var requestContext: AidenRemoteRequestContext?
-            do {
-                let context = try coordinator.requestContext()
-                requestContext = context
-                let acknowledgement = try AidenBotNoticeAcknowledgement(
-                    version: status.version,
-                    decision: decision
-                )
-                let accepted = try await coordinator.remoteClient(for: context)
-                    .acknowledgeBotAccessNotice(acknowledgement)
-                guard coordinator.isCurrent(context),
-                      expectedResolution == noticeResolutionID,
-                      !accepted.requiresAcknowledgement else { return }
-                if decision == .customizeFirst {
-                    noticeGate = .customOnly
-                    deepLinkedBotAllowsMutations = false
-                    isShowingCustomizePlaceholder = true
-                } else {
-                    noticeGate = .accepted
-                    deepLinkedBotAllowsMutations = true
-                }
-            } catch {
-                if let context = requestContext,
-                   await coordinator.handleCredentialRevocation(error, context: context) { return }
-                guard expectedResolution == noticeResolutionID,
-                      requestContext.map({ coordinator.isCurrent($0) }) ?? true,
-                      area == .bots else { return }
-                coordinator.presentedError = error.localizedDescription
-            }
+            guard expectedResolution == botResolutionID, area == .bots else { return }
+            deepLinkedBotAllowsMutations = false
         }
     }
 
@@ -1940,6 +1676,6 @@ struct AidenProductShellView: View {
         deepLinkedBotInstanceID = context.instanceId
         deepLinkedBotDeviceID = context.deviceId
         deepLinkedBotAllowsMutations = false
-        await prepareBotAccess()
+        await prepareBotSurface()
     }
 }
