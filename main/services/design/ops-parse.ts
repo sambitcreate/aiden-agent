@@ -29,10 +29,23 @@ export function isDesignId(value: unknown): value is string {
   return typeof value === "string" && DESIGN_ID.test(value);
 }
 
+/**
+ * True for text that must never reach a title, label or prompt: ASCII and C1 controls, line and
+ * paragraph separators, bidi embedding/override/isolate controls, and malformed UTF-16.
+ */
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) return true;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+    if (code === 0x2028 || code === 0x2029) return true;
+    if ((code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)) return true;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
   }
   return false;
 }
@@ -214,7 +227,7 @@ export function parseDesignElementSelection(value: unknown): DesignElementSelect
     return undefined;
   }
   if (typeof value.tagName !== "string" || !TAG_NAME.test(value.tagName)) return undefined;
-  const label = boundedText(value.label, 120);
+  const label = typeof value.label === "string" ? boundedText(value.label.trim(), 120) : undefined;
   const selector = boundedText(value.selector, 512);
   if (label === undefined || selector === undefined) return undefined;
   const element: DesignElementSelection = { tagName: value.tagName, label, selector };
@@ -238,22 +251,32 @@ export function parseDesignElementSelection(value: unknown): DesignElementSelect
 }
 
 export function parseDesignContextChips(value: unknown): DesignContextChip[] | undefined {
-  if (!Array.isArray(value) || value.length > MAX_DESIGN_CONTEXT_TARGETS) return undefined;
+  // Repeats are collapsed, so the raw list may exceed the target budget; it is still bounded.
+  if (!Array.isArray(value) || value.length > MAX_DESIGN_CONTEXT_TARGETS * 4) return undefined;
   const chips: DesignContextChip[] = [];
+  const seen = new Set<string>();
   for (const item of value) {
     if (!isRecord(item) || !isDesignId(item.screenId) || !isDesignId(item.revisionId)) {
       return undefined;
     }
+    let chip: DesignContextChip;
     if (item.kind === "screen" && hasExactKeys(item, ["kind", "screenId", "revisionId"])) {
-      chips.push({ kind: "screen", screenId: item.screenId, revisionId: item.revisionId });
-      continue;
-    }
-    if (item.kind !== "element" || !hasExactKeys(item, ["kind", "screenId", "revisionId", "element"])) {
+      chip = { kind: "screen", screenId: item.screenId, revisionId: item.revisionId };
+    } else if (
+      item.kind === "element" &&
+      hasExactKeys(item, ["kind", "screenId", "revisionId", "element"])
+    ) {
+      const element = parseDesignElementSelection(item.element);
+      if (!element) return undefined;
+      chip = { kind: "element", screenId: item.screenId, revisionId: item.revisionId, element };
+    } else {
       return undefined;
     }
-    const element = parseDesignElementSelection(item.element);
-    if (!element) return undefined;
-    chips.push({ kind: "element", screenId: item.screenId, revisionId: item.revisionId, element });
+    const key = JSON.stringify(chip);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chips.push(chip);
+    if (chips.length > MAX_DESIGN_CONTEXT_TARGETS) return undefined;
   }
   return chips;
 }

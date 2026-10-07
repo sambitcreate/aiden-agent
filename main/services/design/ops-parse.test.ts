@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   isDesignId,
   parseDesignContextChips,
+  parseDesignElementSelection,
   parseDesignProjectOp,
   parseDesignRunRequest,
   parseDesignTitle,
@@ -96,8 +97,9 @@ test("context chips are bounded to five targets of at most 2 KiB each", () => {
   ];
   assert.deepEqual(parseDesignContextChips(chips), chips);
   assert.deepEqual(parseDesignContextChips([]), []);
-  const six = Array.from({ length: 6 }, () => ({ kind: "screen", screenId: "s1", revisionId: "r1" }));
+  const six = Array.from({ length: 6 }, (_, index) => ({ kind: "screen", screenId: `s${index}`, revisionId: "r1" }));
   assert.equal(parseDesignContextChips(six), undefined);
+  assert.equal(parseDesignContextChips(six.slice(0, 5))?.length, 5);
   // Every field is within its own bound, but the UTF-8 total exceeds 2 KiB.
   const heavy = { ...element, text: "🎨".repeat(250), selector: "é".repeat(512) };
   assert.equal(
@@ -119,4 +121,52 @@ test("design ids and titles reject path syntax and control characters", () => {
   }
   assert.equal(parseDesignTitle("Landing page"), "Landing page");
   assert.equal(parseDesignTitle("tab\there"), undefined);
+});
+
+test("identical context chips collapse instead of consuming the five-target budget", () => {
+  const screen = { kind: "screen", screenId: "s1", revisionId: "r1" };
+  const element = { tagName: "button", label: "Sign up", selector: "main > button.primary" };
+  const elementChip = { kind: "element", screenId: "s1", revisionId: "r1", element };
+  assert.deepEqual(parseDesignContextChips([screen, { ...screen }, screen, screen, screen, screen]), [screen]);
+  assert.deepEqual(parseDesignContextChips([elementChip, { ...elementChip, element: { ...element } }]), [elementChip]);
+  // Distinct targets that share a Screen revision are not duplicates.
+  const other = { ...elementChip, element: { ...element, selector: "main > a" } };
+  assert.deepEqual(parseDesignContextChips([screen, elementChip, other]), [screen, elementChip, other]);
+  // Five distinct targets after repeats still fit; a sixth distinct one does not.
+  const distinct = Array.from({ length: 5 }, (_, index) => ({ kind: "screen", screenId: `s${index}`, revisionId: "r1" }));
+  assert.equal(parseDesignContextChips([...distinct, ...distinct])?.length, 5);
+  assert.equal(parseDesignContextChips([...distinct, screen, { kind: "screen", screenId: "s9", revisionId: "r1" }]), undefined);
+});
+
+test("element selections reject a whitespace-only label and trim the rest", () => {
+  const base = { tagName: "button", selector: "main > button" };
+  assert.equal(parseDesignElementSelection({ ...base, label: "   " }), undefined);
+  assert.equal(parseDesignElementSelection({ ...base, label: "\u00a0\u3000" }), undefined);
+  assert.equal(parseDesignElementSelection({ ...base, label: "  Sign up " })?.label, "Sign up");
+});
+
+test("text fields reject Unicode controls, line separators, bidi overrides and lone surrogates", () => {
+  const hostile: Array<[string, string]> = [
+    ["C1 control", "a\u0085b"],
+    ["C1 range end", "a\u009fb"],
+    ["line separator", "a\u2028b"],
+    ["paragraph separator", "a\u2029b"],
+    ["bidi embedding", "a\u202ab"],
+    ["bidi override", "a\u202eb"],
+    ["bidi isolate", "a\u2066b"],
+    ["bidi isolate end", "a\u2069b"],
+    ["lone high surrogate", "a\ud800b"],
+    ["lone low surrogate", "a\udc00b"],
+    ["trailing high surrogate", "ab\ud83d"],
+  ];
+  for (const [label, text] of hostile) {
+    assert.equal(parseDesignTitle(text), undefined, `title: ${label}`);
+    assert.equal(
+      parseDesignElementSelection({ tagName: "a", label: text, selector: "a" }),
+      undefined,
+      `label: ${label}`,
+    );
+  }
+  // Well-formed astral characters and ordinary punctuation stay valid.
+  assert.equal(parseDesignTitle("Checkout 🎨 – naïve"), "Checkout 🎨 – naïve");
 });
