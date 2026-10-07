@@ -1,6 +1,7 @@
-// The provider-agnostic image generation contract (ADR-CI §2.1). Types only and
-// Electron-free: the scheduler and executor depend on this, never on a provider.
+// The provider-agnostic image generation contract (ADR-CI §2.1). Electron-free:
+// the scheduler and executor depend on this, never on a provider.
 import type { Usage } from "@earendil-works/pi-ai";
+import { DEFAULT_IMAGE_MODEL, type ImageModelRef } from "./schema.js";
 
 export interface ImageModelOption {
   provider: string;
@@ -49,4 +50,13 @@ export interface ImageGenerationPort {
   listModels(signal?: AbortSignal): Promise<readonly ImageModelOption[]>;
   /** Resolves provider outcomes as results; it never throws them. */
   generate(request: ImageGenerationRequest): Promise<ImageGenerationResult>;
+}
+
+/** Owner decision Q1: prefer Nano Banana 2, else the first configured model. */
+export function pickDefaultImageModel(
+  models: readonly ImageModelOption[],
+  preferred: ImageModelRef = DEFAULT_IMAGE_MODEL,
+): ImageModelRef | undefined {
+  const match = models.find((option) => option.provider === preferred.provider && option.model === preferred.id) ?? models[0];
+  return match ? { provider: match.provider, id: match.model } : undefined;
 }
