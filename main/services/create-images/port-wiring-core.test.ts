@@ -9,28 +9,29 @@ const NANO = "google/gemini-3.1-flash-image";
 
 function wired(providers: readonly StoredProvider[] = []) {
   const fake = fakeImageModels();
-  const order: string[] = [];
+  const restores: { providerCallsSoFar: number }[] = [];
   const usage: UsageRequestRecord[] = [];
   const port = createWiredImagePort({
     models: fake.models,
     providerLabel: (id) => (id === "openrouter" ? "OpenRouter" : id),
     restoreOfflineCatalogs: async () => {
-      order.push(`restore-catalogs (provider calls so far: ${fake.calls.length})`);
+      restores.push({ providerCallsSoFar: fake.calls.length });
     },
     listStoredProviders: async () => providers,
     recordUsage: async (record) => {
       usage.push(record);
     },
   });
-  return { fake, port, order, usage };
+  return { fake, port, restores, usage };
 }
 
 test("listing restores the offline catalogs first and sends nothing to a provider", async () => {
-  const { port, order, fake } = wired();
+  const { port, restores, fake } = wired();
+  assert.equal(restores.length, 0, "nothing is restored until a listing is requested");
   const models = await port.listModels();
   assert.deepEqual(models.map((model) => model.model), [NANO]);
-  assert.deepEqual(order, ["restore-catalogs (provider calls so far: 0)"]);
-  assert.equal(fake.calls.length, 0);
+  assert.equal(restores.length, 1, "the listing restored the offline catalogs");
+  assert.equal(fake.calls.length, 0, "and sent no provider request");
 });
 
 test("a request is accounted once under the create-images source with the provider's reported cost", async () => {

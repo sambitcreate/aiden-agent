@@ -59,8 +59,14 @@ export class ImageRunCoordinator {
   private readonly consents: RunConsentStore<{ digest: string }>;
   private readonly active = new Map<string, ActiveRun>();
   private readonly starting = new Set<string>();
+  private readonly deleting = new Set<string>();
   private readonly versions = new Map<string, number>();
   private readonly newId: () => string;
+  /**
+   * Requests between their ledger claim and the port's answer. After an executor fault gives up on a
+   * provider that ignores the abort, that request stays counted until it answers (or the app quits),
+   * so the quit prompt may over-count rather than hide a request that could still be billed.
+   */
   private inFlight = 0;
   private closed = false;
 
@@ -84,6 +90,7 @@ export class ImageRunCoordinator {
     const doc = await this.deps.workflows.get(request.workflowId);
     if (!doc) return refused("unknown_workflow", "This workflow no longer exists.");
     if (doc.revision !== request.revision) return refused("stale_revision", "Aiden is still saving this workflow. Try again.");
+    if (this.deleting.has(doc.id)) return refused("workflow_deleting", "This workflow is being deleted.");
     if (this.hasActiveRun(doc.id)) return refused("run_in_progress", "A run is already in progress for this workflow.");
     const planned = this.plan(doc, request.scope);
     if (!planned.ok) return { issues: planned.issues };
@@ -131,7 +138,7 @@ export class ImageRunCoordinator {
     const consent = this.consents.consume(consentId, ownerKey);
     if (!consent.ok) return { error: "expired" };
     const workflowId = consent.plan.workflowId;
-    if (this.hasActiveRun(workflowId)) return { error: "stale" };
+    if (this.deleting.has(workflowId) || this.hasActiveRun(workflowId)) return { error: "stale" };
     this.starting.add(workflowId);
     try {
       const doc = await this.deps.workflows.get(workflowId);
@@ -153,12 +160,14 @@ export class ImageRunCoordinator {
     const run = this.active.get(runId);
     if (!run) return false;
     // Back to back, nothing awaited between them: once the ledger refuses new claims the signal is
-    // already aborted, so a request cannot slip out in between. The abort happens even if the ledger throws.
+    // already aborted, so a request cannot slip out in between. The abort happens even if the ledger
+    // throws; the failure is reported, and the run is still stopped.
     try {
       this.deps.ledger.requestCancel(runId);
-    } finally {
-      run.controller.abort("user-cancel");
+    } catch (error) {
+      this.deps.reportIssue?.(`Could not record the stop of image run ${runId}.`, error);
     }
+    run.controller.abort("user-cancel");
     run.trigger.trigger();
     return true;
   }
@@ -212,14 +221,20 @@ export class ImageRunCoordinator {
    */
   async deleteWorkflow(workflowId: string): Promise<"deleted" | "not-found" | "busy"> {
     this.requireOpen();
-    if (this.hasActiveRun(workflowId)) return "busy";
-    this.starting.add(workflowId);
+    if (this.deleting.has(workflowId) || this.hasActiveRun(workflowId)) return "busy";
+    this.deleting.add(workflowId);
     try {
-      if (!(await this.deps.workflows.delete(workflowId))) return "not-found";
+      // History first: if the ledger fails, nothing was removed and the workflow is intact. If the
+      // document delete then fails, the workflow remains with an empty history, which holds nothing.
       for (const runId of this.deps.ledger.deleteWorkflowRuns(workflowId)) this.release(runId);
-      return "deleted";
+      try {
+        return (await this.deps.workflows.delete(workflowId)) ? "deleted" : "not-found";
+      } catch (error) {
+        this.deps.reportIssue?.(`Could not delete workflow ${workflowId} after clearing its runs.`, error);
+        throw error;
+      }
     } finally {
-      this.starting.delete(workflowId);
+      this.deleting.delete(workflowId);
     }
   }
 
@@ -287,8 +302,9 @@ export class ImageRunCoordinator {
       .then(
         () => undefined,
         (error: unknown) => {
-          this.deps.reportIssue?.(`Image run ${runId} stopped on an internal error.`, error);
+          // Quitting aborts the run and closes the ledger under it; that is not an internal error.
           if (this.closed) return;
+          this.deps.reportIssue?.(`Image run ${runId} stopped on an internal error.`, error);
           try {
             // A no-op when the executor already ended the run; otherwise the run must not stay "running".
             this.deps.ledger.terminateRun(runId, "failed", "internal-error");
@@ -307,13 +323,18 @@ export class ImageRunCoordinator {
     return runId;
   }
 
+  /** Progress is advisory: a snapshot or listener failure is reported and never strands a run or a workflow. */
   private publish(runId: string): void {
     if (this.closed) return;
-    const body = this.deps.ledger.snapshot(runId);
-    if (!body) return;
-    const version = (this.versions.get(runId) ?? 0) + 1;
-    this.versions.set(runId, version);
-    this.deps.notify({ version, ...body });
+    try {
+      const body = this.deps.ledger.snapshot(runId);
+      if (!body) return;
+      const version = (this.versions.get(runId) ?? 0) + 1;
+      this.versions.set(runId, version);
+      this.deps.notify({ version, ...body });
+    } catch (error) {
+      this.deps.reportIssue?.(`Could not publish progress for image run ${runId}.`, error);
+    }
   }
 
   private plan(doc: WorkflowDocV1, scope: RunScope) {

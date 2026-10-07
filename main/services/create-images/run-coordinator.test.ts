@@ -6,11 +6,10 @@ import test, { type TestContext } from "node:test";
 import type { RunScope, RunSnapshot } from "../../../renderer/shared/images/run-types.js";
 import type { WorkflowDocV1 } from "../../../renderer/shared/images/schema.js";
 import { StudioAssetStore } from "../studio-assets/store.js";
-import { fakeThumbnailer } from "../studio-assets/test-fixture.js";
+import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
 import { createPiImageGenerationPort } from "./image-port.js";
 import { ImageRunCoordinator } from "./run-coordinator.js";
 import { ImageRunLedger } from "./run-ledger.js";
-import { pngBytes } from "../studio-assets/test-fixture.js";
 import { fakeImageModels, generateChains, NANO_BANANA, saveWorkflow, until, type FakeImageReply } from "./test-fixture.js";
 import { ImageWorkflowStore } from "./workflow-store.js";
 
@@ -374,7 +373,7 @@ test("run concurrency is clamped to between one and four and defaults to two", a
   }
 });
 
-test("cancel aborts the request and records the cancel in one synchronous step, even if the ledger throws", async (t) => {
+test("cancel aborts the request and records the cancel in one synchronous step; a ledger failure is reported, not thrown", async (t) => {
   const env = await fixture(t, { reply: () => ({ kind: "hold" }) });
   const doc = await saveWorkflow(env.workflows, generateChains(1));
   const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
@@ -401,8 +400,10 @@ test("cancel aborts the request and records the cancel in one synchronous step, 
   const brokenRun = await broken.coordinator.start(OWNER, (await prepared(broken, brokenDoc)).consentId);
   assert.ok("runId" in brokenRun);
   await onTheWire(broken);
-  assert.throws(() => broken.coordinator.cancel(brokenRun.runId), /disk full/u);
+  // The stop still lands, is reported rather than thrown, and the caller is told the run was stopped.
+  assert.equal(broken.coordinator.cancel(brokenRun.runId), true);
   assert.equal(broken.fake.calls[0]!.options!.signal!.aborted, true);
+  assert.equal(broken.issues.length, 1);
   await broken.coordinator.whenIdle();
 });
 
@@ -564,4 +565,109 @@ test("shutdown ends active runs, closes the ledger even if recording fails, and 
   assert.throws(() => env.ledger.snapshot(started.runId), /closed/u);
   await assert.rejects(env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } }), /shutting down/u);
   assert.equal(env.coordinator.cancel(started.runId), false);
+});
+
+test("a snapshot failure on the first publish cannot strand the workflow as busy", async (t) => {
+  let failFirst = true;
+  const env = await fixture(t, {
+    wrapLedger: withLedgerOverrides({
+      snapshot: (...args: never[]) => {
+        if (failFirst) {
+          failFirst = false;
+          throw new Error("disk full");
+        }
+        return (env.ledger.snapshot as (...a: never[]) => unknown)(...args);
+      },
+    }),
+  });
+  const doc = await saveWorkflow(env.workflows, generateChains(1));
+  const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
+  assert.ok("runId" in started, JSON.stringify(started));
+  await env.coordinator.whenIdle();
+  assert.equal(env.coordinator.getRun({ runId: started.runId })!.run.state, "succeeded");
+  assert.equal(env.coordinator.hasActiveRun(doc.id), false);
+  assert.equal(env.fake.calls.length, 1);
+  assert.equal(env.issues.length, 1);
+});
+
+test("a crash while quitting is not reported as an internal error", async (t) => {
+  let broken = false;
+  let sawBreak = false;
+  const env = await fixture(t, {
+    reply: () => ({ kind: "hold" }),
+    wrapLedger: withLedgerOverrides({
+      snapshot: (...args: never[]) => {
+        if (broken) {
+          sawBreak = true;
+          throw new Error("late failure");
+        }
+        return (env.ledger.snapshot as (...a: never[]) => unknown)(...args);
+      },
+    }),
+  });
+  const doc = await saveWorkflow(env.workflows, generateChains(1));
+  const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
+  assert.ok("runId" in started);
+  await onTheWire(env);
+  broken = true;
+  await env.coordinator.shutdown("app-quit");
+  await until(() => sawBreak, "the aborted run to wind down");
+  for (let tick = 0; tick < 10; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(env.issues, []);
+});
+
+test("deleting runs first: a ledger failure leaves the workflow and its holds intact", async (t) => {
+  let failDelete = true;
+  const env = await fixture(t, {
+    wrapLedger: withLedgerOverrides({
+      deleteWorkflowRuns: (...args: never[]) => {
+        if (failDelete) throw new Error("disk full");
+        return (env.ledger.deleteWorkflowRuns as (...a: never[]) => unknown)(...args);
+      },
+    }),
+  });
+  const doc = await saveWorkflow(env.workflows, generateChains(1));
+  const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
+  await env.coordinator.whenIdle();
+  assert.ok("runId" in started);
+  const output = env.coordinator.getRun({ runId: started.runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
+  await assert.rejects(env.coordinator.deleteWorkflow(doc.id), /disk full/u);
+  assert.notEqual(await env.workflows.get(doc.id), null);
+  assert.notEqual(env.coordinator.getRun({ runId: started.runId }), null);
+  assert.deepEqual(env.assets.holders(output.assetId), [{ kind: "images-run", id: started.runId }]);
+  failDelete = false;
+  assert.equal(await env.coordinator.deleteWorkflow(doc.id), "deleted");
+  assert.deepEqual(env.assets.holders(output.assetId), []);
+});
+
+test("a document delete that fails after the runs are gone is reported and leaves no stranded holds", async (t) => {
+  const env = await fixture(t, {
+    beforeDelete: async () => {
+      throw new Error("permission denied");
+    },
+  });
+  const doc = await saveWorkflow(env.workflows, generateChains(1));
+  const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
+  await env.coordinator.whenIdle();
+  assert.ok("runId" in started);
+  const output = env.coordinator.getRun({ runId: started.runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
+  await assert.rejects(env.coordinator.deleteWorkflow(doc.id), /permission denied/u);
+  assert.equal(env.issues.length, 1);
+  assert.notEqual(await env.workflows.get(doc.id), null);
+  assert.equal(env.coordinator.getRun({ runId: started.runId }), null);
+  assert.deepEqual(env.assets.holders(output.assetId), []);
+  assert.equal(env.coordinator.hasActiveRun(doc.id), false);
+});
+
+test("preparing while the workflow is being deleted says so", async (t) => {
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => (open = resolve));
+  const env = await fixture(t, { beforeDelete: () => gate });
+  const doc = await saveWorkflow(env.workflows, generateChains(1));
+  const deleting = env.coordinator.deleteWorkflow(doc.id);
+  const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+  assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], ["workflow_deleting"]);
+  assert.equal(await env.coordinator.deleteWorkflow(doc.id), "busy");
+  open();
+  assert.equal(await deleting, "deleted");
 });

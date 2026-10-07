@@ -100,7 +100,7 @@ import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
-import { imageRunQuitConfirmation } from "./services/create-images/quit-confirm-core.js";
+import { imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
 import { startStudioAssets } from "./services/studio-assets/startup-core.js";
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
@@ -187,6 +187,8 @@ let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
+/** The last-window close already asked about in-flight image requests; the quit it triggers must not ask again. */
+let imageQuitConfirmedByWindowClose = false;
 let installUpdateOnQuit = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
@@ -549,11 +551,17 @@ async function armRendererUnload(
   }
 }
 
-/** Honest quit copy while paid image requests are on the wire (ADR-CI §2.2). */
-function confirmImageRequestsBeforeQuit(window: BrowserWindow): boolean {
-  const confirmation = imageRunQuitConfirmation(createImagesRuntime.inFlightRequests());
-  if (!confirmation || window.isDestroyed()) return true;
-  return dialog.showMessageBoxSync(window, { type: "warning", noLink: true, ...confirmation }) === 1;
+/**
+ * Honest quit copy while paid image requests are on the wire (ADR-CI §2.2). Every path that will quit
+ * the app asks through here, with or without a window to attach the dialog to.
+ */
+function confirmImageRequestsBeforeQuit(window?: BrowserWindow | null): boolean {
+  return imageRunsAllowQuit(createImagesRuntime.inFlightRequests(), (prompt) => {
+    const options = { type: "warning", noLink: true, ...prompt } as const;
+    return window && !window.isDestroyed()
+      ? dialog.showMessageBoxSync(window, options)
+      : dialog.showMessageBoxSync(options);
+  });
 }
 
 async function authorizeProtectedAction(
@@ -596,12 +604,13 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return;
   lifecycleCheckInFlight = true;
   try {
-    if (!(await authorizeProtectedAction(window, "close"))) return;
     // Closing the last window quits on Linux and Windows. On macOS it does not, and runs continue.
-    if (
-      shouldQuitAfterAllWindowsClose(process.platform, aidenRemoteServiceKeepsApplicationAlive()) &&
-      !confirmImageRequestsBeforeQuit(window)
-    ) {
+    // Asked before the renderer unload is armed, so "Keep Aiden Open" leaves no approved revision behind.
+    const closeQuitsApp = shouldQuitAfterAllWindowsClose(process.platform, aidenRemoteServiceKeepsApplicationAlive());
+    if (closeQuitsApp && !confirmImageRequestsBeforeQuit(window)) return;
+    imageQuitConfirmedByWindowClose = closeQuitsApp;
+    if (!(await authorizeProtectedAction(window, "close"))) {
+      imageQuitConfirmedByWindowClose = false;
       return;
     }
     await persistMainWindowState(window);
@@ -638,8 +647,8 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return false;
   lifecycleCheckInFlight = true;
   try {
-    if (!(await authorizeProtectedAction(window, "close"))) return false;
     if (!confirmImageRequestsBeforeQuit(window)) return false;
+    if (!(await authorizeProtectedAction(window, "close"))) return false;
     await persistMainWindowState(window);
     try {
       await computerUseSettings.shutdown();
@@ -1129,6 +1138,7 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  imageQuitConfirmedByWindowClose = false;
   mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
     level: "info",
@@ -1663,7 +1673,8 @@ if (!ownsSingleInstanceLock) {
     if (shutdownStarted || lifecycleCheckInFlight) return;
     if (mainWindow && !mainWindow.isDestroyed()) {
       void requestApplicationQuit(mainWindow);
-    } else {
+    } else if (imageQuitConfirmedByWindowClose || confirmImageRequestsBeforeQuit(null)) {
+      // No window (macOS keeps running after the last one closes): runs may still be on the wire.
       void shutdownAndQuit();
     }
   });

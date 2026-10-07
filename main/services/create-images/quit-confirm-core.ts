@@ -18,3 +18,16 @@ export function imageRunQuitConfirmation(inFlightRequests: number): {
     cancelId: 0,
   };
 }
+
+/**
+ * The one quit decision every path shares (window close that quits, Cmd+Q, quit with no window).
+ * `show` displays the prompt and returns the pressed button index. True means go ahead and quit.
+ */
+export function imageRunsAllowQuit(
+  inFlightRequests: number,
+  show: (prompt: NonNullable<ReturnType<typeof imageRunQuitConfirmation>>) => number,
+): boolean {
+  const prompt = imageRunQuitConfirmation(inFlightRequests);
+  if (!prompt) return true;
+  return show(prompt) === 1;
+}
