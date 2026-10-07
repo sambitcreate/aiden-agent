@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ArrowLeft,
@@ -8,12 +8,10 @@ import {
   Link2,
   MessageSquarePlus,
   Pencil,
-  Plus,
   RotateCcw,
   Unlink,
 } from "lucide-react";
 import { BotAvatar } from "../components/bot-avatar";
-import { BotFaceStudio } from "../components/bot-face-studio";
 import {
   Button,
   Callout,
@@ -43,8 +41,11 @@ import {
   useBotTelegramBinding,
   useBotTelegramTargets,
 } from "../lib/queries";
-import { useActiveWorkspace } from "../lib/workspace-context";
 import { RemoteBots } from "./remote-bots";
+import { BotCharacterCard } from "./bots/bot-character-card";
+import { BotDeleteDialog } from "./bots/bot-delete-dialog";
+import { BotList, type BotListRow } from "./bots/bot-list";
+import { userFacingErrorMessage } from "../lib/ipc-error";
 import {
   DEFAULT_BOT_AVATAR,
   resolveBotAvatar,
@@ -302,7 +303,6 @@ function BotEditor({
   const [identityBaseline, setIdentityBaseline] = React.useState<BotDraft>(() => draftFromBot(bot));
   const [committedBot, setCommittedBot] = React.useState<BotDefinition | null>(bot);
   const [saveError, setSaveError] = React.useState<string | null>(null);
-  const [generatingAvatar, setGeneratingAvatar] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [noticing, setNoticing] = React.useState(false);
   const savingRef = React.useRef(false);
@@ -463,7 +463,7 @@ function BotEditor({
     });
 
   const isLastStep = step === BOT_EDITOR_STEPS.length - 1;
-  const identityReady = Boolean(draft.name.trim() && draft.instructions.trim()) && !generatingAvatar;
+  const identityReady = Boolean(draft.name.trim() && draft.instructions.trim());
   const accessModeReady = Boolean(
     !accessUnavailable && catalog && accessDraft && !(accessDraft.usesFullAccess && !fullAccepted),
   );
@@ -580,16 +580,11 @@ function BotEditor({
           </label>
         </div>
 
-        <details className="rounded-card bg-well p-3">
-          <summary className="cursor-pointer rounded-control text-small-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">Customize appearance (optional)</summary>
-        <BotFaceStudio
+        <BotCharacterCard
           avatar={draft.avatar}
-          botName={draft.name}
           onChange={(avatar) => setDraft((current) => ({ ...current, avatar }))}
-          onGeneratingChange={setGeneratingAvatar}
           disabled={saving}
         />
-        </details>
 
         <label className="block">
           <Text variant="small-strong">Instructions</Text>
@@ -1028,68 +1023,75 @@ function BotEditor({
   );
 }
 
-function Roster({ bots, onCreate }: { bots: BotDefinition[]; onCreate(): void }) {
+/** The Bots home: loads each Bot's chat summary and opens its chat on tap. */
+function BotsHome({ onCreate }: { onCreate(): void }) {
   const navigate = useNavigate();
-  const active = bots.filter((bot) => bot.archivedAt === undefined);
-  const archived = bots.filter((bot) => bot.archivedAt !== undefined);
-  if (bots.length === 0) {
-    return (
-      <div className="space-y-4 text-center">
-        <EmptyState
-          title="Create your first bot"
-          description="Create a bot with its own role, instructions, and ongoing conversation."
-        />
-        <Button variant="accent" onClick={onCreate}>
-          <Plus /> Create a bot
-        </Button>
-      </div>
-    );
-  }
+  const qc = useQueryClient();
+  const bots = useBots();
+  const active = React.useMemo(
+    () => (bots.data ?? []).filter((bot) => bot.archivedAt === undefined),
+    [bots.data],
+  );
+  // TEMPORARY: the chat list stands in for the durable runtime's per-Bot
+  // projection (preview, unread, session state). The canonical chat title is
+  // the preview until that projection lands.
+  const chats = useQueries({
+    queries: active.map((bot) => ({
+      queryKey: queryKeys.botChats(bot.id),
+      queryFn: () => botsApi.listChats(bot.id),
+    })),
+  });
+  const rows: BotListRow[] = active
+    .map((bot, index) => {
+      const chat = chats[index]?.data?.[0];
+      return {
+        bot,
+        ...(chat ? { preview: chat.title, updatedAt: chat.updatedAt } : {}),
+      };
+    })
+    .sort((left, right) => (right.updatedAt ?? right.bot.updatedAt) - (left.updatedAt ?? left.bot.updatedAt));
+  const [deleting, setDeleting] = React.useState<BotDefinition | null>(null);
+  const opening = React.useRef(false);
+  const openChat = async (bot: BotDefinition) => {
+    if (opening.current) return;
+    opening.current = true;
+    try {
+      const chat = await botsApi.createChat({ botId: bot.id });
+      await qc.invalidateQueries({ queryKey: queryKeys.botChats(bot.id) });
+      await navigate({
+        to: "/bots/$botId/chat/$chatId",
+        params: { botId: bot.id, chatId: chat.id },
+      });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, `Aiden couldn’t open ${bot.name}.`));
+    } finally {
+      opening.current = false;
+    }
+  };
   return (
-    <div className="space-y-8">
-      {[
-        { title: "Your bots", items: active },
-        { title: "Archived", items: archived },
-      ].map((group) =>
-        group.items.length ? (
-          <section key={group.title}>
-            <Text as="h2" variant="small-strong" color="secondary">
-              {group.title}
-            </Text>
-            <div className="mt-2 grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
-              {group.items.map((bot) => (
-                <button
-                  key={bot.id}
-                  type="button"
-                  className="flex min-h-28 items-start gap-3 rounded-card border border-field bg-well p-4 text-left outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control focus-visible:bg-control-hover"
-                  onClick={() => navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
-                >
-                  <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="visible" size="large" />
-                  <span className="min-w-0 flex-1">
-                    <Text as="span" variant="strong" className="block truncate">
-                      {bot.name}
-                    </Text>
-                    <Text
-                      as="span"
-                      variant="small"
-                      color="secondary"
-                      className="mt-1 line-clamp-2 block"
-                    >
-                      {bot.description ?? "A reusable Pi-powered teammate."}
-                    </Text>
-                    {bot.archivedAt ? (
-                      <Text as="span" variant="small" color="tertiary" className="mt-2 block">
-                        Archived
-                      </Text>
-                    ) : null}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null,
-      )}
-    </div>
+    <>
+      <BotList
+        rows={rows}
+        loading={bots.isLoading}
+        error={bots.isError}
+        onRetry={() => void bots.refetch()}
+        onOpen={(bot) => void openChat(bot)}
+        onOpenProfile={(bot) => void navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
+        onDelete={setDeleting}
+        onCreate={onCreate}
+      >
+        <RemoteBots />
+      </BotList>
+      {deleting ? (
+        <BotDeleteDialog
+          bot={deleting}
+          open
+          onOpenChange={(open) => {
+            if (!open) setDeleting(null);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -1131,7 +1133,6 @@ export function BotsView() {
   const params = useParams({ strict: false }) as { botId?: string };
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { activeId } = useActiveWorkspace();
   const bots = useBots(true);
   const chats = useBotChats(params.botId);
   const telegramBinding = useBotTelegramBinding(params.botId);
@@ -1156,10 +1157,10 @@ export function BotsView() {
     }
   };
   const startConversation = async () => {
-    if (!selected || !activeId || selected.archivedAt) return;
+    if (!selected || selected.archivedAt) return;
     setStarting(true);
     try {
-      const chat = await botsApi.createChat({ botId: selected.id, workspaceId: activeId });
+      const chat = await botsApi.createChat({ botId: selected.id });
       await qc.invalidateQueries({ queryKey: queryKeys.botChats(selected.id) });
       await navigate({
         to: "/bots/$botId/chat/$chatId",
@@ -1284,7 +1285,7 @@ export function BotsView() {
                   </div>
                   <Button
                     variant="accent"
-                    disabled={!activeId || Boolean(selected.archivedAt) || starting}
+                    disabled={Boolean(selected.archivedAt) || starting}
                     onClick={() => void startConversation()}
                   >
                     <MessageSquarePlus /> {starting ? "Starting…" : "New conversation"}
@@ -1405,38 +1406,7 @@ export function BotsView() {
             />
           )
         ) : (
-          <>
-            <header className="flex items-end justify-between gap-4">
-              <div>
-                <Text as="h1" variant="heading1">
-                  Bots
-                </Text>
-                <Text as="p" color="secondary" className="mt-1 max-w-2xl">
-                  Create a bot for work you return to, with its own instructions and conversations.
-                </Text>
-              </div>
-              <Button variant="accent" onClick={openCreate}>
-                <Plus /> Create a bot
-              </Button>
-            </header>
-            <div className="mt-8">
-              {bots.isLoading ? (
-                <Text color="secondary">Loading bots…</Text>
-              ) : bots.isError ? (
-                <div className="space-y-3 rounded-card bg-well p-5">
-                  <Text as="p" color="secondary">
-                    Aiden could not load your bots.
-                  </Text>
-                  <Button size="small" variant="filled" onClick={() => void bots.refetch()}>
-                    <RotateCcw /> Try again
-                  </Button>
-                </div>
-              ) : (
-                <Roster bots={bots.data ?? []} onCreate={openCreate} />
-              )}
-              <RemoteBots />
-            </div>
-          </>
+          <BotsHome onCreate={openCreate} />
         )}
       </main>
       {editorOpen ? <BotEditor bot={editorBot} onOpenChange={setEditorOpen} /> : null}

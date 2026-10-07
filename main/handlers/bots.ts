@@ -24,8 +24,6 @@ import {
   BotCapabilityUnavailableError,
 } from "../services/bot-capability-store-core.js";
 import { botMutationGate } from "../services/bot-mutation-gate.js";
-import { generateBotAvatarSuggestion } from "../services/bot-avatar-generator.js";
-import { botAvatarOperations } from "../services/bot-avatar-operation-registry.js";
 import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-store-main.js";
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
@@ -41,8 +39,6 @@ import {
 import { telegramProfileMutationFence } from "../services/telegram/telegram-profile-mutation-fence.js";
 import {
   parseBotAccessUpdateInput,
-  parseBotAvatarSuggestionInput,
-  parseBotAvatarRequestId,
   parseBotChatCreate,
   parseBotCreateWithAccess,
   parseBotId,
@@ -149,43 +145,6 @@ export function registerBotHandlers(): void {
       throw botAccessUpdateRendererError(error);
     }
   });
-  ipcMain.handle("bots:suggestAvatar", async (event, input: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () =>
-        new Error(
-          "Bot avatar design requires the active application document.",
-        ),
-    );
-    const parsed = parseBotAvatarSuggestionInput(input);
-    const operation = botAvatarOperations.admit(
-      owner.documentId,
-      parsed.requestId,
-    );
-    const unsubscribe = owner.onInvalidated(operation.cancel);
-    try {
-      return await generateBotAvatarSuggestion(parsed, operation.signal);
-    } finally {
-      unsubscribe();
-      operation.finish();
-    }
-  });
-  ipcMain.handle(
-    "bots:cancelAvatarSuggestion",
-    async (event, requestId: unknown) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () =>
-          new Error(
-            "Bot avatar design requires the active application document.",
-          ),
-      );
-      return botAvatarOperations.cancel(
-        owner.documentId,
-        parseBotAvatarRequestId(requestId),
-      );
-    },
-  );
   ipcMain.handle("bots:update", async (_event, input: unknown) => {
     return botApplicationService.updateBot(parseBotUpdate(input));
   });

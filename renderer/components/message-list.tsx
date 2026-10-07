@@ -43,6 +43,8 @@ import {
   htmlArtifactTranscriptPlan,
   type HtmlArtifactTranscriptEntry,
 } from "../lib/html-artifact-transcript";
+import { BotUpdates } from "../main/bots/bot-updates";
+import { resolveBotReplyProjection } from "../main/bots/bot-reply-projection";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 interface MessageListProps {
@@ -81,6 +83,11 @@ interface MessageListProps {
    * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
    */
   forkBeforeFirstPrompt?: boolean;
+  /**
+   * Bot chats read like messages: tool activity and narration before the
+   * final answer fold into one collapsed "Updates" line.
+   */
+  botPresentation?: boolean;
 }
 
 interface AssistantResponseProps {
@@ -98,6 +105,46 @@ interface AssistantResponseProps {
   /** Settled turn facts; joins the tail action row, or stands alone without prose. */
   footer?: React.ReactNode;
   fork?: MessageForkAction;
+  botPresentation?: boolean;
+}
+
+/** A Bot reply: one collapsed Updates line, then only the final answer. */
+function BotAssistantResponse({
+  content,
+  timeline,
+  attachments,
+  streaming = false,
+  streamComplete,
+  onStreamHandoffComplete,
+  readAloud,
+  richLinks = true,
+  footer,
+}: AssistantResponseProps) {
+  const active = streaming && !streamComplete;
+  const projection = resolveBotReplyProjection(content, timeline, active);
+  const toolTimeline = timeline
+    ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
+    : null;
+  return (
+    <>
+      <BotUpdates progressText={projection.progressText} timeline={toolTimeline} active={active} />
+      {projection.finalText ? (
+        <SafeMessageBubble
+          role="assistant"
+          content={projection.finalText}
+          streaming={streaming}
+          streamComplete={streamComplete}
+          onStreamHandoffComplete={onStreamHandoffComplete}
+          readAloud={readAloud}
+          richLinks={richLinks}
+          footer={footer}
+        />
+      ) : null}
+      {attachments?.length ? (
+        <MessageAttachments attachments={attachments} role="assistant" />
+      ) : null}
+    </>
+  );
 }
 
 function AssistantResponse({
@@ -113,7 +160,23 @@ function AssistantResponse({
   richLinks = true,
   footer,
   fork,
+  botPresentation = false,
 }: AssistantResponseProps) {
+  if (botPresentation) {
+    return (
+      <BotAssistantResponse
+        content={content}
+        timeline={timeline}
+        attachments={attachments}
+        streaming={streaming}
+        streamComplete={streamComplete}
+        onStreamHandoffComplete={onStreamHandoffComplete}
+        readAloud={readAloud}
+        richLinks={richLinks}
+        footer={footer}
+      />
+    );
+  }
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
   const active =
@@ -248,6 +311,7 @@ interface SettledMessageRowProps {
   forkDisabledReason?: string | null;
   /** Stable like `onFork`; present when a fork from this row can summarize what followed. */
   onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
+  botPresentation?: boolean;
 }
 
 /**
@@ -263,6 +327,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   onFork,
   forkDisabledReason,
   onForkWithSummary,
+  botPresentation = false,
 }: SettledMessageRowProps) {
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
     if (!onFork || (message.role !== "user" && message.role !== "assistant")) return undefined;
@@ -288,6 +353,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             richLinks={richLinks}
             footer={settledTurnFooter(message)}
             fork={fork}
+            botPresentation={botPresentation}
             subagentChips={
               subagentsEnabled && message.subagents ? (
                 <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
@@ -364,6 +430,7 @@ export function MessageList({
   onForkWithSummary,
   forkSummary,
   forkBeforeFirstPrompt = true,
+  botPresentation = false,
 }: MessageListProps) {
   const onForkRef = React.useRef(onFork);
   const onForkWithSummaryRef = React.useRef(onForkWithSummary);
@@ -519,6 +586,7 @@ export function MessageList({
         onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
         forkDisabledReason={forkDisabledReason}
         onForkWithSummary={summaryRows?.has(message.id) ? stableOnForkWithSummary : undefined}
+        botPresentation={botPresentation}
       />,
     );
     transcriptRows.push(...artifactFrames(`message:${message.id}`));
@@ -543,6 +611,7 @@ export function MessageList({
           streaming
           streamComplete={streamComplete}
           onStreamHandoffComplete={onStreamHandoffComplete}
+          botPresentation={botPresentation}
         />
       </div>,
     );

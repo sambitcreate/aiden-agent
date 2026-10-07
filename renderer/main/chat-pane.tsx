@@ -42,7 +42,9 @@ import {
   createAgentsInstructionNoticeLog,
 } from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
-import { BotAvatar } from "../components/bot-avatar";
+import { BotChatActions, BotChatTitle } from "./bots/bot-chat-header";
+import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";
+import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
@@ -222,6 +224,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
   const bot = useBot(chat.data?.botId);
+  /** Bot chats are calm, message-style conversations with no workspace chrome. */
+  const botMode = Boolean(chat.data?.botId);
+  const [botDeleteOpen, setBotDeleteOpen] = React.useState(false);
   const settings = useSettings();
   const computerUseGloballyEnabled =
     capabilities.computerUse && settings.data?.computerUseEnabled === true;
@@ -2486,28 +2491,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
       <ScrollArea
         className="h-full min-h-0"
         alignFooterToScrollContent
+        leading={
+          botMode && bot.data ? (
+            <BotChatTitle
+              bot={bot.data}
+              onBack={() => void navigate({ to: "/bots" })}
+              onOpenProfile={() =>
+                void navigate({ to: "/bots/$botId", params: { botId: bot.data!.id } })
+              }
+            />
+          ) : undefined
+        }
         title={
-          bot.data ? (
-            <span className="flex min-w-0 items-center gap-2">
-              <BotAvatar
-                botId={bot.data.id}
-                avatar={bot.data.avatar}
-                name={bot.data.name}
-                photoLoading="immediate"
-                size="small"
-              />
-              <span className="min-w-0">
-                <span className="flex items-center gap-2">
-                  <span className="truncate">{bot.data.name}</span>
-                  <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
-                    Bot
-                  </span>
-                </span>
-                <span className="block truncate text-small font-normal text-secondary">
-                  {chat.data?.title ?? "New conversation"}
-                </span>
-              </span>
-            </span>
+          botMode ? (
+            <span className="sr-only">{bot.data?.name ?? "Bot"}</span>
           ) : forkSourceLabel ? (
             <span className="block min-w-0" data-chat-fork-lineage>
               <span className="block truncate">{chat.data?.title ?? "New agent"}</span>
@@ -2533,6 +2530,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
           )
         }
         actions={
+          botMode ? (
+            bot.data ? (
+              <BotChatActions
+                bot={bot.data}
+                onOpenProfile={() =>
+                  void navigate({ to: "/bots/$botId", params: { botId: bot.data!.id } })
+                }
+                onOpenFiles={effectiveWorkspace ? () => environmentPanel.showTools("files") : undefined}
+                onDelete={() => setBotDeleteOpen(true)}
+              />
+            ) : undefined
+          ) : (
           <>
             <OpenInEditorPicker
               workspaceId={effectiveWorkspace?.id}
@@ -2555,6 +2564,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               <TerminalSquare />
             </Button>
           </>
+          )
         }
         autoScrollToBottom
         autoScrollResetKey={chatId}
@@ -2694,6 +2704,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 stoppingGeneration={isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
+                surfaces={botMode ? BOT_CHAT_COMPOSER_SURFACES : undefined}
                 workspace={effectiveWorkspace}
                 gitBranch={git.data?.isRepo ? git.data.branch : undefined}
                 gitDetached={git.data?.detached}
@@ -2765,8 +2776,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     search: section ? { section } : {},
                   })
                 }
-                onRenameChat={renameChat}
-                onOpenReview={() => environmentPanel.openReview("changes")}
+                onRenameChat={botMode ? undefined : renameChat}
+                onOpenReview={botMode ? undefined : () => environmentPanel.openReview("changes")}
                 sessionChat={draft ? undefined : (chat.data ?? undefined)}
                 authenticatedProviders={authenticatedProviders}
                 onCloneChat={() => copyChat()}
@@ -2776,7 +2787,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     ? undefined
                     : (messageId, position) => setForkSummaryRequest({ messageId, position })
                 }
-                onExportChat={exportChat}
+                onExportChat={botMode ? undefined : exportChat}
                 onCompactChat={
                   draft
                     ? undefined
@@ -2818,7 +2829,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
-                  googleThinkingSupported ? (
+                  botMode ? undefined : googleThinkingSupported ? (
                     <ThinkingControl
                       level={googleThinkingLevel}
                       levels={googleThinkingLevels}
@@ -2865,7 +2876,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : undefined
                 }
                 contextMeter={
-                  draft ? undefined : (
+                  draft || botMode ? undefined : (
                     <ContextMeter
                       pressure={contextPressure}
                       compacting={
@@ -2883,6 +2894,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 onDraftChange={onDraftContextChange}
                 modelPicker={
+                  botMode ? undefined : (
                   <ModelPicker
                     providers={settings.data ? (providers.data ?? []) : []}
                     providerId={providerId}
@@ -2894,6 +2906,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     settingsBlockedReason={settingsBlockedReason}
                     hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
                   />
+                  )
                 }
               />
             )}
@@ -2925,7 +2938,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           </div>
         ) : messages.length === 0 && displayedStreamingText === null ? (
           <div className="flex min-h-full items-center justify-center">
-            {(providers.data ?? []).some(
+            {botMode ? (
+              <EmptyState title={bot.data ? `Ask ${bot.data.name} anything` : "Loading bot…"} />
+            ) : (providers.data ?? []).some(
               (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
             ) ? (
               <EmptyState title="What would you like to work on?" />
@@ -2951,6 +2966,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <MessageList
             key={chatId}
             chatId={chatId}
+            botPresentation={botMode}
             messages={messages}
             streamingText={displayedStreamingText}
             streamingReasoning={displayedStreamingReasoning}
@@ -3008,6 +3024,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }}
         onConfirm={forkWithSummary}
       />
+      {botMode && bot.data ? (
+        <BotDeleteDialog bot={bot.data} open={botDeleteOpen} onOpenChange={setBotDeleteOpen} />
+      ) : null}
     </>
   );
 }

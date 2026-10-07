@@ -56,7 +56,7 @@ object AidenRemoteProtocol {
     const val PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
-    const val MAX_QUESTION_OPTIONS = 4
+    const val MAX_QUESTION_OPTIONS = 5
     const val MAX_QUESTION_HEADER_LENGTH = 16
     const val MAX_QUESTION_OPTION_LABEL_LENGTH = 60
     const val MAX_QUESTION_LENGTH = 1_000

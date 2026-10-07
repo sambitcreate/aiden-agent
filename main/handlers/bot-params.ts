@@ -1,7 +1,6 @@
 import {
   BOT_LIMITS,
   isBotAvatar,
-  type BotAvatarSuggestionInput,
   type BotCreateInput,
   type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
@@ -23,14 +22,6 @@ const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
 const UPDATE_KEYS = new Set([...CREATE_KEYS, "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
-const AVATAR_SUGGESTION_KEYS = new Set([
-  "currentAvatar",
-  "model",
-  "prompt",
-  "providerId",
-  "requestId",
-]);
-
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error(`Invalid ${label}.`);
@@ -120,21 +111,6 @@ export function parseBotChatCreate(value: unknown) {
   };
 }
 
-export function parseBotAvatarSuggestionInput(value: unknown): BotAvatarSuggestionInput {
-  const record = exact(value, AVATAR_SUGGESTION_KEYS, "bot avatar suggestion fields");
-  if (!isBotAvatar(record.currentAvatar)) throw new Error("Invalid current bot avatar.");
-  return {
-    requestId: text(record.requestId, "bot avatar request id", BOT_LIMITS.avatarRequestIdChars)!,
-    prompt: text(record.prompt, "bot avatar prompt", BOT_LIMITS.avatarPromptChars)!,
-    providerId: text(record.providerId, "provider id", 256)!,
-    model: text(record.model, "model id", 512)!,
-    currentAvatar: record.currentAvatar,
-  };
-}
-
-export function parseBotAvatarRequestId(value: unknown): string {
-  return text(value, "bot avatar request id", BOT_LIMITS.avatarRequestIdChars)!;
-}
 
 export function parseBotAccessUpdateInput(value: unknown): {
   botId: string;
