@@ -23,6 +23,7 @@ export function sniffStudioImageType(bytes: Uint8Array): StudioAssetMediaType | 
 export function validateStudioImage(
   bytes: Uint8Array,
   declaredMimeType: string | undefined,
+  // Custom limits can only tighten the global display limits, never loosen them.
   limits: Pick<StudioAssetLimits, "maxEdge" | "maxPixels"> = STUDIO_ASSET_LIMITS,
 ): { mediaType: StudioAssetMediaType; width: number; height: number } {
   const mediaType = sniffStudioImageType(bytes);

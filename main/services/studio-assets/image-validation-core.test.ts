@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { holderKey, parseHolderKey, StudioAssetError } from "./contract.js";
 import { sniffStudioImageType, validateStudioImage } from "./image-validation-core.js";
-import { pngBytes } from "./test-fixture.js";
+import { jpegBytes, pngBytes, webpBytes, webpContainerBytes } from "./test-fixture.js";
 
 const code = (expected: StudioAssetError["code"]) => (error: unknown) =>
   error instanceof StudioAssetError && error.code === expected;
@@ -15,6 +15,30 @@ test("magic bytes decide the type; a mismatched declaration is rejected", () => 
   assert.throws(() => validateStudioImage(png, "image/jpeg"), code("invalid_image"));
   assert.equal(sniffStudioImageType(new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>")), undefined);
   assert.throws(() => validateStudioImage(new TextEncoder().encode("GIF89a"), "image/gif"), code("invalid_image"));
+});
+
+test("valid JPEG and WebP images report their media type and dimensions", () => {
+  assert.deepEqual(validateStudioImage(jpegBytes(320, 200), "image/jpeg"), {
+    mediaType: "image/jpeg",
+    width: 320,
+    height: 200,
+  });
+  assert.deepEqual(validateStudioImage(webpBytes(640, 360, "VP8L"), "image/webp"), {
+    mediaType: "image/webp",
+    width: 640,
+    height: 360,
+  });
+  assert.deepEqual(validateStudioImage(webpBytes(480, 270, "VP8"), undefined), {
+    mediaType: "image/webp",
+    width: 480,
+    height: 270,
+  });
+});
+
+test("a WebP container with no image chunk is rejected", () => {
+  const noImage = webpContainerBytes([{ type: "EXIF", data: Buffer.alloc(8) }]);
+  assert.equal(sniffStudioImageType(noImage), "image/webp");
+  assert.throws(() => validateStudioImage(noImage, "image/webp"), code("invalid_image"));
 });
 
 test("a recognized signature with broken structure is rejected", () => {
