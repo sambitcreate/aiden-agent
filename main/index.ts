@@ -98,7 +98,9 @@ import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { createImagesEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { createImagesRuntime } from "./services/create-images/main.js";
+import { imageRunQuitConfirmation } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
 import { startStudioAssets } from "./services/studio-assets/startup-core.js";
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
@@ -427,16 +429,28 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       terminalService.flushHistory(),
       // Bounded so a wedged queue cannot hold quit; a store that was never
       // opened (flags off) resolves at once.
-      Promise.race([
-        studioAssetStore.close().then(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
-      ])
-        .then((closed) => {
-          if (!closed) logger.warn("studio", "Studio asset store did not close within the shutdown budget.");
-        })
-        .catch((error) =>
-          logger.warn("studio", "Studio asset store did not close cleanly.", error),
-        ),
+      (async () => {
+        // Image runs record their end (and close the run ledger) before the asset store closes.
+        // Bounded like the other stores; a ledger that was never opened (flag off) resolves at once.
+        await Promise.race([
+          createImagesRuntime.shutdown("app-quit").then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+        ])
+          .then((stopped) => {
+            if (!stopped) logger.warn("create-images", "Image runs did not stop within the shutdown budget.");
+          })
+          .catch((error) => logger.warn("create-images", "Image runs did not stop cleanly.", error));
+        await Promise.race([
+          studioAssetStore.close().then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+        ])
+          .then((closed) => {
+            if (!closed) logger.warn("studio", "Studio asset store did not close within the shutdown budget.");
+          })
+          .catch((error) =>
+            logger.warn("studio", "Studio asset store did not close cleanly.", error),
+          );
+      })(),
       browserService.shutdown(),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
@@ -535,6 +549,13 @@ async function armRendererUnload(
   }
 }
 
+/** Honest quit copy while paid image requests are on the wire (ADR-CI §2.2). */
+function confirmImageRequestsBeforeQuit(window: BrowserWindow): boolean {
+  const confirmation = imageRunQuitConfirmation(createImagesRuntime.inFlightRequests());
+  if (!confirmation || window.isDestroyed()) return true;
+  return dialog.showMessageBoxSync(window, { type: "warning", noLink: true, ...confirmation }) === 1;
+}
+
 async function authorizeProtectedAction(
   window: BrowserWindow,
   action: "close" | "reload",
@@ -576,6 +597,13 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return;
+    // Closing the last window quits on Linux and Windows. On macOS it does not, and runs continue.
+    if (
+      shouldQuitAfterAllWindowsClose(process.platform, aidenRemoteServiceKeepsApplicationAlive()) &&
+      !confirmImageRequestsBeforeQuit(window)
+    ) {
+      return;
+    }
     await persistMainWindowState(window);
     protectedAction = "close";
     window.close();
@@ -611,6 +639,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return false;
+    if (!confirmImageRequestsBeforeQuit(window)) return false;
     await persistMainWindowState(window);
     try {
       await computerUseSettings.shutdown();
@@ -1782,6 +1811,17 @@ if (!ownsSingleInstanceLock) {
           logger.warn(
             "studio",
             "Studio assets are unavailable; Design and Images will report a storage error.",
+            error,
+          ),
+      });
+      // Directly after the studio assets and before startup IPC admission: the ledger's restart sweep
+      // runs here exactly once, before any run can start. With the flag off nothing is created.
+      await createImagesRuntime.initialize({
+        enabled: createImagesEnabled(),
+        onError: (error) =>
+          logger.warn(
+            "create-images",
+            "Create Images storage is unavailable; Images will report a storage error.",
             error,
           ),
       });

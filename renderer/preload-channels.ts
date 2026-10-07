@@ -91,6 +91,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:pull-requests-changed",
   "chats:settled",
   "git:changed",
+  "imageWorkflows:run-changed",
   "dictation:state",
   "formFill:progress",
   "localModels:progress",
