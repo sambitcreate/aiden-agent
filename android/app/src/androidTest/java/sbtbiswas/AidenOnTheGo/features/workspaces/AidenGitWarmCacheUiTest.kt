@@ -98,7 +98,7 @@ class AidenGitWarmCacheUiTest {
         compose.onNodeWithContentDescription("Loading changes").assertDoesNotExist()
         compose.onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertDoesNotExist()
         // The saved snapshot id may be stale, so a commit cannot be sent from it.
-        compose.onNodeWithText("Commit Changes (1 files)").assertIsNotEnabled()
+        compose.onNodeWithText("Commit Changes (1 file)").assertIsNotEnabled()
     }
 
     @Test
