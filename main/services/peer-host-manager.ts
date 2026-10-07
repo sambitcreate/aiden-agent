@@ -100,6 +100,7 @@ interface Supervisor {
   retryTimer: unknown;
   stableTimer: unknown;
   routeTimer?: unknown;
+  discoveryTimer?: unknown;
   probing?: boolean;
   lastSyncedAt?: number;
   failure?: PeerHostStatus["failure"];
@@ -533,9 +534,11 @@ export class PeerHostManager {
     if (sup.retryTimer !== undefined) this.timers.clear(sup.retryTimer);
     if (sup.stableTimer !== undefined) this.timers.clear(sup.stableTimer);
     if (sup.routeTimer !== undefined) this.timers.clear(sup.routeTimer);
+    if (sup.discoveryTimer !== undefined) this.timers.clear(sup.discoveryTimer);
     sup.retryTimer = undefined;
     sup.stableTimer = undefined;
     sup.routeTimer = undefined;
+    sup.discoveryTimer = undefined;
   }
 
   private start(sup: Supervisor): void {
@@ -559,6 +562,7 @@ export class PeerHostManager {
         }, PEER_STABLE_MS);
         void this.runFeed(sup, live);
         this.scheduleRouteCheck(sup, live);
+        this.scheduleRouteDiscovery(sup, live);
         this.wakeHost(sup.hostId);
       },
       (error: unknown) => this.fail(sup, generation, error),
@@ -571,6 +575,23 @@ export class PeerHostManager {
       const better = await this.options.registry.preferReachableRoute(sup.hostId, sup.controller.signal);
       if (better && this.current(sup, generation)) this.start(sup);
     } catch { /* Route preference must never interrupt a working fallback. */ }
+  }
+
+  private scheduleRouteDiscovery(sup: Supervisor, generation: number): void {
+    if (!this.options.registry.probe || sup.view.activeRouteKind !== "lan" || sup.view.hasSuppressedRoutes
+      || !sup.view.features.includes("peer-routes-v1")
+      || sup.view.routes?.some((route) => route.kind === "tailscale")) return;
+    // Optional host discovery takes at most 15s ownership + 5s TLS. One
+    // follow-up per connection learns its result without replacing live feeds
+    // or adding an idle polling loop; the read itself keeps the 5s probe bound.
+    sup.discoveryTimer = this.timers.set(() => {
+      sup.discoveryTimer = undefined;
+      if (!this.current(sup, generation) || sup.view.hasSuppressedRoutes
+        || sup.view.routes?.some((route) => route.kind === "tailscale")) return;
+      void this.options.registry.probe!(sup.hostId, sup.controller.signal).catch((error: unknown) => {
+        if (this.current(sup, generation)) this.fail(sup, generation, error);
+      });
+    }, 25_000);
   }
 
   private scheduleRouteCheck(sup: Supervisor, generation: number): void {

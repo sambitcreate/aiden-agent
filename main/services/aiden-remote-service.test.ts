@@ -2258,7 +2258,8 @@ for (const stalledStage of ["inspection", "pin"] as const) {
         client: (trust) => new PeerTransport(trust, { lookup: (_hostname, options, callback) => { if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]); else callback(null, "127.0.0.1", 4); } }),
       });
       let wake: (() => void) | undefined;
-      manager = new PeerHostManager({ registry, broadcast: () => {}, timers: { set: (callback, ms) => { if (ms === PEER_WAKE_COALESCE_MS) wake = callback; return callback; }, clear: () => {} } });
+      let discover: (() => void) | undefined;
+      manager = new PeerHostManager({ registry, broadcast: () => {}, timers: { set: (callback, ms) => { if (ms === PEER_WAKE_COALESCE_MS) wake = callback; if (ms === 25_000) discover = callback; return callback; }, clear: () => {} } });
       await manager.whenReady();
       await until(() => manager!.statuses()[0]?.state.kind === "connected");
       const generation = manager.statuses()[0]!.generation;
@@ -2283,9 +2284,22 @@ for (const stalledStage of ["inspection", "pin"] as const) {
         gate = new Promise<void>((resolve) => { release = resolve; });
         now += 30_001;
         const expired = await within(readLan());
-        assert.equal(expired.body.peerRoutes.length, 1, "expired alternates are omitted while revalidation is held");
+        assert.equal(expired.body.peerRoutes.length, 2, "delayed clients can consume the last validated observation while revalidation is held");
         assert.equal(app.tailscale.inspectionCalls, 2);
       }
+      discover!();
+      await within((async () => {
+        while (!(await registry!.list())[0]!.routes?.some((route) => route.kind === "tailscale")) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        }
+      })());
+      assert.equal(manager.statuses()[0]!.generation, generation, "follow-up discovery preserves the live LAN generation, including after cache expiry");
+      await app.state.setTailscaleOwnership(undefined);
+      assert.equal((await within(readLan())).body.peerRoutes.length, 1, "ownership changes invalidate the retained alternate immediately");
+      hold = false;
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal((await within(readLan())).body.peerRoutes.length, 1, "an older pending refresh cannot restore another ownership key");
     } finally {
       hold = false;
       release();

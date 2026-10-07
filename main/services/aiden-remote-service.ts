@@ -622,13 +622,14 @@ export class AidenRemoteService {
               });
             }
           } catch { /* Local access may be disabled on a Tailscale-only host. */ }
-          const fresh = tailnetRouteCache?.key === key && tailnetRouteCache.expires > this.now() ? tailnetRouteCache : undefined;
-          if (fresh) {
-            if (fresh.route) routes.push(fresh.route);
-          } else if (!tailnetRouteRefresh && current.tailscaleOwnership && !current.tailscalePendingOutcome
+          const cached = tailnetRouteCache?.key === key ? tailnetRouteCache : undefined;
+          // Keep the last validated observation available to delayed clients
+          // while refreshing. Peers independently verify identity before use.
+          if (cached?.route) routes.push(cached.route);
+          if ((!cached || cached.expires <= this.now()) && !tailnetRouteRefresh && current.tailscaleOwnership && !current.tailscalePendingOutcome
             && this.tailscaleServer && (current.connectionMode === "tailscale" || current.connectionMode === "both")) {
             // One on-demand refresh uses the existing bounded ownership/pin
-            // checks. Cold, expired and failed alternates are omitted meanwhile.
+            // checks. Cold and failed alternates are omitted meanwhile.
             tailnetRouteRefresh = (async () => {
               let route: import("./peer-transport.js").PeerTrust | undefined;
               try {

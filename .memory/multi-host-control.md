@@ -78,3 +78,11 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
   revocation across routes, keeping healthy streams, and withholding HTTP request
   bytes from a wrong-pin endpoint. Packaged physical-device acceptance and measured
   idle CPU/wakeups remain outstanding; unit/TLS fixtures do not close those gates.
+
+- Deferred-advertisement follow-up: a connected LAN peer with route support, no
+  known Tailscale route, and no suppression makes one authenticated identity read
+  after 25 seconds. The timer is generation-bound and never repeats while idle.
+  Same-ownership validated observations remain available during bounded server
+  refresh; failure/key change clears the observation. It is still independently
+  verified before use. Tests cover delayed collection, retained feeds, and failover
+  after LAN loss without incidental wake.

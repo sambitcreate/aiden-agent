@@ -22,7 +22,7 @@ import {
   peerNetworkFingerprint,
 } from "./peer-host-manager.js";
 import { PEER_RUN_EVICT_MS } from "./peer-run-subscriptions.js";
-import { PeerEventFrames, PeerTransportError, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
+import { PeerEventFrames, PeerTransportError, type PeerRequest, type PeerStreamEnd, type PeerTrust } from "./peer-transport.js";
 import type {
   PeerHostFeedMessage,
   PeerHostStatus,
@@ -330,7 +330,7 @@ function stored(id: string, enabled = true): StoredPeerHost {
   };
 }
 
-function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id))) {
+function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id)), client?: (host: FakeHost, trust: PeerTrust) => PeerClient) {
   const timers = new FakeTimers();
   const byId = new Map(hosts.map((host) => [host.id, host]));
   let saved = records;
@@ -345,7 +345,10 @@ function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id))
     deviceName: "Desktop",
     clientVersion: "1",
     platform: "mac",
-    client: (trust) => byId.get((trust as StoredPeerHost).id)!.client(),
+    client: (trust) => {
+      const host = byId.get((trust as StoredPeerHost).id)!;
+      return client ? client(host, trust) : host.client();
+    },
     // No fake host presents a WebPKI-valid renewed key, so a pin mismatch is never re-pinned.
     bootstrap: () => ({
       observedSpki: undefined,
@@ -1066,3 +1069,65 @@ for (const hostCount of [1, 5, 10]) {
     }
   });
 }
+
+for (const delayed of [false, true]) {
+  test(`cold LAN automatically learns its alternate without replacing the feed${delayed ? " after a delayed timer" : ""}`, async () => {
+    const host = new FakeHost("host_discovery", "Cold discovery");
+    const record = { ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" };
+    const alternate = { endpoint: "https://studio.tail123.ts.net/api/aiden/v1", serverSpkiSha256: record.serverSpkiSha256 };
+    let discovered = false;
+    let lanDown = false;
+    const attempted: string[] = [];
+    host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
+      features: [...FEATURES, "peer-routes-v1"], peerRoutes: discovered ? [alternate] : [] });
+    const harness = setup([host], [record], (server, trust) => {
+      const client = server.client();
+      return { ...client, json: async (input) => {
+        attempted.push(trust.endpoint);
+        if (lanDown && trust.endpoint === record.endpoint) throw new PeerTransportError("unavailable");
+        return client.json(input);
+      } };
+    });
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      const generation = harness.status(host.id).generation;
+      const stream = host.streams("/host/events")[0]!;
+      assert.equal(harness.status(host.id).feed, "live");
+      await harness.advance(24_999);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, 1);
+      discovered = true;
+      await harness.advance(delayed ? 40_000 : 1);
+      assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), true);
+      assert.equal(harness.status(host.id).generation, generation);
+      assert.equal(host.streams("/host/events")[0], stream);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, 2);
+      await harness.advance(300_000);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, 2, "discovery never becomes idle polling");
+      lanDown = true;
+      stream.drop();
+      await settle();
+      await harness.advance(3_000);
+      assert.equal(harness.status(host.id).state.kind, "connected");
+      assert.equal(harness.status(host.id).feed, "live");
+      assert.equal((await harness.registry.list())[0]!.activeRouteKind, "tailscale");
+      assert.equal(last(attempted), alternate.endpoint);
+    } finally { harness.close(); }
+  });
+}
+
+test("disabling a cold LAN connection cancels its one-time discovery read", async () => {
+  const host = new FakeHost("host_disabled_discovery", "Disabled discovery");
+  host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
+    features: [...FEATURES, "peer-routes-v1"], peerRoutes: [] });
+  const harness = setup([host], [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    assert.equal(harness.status(host.id).state.kind, "connected");
+    await harness.manager.setEnabled(host.id, false);
+    await harness.advance(60_000);
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, 1);
+    assert.equal(harness.status(host.id).state.kind, "disabled");
+  } finally { harness.close(); }
+});

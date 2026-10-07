@@ -627,11 +627,17 @@ private CA. A LAN route may include up to eight RFC1918 IPv4 `addresses` as look
 hints. These hints never replace the canonical TLS hostname.
 
 Advertisements are partial observations, not an authoritative removal list. LAN
-identity reads never wait for optional Tailscale discovery: cold, expired, or
-unavailable alternatives are omitted while one bounded refresh runs. Successful
-and failed alternate lookups are cached for 30 seconds. Clients retain previously
+identity reads never wait for optional Tailscale discovery. One bounded refresh
+updates a 30-second positive/negative cache. A previously validated observation
+may remain available during refresh only under the same ownership/lifecycle key;
+a failed refresh or changed key clears it. This observation does not promise current
+reachability, and clients verify the route before use. Clients retain previously
 validated omitted routes within their two-route bound; a new observation replaces
 trust for the same endpoint. Explicit removal/suppression remains authoritative.
+A connected LAN client with this feature, no known Tailscale route, and no suppressed
+routes performs one authenticated follow-up after 25 seconds to collect deferred
+observations. It retains its feed, cancels the timer when the connection changes,
+and does not poll repeatedly while idle.
 
 The existing authenticated, identity-verified channel delivers each alternate
 route's trust material. A client verifies CA/system trust, hostname and SPKI before
