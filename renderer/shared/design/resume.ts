@@ -1,6 +1,7 @@
 // Resume of an incomplete direction set (owner decision 2026-10-07). Shared so
 // main's planDesignRun and the renderer's cost disclosure compute the same cap,
 // existing titles and default model from one manifest.
+import { own } from "./own.js";
 import type {
   DesignModelRef,
   DesignProjectManifestV1,
@@ -11,25 +12,30 @@ import type {
 /** Runs that may be resumed or discarded when they are the newest run of an incomplete set. */
 const RESUMABLE: ReadonlySet<DesignRunStatus> = new Set(["partial", "interrupted", "cancelled", "failed"]);
 
-/** Ids are untrusted keys: "constructor" is a valid id and must never resolve to an inherited member. */
-function own<T>(record: Record<string, T>, key: string): T | undefined {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
-/** Direction titles compare without case or whitespace. */
+/** Direction titles compare without case, whitespace, zero-width characters or Unicode composition. */
 export function designDirectionTitleKey(title: string): string {
-  return title.replace(/\s+/gu, "").toLowerCase();
+  return title
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/gu, "")
+    .replace(/\s+/gu, "")
+    .toLowerCase();
 }
 
-/** The newest run that fills a direction set: its original Explore or the last Resume. */
+/**
+ * The newest run that fills a direction set: its original Explore or the last Resume.
+ * Ordered by start time, then id, so the answer never depends on record order.
+ * `beginDesignRun` keeps a Resume's start strictly after the set's earlier runs.
+ */
 export function latestDesignRunForSet(
   manifest: DesignProjectManifestV1,
   directionSetId: string,
 ): DesignRunRecord | undefined {
   let latest: DesignRunRecord | undefined;
   for (const run of Object.values(manifest.runs)) {
-    // Ties keep insertion order: a run record is always added after the runs before it.
-    if (run.directionSetId === directionSetId && (!latest || run.startedAt >= latest.startedAt)) latest = run;
+    if (run.directionSetId !== directionSetId) continue;
+    if (!latest || run.startedAt > latest.startedAt || (run.startedAt === latest.startedAt && run.id > latest.id)) {
+      latest = run;
+    }
   }
   return latest;
 }

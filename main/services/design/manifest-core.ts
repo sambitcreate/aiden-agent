@@ -8,6 +8,7 @@ import {
   MAX_DESIGN_RUN_RECORDS,
   MAX_DESIGN_SCREENS_PER_PROJECT,
 } from "../../../renderer/shared/design/limits.js";
+import { own } from "../../../renderer/shared/design/own.js";
 import type {
   DesignCanvasNode,
   DesignDirectionSet,
@@ -265,11 +266,6 @@ function parseRun(value: unknown): DesignRunRecord | undefined {
     startedAt: value.startedAt,
     ...(value.endedAt === undefined ? {} : { endedAt: value.endedAt }),
   };
-}
-
-/** Ids are untrusted keys: "constructor" and "toString" are valid ids but must never resolve to inherited members. */
-function own<T>(record: Record<string, T>, key: string): T | undefined {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
 function crossReferencesHold(manifest: DesignProjectManifestV1): boolean {

@@ -15,6 +15,7 @@ import {
   MAX_DESIGN_SCREENS_PER_PROJECT,
   MAX_DESIGN_TOTAL_BYTES,
 } from "../../../renderer/shared/design/limits.js";
+import { own } from "../../../renderer/shared/design/own.js";
 import {
   designDirectionTitleKey,
   designResumeOffer,
@@ -90,11 +91,6 @@ const SHA256 = /^[a-f0-9]{64}$/u;
 const invalid = (message: string) => new DesignStoreError("invalid", message);
 const quota = (message: string) => new DesignStoreError("quota", message);
 
-/** Ids are untrusted keys: "constructor" is a valid id and must never resolve to an inherited member. */
-function own<T>(record: Record<string, T>, key: string): T | undefined {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
 /** Bump the compare-and-set revision of a clone the caller owns. */
 export function touchDesignManifest(manifest: DesignProjectManifestV1, now: number): DesignProjectManifestV1 {
   manifest.revision += 1;
@@ -102,21 +98,13 @@ export function touchDesignManifest(manifest: DesignProjectManifestV1, now: numb
   return manifest;
 }
 
-/** Bytes on disk: a missing revision occupies nothing. */
-export function designProjectBytes(manifest: DesignProjectManifestV1): number {
-  let bytes = 0;
-  for (const revision of Object.values(manifest.revisions)) {
-    if (revision.state !== "missing") bytes += revision.bytes;
-  }
-  return bytes;
-}
-
 /**
- * The per-project quota counts every revision the manifest still lists, missing
- * ones included: a file that failed its size check may still sit on disk, and
- * only deleting its Screen releases it. Archiving a direction set frees nothing.
+ * The bytes the project quota, the library summary and the delete preview all
+ * report: every revision the manifest still lists, missing ones included. A file
+ * that failed its size check may still sit on disk, and only deleting its Screen
+ * releases it. Archiving a direction set frees nothing.
  */
-function declaredRevisionBytes(manifest: DesignProjectManifestV1): number {
+export function designProjectBytes(manifest: DesignProjectManifestV1): number {
   let bytes = 0;
   for (const revision of Object.values(manifest.revisions)) bytes += revision.bytes;
   return bytes;
@@ -189,10 +177,17 @@ export function planDesignRun(manifest: DesignProjectManifestV1, request: Design
 function trimDesignRuns(manifest: DesignProjectManifestV1): void {
   const runs = Object.values(manifest.runs);
   if (runs.length <= MAX_DESIGN_RUN_RECORDS) return;
+  // The newest run of a set is what Resume and Discard act on; it outlives older runs.
+  const newest = new Set<string>();
+  for (const set of Object.values(manifest.directionSets)) {
+    const latest = latestDesignRunForSet(manifest, set.id);
+    if (latest) newest.add(latest.id);
+  }
   const removable = runs
     .filter(
       (run) =>
         run.status !== "running" &&
+        !newest.has(run.id) &&
         !run.revisionIds.some((id) => own(manifest.revisions, id)?.state === "draft"),
     )
     .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
@@ -224,6 +219,12 @@ export function beginDesignRun(
       throw invalid(resumedSetId === undefined ? "This direction set already exists." : "The direction set to resume no longer exists.");
     }
   }
+  // A Resume must rank as its set's newest run even if the clock ran backwards.
+  let startedAt = input.now;
+  if (resumedSetId !== undefined) {
+    const previous = latestDesignRunForSet(manifest, resumedSetId);
+    if (previous) startedAt = Math.max(startedAt, previous.startedAt + 1);
+  }
   const next = structuredClone(manifest);
   next.runs[input.runId] = {
     id: input.runId,
@@ -235,7 +236,7 @@ export function beginDesignRun(
     ...(input.request.op === "explore" ? { directionSetId } : {}),
     ...(input.promptMessageId === undefined ? {} : { promptMessageId: input.promptMessageId }),
     revisionIds: [],
-    startedAt: input.now,
+    startedAt,
   };
   if (input.request.op === "explore" && resumedSetId === undefined) {
     next.directionSets[directionSetId] = {
@@ -393,7 +394,7 @@ export function acceptDesignArtifact(
     nextRun.revisionIds.push(revision.id);
   }
   next.revisions[revision.id] = revision;
-  if (declaredRevisionBytes(next) > MAX_DESIGN_PROJECT_BYTES) {
+  if (designProjectBytes(next) > MAX_DESIGN_PROJECT_BYTES) {
     throw quota("This project has reached its 64 MiB design limit. Delete Screens to free space.");
   }
   if (totals.otherProjectsBytes + designProjectBytes(next) > MAX_DESIGN_TOTAL_BYTES) {
@@ -406,15 +407,35 @@ export function acceptDesignArtifact(
   return { manifest: touchDesignManifest(next, now), deletedRevisionIds };
 }
 
+/** Drop a direction set and make every run that named it forget it. */
+function dropDirectionSet(manifest: DesignProjectManifestV1, setId: string): void {
+  delete manifest.directionSets[setId];
+  for (const run of Object.values(manifest.runs)) {
+    if (run.directionSetId === setId) delete run.directionSetId;
+  }
+}
+
 /**
  * Remove a Screen with all of its revisions from a clone; returns the deleted revision ids.
- * A direction set left without Screens is dropped and the runs that named it forget it
- * (a set an in-progress run is still filling stays). A settled run that no longer has any
- * design is dropped too: complete and partial runs always keep at least one revision.
+ * Refused as "busy" (nothing changes) while a run is rendering into the Screen: it holds a
+ * draft of a running run, or a running Refine targets it. A direction set left without
+ * Screens is dropped (a set an in-progress run is still filling stays), and a settled run
+ * that no longer has any design is dropped too: complete and partial runs always keep at
+ * least one revision.
  */
 export function removeDesignScreen(manifest: DesignProjectManifestV1, screenId: string): string[] {
   const screen = own(manifest.screens, screenId);
   if (!screen) return [];
+  const runs = Object.values(manifest.runs);
+  const rendering = runs.some(
+    (run) =>
+      run.status === "running" &&
+      ((run.request.op === "refine" && run.request.screenId === screenId) ||
+        run.revisionIds.some((id) => screen.revisionIds.includes(id))),
+  );
+  if (rendering) {
+    throw new DesignStoreError("busy", `"${screen.title}" is being rendered. Stop the design run first.`);
+  }
   const deleted = [...screen.revisionIds];
   const deletedIds = new Set(deleted);
   for (const id of deleted) delete manifest.revisions[id];
@@ -424,21 +445,13 @@ export function removeDesignScreen(manifest: DesignProjectManifestV1, screenId: 
     set.screenIds = set.screenIds.filter((id) => id !== screenId);
     if (set.chosenScreenId === screenId) delete set.chosenScreenId;
   }
-  for (const run of Object.values(manifest.runs)) {
-    run.revisionIds = run.revisionIds.filter((id) => !deletedIds.has(id));
-  }
-  const setId = screen.directionSetId;
-  const set = setId === undefined ? undefined : own(manifest.directionSets, setId);
+  for (const run of runs) run.revisionIds = run.revisionIds.filter((id) => !deletedIds.has(id));
+  const set = screen.directionSetId === undefined ? undefined : own(manifest.directionSets, screen.directionSetId);
   if (set && set.screenIds.length === 0) {
-    const filling = Object.values(manifest.runs).some((run) => run.directionSetId === set.id && run.status === "running");
-    if (!filling) {
-      delete manifest.directionSets[set.id];
-      for (const run of Object.values(manifest.runs)) {
-        if (run.directionSetId === set.id) delete run.directionSetId;
-      }
-    }
+    const filling = runs.some((run) => run.directionSetId === set.id && run.status === "running");
+    if (!filling) dropDirectionSet(manifest, set.id);
   }
-  for (const run of Object.values(manifest.runs)) {
+  for (const run of runs) {
     if ((run.status === "complete" || run.status === "partial") && run.revisionIds.length === 0) {
       delete manifest.runs[run.id];
     }
@@ -446,12 +459,10 @@ export function removeDesignScreen(manifest: DesignProjectManifestV1, screenId: 
   return deleted;
 }
 
-/** Remove an empty set its own run created; a Resume never owns the set it fills. */
+/** A run that ends with no design leaves no empty set behind, whichever run created it. */
 function dropEmptyDirectionSet(manifest: DesignProjectManifestV1, run: DesignRunRecord): void {
   const set = directionSetForRun(manifest, run);
-  if (!set || set.runId !== run.id || set.screenIds.length > 0) return;
-  delete manifest.directionSets[set.id];
-  delete run.directionSetId;
+  if (set && set.screenIds.length === 0) dropDirectionSet(manifest, set.id);
 }
 
 export function publishRunDrafts(manifest: DesignProjectManifestV1, run: DesignRunRecord): void {
