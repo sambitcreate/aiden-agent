@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.navigation
 
 import androidx.compose.runtime.saveable.SaverScope
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -103,5 +104,24 @@ class AidenNavigationStackTest {
         // Pushing over a voice-launched chat must keep that chat's saved UI state.
         assertTrue(profile.discardedFrom(chat).isEmpty())
         assertEquals(listOf(AidenScreen.BotProfile("b")), profile.pop()!!.discardedFrom(profile))
+    }
+
+    @Test
+    fun predictiveBackRoundsAndLiftsTheRecedingScreenWithTheGesture() {
+        val rest = predictiveBackDepth(0f, reduceMotion = false)
+        val half = predictiveBackDepth(0.5f, reduceMotion = false)
+        val full = predictiveBackDepth(1f, reduceMotion = false)
+
+        assertEquals(AidenPredictiveBackDepth(1f, 0.dp, 0.dp), rest)
+        assertTrue(half.scale < 1f && full.scale < half.scale)
+        assertEquals(14.dp, half.cornerRadius)
+        assertEquals(28.dp, full.cornerRadius)
+        assertEquals(16.dp, full.shadowElevation)
+        assertEquals("progress past the gesture end is clamped", full, predictiveBackDepth(1.4f, reduceMotion = false))
+    }
+
+    @Test
+    fun predictiveBackHoldsTheScreenStillWhenMotionIsReduced() {
+        assertEquals(AidenPredictiveBackDepth(1f, 0.dp, 0.dp), predictiveBackDepth(0.7f, reduceMotion = true))
     }
 }

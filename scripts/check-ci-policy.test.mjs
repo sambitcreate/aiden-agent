@@ -461,6 +461,8 @@ test("Linux required contexts exist for scoped PRs and fail closed", async () =>
   });
   for (const [detection, selected, result, expected] of [
     ["success", "false", "skipped", 0],
+    // The linux matrix always starts and skips its steps when unselected, so GitHub reports success.
+    ["success", "false", "success", 0],
     ["success", "true", "success", 0],
     ["success", "true", "failure", 1],
     ["success", "true", "cancelled", 1],

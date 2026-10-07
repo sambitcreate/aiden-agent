@@ -1,5 +1,12 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.models.AidenChatRowState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 
 /** Semantic tone for a row-status pill; resolved against the active palette. */
 enum class AidenChatRowStatusTone { WARNING, ACCENT }
@@ -59,16 +68,44 @@ data class AidenChatRowStatusPresentation(
 /**
  * Trailing chat-row status. Attention states use soft semantic fills with no
  * borders, Working keeps a compact spinner, and the unread dot is independent
- * because a chat can be working while holding unseen earlier output.
+ * because a chat can be working while holding unseen earlier output. State changes
+ * morph with a snappy spring; with reduced motion they swap instantly and the
+ * Working spinner holds still.
  */
 @Composable
 fun AidenChatRowStatus(state: AidenChatRowState, unread: Boolean, palette: AidenPalette) {
     val presentation = AidenChatRowStatusPresentation.of(state, unread)
-    val description = presentation.contentDescription ?: return
+    val description = presentation.contentDescription
+    val reduceMotion = aidenReduceMotion()
+    AnimatedContent(
+        targetState = presentation,
+        contentAlignment = Alignment.CenterEnd,
+        transitionSpec = {
+            (scaleIn(AidenMotion.snappy(reduceMotion), initialScale = 0.8f) +
+                fadeIn(AidenMotion.nonSpatial(reduceMotion))) togetherWith
+                (scaleOut(AidenMotion.snappy(reduceMotion), targetScale = 0.8f) +
+                    fadeOut(AidenMotion.nonSpatial(reduceMotion))) using
+                SizeTransform(clip = false) { _, _ -> AidenMotion.spatial(reduceMotion) }
+        },
+        label = "ChatRowStatus",
+        modifier = Modifier.clearAndSetSemantics {
+            if (description != null) contentDescription = description
+        }
+    ) { shown ->
+        AidenChatRowStatusContent(shown, palette, reduceMotion)
+    }
+}
+
+@Composable
+private fun AidenChatRowStatusContent(
+    presentation: AidenChatRowStatusPresentation,
+    palette: AidenPalette,
+    reduceMotion: Boolean
+) {
+    if (presentation.contentDescription == null) return
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.clearAndSetSemantics { contentDescription = description }
+        verticalAlignment = Alignment.CenterVertically
     ) {
         val title = presentation.pillTitle
         val tone = presentation.pillTone
@@ -88,11 +125,21 @@ fun AidenChatRowStatus(state: AidenChatRowState, unread: Boolean, palette: Aiden
             )
         }
         if (presentation.showsSpinner) {
-            CircularProgressIndicator(
-                color = palette.accent,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(16.dp)
-            )
+            if (reduceMotion) {
+                CircularProgressIndicator(
+                    progress = { 0.75f },
+                    color = palette.accent,
+                    trackColor = palette.accent.copy(alpha = 0.18f),
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(16.dp)
+                )
+            } else {
+                CircularProgressIndicator(
+                    color = palette.accent,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
         if (presentation.showsUnreadDot) {
             Box(Modifier.size(8.dp).background(palette.accent, CircleShape))

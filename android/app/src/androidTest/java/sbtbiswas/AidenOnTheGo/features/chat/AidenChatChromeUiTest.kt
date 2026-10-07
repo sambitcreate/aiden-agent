@@ -4,6 +4,10 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -38,6 +42,80 @@ class AidenChatChromeUiTest {
             .assertHasClickAction()
         compose.onNodeWithText("Jump to latest").assertDoesNotExist()
         compose.onNodeWithText("New tokens").assertDoesNotExist()
+    }
+
+    @Test
+    fun jumpToLatestFiresOncePerTap() {
+        var jumps = 0
+        compose.setContent {
+            AidenTheme {
+                AidenJumpToBottom(visible = true, onClick = { jumps += 1 })
+            }
+        }
+
+        compose.onNodeWithContentDescription("Jump to latest").performClick()
+        compose.runOnIdle { assertEquals(1, jumps) }
+    }
+
+    @Test
+    fun codeBlockCopyPillConfirmsThenReverts() {
+        val copies = mutableListOf<String>()
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            AidenTheme {
+                AidenCodeBlock(code = "val x = 1", language = "kotlin", palette = AidenTheme.palette, onCopy = { copies += it })
+            }
+        }
+
+        compose.onNodeWithContentDescription("Copy code").assertHasClickAction().performClick()
+        compose.mainClock.advanceTimeBy(500)
+        compose.onNodeWithContentDescription("Copied").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Copy code").assertDoesNotExist()
+        assertEquals(listOf("val x = 1"), copies)
+
+        compose.mainClock.advanceTimeBy(AIDEN_CODE_COPY_CONFIRMATION_MS + 500)
+        compose.onNodeWithContentDescription("Copy code").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Copied").assertDoesNotExist()
+    }
+
+    @Test
+    fun loadEarlierMessagesFiresOnceAndIsInertWhileLoading() {
+        var loads = 0
+        var loading by mutableStateOf(false)
+        compose.setContent {
+            AidenTheme {
+                AidenLoadEarlierMessages(isLoading = loading, onClick = { loads += 1 })
+            }
+        }
+
+        compose.onNodeWithText("Load earlier messages").assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(1, loads)
+            loading = true
+        }
+        compose.onNodeWithText("Loading earlier messages").assertIsNotEnabled()
+    }
+
+    @Test
+    fun readAloudMiniPlayerShowsSegmentProgressAndStopsOnce() {
+        var stops = 0
+        compose.setContent {
+            AidenTheme {
+                AidenReadAloudMiniPlayer(
+                    phase = AidenReadAloudPhase.PLAYING,
+                    label = AidenReadAloudProgress.label(AidenReadAloudPhase.PLAYING, 4, 4, 1),
+                    progressRatio = 0.375f,
+                    totalSegments = 4,
+                    onStop = { stops += 1 }
+                )
+            }
+        }
+
+        compose.onNodeWithText("Reading aloud · 2 of 4").assertIsDisplayed()
+        compose.onNodeWithText("Listening...").assertDoesNotExist()
+        compose.onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo(0.375f, 0f..1f))).assertExists()
+        compose.onNodeWithContentDescription("Stop reading aloud").performClick()
+        compose.runOnIdle { assertEquals(1, stops) }
     }
 
     @Test

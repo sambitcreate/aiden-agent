@@ -1,10 +1,13 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -12,14 +15,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -35,10 +38,14 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenToolbarAction
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,105 +84,21 @@ fun AidenProductShellScreen(
         val instanceId = activeInstallationId ?: return@LaunchedEffect
         navigationStore.activateSelectedArea(instanceId, activeInstallation?.isBotsEligible == true)
     }
-    val connectionLabel = when (connectionState) {
-        AidenConnectionState.CONNECTED -> "Connected"
-        AidenConnectionState.CONNECTING -> "Connecting"
-        AidenConnectionState.OFFLINE -> "Offline"
-        AidenConnectionState.NEEDS_PAIRING -> "Needs pairing"
-    }
+    val botsAvailable = activeInstallation?.isBotsEligible == true
+    val reduceMotion = aidenReduceMotion()
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val areaPosition = animateFloatAsState(
+        targetValue = activeArea.ordinal.toFloat(),
+        animationSpec = AidenMotion.spatial(reduceMotion),
+        label = "ProductAreaPosition"
+    )
 
-    Scaffold(
-        topBar = {
-            if (activeArea == AidenProductArea.BOTS) TopAppBar(
-                navigationIcon = {
-                    AidenProductSwitcher(
-                        activeArea = activeArea,
-                        botsAvailable = activeInstallation?.isBotsEligible == true,
-                        onAreaSelected = selectArea
-                    )
-                },
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = if (activeArea == AidenProductArea.BOTS) "Bots" else "Workspaces",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Medium,
-                            color = palette.foreground
-                        )
-                        Spacer(modifier = Modifier.width(9.dp))
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when (connectionState) {
-                                        AidenConnectionState.CONNECTED -> palette.success
-                                        AidenConnectionState.CONNECTING -> palette.accent
-                                        else -> palette.warning
-                                    }
-                                )
-                                .semantics { contentDescription = connectionLabel }
-                        )
-                    }
-                },
-                actions = {
-                    if (activeArea == AidenProductArea.BOTS) {
-                        Surface(
-                            onClick = { onNavigateToBotEditor(null) },
-                            modifier = Modifier.size(40.dp),
-                            shape = CircleShape,
-                            color = palette.accent,
-                            shadowElevation = 2.dp
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Add,
-                                    contentDescription = "New Bot",
-                                    tint = androidx.compose.ui.graphics.Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(2.dp))
-                    }
-                    AidenToolbarAction(
-                        icon = Icons.Outlined.Devices,
-                        contentDescription = "Installations",
-                        onClick = { showPairingDialog = true }
-                    )
-                    Spacer(Modifier.width(2.dp))
-                    AidenToolbarAction(
-                        icon = Icons.Outlined.Settings,
-                        contentDescription = "Settings",
-                        onClick = { showSettingsSheet = true }
-                    )
-                    Spacer(Modifier.width(6.dp))
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = palette.canvas,
-                    titleContentColor = palette.foreground
-                )
-            )
-        },
-        containerColor = palette.canvas
-    ) { padding ->
+    Scaffold(containerColor = palette.canvas) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val duration = if (AidenTheme.config.reduceMotion) 0 else 180
-            val botsAlpha by animateFloatAsState(
-                targetValue = if (activeArea == AidenProductArea.BOTS) 1f else 0f,
-                animationSpec = tween(duration),
-                label = "BotsAreaAlpha"
-            )
-            val workspacesAlpha by animateFloatAsState(
-                targetValue = if (activeArea == AidenProductArea.WORKSPACES) 1f else 0f,
-                animationSpec = tween(duration),
-                label = "WorkspacesAreaAlpha"
-            )
-
             AidenWorkspaceShellScreen(
                 coordinator = coordinator,
                 viewModel = workspaceHomeViewModel,
@@ -184,29 +107,71 @@ fun AidenProductShellScreen(
                 onNavigateToFiles = onNavigateToWorkspaceFiles,
                 onNavigateToGit = onNavigateToWorkspaceGit,
                 productSwitcher = {
-                    AidenProductSwitcher(activeArea, activeInstallation?.isBotsEligible == true, selectArea)
+                    AidenProductSwitcher(activeArea, botsAvailable, selectArea)
                 },
                 onOpenSettings = { showSettingsSheet = true },
                 isActive = activeArea == AidenProductArea.WORKSPACES,
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(workspacesAlpha)
+                    .productAreaLayer(AidenProductArea.WORKSPACES, rtl) { areaPosition.value }
                     .zIndex(if (activeArea == AidenProductArea.WORKSPACES) 1f else 0f)
+                    .inactiveAreaGuard(activeArea == AidenProductArea.WORKSPACES)
                     .semantics { if (activeArea != AidenProductArea.WORKSPACES) hideFromAccessibility() }
             )
 
-            AidenBotsHomeScreen(
-                coordinator = coordinator,
-                viewModel = botsViewModel,
-                onNavigateToChat = onNavigateToChat,
-                onNavigateToBotProfile = onNavigateToBotProfile,
-                onNavigateToCreateBot = { onNavigateToBotEditor(null) },
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(botsAlpha)
+                    .productAreaLayer(AidenProductArea.BOTS, rtl) { areaPosition.value }
                     .zIndex(if (activeArea == AidenProductArea.BOTS) 1f else 0f)
+                    .inactiveAreaGuard(activeArea == AidenProductArea.BOTS)
                     .semantics { if (activeArea != AidenProductArea.BOTS) hideFromAccessibility() }
-            )
+            ) {
+                AidenProductTopBar(
+                    title = "Bots",
+                    connectionState = connectionState,
+                    productSwitcher = {
+                        AidenProductSwitcher(
+                            activeArea = activeArea,
+                            botsAvailable = botsAvailable,
+                            onAreaSelected = selectArea
+                        )
+                    },
+                    modifier = Modifier.background(palette.canvas),
+                    primaryAction = {
+                        AidenProductTopBarPrimaryAction(
+                            icon = Icons.Outlined.Add,
+                            contentDescription = "New Bot",
+                            onClick = { onNavigateToBotEditor(null) }
+                        )
+                    }
+                ) {
+                    AidenProductTopBarAction(
+                        icon = Icons.Outlined.Devices,
+                        contentDescription = "Installations",
+                        onClick = { showPairingDialog = true }
+                    )
+                    AidenProductTopBarAction(
+                        icon = Icons.Outlined.Settings,
+                        contentDescription = "Settings",
+                        onClick = { showSettingsSheet = true }
+                    )
+                }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    AidenBotsHomeScreen(
+                        coordinator = coordinator,
+                        viewModel = botsViewModel,
+                        onNavigateToChat = onNavigateToChat,
+                        onNavigateToBotProfile = onNavigateToBotProfile,
+                        onNavigateToCreateBot = { onNavigateToBotEditor(null) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
     }
 
@@ -256,16 +221,25 @@ fun AidenProductSwitcher(
     onAreaSelected: (AidenProductArea) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
     var expanded by remember { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = AidenMotion.spatial(reduceMotion),
+        label = "ProductSwitcherChevron"
+    )
+    val interaction = remember { MutableInteractionSource() }
 
     Box {
         Surface(
             onClick = { expanded = true },
             color = androidx.compose.ui.graphics.Color.Transparent,
             shape = RoundedCornerShape(24.dp),
+            interactionSource = interaction,
             modifier = Modifier
                 .height(48.dp)
                 .width(58.dp)
+                .tactilePress(interaction)
                 .semantics {
                     contentDescription = "Aiden. Current area: ${activeArea.displayTitle}. Choose Bots or Workspaces."
                 }
@@ -286,7 +260,9 @@ fun AidenProductSwitcher(
                     imageVector = Icons.Outlined.KeyboardArrowDown,
                     contentDescription = null,
                     tint = palette.secondary,
-                    modifier = Modifier.size(14.dp)
+                    modifier = Modifier
+                        .size(14.dp)
+                        .graphicsLayer { rotationZ = chevronRotation }
                 )
             }
         }
@@ -294,12 +270,19 @@ fun AidenProductSwitcher(
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            shape = RoundedCornerShape(18.dp),
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            shape = AidenShape.Snackbar,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
         ) {
             AidenProductArea.entries.forEach { area ->
                 DropdownMenuItem(
                     text = { Text(area.displayTitle) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (area == AidenProductArea.BOTS) Icons.Outlined.SmartToy else Icons.Outlined.FolderOpen,
+                            contentDescription = null,
+                            tint = if (area == activeArea) palette.accent else palette.secondary
+                        )
+                    },
                     trailingIcon = {
                         if (area == activeArea) {
                             Icon(Icons.Outlined.Check, contentDescription = "Selected", tint = palette.accent)
@@ -319,3 +302,51 @@ fun AidenProductSwitcher(
 
 private val AidenProductArea.displayTitle: String
     get() = if (this == AidenProductArea.BOTS) "Bots" else "Workspaces"
+
+/** Horizontal travel of an entering or leaving area, as a fraction of the shell width. */
+private const val AidenProductAreaSlideFraction = 0.2f
+
+internal data class AidenProductAreaLayerTransform(val offsetFraction: Float, val alpha: Float)
+
+/**
+ * Placement of the layer for the area at [areaIndex] while the shell's animated area
+ * [position] travels between area indices. Areas after the active one wait on the trailing
+ * side and earlier ones on the leading side, so the switch slides in area order.
+ */
+internal fun aidenProductAreaLayerTransform(areaIndex: Int, position: Float): AidenProductAreaLayerTransform {
+    val distance = (areaIndex - position).coerceIn(-1f, 1f)
+    return AidenProductAreaLayerTransform(
+        offsetFraction = distance * AidenProductAreaSlideFraction,
+        alpha = 1f - abs(distance)
+    )
+}
+
+/**
+ * The inactive area stays composed for the directional switch but must not take taps,
+ * keyboard focus, or D-pad traversal; alpha alone does not stop hit testing.
+ */
+internal fun Modifier.inactiveAreaGuard(active: Boolean): Modifier =
+    if (active) {
+        this
+    } else {
+        this
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                    }
+                }
+            }
+            .focusProperties { onEnter = { cancelFocusChange() } }
+            .focusGroup()
+    }
+
+private fun Modifier.productAreaLayer(
+    area: AidenProductArea,
+    rtl: Boolean,
+    position: () -> Float
+): Modifier = graphicsLayer {
+    val transform = aidenProductAreaLayerTransform(area.ordinal, position())
+    translationX = transform.offsetFraction * size.width * (if (rtl) -1f else 1f)
+    alpha = transform.alpha
+}

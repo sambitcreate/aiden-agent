@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -85,6 +86,8 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.exponentialVerticalScrim
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.io.File
 import kotlin.math.abs
@@ -109,6 +112,7 @@ fun AidenChatDetailScreen(
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -472,8 +476,8 @@ fun AidenChatDetailScreen(
                 // Pending Approval Banner
                 AnimatedVisibility(
                     visible = pendingApproval != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
                 ) {
                     pendingApproval?.let { approval ->
                         val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
@@ -482,9 +486,9 @@ fun AidenChatDetailScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp)),
+                                .shadow(elevation = 8.dp, shape = RoundedCornerShape(24.dp)),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(16.dp)
+                            shape = RoundedCornerShape(24.dp)
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -532,56 +536,11 @@ fun AidenChatDetailScreen(
                                 }
                                 if (approval.canRespond) {
                                     Spacer(modifier = Modifier.height(10.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        Button(
-                                            onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY, approval.id) },
-                                            enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Text(if (isAutomation) "Cancel" else "Deny", fontWeight = FontWeight.SemiBold)
-                                        }
-                                        val broaderScopes = approval.scopes.filter { it != AidenApprovalScope.ONCE }
-                                        if (approval.canAllow && broaderScopes.isNotEmpty()) {
-                                            var scopeMenuOpen by remember(approval.id) { mutableStateOf(false) }
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Box {
-                                                IconButton(
-                                                    onClick = { scopeMenuOpen = true },
-                                                    enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping
-                                                ) {
-                                                    Icon(Icons.Default.MoreVert, contentDescription = "More allow options")
-                                                }
-                                                DropdownMenu(
-                                                    expanded = scopeMenuOpen,
-                                                    onDismissRequest = { scopeMenuOpen = false }
-                                                ) {
-                                                    broaderScopes.forEach { scope ->
-                                                        DropdownMenuItem(
-                                                            text = { Text(AidenApprovalPresentation.scopeTitle(scope)) },
-                                                            onClick = {
-                                                                scopeMenuOpen = false
-                                                                viewModel.respondToApproval(AidenApprovalDecision.ALLOW, approval.id, scope)
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if (approval.canAllow) {
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Button(
-                                                onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW, approval.id) },
-                                                enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
-                                                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                                shape = RoundedCornerShape(10.dp)
-                                            ) {
-                                                Text(if (isAutomation) "Approve task" else "Allow once", color = Color.White, fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                    }
+                                    AidenApprovalActions(
+                                        approval = approval,
+                                        enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
+                                        onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) }
+                                    )
                                 }
                             }
                         }
@@ -591,8 +550,8 @@ fun AidenChatDetailScreen(
                 // Pending Question Banner
                 AnimatedVisibility(
                     visible = pendingQuestion != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
                 ) {
                     pendingQuestion?.let { question ->
                         key(question.id) {
@@ -611,8 +570,8 @@ fun AidenChatDetailScreen(
                 // Error Banner
                 AnimatedVisibility(
                     visible = presentedError != null || readAloud.error != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
                 ) {
                     (presentedError ?: readAloud.error)?.let { err ->
                         Card(
@@ -620,7 +579,7 @@ fun AidenChatDetailScreen(
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 4.dp),
                             colors = CardDefaults.cardColors(containerColor = palette.danger.copy(alpha = 0.12f)),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -631,6 +590,33 @@ fun AidenChatDetailScreen(
                                 Text(text = err, style = MaterialTheme.typography.bodySmall, color = palette.danger)
                             }
                         }
+                    }
+                }
+
+                // Keeps the last live values while collapsing so the pill never empties mid-exit.
+                AidenComposerReveal(
+                    value = readAloud.activeMessageId?.let {
+                        AidenReadAloudMiniPlayerState(
+                            phase = readAloud.phase,
+                            label = readAloud.progressLabel,
+                            progressRatio = readAloud.progressRatio,
+                            totalSegments = readAloud.totalSegments
+                        )
+                    }
+                ) { state ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AidenReadAloudMiniPlayer(
+                            phase = state.phase,
+                            label = state.label,
+                            progressRatio = state.progressRatio,
+                            totalSegments = state.totalSegments,
+                            onStop = { readAloud.stop() }
+                        )
                     }
                 }
 
@@ -818,7 +804,7 @@ fun AidenChatDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(
                     top = 16.dp,
-                    bottom = padding.calculateBottomPadding() + 12.dp
+                    bottom = padding.calculateBottomPadding() + 16.dp
                 )
             ) {
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
@@ -945,6 +931,30 @@ fun AidenChatDetailScreen(
                 }
             }
 
+            // Content fades into the canvas beneath the top app bar and behind the
+            // floating composer instead of ending on a hard edge.
+            Spacer(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(16.dp)
+                    .exponentialVerticalScrim(palette.canvas, startYPercentage = 1f, endYPercentage = 0f)
+            )
+            Column(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                        .exponentialVerticalScrim(palette.canvas)
+                )
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(padding.calculateBottomPadding())
+                        .background(palette.canvas)
+                )
+            }
+
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
                 visible = !followLatest,
@@ -1019,6 +1029,16 @@ fun AidenChatDetailScreen(
     }
 
 }
+
+private fun aidenBannerEnter(reduceMotion: Boolean): EnterTransition =
+    expandVertically(AidenMotion.spatial(reduceMotion), expandFrom = Alignment.Bottom) +
+        slideInVertically(AidenMotion.spatial(reduceMotion)) { it / 3 } +
+        fadeIn(AidenMotion.nonSpatial(reduceMotion))
+
+private fun aidenBannerExit(reduceMotion: Boolean): ExitTransition =
+    shrinkVertically(AidenMotion.spatial(reduceMotion), shrinkTowards = Alignment.Bottom) +
+        slideOutVertically(AidenMotion.spatial(reduceMotion)) { it / 3 } +
+        fadeOut(AidenMotion.nonSpatial(reduceMotion))
 
 private fun calculateClusterPosition(
     index: Int,
@@ -1578,11 +1598,17 @@ private fun AidenChronologicalReasoningCard(
             if (!userControlled) expanded = false
         }
     }
+    val reduceMotion = aidenReduceMotion()
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = AidenMotion.spatial(reduceMotion),
+        label = "reasoning_chevron"
+    )
     Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().clickable {
+                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) {
                     userControlled = true
                     expanded = !expanded
                 }
@@ -1595,12 +1621,19 @@ private fun AidenChronologicalReasoningCard(
                     modifier = Modifier.weight(1f)
                 )
                 Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    imageVector = Icons.Default.ExpandMore,
                     contentDescription = if (expanded) "Collapse reasoning" else "Expand reasoning",
-                    tint = palette.secondary
+                    tint = palette.secondary,
+                    modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
                 )
             }
-            if (expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(AidenMotion.spatial(reduceMotion), expandFrom = Alignment.Top) +
+                    fadeIn(AidenMotion.nonSpatial(reduceMotion)),
+                exit = shrinkVertically(AidenMotion.spatial(reduceMotion), shrinkTowards = Alignment.Top) +
+                    fadeOut(AidenMotion.nonSpatial(reduceMotion))
+            ) {
                 Text(
                     text = row.text,
                     style = MaterialTheme.typography.bodySmall,

@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.features.bots
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -19,6 +20,8 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatar
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 object AidenBotAvatarMemoryCache {
@@ -84,23 +87,43 @@ fun AidenBotCanonicalAvatarView(
         }
     }
 
+    val reduceMotion = aidenReduceMotion()
     Box(modifier = modifier.size(size)) {
-        val bmp = customBitmap
-        if (bmp != null) {
-            Image(
-                bitmap = bmp.asImageBitmap(),
-                contentDescription = if (name.isNotEmpty()) "$name avatar" else "Bot Avatar",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(size)
-                    .clip(CircleShape)
-            )
+        if (reduceMotion) {
+            AidenBotAvatarLayer(customBitmap, avatar, name, size)
         } else {
-            AidenBotSemanticAvatarView(
-                avatar = avatar.semantic,
-                name = name,
-                size = size
-            )
+            Crossfade(
+                targetState = customBitmap,
+                animationSpec = AidenMotion.nonSpatialExpressiveSpring(),
+                label = "bot_avatar_reveal"
+            ) { bmp ->
+                AidenBotAvatarLayer(bmp, avatar, name, size)
+            }
         }
+    }
+}
+
+@Composable
+private fun AidenBotAvatarLayer(
+    bitmap: Bitmap?,
+    avatar: AidenBotAvatar,
+    name: String,
+    size: Dp
+) {
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = if (name.isNotEmpty()) "$name avatar" else "Bot Avatar",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+        )
+    } else {
+        AidenBotSemanticAvatarView(
+            avatar = avatar.semantic,
+            name = name,
+            size = size
+        )
     }
 }
