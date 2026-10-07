@@ -130,6 +130,7 @@
         "main/services/parakeet-protocol.test.ts",
         "main/services/parakeet-transcription-lane.test.ts",
         "main/services/pi-agent-runtime-harness.test.ts",
+        "main/services/pi-agent-runtime-harness-finish-turn.test.ts",
         "main/services/pi-codemode.test.ts",
         "main/services/pi-compaction-core.test.ts",
         "main/services/pi-journal-fork.test.ts",
