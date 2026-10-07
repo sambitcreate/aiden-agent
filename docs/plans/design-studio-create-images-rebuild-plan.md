@@ -256,14 +256,14 @@ Rules:
 - [ ] **ADR-F (foundation)**
   - **Flags:** `designStudio` and `createImages` capabilities, default off.
   - **Navigation:**
-    - A "Create" group in the sidebar top nav (Design, Images) under the existing New Agent / Scheduled / Bots entries.
-    - Root routes `/design…` and `/images…` outside the chat-layout `EnvironmentWorkbench` and `TerminalDrawer`, so neither feature edits `chat-layout.tsx`.
+    - Design and Images rows in the sidebar primary nav (no group heading), alongside New Agent / Scheduled / Bots.
+    - Lazy `/design…` and `/images…` routes **under** the chat layout so the sidebar stays visible; `chat-layout.tsx` gets one `isStudioPath` check that suppresses the Environment panel and terminal there (ADR-F supersedes the earlier root-route idea, which would have hidden the sidebar).
   - **Canvas kit:** shared `renderer/canvas/` on `@xyflow/react` (pinned): viewport, tool rail, node chrome, selection, keyboard map, minimap toggle.
   - **Asset store:**
     - Shared `main/services/studio-assets/`: content-addressed files under userData, magic-byte and pixel validation (ported `asset-image-validation-core.ts`), thumbnails via `nativeImage`, ref-counted GC.
     - The `aiden-asset:` protocol with document-bound grants (ported `asset-delivery-core.ts`), registered in the **same** `registerSchemesAsPrivileged` call as `aiden-genui:`.
   - **Chat visibility:** a `isUserVisibleChat()` / chat `owner` predicate that replaces the ten scattered `ASSISTANT_WORKSPACE_ID` exclusions.
-  - **Tests:** test lanes `studio-foundation`, `design-studio` and `create-images` in `ci-test-registry.json`.
+  - **Tests:** npm suites (`test:chat-visibility`, `test:studio-foundation`, later `test:design-studio`, `test:create-images`) filed into the existing CI lanes; no new lanes (ADR-F).
 - [ ] **ADR-DS (Design Studio)**
   - **Ownership:** a project is a first-class record that *owns* a hidden chat via the `owner` field, not a sentinel workspace.
   - **Storage:**
@@ -308,11 +308,11 @@ Rules:
 | Task | Deliverable | Key files | Behavioral tests |
 |---|---|---|---|
 | F-1 Capabilities and flags | `designStudio` / `createImages` capabilities, default off | `main/handlers/app.ts`, `renderer/lib/app-capabilities.tsx` | Capability read with env on/off; render tests show nothing when off |
-| F-2 Routes, sidebar, commands | Lazy root routes `/design`, `/images` with placeholder views; sidebar "Create" rows; `design.open` / `images.open` commands (no default binding); capability-route redirect to `/` | `router.tsx`, `chat-sidebar.tsx`, `keybindings.ts`, `command-system-core.ts`, new `renderer/main/design-route.tsx`, `images-route.tsx` | Rendered sidebar with each flag combination; router redirect when off; palette visibility; bundle budget unchanged |
+| F-2 Routes, sidebar, commands | Lazy `/design`, `/images` routes under the chat layout with placeholder views; sidebar Design and Images rows; `design.open` / `images.open` commands (no default binding); capability-route redirect to `/` | `router.tsx`, `chat-sidebar.tsx`, `keybindings.ts`, `command-system-core.ts`, new `renderer/main/design-route.tsx`, `images-route.tsx` | Rendered sidebar with each flag combination; router redirect when off; palette visibility; bundle budget unchanged |
 | F-3 Chat visibility predicate | `isUserVisibleChat(chat)` (or the `owner` field) replacing the scattered `ASSISTANT_WORKSPACE_ID` exclusions, applied in every listing/Remote/peer/fork projection | `chat-workspace-authority.ts`, `aiden-remote-chats.ts`, `aiden-remote-host-feed.ts`, `chat-fork-service`, `main/handlers/chats.ts`, … | Per-projection tests: a hidden chat is absent from the sidebar list, Remote summary, host feed, peer list, fork, search; existing Assistant behavior unchanged. iOS/Android contract suites run. |
 | F-4 Shared asset store and protocol | `main/services/studio-assets/` (content-addressed put/get/thumb/GC) and the `aiden-asset:` protocol with document-bound grants, in one privileged-scheme registration | new `studio-assets/*-core.ts`, `generative-ui-protocol.ts` (shared registration), `main/index.ts` reconcile chain | Put/dedupe/GC/ref-count; invalid magic bytes and oversize pixels rejected; grant bound to document and revoked on navigation; both schemes privileged (register-and-invoke) |
 | F-5 Canvas kit | `renderer/canvas/` on pinned `@xyflow/react`: `<StudioCanvas>`, tool rail, node chrome, keyboard map, fit/zoom | new files; CSS imported only by lazy routes | Testing Library render plus keyboard tool switching; Playwright smoke for pan/zoom/select on the placeholder route |
-| F-6 Test lanes and docs | New lanes in `ci-test-registry.json`, `package.json` scripts, `.memory/studio-foundation.md`, plan index | registry, `package.json` | `test:ci-policy` / `validateRegistry` green |
+| F-6 Test suites and docs | npm suites filed into existing lanes in `ci-test-registry.json`, `package.json` scripts, `.memory/studio-foundation.md`, plan index | registry, `package.json` | `test:ci-policy` / `validateRegistry` green |
 
 **Exit:** with both flags off, behavior matches `main` (sidebar, router and bundle-budget evidence). With them on, two empty canvases render. F-3 passes on desktop and native suites. CI is green at the exact head, and the PR merges.
 
