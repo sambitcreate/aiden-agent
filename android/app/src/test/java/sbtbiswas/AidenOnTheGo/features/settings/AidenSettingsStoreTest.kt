@@ -241,6 +241,36 @@ class AidenSettingsStoreTest {
     }
 
     @Test
+    fun aSpeechReadThatStartedWhileAChoiceWasPendingCannotRevertIt() = runTest {
+        val cache = AidenSettingsCache(tempFolder.root)
+        val store = store(cache)
+        val remote = FakeRemote()
+        store.bind("mac", remote)
+        store.refreshSpeech()
+        advanceUntilIdle()
+
+        // The selection is applied on the desktop but its response is held.
+        remote.speechGate = CompletableDeferred()
+        store.selectSpeechModel("large")
+        runCurrent()
+        // A resume-triggered read starts while the choice is pending and observes an older status.
+        remote.speech = speechStatus(selected = "small")
+        remote.speechReadGate = CompletableDeferred()
+        store.refreshSpeech()
+        runCurrent()
+        remote.speech = speechStatus(selected = "large")
+
+        remote.speechGate?.complete(Unit)
+        runCurrent()
+        assertFalse(store.state.value.isSavingSpeech)
+        remote.speechReadGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("large", store.state.value.speech?.selectedModelId)
+        assertEquals("large", cache.load("mac")?.speech?.selectedModelId)
+    }
+
+    @Test
     fun aFailedRefreshKeepsTheLastKnownValues() = runTest {
         val store = store()
         val remote = FakeRemote()

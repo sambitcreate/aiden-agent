@@ -142,8 +142,9 @@ class AidenSettingsStore(
     private var unconfirmedMemoryBaseline: AidenMemorySettings? = null
     private var unconfirmedSpeechBaseline: AidenSpeechStatus? = null
 
-    // Counts speech actions. A status read records it when it starts and is dropped if an
-    // action started since, so an older read can never undo a newer confirmed choice.
+    // Advances when a speech action starts and again when it settles. A status read records
+    // it when it starts and is dropped if it moved, so a read that overlapped any part of an
+    // action (begun before it, or while it was pending) can never undo its confirmed result.
     private var speechActions = 0L
 
     /** Points Settings at the active installation and its client. The same installation keeps its values. */
@@ -303,6 +304,7 @@ class AidenSettingsStore(
                 call(remote)
             } catch (cancelled: CancellationException) {
                 if (gen == generation) {
+                    speechActions += 1
                     unconfirmedSpeechBaseline = null
                     _state.update { it.copy(speech = previous, isSavingSpeech = false) }
                 }
@@ -311,6 +313,7 @@ class AidenSettingsStore(
                 null
             }
             if (gen != generation) return@launch
+            speechActions += 1
             unconfirmedSpeechBaseline = null
             _state.update {
                 if (result == null) it.copy(speech = previous, isSavingSpeech = false, speechFailure = AidenSettingsFailure.SAVE_FAILED)
