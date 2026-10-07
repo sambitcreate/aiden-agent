@@ -43,7 +43,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDashed,
-  Clock3,
   ExternalLink,
   Folder,
   FolderPlus,
@@ -56,7 +55,7 @@ import {
   SquarePen,
   UserRound,
 } from "lucide-react";
-import { BotSidebarIcon } from "./bot-avatar";
+import { SidebarPrimaryNav } from "./sidebar-primary-nav";
 import { appUpdatesApi, chatsApi, gitApi, peerHostsApi, workspacesApi } from "../lib/ipc";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import {
@@ -1660,28 +1659,13 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
           </SidebarFooter>
         }
       >
-        <div className="flex flex-col gap-0.5 px-2.5 pb-2">
-          <SidebarListItem
-            icon={<SquarePen />}
-            title="New Agent"
-            disabled={!activeId || appendReconciliationRequired}
-            onClick={() => void newAgent()}
-          />
-          <SidebarListItem
-            icon={<Clock3 />}
-            title="Scheduled"
-            selected={pathname === "/scheduled"}
-            onClick={() => navigate({ to: "/scheduled" })}
-          />
-          {capabilities.bots ? (
-            <SidebarListItem
-              icon={<BotSidebarIcon />}
-              title="Bots"
-              selected={pathname.startsWith("/bots")}
-              onClick={() => navigate({ to: "/bots" })}
-            />
-          ) : null}
-        </div>
+        <SidebarPrimaryNav
+          pathname={pathname}
+          capabilities={capabilities}
+          newAgentDisabled={!activeId || appendReconciliationRequired}
+          onNewAgent={() => void newAgent()}
+          onNavigate={(to) => void navigate({ to })}
+        />
 
         {hasHosts ? (
           <RemoteHostStatusList

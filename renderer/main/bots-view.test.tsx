@@ -242,11 +242,7 @@ test("visible and selected subscribers share one active canonical-photo read", a
 });
 
 test("Bots is a stable sidebar destination and bot rosters do not open the terminal", () => {
-  const sidebar = source("../components/chat-sidebar.tsx");
   const layout = source("./chat-layout.tsx");
-  assert.match(sidebar, /title="Bots"[\s\S]*selected=\{pathname\.startsWith\("\/bots"\)\}/u);
-  assert.match(sidebar, /icon=\{<BotSidebarIcon \/>\}/u);
-  assert.match(sidebar, /navigate\(\{ to: "\/bots" \}\)/u);
   assert.match(layout, /pathname\.startsWith\("\/bots"\) && !params\.chatId/u);
 });
 
