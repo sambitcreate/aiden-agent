@@ -149,6 +149,7 @@ import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 
 if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
   process.stdout.write(`${app.getVersion()}\n`);
@@ -1922,12 +1923,9 @@ if (!ownsSingleInstanceLock) {
         if (error instanceof EmptyChatMigrationSnapshotError) throw error;
         logger.warn("chat", "Empty-chat migration is incomplete; it will resume on the next launch.", error);
       }
-      const visibleChatIds = new Set(
-        (await chatStore.list()).map((chat) => chat.id),
-      );
-      await Promise.all([
-        piRuntimeEffectStore.reconcileChats(visibleChatIds),
-        piCompactionSessionStore.reconcileChats(visibleChatIds),
+      await reconcileChatScopedStores(chatStore, [
+        piRuntimeEffectStore,
+        piCompactionSessionStore,
       ]);
       await reconcilePendingManagedWorktreeDeletions({
         listWorkspaces: () => configStore.listWorkspaces(),
