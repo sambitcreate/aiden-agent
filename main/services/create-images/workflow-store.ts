@@ -21,9 +21,13 @@ export type WorkflowSaveResult =
 
 export interface ImageWorkflowStoreOptions {
   root: () => string;
-  assets: Pick<StudioAssetStore, "replaceHolder" | "releaseAllForHolder">;
+  assets: Pick<StudioAssetStore, "retain" | "replaceHolder" | "releaseAllForHolder">;
   now?: () => number;
   newId?: () => string;
+  /** Test seam for the atomic JSON writer. */
+  writeJson?: typeof writeJsonAtomic;
+  /** Receives non-fatal failures (a cache write that did not land). Defaults to `console.warn`. */
+  reportIssue?: (message: string, error: unknown) => void;
 }
 
 /**
@@ -78,10 +82,14 @@ export class ImageWorkflowStore {
   private indexWrites: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly newId: () => string;
+  private readonly writeJson: typeof writeJsonAtomic;
+  private readonly reportIssue: (message: string, error: unknown) => void;
 
   constructor(private readonly options: ImageWorkflowStoreOptions) {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
+    this.writeJson = options.writeJson ?? writeJsonAtomic;
+    this.reportIssue = options.reportIssue ?? ((message, error) => console.warn(message, error));
   }
 
   async initialize(): Promise<void> {
@@ -164,9 +172,14 @@ export class ImageWorkflowStore {
       };
       const problems = graphProblems(next);
       if (problems.length > 0) return { ok: false, reason: "invalid", issues: problems } as const;
-      const held = this.hold(next);
+      // Crash-safe order: add holds for the new document's assets (a missing asset
+      // rejects here, before any write), commit the document, and only then shrink
+      // membership to exact. A failed or interrupted write therefore never leaves
+      // the still-persisted old document referencing an unheld asset.
+      const held = this.retainAssets(next);
       if (held) return held;
       await this.publish(next);
+      this.settleHolds(next);
       return { ok: true, revision: next.revision } as const;
     });
   }
@@ -203,7 +216,7 @@ export class ImageWorkflowStore {
       updatedAt: now,
     };
     return this.serialize(copy.id, async () => {
-      const held = this.hold(copy);
+      const held = this.retainAssets(copy);
       if (held) throw new Error(held.issues?.[0] ?? "An image in this workflow is no longer available.");
       try {
         await this.publish(copy);
@@ -217,7 +230,8 @@ export class ImageWorkflowStore {
 
   delete(workflowId: string): Promise<boolean> {
     return this.serialize(workflowId, async () => {
-      if (!this.index.has(workflowId)) return false;
+      // A file that is not indexed (unparseable) can still be deleted by id.
+      if (!this.index.has(workflowId) && !(await this.fileExists(workflowId))) return false;
       await fs.rm(this.file(workflowId), { force: true });
       this.index.delete(workflowId);
       await this.writeIndex();
@@ -226,10 +240,10 @@ export class ImageWorkflowStore {
     });
   }
 
-  /** Exact holder membership; a missing asset rejects the save before anything is written. */
-  private hold(doc: WorkflowDocV1): Extract<WorkflowSaveResult, { ok: false }> | null {
+  /** Additive holds; a missing asset rejects before anything is written. */
+  private retainAssets(doc: WorkflowDocV1): Extract<WorkflowSaveResult, { ok: false }> | null {
     try {
-      this.options.assets.replaceHolder({ kind: "images-workflow", id: doc.id }, imageInputAssets(doc));
+      this.options.assets.retain({ kind: "images-workflow", id: doc.id }, imageInputAssets(doc));
       return null;
     } catch (error) {
       if (error instanceof StudioAssetError && error.code === "not_found") {
@@ -239,10 +253,29 @@ export class ImageWorkflowStore {
     }
   }
 
+  /** After the document is committed: drop holds the document no longer references. */
+  private settleHolds(doc: WorkflowDocV1): void {
+    try {
+      this.options.assets.replaceHolder({ kind: "images-workflow", id: doc.id }, imageInputAssets(doc));
+    } catch (error) {
+      // Holds are a superset until the next save; the committed document is not undone.
+      this.reportIssue(`Could not trim image holds for workflow ${doc.id}.`, error);
+    }
+  }
+
+  /** The document write is the commit point; the index is only a cache of it. */
   private async publish(doc: WorkflowDocV1): Promise<void> {
-    await writeJsonAtomic(this.file(doc.id), doc, JSON_FILE);
+    await this.writeJson(this.file(doc.id), doc, JSON_FILE);
     this.index.set(doc.id, summary(doc));
     await this.writeIndex();
+  }
+
+  private async fileExists(workflowId: string): Promise<boolean> {
+    if (!IMAGE_WORKFLOW_ID_PATTERN.test(workflowId)) return false;
+    return fs.stat(this.file(workflowId)).then(
+      (stat) => stat.isFile(),
+      () => false,
+    );
   }
 
   /** Shape-parses the stored file. A file that cannot be parsed is left in place and reads as absent. */
@@ -273,8 +306,11 @@ export class ImageWorkflowStore {
   }
 
   private writeIndex(): Promise<void> {
-    const write = this.indexWrites.then(() => writeJsonAtomic(this.indexFile(), this.list(), JSON_FILE));
-    this.indexWrites = write.catch(() => undefined);
+    // A failed cache write is reported, never thrown: the index is rebuilt from the documents.
+    const write = this.indexWrites
+      .then(() => this.writeJson(this.indexFile(), this.list(), JSON_FILE))
+      .catch((error: unknown) => this.reportIssue("Could not write the image workflow index.", error));
+    this.indexWrites = write;
     return write;
   }
 

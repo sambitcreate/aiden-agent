@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 import type { WorkflowDocV1 } from "../../../renderer/shared/images/schema.js";
 import { StudioAssetStore } from "../studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
+import { writeJsonAtomic } from "../durable-fs.js";
 import { ImageWorkflowLoadError, ImageWorkflowStore } from "./workflow-store.js";
 
 async function fixture(t: TestContext) {
@@ -15,13 +16,26 @@ async function fixture(t: TestContext) {
   await assets.initialize();
   t.after(() => assets.close());
   let clock = 1_000;
+  /** Flip a flag to make that kind of JSON write fail, as a full disk or a permissions error would. */
+  const faults = { document: false, index: false };
+  const issues: string[] = [];
   const open = async () => {
-    const store = new ImageWorkflowStore({ root: () => path.join(root, "create-images"), assets, now: () => (clock += 1) });
+    const store = new ImageWorkflowStore({
+      root: () => path.join(root, "create-images"),
+      assets,
+      now: () => (clock += 1),
+      writeJson: (target, value, options) => {
+        const isIndex = path.basename(target) === "index.json";
+        if (isIndex ? faults.index : faults.document) return Promise.reject(new Error("disk full"));
+        return writeJsonAtomic(target, value, options);
+      },
+      reportIssue: (message) => void issues.push(message),
+    });
     await store.initialize();
     return store;
   };
   const documentFile = (id: string) => path.join(root, "create-images", "workflows", `${id}.json`);
-  return { root, assets, open, documentFile, store: await open() };
+  return { root, assets, open, documentFile, faults, issues, store: await open() };
 }
 
 test("create, save and reopen round-trip through the documents and the index", async (t) => {
@@ -67,21 +81,41 @@ test("concurrent saves from one base revision: exactly one wins", async (t) => {
 });
 
 test("invalid documents are rejected: unknown keys, cycles, foreign ids and missing assets", async (t) => {
-  const { store } = await fixture(t);
-  const created = await store.create("starter");
+  const { store, assets, documentFile } = await fixture(t);
+  const held = await assets.put({ bytes: pngBytes(4, 4, 1) });
+  const other = await assets.put({ bytes: pngBytes(4, 4, 2) });
+  const blank = await store.create("starter");
+  const created: WorkflowDocV1 = {
+    ...blank,
+    nodes: [...blank.nodes, { id: "keep", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: held.assetId } }],
+  };
+  assert.deepEqual(await store.save(created.id, 1, created), { ok: true, revision: 2 });
   const generate = created.nodes.find((node) => node.type === "generate-image")!;
+  const file = documentFile(created.id);
+  const before = await readFile(file, "utf8");
   const cases: unknown[] = [
     { ...created, extra: true },
     { ...created, id: "another-id" },
     { ...created, edges: [...created.edges, { id: "loop", source: generate.id, sourcePort: "images", target: generate.id, targetPort: "references" }] },
-    { ...created, nodes: [...created.nodes, { id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: "b".repeat(64) } }] },
+    // One real new asset beside a missing one: the whole save is refused, so the real one is not held either.
+    {
+      ...created,
+      nodes: [
+        ...created.nodes,
+        { id: "fresh", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: other.assetId } },
+        { id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: "b".repeat(64) } },
+      ],
+    },
   ];
   for (const document of cases) {
-    const result = await store.save(created.id, 1, document);
+    const result = await store.save(created.id, 2, document);
     assert.equal(result.ok, false, JSON.stringify(document).slice(0, 80));
     assert.equal(result.ok ? "" : result.reason, "invalid");
   }
-  assert.equal((await store.get(created.id))?.revision, 1);
+  assert.equal(await readFile(file, "utf8"), before);
+  assert.equal((await store.get(created.id))?.revision, 2);
+  assert.deepEqual(assets.holders(held.assetId), [{ kind: "images-workflow", id: created.id }]);
+  assert.deepEqual(assets.holders(other.assetId), []);
   assert.deepEqual(await store.save("missing", 1, created), { ok: false, reason: "not-found" });
 });
 
@@ -214,4 +248,68 @@ test("a hand-edited cycle or dangling edge refuses to open, and the other workfl
   await assert.rejects(reopened.duplicate(cyclic.id), ImageWorkflowLoadError);
   assert.ok(JSON.parse(await readFile(documentFile(dangling.id), "utf8")).edges.some((edge: { id: string }) => edge.id === "ghost"));
   assert.equal(reopened.list().find((entry) => entry.id === dangling.id)?.title, "Dangling");
+});
+
+test("a failed document write leaves the old document and every hold it needs in place", async (t) => {
+  const { store, assets, faults, documentFile } = await fixture(t);
+  const removed = await assets.put({ bytes: pngBytes(4, 4, 1) });
+  const added = await assets.put({ bytes: pngBytes(4, 4, 2) });
+  const created = await store.create("blank");
+  const withInput = (assetId: string): WorkflowDocV1 => ({
+    ...created,
+    nodes: [{ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId } }],
+  });
+  assert.equal((await store.save(created.id, 1, withInput(removed.assetId))).ok, true);
+  const holder = { kind: "images-workflow", id: created.id };
+  const before = await readFile(documentFile(created.id), "utf8");
+
+  faults.document = true;
+  await assert.rejects(store.save(created.id, 2, withInput(added.assetId)), /disk full/u);
+  faults.document = false;
+
+  // The persisted document still references the removed asset, so it must still be held.
+  assert.equal(await readFile(documentFile(created.id), "utf8"), before);
+  assert.deepEqual(assets.holders(removed.assetId), [holder]);
+
+  // A later successful save settles membership to exactly what the document references.
+  assert.deepEqual(await store.save(created.id, 2, withInput(added.assetId)), { ok: true, revision: 3 });
+  assert.deepEqual(assets.holders(removed.assetId), []);
+  assert.deepEqual(assets.holders(added.assetId), [holder]);
+});
+
+test("the index is a cache: a failed index write neither fails a save nor desyncs the list", async (t) => {
+  const { store, open, faults, issues } = await fixture(t);
+  const created = await store.create("blank");
+  faults.index = true;
+  assert.deepEqual(await store.save(created.id, 1, { ...created, title: "Saved anyway" }), { ok: true, revision: 2 });
+  assert.deepEqual(await store.rename(created.id, "Renamed anyway"), { ok: true, revision: 3 });
+  assert.deepEqual(store.list().map(({ title, revision }) => ({ title, revision })), [{ title: "Renamed anyway", revision: 3 }]);
+  assert.ok(issues.length >= 2, "each failed index write is reported");
+  faults.index = false;
+  assert.equal((await (await open()).get(created.id))?.revision, 3);
+});
+
+test("delete releases the workflow's holds even if the index cannot be rewritten, and removes unindexed files", async (t) => {
+  const { store, open, assets, faults, documentFile, root } = await fixture(t);
+  const asset = await assets.put({ bytes: pngBytes(4, 4, 1) });
+  const created = await store.create("blank");
+  const withImage = { ...created, nodes: [{ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } }] };
+  assert.equal((await store.save(created.id, 1, withImage)).ok, true);
+
+  faults.index = true;
+  assert.equal(await store.delete(created.id), true);
+  faults.index = false;
+  assert.deepEqual(assets.holders(asset.assetId), []);
+  assert.equal(await store.get(created.id), null);
+  assert.deepEqual(store.list(), []);
+
+  const unreadable = await store.create("blank");
+  await writeFile(documentFile(unreadable.id), "{ not json");
+  await rm(path.join(root, "create-images", "index.json"));
+  const reopened = await open();
+  assert.deepEqual(reopened.list(), [], "the unparseable file is not indexed");
+  assert.equal(await reopened.delete(unreadable.id), true);
+  await assert.rejects(readFile(documentFile(unreadable.id)), { code: "ENOENT" });
+  assert.equal(await reopened.delete(unreadable.id), false);
+  assert.equal(await reopened.delete("../escape"), false);
 });
