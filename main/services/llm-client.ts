@@ -384,7 +384,12 @@ import {
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
-import { resolveGenerationProfile, type DesignRunBinding, type GenerationProfile } from "./generation-profile.js";
+import {
+  resolveGenerationProfile,
+  selectRuntimeExtensions,
+  type DesignRunBinding,
+  type GenerationProfile,
+} from "./generation-profile.js";
 import { redactDesignMessageForStorage } from "./design/design-context-core.js";
 import type { DesignRunOutcome } from "./design/store-core.js";
 import {
@@ -2453,7 +2458,9 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
-      const advisorExtension = await advisorRuntime.extensionForGeneration({
+      // A design run composes exactly its own extension: no advisor, codemode or
+      // other base extension may join it (ADR-DS §4).
+      const advisorExtension = generationProfile.kind === "design" ? undefined : await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -2504,7 +2511,9 @@ export const llmClient = {
           : {}),
       });
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
-        workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
+        generationProfile.kind === "design"
+          ? undefined
+          : workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
         permission !== "none" && !options.excludeToolNames?.has("codemode")
           ? {
               id: "aiden.workspace-codemode",
@@ -2520,11 +2529,10 @@ export const llmClient = {
               }).toolSearch] : [])],
             }
           : undefined;
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
-        ...baseRuntimeExtensions,
-        ...(advisorExtension ? [advisorExtension] : []),
-        ...(codemodeExtension ? [codemodeExtension] : []),
-      ];
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = selectRuntimeExtensions(
+        generationProfile,
+        { base: baseRuntimeExtensions, advisor: advisorExtension, codemode: codemodeExtension },
+      );
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,

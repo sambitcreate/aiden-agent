@@ -12,7 +12,7 @@ import type { ToolOutputStore } from "./tool-output-store.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
-import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+import { assertRenameAllowedFromChat } from "./chat-title-policy.js";
 import type { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import type { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import type { subagentRunStore } from "./subagents/subagent-run-store.js";
@@ -81,14 +81,6 @@ export interface ChatApplicationDependencies {
   /** Release ambient per-chat caches (context-pressure projections). */
   releaseChatContext?: (chatId: string) => void;
   logError(area: string, message: string, error: unknown): void;
-}
-
-function refuseFeatureOwnedChat(chat: Chat, options: ChatApplicationMutationOptions): void {
-  if (options.rejectFeatureOwned && chatSurface(chat) === "feature") {
-    throw new Error(
-      "This conversation belongs to another Aiden feature and cannot be renamed or deleted from chat.",
-    );
-  }
 }
 
 export function createChatApplicationService(deps: ChatApplicationDependencies) {
@@ -208,7 +200,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
 
     rename(chatId: string, title: string, options: ChatApplicationMutationOptions = {}) {
       return deps.chatStore.rename(chatId, title, async (chat) => {
-        refuseFeatureOwnedChat(chat, options);
+        assertRenameAllowedFromChat(chat, options);
         await options.assertCurrent?.(chat);
       });
     },
@@ -266,7 +258,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         finishAttachmentDeletion = deps.attachments?.beginChatDeletion(chatId);
         const current = await deps.chatStore.get(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
-        refuseFeatureOwnedChat(current, options);
+        assertRenameAllowedFromChat(current, options);
         await options.assertCurrent?.(current);
         await deps.llmClient.cancelChat(chatId);
         try {
@@ -329,7 +321,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);
-          refuseFeatureOwnedChat(chat, options);
+          assertRenameAllowedFromChat(chat, options);
           await options.assertCurrent?.(chat);
         });
         await deps.subagentRunStore.completeChatDeletion(chatId);

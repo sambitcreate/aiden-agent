@@ -10,6 +10,7 @@ import {
   buildChatRenamePrompt,
   buildChatTitlePrompt,
   canReplaceGeneratedChatTitle,
+  assertRenameAllowedFromChat,
   deriveChatTitleSeed,
   sanitizeGeneratedChatTitle,
 } from "./chat-title-policy.js";
@@ -26,7 +27,6 @@ import {
 } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
-import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 
 const TITLE_TIMEOUT_MS = 15_000;
 const inFlight = new Map<string, Promise<void>>();
@@ -257,9 +257,7 @@ async function generateFoundationModelsRename(
 
   const chat = await chatStore.get(chatId);
   if (!chat) throw new Error("That chat no longer exists.");
-  if (options.rejectFeatureOwned && chatSurface(chat) === "feature") {
-    throw new Error("This conversation belongs to another Aiden feature and cannot be renamed from chat.");
-  }
+  assertRenameAllowedFromChat(chat, options);
   const hasUserContext = chat.messages.some(
     (message) =>
       message.role === "user" &&

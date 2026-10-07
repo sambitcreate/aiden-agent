@@ -45,6 +45,19 @@ export function resolveGenerationProfile(
   };
 }
 
+/**
+ * The extensions one generation composes, in order. A design profile composes
+ * exactly its base list (the design extension); advisor and codemode never join
+ * it, so the harness allowlist is not tripped by ordinary runtime extensions.
+ */
+export function selectRuntimeExtensions<E>(
+  profile: GenerationProfile,
+  parts: { base: readonly E[]; advisor?: E | null; codemode?: E | null },
+): E[] {
+  if (profile.kind === "design") return [...parts.base];
+  return [...parts.base, ...(parts.advisor ? [parts.advisor] : []), ...(parts.codemode ? [parts.codemode] : [])];
+}
+
 export function assertGenerationProfileTools(profile: GenerationProfile, toolNames: readonly string[]): void {
   if (profile.kind === "default") return;
   const allowed = new Set(profile.toolAllowlist);
