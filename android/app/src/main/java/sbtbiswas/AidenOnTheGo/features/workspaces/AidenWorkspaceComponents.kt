@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -9,7 +10,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -22,10 +22,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
@@ -70,7 +71,8 @@ internal fun AidenWorkspaceAlertDialog(
 /**
  * One tonal segment of a connected horizontal action bar (16.dp outer corners, 4.dp
  * seams). [stacked] places the icon above the label for narrow four-up bars; [loading]
- * swaps the icon for a progress ring while the action is in flight.
+ * swaps the icon for a breathing activity dot while the action is in flight and makes
+ * the segment inert so it cannot be sent twice.
  */
 @Composable
 internal fun AidenConnectedActionSegment(
@@ -86,18 +88,11 @@ internal fun AidenConnectedActionSegment(
 ) {
     val palette = AidenTheme.palette
     val interaction = remember { MutableInteractionSource() }
-    val reduceMotion = aidenReduceMotion()
     val leading: @Composable () -> Unit = {
-        if (loading && reduceMotion) {
-            CircularProgressIndicator(
-                progress = { 0.75f },
-                color = palette.accent,
-                trackColor = palette.accent.copy(alpha = 0.18f),
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(16.dp)
-            )
-        } else if (loading) {
-            CircularProgressIndicator(color = palette.accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+        if (loading) {
+            Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                AidenActivityDot(color = palette.accent)
+            }
         } else {
             Icon(icon, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
         }
@@ -113,6 +108,7 @@ internal fun AidenConnectedActionSegment(
     }
     Surface(
         onClick = onClick,
+        enabled = !loading,
         shape = aidenGroupItemShape(index, count, AidenShape.SplitOuter, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = palette.foreground,
@@ -121,7 +117,10 @@ internal fun AidenConnectedActionSegment(
             .fillMaxHeight()
             .heightIn(min = 48.dp)
             .tactilePress(interaction)
-            .semantics { role = Role.Button }
+            .semantics {
+                role = Role.Button
+                if (loading) stateDescription = "In progress"
+            }
     ) {
         if (stacked) {
             Column(

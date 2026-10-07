@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.Role
@@ -30,7 +32,11 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
@@ -124,11 +130,21 @@ fun AidenBotProfileScreen(
     val client by coordinator.client.collectAsStateWithLifecycle()
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
 
-    var botDetail by remember { mutableStateOf<AidenBotDetail?>(null) }
-    var favorites by remember { mutableStateOf<AidenBotFavorites?>(null) }
-    var conversations by remember { mutableStateOf<List<AidenBotConversationItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    // The saved profile, Favorites and chats render at once and refresh underneath.
+    var botDetail by remember(botId) { mutableStateOf(coordinator.botCache.getBotDetail(botId)) }
+    var favorites by remember { mutableStateOf(coordinator.botCache.botList.value?.favorites) }
+    var conversations by remember(botId) {
+        mutableStateOf(
+            aidenCanonicalBotConversations(
+                coordinator.botCache.botConversations.value?.conversations.orEmpty().filter { it.botId == botId }
+            )
+        )
+    }
+    var isLoading by remember { mutableStateOf(false) }
+    var loadFailed by remember { mutableStateOf(false) }
     var isConfirmingArchive by remember { mutableStateOf(false) }
+    var lifecyclePending by remember { mutableStateOf<String?>(null) }
+    var favoritesInFlight by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
 
@@ -136,15 +152,79 @@ fun AidenBotProfileScreen(
         val cl = client ?: return
         scope.launch {
             isLoading = true
+            loadFailed = false
             try {
                 val b = cl.bot(botId)
                 botDetail = b
+                coordinator.botCache.putBotDetail(b)
+                // Favorites stay as shown while a pin or reorder is still being written.
                 val fav = cl.botFavorites()
-                favorites = fav
+                if (!favoritesInFlight) favorites = fav
                 val page = cl.botConversations(botId = botId)
                 conversations = aidenCanonicalBotConversations(page.conversations)
-            } catch (_: Exception) {} finally {
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                loadFailed = true
+            } finally {
                 isLoading = false
+            }
+        }
+    }
+
+    /**
+     * Pinning and reordering apply at once, then reconcile with the desktop's Favorites
+     * or roll back with an error. One write runs at a time so each carries the revision
+     * the previous one returned.
+     */
+    fun writeFavorites(next: List<String>) {
+        val cl = client ?: return
+        val previous = favorites ?: return
+        if (favoritesInFlight || next == previous.botIds) return
+        favoritesInFlight = true
+        actionError = null
+        favorites = previous.copy(botIds = next)
+        scope.launch {
+            try {
+                favorites = cl.updateFavorites(next, previous.revision)
+                onBotMutated()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                favorites = previous
+                throw error
+            } catch (error: Exception) {
+                favorites = previous
+                actionError = error.message ?: "Aiden couldn't update Favorites. Try again."
+            } finally {
+                favoritesInFlight = false
+            }
+        }
+    }
+
+    /** Archive and Restore wait for the desktop; the menu shows them pending meanwhile. */
+    fun updateLifecycle(action: AidenBotProfileLifecycleAction, pendingLabel: String) {
+        val cl = client ?: return
+        val b = botDetail ?: return
+        if (lifecyclePending != null) return
+        lifecyclePending = pendingLabel
+        actionError = null
+        scope.launch {
+            try {
+                val res = aidenBotProfileLifecycleUpdate(
+                    client = cl,
+                    botId = botId,
+                    revision = b.revision,
+                    action = action
+                )
+                botDetail = res.detail
+                favorites = res.favorites
+                coordinator.botCache.putBotDetail(res.detail)
+                onBotMutated()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                actionError = error.message ?: "Aiden couldn't update this Bot."
+            } finally {
+                lifecyclePending = null
             }
         }
     }
@@ -181,7 +261,8 @@ fun AidenBotProfileScreen(
                     ) {
                         if (!isArchived) {
                             DropdownMenuItem(
-                                text = { Text("Archive Bot", color = palette.danger) },
+                                text = { Text(lifecyclePending ?: "Archive Bot", color = palette.danger) },
+                                enabled = lifecyclePending == null,
                                 onClick = {
                                     showMenu = false
                                     isConfirmingArchive = true
@@ -192,27 +273,11 @@ fun AidenBotProfileScreen(
                             )
                         } else {
                             DropdownMenuItem(
-                                text = { Text("Restore Bot", color = palette.accent) },
+                                text = { Text(lifecyclePending ?: "Restore Bot", color = palette.accent) },
+                                enabled = lifecyclePending == null,
                                 onClick = {
                                     showMenu = false
-                                    val cl = client ?: return@DropdownMenuItem
-                                    val b = bot ?: return@DropdownMenuItem
-                                    scope.launch {
-                                        try {
-                                            val res = aidenBotProfileLifecycleUpdate(
-                                                client = cl,
-                                                botId = botId,
-                                                revision = b.revision,
-                                                action = AidenBotProfileLifecycleAction.Restore()
-                                            )
-                                            botDetail = res.detail
-                                            favorites = res.favorites
-                                            coordinator.botCache.putBotDetail(res.detail)
-                                            onBotMutated()
-                                        } catch (e: Exception) {
-                                            actionError = e.message
-                                        }
-                                    }
+                                    updateLifecycle(AidenBotProfileLifecycleAction.Restore(), "Restoring…")
                                 },
                                 leadingIcon = {
                                     Icon(Icons.Default.Unarchive, contentDescription = null, tint = palette.accent)
@@ -229,10 +294,24 @@ fun AidenBotProfileScreen(
         },
         containerColor = palette.canvas
     ) { padding ->
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = palette.accent)
-            }
+        val presentation = AidenReadPresentation.of(
+            hasContent = bot != null,
+            isFetching = isLoading,
+            hasSettled = loadFailed || client == null,
+            failed = loadFailed
+        )
+        if (presentation == AidenReadPresentation.SKELETON) {
+            AidenBotProfileSkeleton(Modifier.padding(padding))
+        } else if (presentation == AidenReadPresentation.FAILED || presentation == AidenReadPresentation.EMPTY) {
+            AidenEmptyState(
+                icon = Icons.Default.CloudOff,
+                title = "Bot unavailable",
+                body = if (client == null) "Connect to your paired desktop to see this Bot." else "Aiden couldn't load this Bot.",
+                modifier = Modifier.fillMaxSize().padding(padding),
+                action = if (client != null) {
+                    { AidenTonalButton(text = "Try Again", onClick = { refresh() }) }
+                } else null
+            )
         } else if (bot != null) {
             Column(
                 modifier = Modifier
@@ -303,7 +382,11 @@ fun AidenBotProfileScreen(
                                         try {
                                             val created = cl.createBotChat(bot.id)
                                             onNavigateToChat(created.id)
-                                        } catch (_: Exception) {}
+                                        } catch (error: kotlinx.coroutines.CancellationException) {
+                                            throw error
+                                        } catch (error: Exception) {
+                                            actionError = error.message ?: "Aiden couldn't open a chat with this Bot."
+                                        }
                                     }
                                 }
                             }
@@ -328,23 +411,15 @@ fun AidenBotProfileScreen(
                             label = if (isFavorite) "Unpin" else "Pin",
                             icon = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                             iconTint = if (isFavorite) palette.accent else null,
-                            onClick = onClick@{
-                                val cl = client ?: return@onClick
-                                val favs = favorites ?: return@onClick
-                                scope.launch {
-                                    val next = if (isFavorite) {
+                            enabled = !favoritesInFlight,
+                            onClick = {
+                                writeFavorites(
+                                    if (isFavorite) {
                                         favoriteList.filter { it != botId }
                                     } else {
                                         (favoriteList + botId).take(AidenBotWire.MAX_FAVORITES)
                                     }
-                                    try {
-                                        val updated = cl.updateFavorites(next, favs.revision)
-                                        favorites = updated
-                                        onBotMutated()
-                                    } catch (e: Exception) {
-                                        actionError = e.message
-                                    }
-                                }
+                                )
                             }
                         )
                     )
@@ -379,18 +454,9 @@ fun AidenBotProfileScreen(
                                 OutlinedButton(
                                     border = null,
                                     onClick = {
-                                        val cl = client ?: return@OutlinedButton
-                                        val favs = favorites ?: return@OutlinedButton
-                                        val next = aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.EARLIER)
-                                        scope.launch {
-                                            try {
-                                                val updated = cl.updateFavorites(next, favs.revision)
-                                                favorites = updated
-                                                onBotMutated()
-                                            } catch (_: Exception) {}
-                                        }
+                                        writeFavorites(aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.EARLIER))
                                     },
-                                    enabled = favoriteIndex > 0,
+                                    enabled = favoriteIndex > 0 && !favoritesInFlight,
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
@@ -402,18 +468,9 @@ fun AidenBotProfileScreen(
                                 OutlinedButton(
                                     border = null,
                                     onClick = {
-                                        val cl = client ?: return@OutlinedButton
-                                        val favs = favorites ?: return@OutlinedButton
-                                        val next = aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.LATER)
-                                        scope.launch {
-                                            try {
-                                                val updated = cl.updateFavorites(next, favs.revision)
-                                                favorites = updated
-                                                onBotMutated()
-                                            } catch (_: Exception) {}
-                                        }
+                                        writeFavorites(aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.LATER))
                                     },
-                                    enabled = favoriteIndex < favoriteList.size - 1,
+                                    enabled = favoriteIndex < favoriteList.size - 1 && !favoritesInFlight,
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
@@ -529,26 +586,9 @@ fun AidenBotProfileScreen(
                 AidenDialogConfirmButton(
                     text = "Archive Bot",
                     destructive = true,
-                    onClick = onClick@{
+                    onClick = {
                         isConfirmingArchive = false
-                        val cl = client ?: return@onClick
-                        val b = bot ?: return@onClick
-                        scope.launch {
-                            try {
-                                val res = aidenBotProfileLifecycleUpdate(
-                                    client = cl,
-                                    botId = botId,
-                                    revision = b.revision,
-                                    action = AidenBotProfileLifecycleAction.Archive
-                                )
-                                botDetail = res.detail
-                                favorites = res.favorites
-                                coordinator.botCache.putBotDetail(res.detail)
-                                onBotMutated()
-                            } catch (e: Exception) {
-                                actionError = e.message
-                            }
-                        }
+                        updateLifecycle(AidenBotProfileLifecycleAction.Archive, "Archiving…")
                     }
                 )
             },
@@ -558,6 +598,27 @@ fun AidenBotProfileScreen(
             shape = AidenShape.Dialog,
             containerColor = palette.raised
         )
+    }
+}
+
+/** Profile-shaped placeholders for a Bot opened with nothing saved on this phone. */
+@Composable
+private fun AidenBotProfileSkeleton(modifier: Modifier = Modifier) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .padding(20.dp)
+            .clearAndSetSemantics { contentDescription = "Loading Bot" }
+    ) {
+        AidenSkeletonBlock(width = 112.dp, height = 112.dp, shape = CircleShape)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AidenSkeletonBlock(width = 160.dp, height = 24.dp)
+            AidenSkeletonBlock(width = 220.dp, height = 14.dp)
+        }
+        AidenSkeletonBlock(height = 72.dp, shape = MaterialTheme.shapes.large)
+        AidenSkeletonBlock(height = 120.dp, shape = MaterialTheme.shapes.large)
     }
 }
 

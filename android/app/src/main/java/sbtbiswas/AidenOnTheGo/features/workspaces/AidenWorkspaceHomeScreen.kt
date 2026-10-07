@@ -56,7 +56,6 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -94,7 +93,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
@@ -116,7 +117,10 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
+import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
@@ -128,6 +132,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
@@ -263,6 +269,8 @@ private fun AidenWorkspaceHome(
         viewModel.hydrate(workspaces)
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.load()
     }
+    // Coming back to the app rereads stale data underneath what is already shown.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.revalidate() }
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
             if (
@@ -482,7 +490,22 @@ private fun AidenWorkspaceHome(
                     }
                 }
 
-                if (chatListUnavailable) {
+                val projectionIsEmpty = if (
+                    sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
+                ) {
+                    sidebarProjection.sections.isEmpty()
+                } else {
+                    sidebarProjection.recents.isEmpty()
+                }
+                val listPresentation = aidenWorkspaceHomeListPresentation(
+                    projectionIsEmpty = projectionIsEmpty,
+                    isSearching = isSearching,
+                    isLoading = isLoading,
+                    connectionState = connectionState,
+                    hasCompletedWorkspaceRefresh = hasCompletedWorkspaceRefresh,
+                    chatListLoadState = chatListLoadState
+                )
+                if (listPresentation == AidenReadPresentation.FAILED) {
                     item {
                         AidenWorkspaceChatLoadErrorState(
                             message = chatLoadErrorMessage ?: "Reconnect and try again.",
@@ -490,15 +513,27 @@ private fun AidenWorkspaceHome(
                             modifier = Modifier.padding(top = 32.dp)
                         )
                     }
-                } else {
-                    val projectionIsEmpty = if (
-                        sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
-                    ) {
-                        sidebarProjection.sections.isEmpty()
-                    } else {
-                        sidebarProjection.recents.isEmpty()
+                } else if (listPresentation == AidenReadPresentation.SKELETON) {
+                    item(key = "workspace-home-skeleton") {
+                        // Chat rows are text-only, inset to line up with the real rows.
+                        AidenSkeletonList(
+                            count = 6,
+                            leading = false,
+                            loadingDescription = "Loading chats",
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
                     }
-                    if (projectionIsEmpty && !isLoading) {
+                } else {
+                    // Saved chats stay on screen when a refresh fails; the error sits above them.
+                    if (chatListUnavailable && !projectionIsEmpty) {
+                        item(key = "chat-refresh-error") {
+                            AidenWorkspaceInlineRefreshError(
+                                message = chatLoadErrorMessage ?: "Aiden couldn't refresh chats.",
+                                onRetry = { viewModel.refresh(workspaces) }
+                            )
+                        }
+                    }
+                    if (listPresentation == AidenReadPresentation.EMPTY) {
                         item {
                             AidenEmptyState(
                                 icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.FolderOpen,
@@ -576,19 +611,13 @@ private fun AidenWorkspaceHome(
                                         modifier = Modifier.padding(bottom = 4.dp)
                                     )
                                 }
-                                TextButton(
-                                    onClick = viewModel::loadMoreChats,
-                                    enabled = !isLoadingMoreChats
-                                ) {
-                                    if (isLoadingMoreChats) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            strokeWidth = 2.dp,
-                                            color = palette.accent
-                                        )
-                                        Spacer(Modifier.width(8.dp))
+                                if (isLoadingMoreChats) {
+                                    // The next page arrives as rows, so it is previewed as rows.
+                                    AidenSkeletonList(count = 2, leading = false, loadingDescription = "Loading more chats")
+                                } else {
+                                    TextButton(onClick = viewModel::loadMoreChats) {
+                                        Text(if (chatPaginationErrorMessage == null) "Load more chats" else "Retry")
                                     }
-                                    Text(if (chatPaginationErrorMessage == null) "Load more chats" else "Retry")
                                 }
                             }
                         }
@@ -596,13 +625,6 @@ private fun AidenWorkspaceHome(
                 }
             }
 
-            if (isLoading && chats.isEmpty()) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center).size(28.dp),
-                    strokeWidth = 2.dp,
-                    color = palette.accent
-                )
-            }
             creationStatus?.let { status ->
                 Surface(
                     color = palette.raised,
@@ -614,9 +636,13 @@ private fun AidenWorkspaceHome(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        AidenActivityDot()
                         Spacer(Modifier.width(12.dp))
-                        Text(status, color = palette.foreground)
+                        Text(
+                            status,
+                            color = palette.foreground,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        )
                     }
                 }
             }
@@ -811,6 +837,61 @@ internal fun AidenWorkspaceChatLoadErrorState(
         action = {
             Button(onClick = onRetry) { Text("Try Again") }
         }
+    )
+}
+
+/** A compact refresh failure shown above saved rows instead of replacing them. */
+@Composable
+internal fun AidenWorkspaceInlineRefreshError(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = AidenUi.ScreenGutter, vertical = 4.dp)
+            .semantics { error(message) }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
+        ) {
+            Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = onRetry) { Text("Retry", color = palette.accent) }
+        }
+    }
+}
+
+/**
+ * The Workspace home list shows saved rows whenever it has any, placeholders only while
+ * a first read is pending, and the empty or error state once reads have settled.
+ */
+internal fun aidenWorkspaceHomeListPresentation(
+    projectionIsEmpty: Boolean,
+    isSearching: Boolean,
+    isLoading: Boolean,
+    connectionState: AidenConnectionState,
+    hasCompletedWorkspaceRefresh: Boolean,
+    chatListLoadState: AidenChatListLoadState
+): AidenReadPresentation {
+    // A search that matches nothing is an answer, not a pending read.
+    if (isSearching) return if (projectionIsEmpty) AidenReadPresentation.EMPTY else AidenReadPresentation.CONTENT
+    val readsSettled = when (connectionState) {
+        AidenConnectionState.OFFLINE, AidenConnectionState.NEEDS_PAIRING -> true
+        AidenConnectionState.CONNECTING -> false
+        AidenConnectionState.CONNECTED -> hasCompletedWorkspaceRefresh &&
+            chatListLoadState != AidenChatListLoadState.UNRESOLVED
+    }
+    return AidenReadPresentation.of(
+        hasContent = !projectionIsEmpty,
+        isFetching = isLoading,
+        hasSettled = readsSettled,
+        failed = chatListLoadState == AidenChatListLoadState.FAILED
     )
 }
 

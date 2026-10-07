@@ -44,6 +44,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
@@ -111,6 +112,14 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     fun refreshFiles() {
         if (client != null) {
             if (isLoading) return
+            // Show the saved tree at once while the desktop answers. It stays read-only
+            // (its folder cursors may be stale) until the fresh index replaces it.
+            if (fileIndex == null && activeInstanceId != null) {
+                cache.load(activeInstanceId, workspaceId)?.let { snapshot ->
+                    fileIndex = snapshot.index
+                    isOfflineIndex = true
+                }
+            }
             requestRevision += 1
             val revision = requestRevision
             isLoading = true
@@ -401,8 +410,8 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 .padding(padding)
                 .aidenReadableWidth()
         ) {
-            // Offline or Truncated Banner
-            if (if (selectedFile != null) isOfflineDocument else isOfflineIndex) {
+            // Offline or Truncated Banner. A saved tree being revalidated is not "offline" yet.
+            if (if (selectedFile != null) isOfflineDocument else isOfflineIndex && !isLoading) {
                 Surface(
                     color = palette.warning.copy(alpha = 0.15f),
                     modifier = Modifier.fillMaxWidth()
@@ -542,7 +551,11 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
                 ) {
-                    if (filteredEntries.isEmpty() && !isLoading) {
+                    if (fileIndex == null && isLoading) {
+                        item(key = "files-skeleton") {
+                            AidenSkeletonList(count = 8, supporting = false, loadingDescription = "Loading files")
+                        }
+                    } else if (filteredEntries.isEmpty() && !isLoading) {
                         item {
                             Box(
                                 modifier = Modifier
@@ -670,7 +683,7 @@ private fun AidenDiscardSavePair(
             enabled = saveEnabled,
             shape = aidenGroupItemShape(1, 2, outer, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
             color = if (saveEnabled || saving) palette.accent else palette.accent.copy(alpha = 0.4f),
-            contentColor = Color.White,
+            contentColor = palette.onAccent,
             interactionSource = saveInteraction,
             modifier = Modifier
                 .fillMaxHeight()
@@ -678,11 +691,13 @@ private fun AidenDiscardSavePair(
                 .semantics { role = Role.Button }
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 16.dp)) {
-                if (saving) {
-                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                } else {
-                    Text("Save", style = MaterialTheme.typography.labelLarge, color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                // Saving waits for the desktop's version check, so it holds a pending label.
+                Text(
+                    if (saving) "Saving…" else "Save",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = palette.onAccent,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }

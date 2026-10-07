@@ -19,12 +19,15 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenReadSnapshotCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenReadSnapshotKeys
 import sbtbiswas.AidenOnTheGo.persistence.AidenScheduledTaskCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.UUID
@@ -51,6 +54,8 @@ class AidenRemoteCoordinator(
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
     val modelPreferenceStore = AidenModelPreferenceStore(storageDir)
+    val readSnapshotCache = AidenReadSnapshotCache(File(storageDir, "read_snapshots"))
+    private val workspaceListSerializer = ListSerializer(AidenWorkspace.serializer())
 
     private val _connectionState = MutableStateFlow(
         if (installationStore.activeInstallation == null) {
@@ -142,7 +147,8 @@ class AidenRemoteCoordinator(
         botCache.activate(installation.instanceId, installation.deviceId)
         _client.value = newClient
         _serverInfo.value = null
-        _workspaces.value = emptyList()
+        // The last Workspace list renders at once while the desktop is reached.
+        _workspaces.value = cachedWorkspaces(installation.instanceId)
         _hasCompletedWorkspaceRefresh.value = false
         _connectionState.value = AidenConnectionState.CONNECTING
 
@@ -273,6 +279,7 @@ class AidenRemoteCoordinator(
                 _workspaces.value = list
                 if (instanceId != null) {
                     archiveStore.prune(instanceId, list.map { it.id }.toSet())
+                    readSnapshotCache.store(instanceId, AidenReadSnapshotKeys.WORKSPACES, list, workspaceListSerializer)
                 }
                 refreshIntentCatalog()
             } catch (_: Exception) {
@@ -306,6 +313,7 @@ class AidenRemoteCoordinator(
         workspaceCache.purge(installation.instanceId, knownWorkspaceIds)
         scheduledCache.purge(installation.instanceId)
         usageCache.purge(installation.instanceId)
+        readSnapshotCache.purge(installation.instanceId)
         botCache.purge(installation.instanceId, installation.deviceId)
         chatCache.purge(installation.instanceId)
         draftStore.purge(installation.instanceId)
@@ -337,6 +345,9 @@ class AidenRemoteCoordinator(
         )
     }
 
+    private fun cachedWorkspaces(instanceId: String): List<AidenWorkspace> =
+        readSnapshotCache.load(instanceId, AidenReadSnapshotKeys.WORKSPACES, workspaceListSerializer).orEmpty()
+
     private fun isCurrent(generation: Long, installationId: String, client: AidenRemoteClient): Boolean =
         activationGeneration == generation &&
             installationStore.activeInstallation?.id == installationId &&
@@ -347,6 +358,8 @@ class AidenRemoteCoordinator(
         _isMutating.value = true
         return try {
             val created = currentClient.createWorkspace(create)
+            // Reconcile at once with the server's answer; the refresh follows.
+            if (_workspaces.value.none { it.id == created.id }) _workspaces.value = _workspaces.value + created
             refreshWorkspaces()
             created
         } finally {
@@ -368,6 +381,7 @@ class AidenRemoteCoordinator(
                 revision = workspace.revision,
                 patch = AidenWorkspacePatch(name = name, permission = permission, memoryEnabled = memoryEnabled)
             )
+            _workspaces.value = _workspaces.value.map { if (it.id == updated.id) updated else it }
             refreshWorkspaces()
             updated
         } finally {
@@ -381,6 +395,7 @@ class AidenRemoteCoordinator(
         try {
             currentClient.removeWorkspace(workspace.id, workspace.revision)
             archiveStore.forget(workspace.id, activeInstanceId)
+            _workspaces.value = _workspaces.value.filterNot { it.id == workspace.id }
             refreshWorkspaces()
         } finally {
             _isMutating.value = false
@@ -397,6 +412,7 @@ class AidenRemoteCoordinator(
                 idempotencyKey = UUID.randomUUID()
             )
             archiveStore.forget(workspace.id, activeInstanceId)
+            _workspaces.value = _workspaces.value.filterNot { it.id == workspace.id }
             refreshWorkspaces()
             res
         } finally {

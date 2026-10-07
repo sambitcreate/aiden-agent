@@ -165,6 +165,7 @@ fun AidenChatDetailScreen(
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
     val isLoadingEarlierMessages by viewModel.isLoadingEarlierMessages.collectAsStateWithLifecycle()
+    val isLoadingTranscript by viewModel.isLoading.collectAsStateWithLifecycle()
     val voiceInputMode by voiceInputStore.mode.collectAsStateWithLifecycle()
     val taskProgress by viewModel.taskProgress.collectAsStateWithLifecycle()
     val currentAgentRoster by viewModel.agentRoster.collectAsStateWithLifecycle()
@@ -848,6 +849,12 @@ fun AidenChatDetailScreen(
                     bottom = padding.calculateBottomPadding() + 16.dp
                 )
             ) {
+                // Only a chat with nothing saved previews its transcript; a saved one renders
+                // at once and refreshes underneath.
+                if (chat == null && isLoadingTranscript) {
+                    item(key = "transcript_skeleton") { AidenTranscriptSkeleton() }
+                }
+
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
                 if (isStreaming) {
                     item(key = "live_stream") {

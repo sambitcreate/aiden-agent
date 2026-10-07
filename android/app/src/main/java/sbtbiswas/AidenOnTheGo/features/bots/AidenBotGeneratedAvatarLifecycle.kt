@@ -17,6 +17,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +32,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
 import sbtbiswas.AidenOnTheGo.models.AidenBotSemanticAvatar
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Base64
@@ -233,8 +237,21 @@ fun AidenBotGeneratedAvatarLifecycleView(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (phase == AidenBotGeneratedAvatarPhase.UPLOADING || phase == AidenBotGeneratedAvatarPhase.REVERTING) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+        // Upload and revert write to the desktop, so they show an in-place pending label.
+        val pendingLabel = when (phase) {
+            AidenBotGeneratedAvatarPhase.UPLOADING -> "Saving avatar…"
+            AidenBotGeneratedAvatarPhase.REVERTING -> "Restoring avatar…"
+            else -> null
+        }
+        if (pendingLabel != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+            ) {
+                AidenActivityDot()
+                Text(pendingLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         if (error != null) {
             Text(
