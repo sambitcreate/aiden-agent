@@ -641,3 +641,15 @@ test("operation usage follows the selected provider deployment rather than the c
   assert.equal(freshFacade.local, true, "a host facade can supply its newer authoritative deployment snapshot");
   assert.equal(freshFacade.costStatus, "not-applicable");
 });
+
+test("design run charges survive reload under their own source", async () => {
+  const persistence = memoryPersistence();
+  const store = createUsageStore(persistence, () => NOW);
+  await store.record(
+    record({ source: "design", providerId: "fixture", modelId: "priced", costStatus: "reported", costUsd: 0.25 }),
+  );
+  const summary = await createUsageStore(persistence, () => NOW).summary("7d");
+  assert.equal(summary.totals.requests, 1);
+  assert.equal(summary.totals.hostedCostUsd, 0.25);
+  assert.equal(persistence.read().buckets[0]?.source, "design");
+});

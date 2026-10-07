@@ -93,6 +93,7 @@
         "main/services/generation-git-context.test.ts",
         "main/services/generation-initialization-terminal.test.ts",
         "main/services/generation-messages.test.ts",
+        "main/services/generation-profile.test.ts",
         "main/services/generation-runtime.test.ts",
         "main/services/git-executable.test.ts",
         "main/services/git-repo-watcher.test.ts",
