@@ -36,6 +36,25 @@
     <string name="action_remove">Remove</string>
     <string name="action_save">Save</string>
     <string name="action_saving">Saving…</string>
+    <string name="action_done">Done</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_discard">Discard</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_retry">Retry</string>
+    <string name="state_expanded">Expanded</string>
+    <string name="state_collapsed">Collapsed</string>
+    <string name="state_selected">Selected</string>
+    <string name="action_close">Close</string>
+    <string name="action_create">Create</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_try_again">Try Again</string>
+    <string name="action_load_more">Load More</string>
+    <string name="action_search">Search</string>
+    <string name="action_clear_search">Clear search</string>
+    <string name="action_more_actions">More actions</string>
+    <string name="state_in_progress">In progress</string>
 
     <!-- Settings root -->
     <string name="settings_title">Settings</string>
@@ -177,4 +196,241 @@
     <string name="camera_prompt_blocked">Camera access is off for Aiden. Turn it on in Settings, or use the setup code instead.</string>
     <string name="camera_enable">Enable camera</string>
     <string name="camera_open_settings">Open settings</string>
+
+    <!-- Workspaces: directory -->
+    <string name="workspace_start_chat_failed">Aiden couldn\'t start a chat.</string>
+    <string name="workspace_create_failed">Aiden couldn\'t create the workspace.</string>
+    <string name="workspace_rename_failed">Aiden couldn\'t rename \"%1$s\".</string>
+    <string name="workspace_delete_worktree_failed">Aiden couldn\'t delete the worktree.</string>
+    <string name="workspace_remove_failed">Aiden couldn\'t remove \"%1$s\".</string>
+    <string name="workspace_opening_new_chat">Opening new chat</string>
+    <string name="workspace_new_chat">New Chat</string>
+    <string name="workspace_back_to_workspaces">Back to Workspaces</string>
+    <string name="workspace_permission_label">Permission: %1$s</string>
+    <string name="workspace_settings">Workspace Settings</string>
+    <string name="workspace_back_to_home">Back to Workspace home</string>
+    <string name="workspace_directory_title">Workspaces</string>
+    <string name="workspace_search_placeholder">Search workspaces...</string>
+    <string name="workspace_creating">Creating workspace</string>
+    <string name="workspace_add">Add Workspace</string>
+    <string name="workspace_menu_new">New Workspace</string>
+    <string name="workspace_menu_new_scratch">New Managed Scratch</string>
+    <string name="workspace_menu_add_folder">Add Desktop Folder...</string>
+    <string name="workspace_tab_active">Active (%1$d)</string>
+    <string name="workspace_tab_archived">Archived (%1$d)</string>
+    <string name="workspace_empty_active_title">No active workspaces</string>
+    <string name="workspace_empty_archived_title">No archived workspaces</string>
+    <string name="workspace_empty_active_body">Create a workspace or add an approved folder from your desktop.</string>
+    <string name="workspace_empty_archived_body">Workspaces archived on this device will appear here.</string>
+    <string name="workspace_worktree_badge">Worktree</string>
+    <string name="workspace_deleting">Deleting…</string>
+    <string name="workspace_removing">Removing…</string>
+    <string name="workspace_uncommitted_count">+%1$d uncommitted</string>
+    <string name="workspace_menu_archive">Archive on this device</string>
+    <string name="workspace_menu_unarchive">Unarchive</string>
+    <string name="workspace_menu_delete_worktree">Delete Managed Worktree</string>
+    <string name="workspace_menu_remove">Remove from Aiden</string>
+    <string name="workspace_new_dialog_body">Enter a name for the new folderless workspace:</string>
+    <string name="workspace_name_placeholder">Workspace name</string>
+    <string name="workspace_scratch_dialog_title">Create Managed Scratch?</string>
+    <string name="workspace_scratch_dialog_confirm">Create Scratch</string>
+    <string name="workspace_scratch_dialog_body">Aiden will create an isolated scratch workspace in an ephemeral location on your paired desktop.</string>
+    <string name="workspace_rename_dialog_title">Rename Workspace</string>
+    <string name="workspace_name_label">Workspace Name</string>
+    <string name="workspace_archive_dialog_title">Archive on this Device</string>
+    <string name="workspace_archive_dialog_confirm">Got it, Archive</string>
+    <string name="workspace_archive_dialog_body">Archiving a workspace hides it only on this device. Your paired desktop, files, and other devices remain completely unaffected.</string>
+    <string name="workspace_remove_dialog_title">Remove Workspace?</string>
+    <string name="workspace_remove_dialog_body">Are you sure you want to remove \"%1$s\" from Aiden? Local files on your paired desktop are preserved.</string>
+    <string name="workspace_delete_worktree_dialog_title">Delete Managed Worktree?</string>
+    <string name="workspace_delete_worktree_dialog_confirm">Delete Worktree</string>
+    <string name="workspace_delete_worktree_dialog_body">This will permanently remove the managed worktree folder and git worktree on your paired desktop.</string>
+
+    <!-- Workspaces: desktop folder browser -->
+    <string name="workspace_folders_title">Browse Desktop Folders</string>
+    <string name="workspace_folders_loading">Loading folders</string>
+    <string name="workspace_folder_add_failed">Aiden couldn\'t add this folder.</string>
+    <string name="workspace_folder_adding">Adding Folder…</string>
+    <string name="workspace_folder_add">Add This Folder as Workspace</string>
+
+    <!-- Workspaces: settings sheet -->
+    <string name="workspace_permission_level">Permission Level</string>
+    <string name="workspace_save_changes">Save Changes</string>
+    <string name="workspace_settings_save_failed">Aiden couldn\'t save these settings.</string>
+    <string name="workspace_remove">Remove Workspace</string>
+    <string name="workspace_delete_worktree_short_title">Delete Worktree?</string>
+    <string name="workspace_use_memory">Use memory</string>
+    <string name="workspace_use_memory_body">When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your Mac.</string>
+
+    <!-- Workspaces: chats -->
+    <string name="workspace_chats_loading">Loading chats</string>
+    <string name="workspace_chats_reconnect">Reconnect and try again.</string>
+    <string name="workspace_chats_empty">No chats in this workspace yet</string>
+    <string name="workspace_start_chat">Start a Chat</string>
+    <plurals name="workspace_message_count">
+        <item quantity="one">%1$d message</item>
+        <item quantity="other">%1$d messages</item>
+    </plurals>
+    <string name="workspace_action_files">Files</string>
+    <string name="workspace_action_git_review">Git Review</string>
+
+    <!-- Workspaces: home -->
+    <string name="workspace_home_opening_chat">Opening chat…</string>
+    <string name="workspace_home_chats_still_loading">Chats are still loading. Try again shortly.</string>
+    <string name="workspace_home_create_chat_failed">Aiden couldn\'t create the chat.</string>
+    <string name="workspace_home_new_chat_cd">New Workspace Chat</string>
+    <string name="workspace_home_connecting">Connecting to Aiden Agent…</string>
+    <string name="workspace_home_offline">Offline — showing saved chats</string>
+    <string name="workspace_home_scheduled_tasks">Scheduled Tasks</string>
+    <string name="workspace_home_usage">Usage</string>
+    <string name="workspace_home_usage_loading">Loading Usage from your paired desktop…</string>
+    <string name="workspace_home_manage">Manage Workspaces</string>
+    <string name="workspace_home_recents">Recents</string>
+    <string name="workspace_home_refresh_failed">Aiden couldn\'t refresh chats.</string>
+    <string name="workspace_home_empty_search_title">No Matches</string>
+    <string name="workspace_home_empty_workspaces_title">No Workspaces Yet</string>
+    <string name="workspace_home_empty_chats_title">No Chats Yet</string>
+    <string name="workspace_home_empty_search_body">Try a different search term.</string>
+    <string name="workspace_home_empty_workspaces_body">Add a workspace to begin.</string>
+    <string name="workspace_home_empty_chats_body">Start a new Workspace chat to begin.</string>
+    <string name="workspace_home_loading_more">Loading more chats</string>
+    <string name="workspace_home_load_more">Load more chats</string>
+    <string name="workspace_home_choice_existing">Existing Workspace</string>
+    <string name="workspace_home_choice_existing_detail">Choose a workspace and open a new chat</string>
+    <string name="workspace_home_choice_new_detail">Create a reusable workspace and its first chat</string>
+    <string name="workspace_home_choice_scratch">Managed Scratch Workspace</string>
+    <string name="workspace_home_choice_scratch_detail">Create an isolated scratch workspace and chat</string>
+    <string name="workspace_home_creating_workspace">Creating workspace…</string>
+    <string name="workspace_home_scratch_body">Create an isolated managed workspace and open its first chat?</string>
+    <string name="workspace_home_preparing_scratch">Preparing scratch workspace…</string>
+    <string name="workspace_home_create_scratch_failed">Aiden couldn\'t create the scratch workspace.</string>
+    <string name="workspace_home_chats_load_failed_title">Chats Couldn\'t Load</string>
+    <string name="workspace_home_search_cd">Search Workspace chats</string>
+    <string name="workspace_home_profile_cd">Profile and settings</string>
+    <string name="workspace_home_search_placeholder">Search chats</string>
+    <string name="workspace_home_close_search">Close search</string>
+    <string name="workspace_home_organize_by_workspace">By workspace</string>
+    <string name="workspace_home_organize_recent">Recent only</string>
+    <string name="workspace_home_organize_cd">Organize sidebar</string>
+    <string name="workspace_home_new_chat">New chat</string>
+    <string name="workspace_home_show_more">Show %1$d more</string>
+    <string name="workspace_home_forked_chat_cd">Forked chat</string>
+
+    <!-- Workspaces: Git review -->
+    <string name="git_review_title">Git Review</string>
+    <string name="git_diff_truncated">Diff truncated: payload limit exceeded</string>
+    <string name="git_loading_changes">Loading changes</string>
+    <string name="git_changes_unavailable">Changes unavailable</string>
+    <string name="git_changes_connect">Connect to your paired desktop to review this Workspace.</string>
+    <string name="git_changes_read_failed">Aiden couldn\'t read this Workspace\'s changes.</string>
+    <string name="git_branch_label">Branch: %1$s</string>
+    <string name="git_uncommitted_count">%1$d uncommitted</string>
+    <string name="git_clean">Clean</string>
+    <string name="git_checking_changes">Checking for changes…</string>
+    <string name="git_clean_title">Working tree is clean</string>
+    <string name="git_clean_body">No uncommitted changes in this workspace.</string>
+    <plurals name="git_commit_changes_count">
+        <item quantity="one">Commit Changes (%1$d file)</item>
+        <item quantity="other">Commit Changes (%1$d files)</item>
+    </plurals>
+    <string name="git_commit_changes">Commit Changes</string>
+    <string name="git_commit_message">Commit message</string>
+    <string name="git_commit_message_placeholder">Describe your changes...</string>
+    <string name="git_stage_reviewed_only">Stage only reviewed changes</string>
+    <string name="git_review_and_commit">Review &amp; Commit</string>
+    <string name="git_confirm_commit">Confirm Commit</string>
+    <string name="git_commit">Commit</string>
+    <string name="git_committing">Committing…</string>
+    <string name="git_commit_confirm_body">Create a commit on branch \"%1$s\" with message:\n\n\"%2$s\"</string>
+    <string name="git_branches_title">Git Branches</string>
+    <string name="git_new_branch">New Branch</string>
+    <string name="git_loading_branches">Loading branches</string>
+    <string name="git_active_branch_cd">Active</string>
+    <string name="git_checkout_title">Checkout Branch?</string>
+    <string name="git_checkout">Checkout</string>
+    <string name="git_switching_to">Switching to %1$s…</string>
+    <string name="git_checkout_body">Switch working tree to branch \"%1$s\"?</string>
+    <string name="git_create_branch_title">Create New Branch</string>
+    <string name="git_creating_branch">Creating %1$s…</string>
+    <string name="git_branch_name">Branch name</string>
+    <string name="git_start_point">Start point (branch / commit)</string>
+    <string name="git_push_title">Push to Remote</string>
+    <string name="git_push">Push</string>
+    <string name="git_pushing">Pushing %1$s…</string>
+    <string name="git_push_not_allowed">Push is not allowed: %1$s</string>
+    <string name="git_permission_denied">Permission denied</string>
+    <string name="git_push_body">Push branch \"%1$s\" to remote \"%2$s\"?</string>
+    <string name="git_never_force_push">Aiden never force-pushes.</string>
+    <string name="git_compare_title">Compare Branches</string>
+    <string name="git_base_branch">Base branch</string>
+    <string name="git_comparing">Comparing…</string>
+    <string name="git_compare">Compare</string>
+    <string name="git_comparing_branches">Comparing branches</string>
+    <plurals name="git_compare_summary">
+        <item quantity="one">%1$d changed file between %2$s and %3$s:</item>
+        <item quantity="other">%1$d changed files between %2$s and %3$s:</item>
+    </plurals>
+    <string name="git_worktrees_title">Git Worktrees</string>
+    <string name="git_new_worktree">New Worktree</string>
+    <string name="git_loading_worktrees">Loading worktrees</string>
+    <string name="git_worktree_managed">Managed</string>
+    <string name="git_create_worktree_title">Create Managed Worktree</string>
+    <string name="git_creating_worktree">Creating worktree %1$s…</string>
+    <string name="git_worktree_name">Worktree name</string>
+    <string name="git_action_branch">Branch</string>
+    <string name="git_action_worktrees">Worktrees</string>
+
+    <!-- Workspaces: Usage sheet -->
+    <string name="usage_title">Usage</string>
+    <string name="usage_your_activity">Your Activity</string>
+    <string name="usage_requests">Requests</string>
+    <string name="usage_active_days">Active days</string>
+    <string name="usage_current_streak">Current streak</string>
+    <string name="usage_longest_streak">Longest streak</string>
+    <string name="usage_total_tokens_cd">%1$s total tokens</string>
+    <string name="usage_total_tokens">Total tokens</string>
+    <string name="usage_token_activity">Token activity</string>
+    <string name="usage_daily_totals">Daily totals</string>
+    <string name="usage_legend_less">Less</string>
+    <string name="usage_legend_more">More</string>
+    <string name="usage_activity_insights">Activity insights</string>
+    <string name="usage_completed_requests">Completed requests</string>
+    <string name="usage_local_model_share">Local model share</string>
+    <string name="usage_failed_requests">Failed requests</string>
+    <string name="usage_hosted_cost">Hosted cost</string>
+    <string name="usage_most_used_models">Most used models</string>
+    <string name="usage_provider_local">%1$s · Local</string>
+    <string name="usage_model_runs">%1$s runs</string>
+    <string name="usage_privacy_note">Privacy-safe aggregates are recorded by Aiden Agent on your paired desktop. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.</string>
+    <string name="usage_metric_cd">%1$s, %2$s</string>
+    <plurals name="usage_day_tokens_cd">
+        <item quantity="one">%1$s, %2$d token</item>
+        <item quantity="other">%1$s, %2$d tokens</item>
+    </plurals>
+    <plurals name="usage_day_count">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+
+    <!-- Workspaces: Files -->
+    <string name="files_tree_limit">The loaded tree reached 4,000 entries. Refresh Files to browse another folder.</string>
+    <string name="files_open_failed">This workspace file could not be opened. Browse Files to locate it.</string>
+    <string name="files_title">Workspace Files</string>
+    <string name="files_offline_banner">Showing offline snapshot. Editing is disabled.</string>
+    <string name="files_truncated_banner">File list is truncated at %1$d entries.</string>
+    <string name="files_search_placeholder">Search loaded files…</string>
+    <string name="files_loading">Loading files</string>
+    <string name="files_no_matches">No matching files found</string>
+    <string name="files_load_more">Load more files</string>
+    <string name="files_load_more_in">Load more in %1$s</string>
+    <string name="files_discard_title">Discard Changes?</string>
+    <string name="files_keep_editing">Keep Editing</string>
+    <string name="files_discard_body">You have unsaved changes in this file. Are you sure you want to discard them?</string>
+    <string name="files_conflict_title">Conflict Detected</string>
+    <string name="files_conflict_reload">Reload from desktop</string>
+    <string name="files_conflict_body">This file on your paired desktop was modified since you opened it. Would you like to reload the latest version from your desktop?</string>
+    <string name="usage_token_input">Input</string>
+    <string name="usage_token_output">Output</string>
+    <string name="usage_token_reasoning">Reasoning</string>
+    <string name="usage_token_cache_read">Cache read</string>
 </resources>

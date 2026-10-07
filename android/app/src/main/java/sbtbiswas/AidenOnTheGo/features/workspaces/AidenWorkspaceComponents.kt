@@ -34,6 +34,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Squircle confirmation dialog used by the workspace, files, and git screens. The dismiss
@@ -46,7 +48,7 @@ internal fun AidenWorkspaceAlertDialog(
     onDismissRequest: () -> Unit,
     confirmText: String?,
     onConfirm: () -> Unit,
-    dismissText: String = "Cancel",
+    dismissText: String = stringResource(R.string.action_cancel),
     destructive: Boolean = false,
     text: @Composable () -> Unit
 ) {
@@ -87,6 +89,7 @@ internal fun AidenConnectedActionSegment(
     trailing: (@Composable () -> Unit)? = null
 ) {
     val palette = AidenTheme.palette
+    val inProgress = stringResource(R.string.state_in_progress)
     val interaction = remember { MutableInteractionSource() }
     val leading: @Composable () -> Unit = {
         if (loading) {
@@ -119,7 +122,7 @@ internal fun AidenConnectedActionSegment(
             .tactilePress(interaction)
             .semantics {
                 role = Role.Button
-                if (loading) stateDescription = "In progress"
+                if (loading) stateDescription = inProgress
             }
     ) {
         if (stacked) {
