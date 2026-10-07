@@ -283,8 +283,8 @@ Rules:
 - [ ] **ADR-CI (Create Images)**
   - **Provider:**
     - Generate through **Pi image models** (`models.getAvailableOfType("image")`, `models.generateImages`), the same path as main's `generate_image` tool in `main/services/pi-model-tools.ts`. Any configured image-capable provider works (OpenRouter today).
-    - Optionally register a direct Google images API with `registerImagesApiProvider` + `@google/genai`, reusing the `main/services/tts/credentials.ts` saved-key / dedicated-key pattern (fails closed).
-  - **Consent:** preview naming provider, model, request count and estimate (or "unknown"); expiry; a request counter enforced in main.
+    - All 59 bundled image models are OpenRouter's; bundled Google has none. `registerImagesApiProvider` only feeds Pi's standalone `generateImages()`, so direct Google needs a wrapped provider (as `concentrate-provider.ts` does), reusing the `main/services/tts/credentials.ts` saved-key / dedicated-key pattern (fails closed). **Deferred to CI-2** (owner has an OpenRouter key).
+  - **Consent:** preview naming provider, model, request count and estimate (or "unknown"); expiry; a request counter enforced in main. **Owner caps for CI-1: 1 request per node, ≤ 4 per run.**
   - **Run ledger:** `node:sqlite` with one row per node attempt and O(1) append, modeled on `durable-jobs/store.ts`. Restart marks in-flight attempts `interrupted`.
   - **Workflow docs:** JSON via `writeJsonAtomic` with debounced autosave.
   - **Assets:** the shared studio asset store.
