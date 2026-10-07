@@ -58,6 +58,7 @@ async function start(
     scope?: RunScope;
     priorOutputs?: Readonly<Record<string, readonly OutputRef[]>>;
     ledger?: RunExecutorDependencies["ledger"];
+    deps?: Partial<RunExecutorDependencies>;
   } = {},
 ) {
   const scope = options.scope ?? { kind: "all" };
@@ -87,6 +88,7 @@ async function start(
       assets: env.assets,
       onChange: () => undefined,
       port: { generate: async (request) => { calls.push(request); return reply(request, calls.length - 1); } },
+      ...options.deps,
     },
     { runId, plan: planned.plan, concurrency: options.concurrency ?? 1, signal: controller.signal },
   );
@@ -295,4 +297,177 @@ test("a cancel that lands just before the claim sends nothing and records a canc
   const attempt = attempts(env).get("g")!;
   assert.deepEqual([attempt.state, attempt.mayHaveBeenBilled, attempt.errorCode], ["cancelled", false, undefined]);
   assert.equal(env.ledger.snapshot("run-1")!.run.requestsSent, 0);
+});
+
+test("a throwing port or asset store fails that attempt as executor-fault and keeps any reported cost", async (t) => {
+  const env = await fixture(t);
+  const doc = workflow([prompt("p"), gen("a"), gen("b")], [link("p", "text", "a", "prompt"), link("p", "text", "b", "prompt")]);
+  const run = await start(
+    env,
+    doc,
+    (_request, index) => {
+      if (index === 0) throw new Error("port broke its never-throws contract");
+      return generated(11);
+    },
+    {
+      requestLimit: 2,
+      concurrency: 2,
+      deps: {
+        assets: {
+          read: (assetId) => env.assets.read(assetId),
+          put: (input) => env.assets.put(input),
+          retain: () => {
+            throw new Error("holder table unavailable");
+          },
+        },
+      },
+    },
+  );
+  assert.equal(await run.done, "failed");
+  const byNode = attempts(env);
+  assert.deepEqual(
+    [byNode.get("a")!.state, byNode.get("a")!.errorCode, byNode.get("a")!.mayHaveBeenBilled, byNode.get("a")!.costStatus],
+    ["failed", "executor-fault", true, "unavailable"],
+  );
+  assert.deepEqual(
+    [byNode.get("b")!.state, byNode.get("b")!.errorCode, byNode.get("b")!.costUsd, byNode.get("b")!.costStatus],
+    ["failed", "executor-fault", 0.039, "reported"],
+  );
+  assert.equal(byNode.get("b")!.output.length, 0, "an image the run could not hold is not published");
+});
+
+test("a ledger fault before the claim fails the step as executor-fault and sends nothing", async (t) => {
+  const env = await fixture(t);
+  const faulty: RunExecutorDependencies["ledger"] = {
+    claimProviderRequest: () => {
+      throw new Error("database is locked");
+    },
+    snapshot: (runId) => env.ledger.snapshot(runId),
+    finishAttempts: (updates) => env.ledger.finishAttempts(updates),
+    finishRun: (...args) => env.ledger.finishRun(...args),
+    terminateRun: (...args) => env.ledger.terminateRun(...args),
+  };
+  const run = await start(env, workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]), () => generated(12), { ledger: faulty });
+  assert.equal(await run.done, "failed");
+  assert.equal(run.calls.length, 0);
+  const attempt = attempts(env).get("g")!;
+  assert.deepEqual([attempt.state, attempt.errorCode, attempt.mayHaveBeenBilled], ["failed", "executor-fault", false]);
+});
+
+test("an executor fault aborts in-flight provider requests and waits for them before ending the run", async (t) => {
+  const env = await fixture(t);
+  const doc = workflow([prompt("p"), gen("a"), gen("b")], [link("p", "text", "a", "prompt"), link("p", "text", "b", "prompt")]);
+  const order: string[] = [];
+  // The ledger cannot record node a's result: a store failure inside the scheduler.
+  const broken: RunExecutorDependencies["ledger"] = {
+    claimProviderRequest: (...args) => env.ledger.claimProviderRequest(...args),
+    snapshot: (runId) => env.ledger.snapshot(runId),
+    finishAttempts: (updates) => {
+      if (updates.some((update) => update.nodeId === "a")) throw new Error("disk full");
+      env.ledger.finishAttempts(updates);
+    },
+    finishRun: (...args) => env.ledger.finishRun(...args),
+    terminateRun: (...args) => {
+      order.push("terminateRun");
+      env.ledger.terminateRun(...args);
+    },
+  };
+  let held!: AbortSignal;
+  const run = await start(
+    env,
+    doc,
+    (request, index) => {
+      if (index === 0) return generated(13);
+      held = request.signal;
+      return new Promise((resolve) =>
+        request.signal.addEventListener("abort", () => {
+          order.push("request-aborted");
+          resolve({ kind: "failed", code: "aborted", message: "Cancelled." });
+        }),
+      );
+    },
+    { ledger: broken, concurrency: 2, requestLimit: 2 },
+  );
+  await assert.rejects(run.done, /disk full/u);
+  assert.equal(run.controller.signal.aborted, false, "the user never cancelled");
+  assert.equal(held.aborted, true);
+  assert.deepEqual(order, ["request-aborted", "terminateRun"]);
+  const snapshot = env.ledger.snapshot("run-1")!;
+  assert.deepEqual([snapshot.run.state, snapshot.run.endReason], ["failed", "executor-fault"]);
+  const b = attempts(env).get("b")!;
+  assert.deepEqual([b.state, b.mayHaveBeenBilled], ["cancelled", true]);
+  assert.ok(snapshot.attempts.every((attempt) => attempt.state !== "queued" && attempt.state !== "running"));
+});
+
+test("a failing terminateRun is reported without masking the original executor error", async (t) => {
+  const env = await fixture(t);
+  const issues: unknown[] = [];
+  const broken: RunExecutorDependencies["ledger"] = {
+    claimProviderRequest: (...args) => env.ledger.claimProviderRequest(...args),
+    snapshot: (runId) => env.ledger.snapshot(runId),
+    finishAttempts: (updates) => {
+      if (updates.some((update) => update.nodeId === "g")) throw new Error("disk full");
+      env.ledger.finishAttempts(updates);
+    },
+    finishRun: (...args) => env.ledger.finishRun(...args),
+    terminateRun: () => {
+      throw new Error("terminate failed too");
+    },
+  };
+  const run = await start(env, workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]), () => generated(14), {
+    ledger: broken,
+    deps: { reportIssue: (error) => issues.push(error) },
+  });
+  await assert.rejects(run.done, /disk full/u);
+  assert.deepEqual(issues.map((issue) => (issue as Error).message), ["terminate failed too"]);
+});
+
+test("throwing change and request callbacks cannot fail a step or mislabel an unsent request", async (t) => {
+  const env = await fixture(t);
+  const lifecycle: string[] = [];
+  const run = await start(env, workflow([prompt("p"), gen("g"), out("o")], [link("p", "text", "g", "prompt"), link("g", "images", "o", "images")]), () => generated(15), {
+    deps: {
+      onChange: () => {
+        throw new Error("renderer is gone");
+      },
+      onRequestStart: () => {
+        lifecycle.push("start");
+        throw new Error("start listener broke");
+      },
+      onRequestEnd: () => {
+        lifecycle.push("end");
+        throw new Error("end listener broke");
+      },
+    },
+  });
+  assert.equal(await run.done, "succeeded");
+  assert.equal(run.calls.length, 1);
+  assert.deepEqual(lifecycle, ["start", "end"]);
+  const attempt = attempts(env).get("g")!;
+  assert.deepEqual([attempt.state, attempt.errorCode, attempt.output.length], ["succeeded", undefined, 1]);
+});
+
+test("run concurrency is clamped: zero still runs, and nine never exceeds four requests at once", async (t) => {
+  const env = await fixture(t);
+  const ids = ["a", "b", "c", "d"];
+  const doc = workflow([prompt("p"), ...ids.map(gen)], ids.map((id) => link("p", "text", id, "prompt")));
+  for (const [concurrency, expectedPeak] of [[0, 1], [9, 4]] as const) {
+    let running = 0;
+    let peak = 0;
+    const run = await start(
+      env,
+      doc,
+      async () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        running -= 1;
+        return generated(16);
+      },
+      { runId: `run-c${concurrency}`, concurrency },
+    );
+    assert.equal(await run.done, "succeeded", `concurrency ${concurrency}`);
+    assert.equal(run.calls.length, 4);
+    assert.equal(peak, expectedPeak, `concurrency ${concurrency}`);
+  }
 });

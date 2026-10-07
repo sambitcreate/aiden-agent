@@ -244,9 +244,21 @@ export interface StepTransition {
   value?: NodeValue;
   /** True when executeProvider ran the step and already recorded its ledger row. */
   executed: boolean;
+  /** Set when the step failed because the executor itself threw, not because the provider failed. */
+  errorCode?: string;
+}
+
+export const MAX_RUN_CONCURRENCY = 4;
+export const DEFAULT_RUN_CONCURRENCY = 2;
+
+/** Whatever the caller asks for, a run dispatches between one and four provider requests at once. */
+export function clampRunConcurrency(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_RUN_CONCURRENCY;
+  return Math.min(MAX_RUN_CONCURRENCY, Math.max(1, Math.trunc(value)));
 }
 
 export interface RunPlanHooks {
+  /** Clamped to 1 through 4 by runPlan. */
   concurrency: number;
   signal: AbortSignal;
   executeProvider(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome>;
@@ -281,10 +293,18 @@ export async function runPlan(plan: RunPlan, hooks: RunPlanHooks): Promise<Map<s
   let batch: StepTransition[] = [];
 
   const enqueue = (id: string) => (steps.get(id)!.provider ? providerReady : localReady).push(id);
-  const settle = (id: string, state: StepTransition["state"], executed: boolean, value?: NodeValue) => {
+  const concurrency = clampRunConcurrency(hooks.concurrency);
+  const settle = (id: string, state: StepTransition["state"], executed: boolean, value?: NodeValue, errorCode?: string) => {
     if (settled.has(id)) return;
     settled.set(id, state);
-    batch.push({ nodeId: id, variant: steps.get(id)!.variant, state, executed, ...(value ? { value } : {}) });
+    batch.push({
+      nodeId: id,
+      variant: steps.get(id)!.variant,
+      state,
+      executed,
+      ...(value ? { value } : {}),
+      ...(errorCode ? { errorCode } : {}),
+    });
     if (state === "succeeded") {
       values.set(id, value!);
       for (const dependent of dependents.get(id) ?? []) {
@@ -318,7 +338,7 @@ export async function runPlan(plan: RunPlan, hooks: RunPlanHooks): Promise<Map<s
       const value: NodeValue = step.local ?? { kind: "images", images: imagesOf(sourcesOf(step, "images", values)) };
       settle(step.nodeId, "succeeded", false, value);
     }
-    while (providerReady.length > 0 && running.size < hooks.concurrency) {
+    while (providerReady.length > 0 && running.size < concurrency) {
       const step = steps.get(providerReady.shift()!)!;
       if (settled.has(step.nodeId)) continue;
       const prompt = sourcesOf(step, "prompt", values).find((value) => value.kind === "text");
@@ -335,7 +355,7 @@ export async function runPlan(plan: RunPlan, hooks: RunPlanHooks): Promise<Map<s
         () => {
           // An executor fault is recorded through onSettled because executeProvider did not record it.
           running.delete(step.nodeId);
-          settle(step.nodeId, "failed", false);
+          settle(step.nodeId, "failed", false, undefined, "executor-fault");
         },
       );
       running.set(step.nodeId, task);

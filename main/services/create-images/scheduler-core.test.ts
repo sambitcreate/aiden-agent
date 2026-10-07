@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { OutputRef } from "../../../renderer/shared/images/run-types.js";
 import type { WorkflowDocV1, WorkflowEdge, WorkflowNode } from "../../../renderer/shared/images/schema.js";
-import { planRun, runPlan, staleNodeIds, summarizeRunState, type PlanContext, type StepOutcome, type StepTransition } from "./scheduler-core.js";
+import { planDigest, planRun, runPlan, staleNodeIds, summarizeRunState, type PlanContext, type StepOutcome, type StepTransition } from "./scheduler-core.js";
 
 const MODEL = { provider: "openrouter", id: "google/gemini-3.1-flash-image" };
 const ref = (seed: string): OutputRef => ({ assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png" });
@@ -233,4 +233,77 @@ test("transitions are coalesced: each scheduler tick reports once", async () => 
     ],
   );
   assert.deepEqual(batches[1]?.[1]?.value, { kind: "images", images: [ref("g")] });
+});
+
+test("concurrency is clamped to 1 through 4, so 0 never stalls a run and 9 never fans out", async () => {
+  const ids = ["a", "b", "c", "d", "e", "f"];
+  const wide = doc(
+    [prompt("p"), ...ids.map((id) => generate(id))],
+    ids.map((id) => edge("p", "text", id, "prompt")),
+  );
+  const planned = planRun(wide, { kind: "all" }, context({ maxRequests: 6 }));
+  assert.ok(planned.ok);
+  for (const [requested, expectedPeak] of [[0, 1], [9, 4], [Number.NaN, 2]] as const) {
+    let running = 0;
+    let peak = 0;
+    const states = await runPlan(planned.plan, {
+      concurrency: requested,
+      signal: new AbortController().signal,
+      onSettled: () => undefined,
+      executeProvider: async (step) => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise((resolve) => setImmediate(resolve));
+        running -= 1;
+        return images(step.nodeId);
+      },
+    });
+    assert.equal(peak, expectedPeak, `concurrency ${requested}`);
+    assert.equal(summarizeRunState(planned.plan, states, false), "succeeded", `concurrency ${requested}`);
+  }
+});
+
+test("a step whose executor throws settles as failed with the executor-fault code", async () => {
+  const one = doc([prompt("p"), generate("g"), output("o")], [edge("p", "text", "g", "prompt"), edge("g", "images", "o", "images")]);
+  const planned = planRun(one, { kind: "all" }, context());
+  assert.ok(planned.ok);
+  const transitions: StepTransition[] = [];
+  await runPlan(planned.plan, {
+    concurrency: 1,
+    signal: new AbortController().signal,
+    onSettled: (batch) => transitions.push(...batch),
+    executeProvider: async () => {
+      throw new Error("boom");
+    },
+  });
+  const byNode = new Map(transitions.map((transition) => [transition.nodeId, transition]));
+  assert.deepEqual([byNode.get("g")?.state, byNode.get("g")?.executed, byNode.get("g")?.errorCode], ["failed", false, "executor-fault"]);
+  assert.deepEqual([byNode.get("o")?.state, byNode.get("o")?.errorCode], ["skipped", undefined]);
+  assert.equal(byNode.get("p")?.errorCode, undefined);
+});
+
+test("the plan digest changes with the model, a reference asset or the scope, and an identical re-plan reproduces it", () => {
+  const digest = (document: WorkflowDocV1, scope: Parameters<typeof planRun>[1] = { kind: "all" }) => {
+    const planned = planRun(document, scope, context({ priorOutputs: { g1: [ref("b")] } }));
+    assert.ok(planned.ok);
+    return planDigest(planned.plan);
+  };
+  const base = digest(graph);
+  assert.equal(digest(structuredClone(graph)), base);
+
+  const otherModel = doc(
+    graph.nodes.map((node): WorkflowNode =>
+      node.id === "g2" ? { id: "g2", type: "generate-image", position: at, data: { model: { provider: "openrouter", id: "black-forest-labs/flux.2-pro" }, count: 1 } } : node),
+    graph.edges,
+  );
+  const otherReference = doc(graph.nodes.map((node) => (node.id === "i" ? input("i", "c") : node)), graph.edges);
+  const variants = [
+    digest(otherModel),
+    digest(otherReference),
+    digest(graph, { kind: "from-node", nodeId: "g2" }),
+    // Same steps and requests as run-all, so only the recorded scope tells them apart.
+    digest(graph, { kind: "from-node", nodeId: "p1" }),
+    digest(graph, { kind: "node-only", nodeId: "g2" }),
+  ];
+  assert.equal(new Set([base, ...variants]).size, variants.length + 1);
 });

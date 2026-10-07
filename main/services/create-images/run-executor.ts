@@ -18,6 +18,8 @@ export interface RunExecutorDependencies {
   onChange(): void;
   onRequestStart?(): void;
   onRequestEnd?(): void;
+  /** Receives a secondary failure that must not replace the error being thrown. */
+  reportIssue?(error: unknown): void;
 }
 
 export interface RunExecution {
@@ -44,12 +46,43 @@ function guarded<T>(write: () => T, fallback: T): T {
   }
 }
 
+/** Observers are advisory: a throwing one must not fail a step or relabel a request. */
+function observer(callback: (() => void) | undefined): () => void {
+  return () => {
+    try {
+      callback?.();
+    } catch {
+      // A listener bug is not a run failure.
+    }
+  };
+}
+
+const FAULT_MESSAGE = "Aiden hit an internal error while running this step.";
+
 export async function executeRun(deps: RunExecutorDependencies, run: RunExecution): Promise<RunState> {
+  const changed = observer(deps.onChange);
+  const requestStarted = observer(deps.onRequestStart);
+  const requestEnded = observer(deps.onRequestEnd);
+  // The scheduler gets this signal, not run.signal: an executor fault can then stop
+  // in-flight provider requests without pretending the user cancelled.
+  const internal = new AbortController();
+  const relay = () => internal.abort(run.signal.reason);
+  if (run.signal.aborted) relay();
+  else run.signal.addEventListener("abort", relay, { once: true });
+  const outstanding = new Set<Promise<unknown>>();
   const abortReason = () => (typeof run.signal.reason === "string" ? run.signal.reason : "user-cancel");
   const finish = (step: PlannedStep, update: Omit<AttemptFinish, "runId" | "nodeId" | "variant">) =>
     guarded(() => deps.ledger.finishAttempts([{ runId: run.runId, nodeId: step.nodeId, variant: step.variant, ...update }]), undefined);
 
-  async function generate(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome> {
+  function generate(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome> {
+    const task = generateStep(step, inputs, signal);
+    outstanding.add(task);
+    const forget = () => outstanding.delete(task);
+    task.then(forget, forget);
+    return task;
+  }
+
+  async function generateStep(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome> {
     if (inputs.references.length > IMAGE_WORKFLOW_LIMITS.maxReferences) {
       finish(step, {
         state: "failed",
@@ -87,8 +120,27 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       });
       return { ok: false, state: "failed" };
     }
-    deps.onChange();
-    deps.onRequestStart?.();
+    changed();
+    requestStarted();
+    // Once the claim is spent the request may have been billed: a fault from here on is recorded
+    // against this attempt, with whatever cost the provider reported, instead of escaping the step.
+    let reported: Usage | undefined;
+    try {
+      return await sendAndStore(step, inputs, references, signal, (usage) => (reported = usage));
+    } catch {
+      finish(step, { state: "failed", errorCode: "executor-fault", errorMessage: FAULT_MESSAGE, ...cost(reported) });
+      return { ok: false, state: "failed" };
+    }
+  }
+
+  async function sendAndStore(
+    step: PlannedStep,
+    inputs: StepInputs,
+    sentReferences: { mimeType: string; bytes: Uint8Array }[],
+    signal: AbortSignal,
+    reportUsage: (usage: Usage | undefined) => void,
+  ): Promise<StepOutcome> {
+    let references = sentReferences;
     let result: ImageGenerationResult;
     try {
       result = await deps.port.generate({
@@ -99,9 +151,10 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
         signal,
       });
     } finally {
-      deps.onRequestEnd?.();
+      requestEnded();
       references = [];
     }
+    reportUsage(result.usage);
     if (result.kind === "failed") {
       const state = result.code === "aborted" ? "cancelled" : "failed";
       finish(step, { state, errorCode: result.code, errorMessage: result.message, ...cost(result.usage) });
@@ -139,7 +192,7 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
   try {
     states = await runPlan(run.plan, {
       concurrency: run.concurrency,
-      signal: run.signal,
+      signal: internal.signal,
       executeProvider: generate,
       onSettled: (transitions) => {
         const unrecorded = transitions
@@ -149,16 +202,31 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
             nodeId: transition.nodeId,
             variant: transition.variant,
             state: transition.state,
+            ...(transition.errorCode ? { errorCode: transition.errorCode, errorMessage: FAULT_MESSAGE } : {}),
             ...(transition.value?.kind === "images" ? { output: transition.value.images } : {}),
           }));
         guarded(() => deps.ledger.finishAttempts(unrecorded), undefined);
-        deps.onChange();
+        changed();
       },
     });
   } catch (error) {
-    // The scheduler itself failed: end every live attempt so nothing is left looking in flight.
-    guarded(() => deps.ledger.terminateRun(run.runId, "failed", "executor-fault"), undefined);
+    // The scheduler itself failed. Stop what is still in flight, let it record its own outcome
+    // (a paid request keeps its cost), and only then end every live attempt.
+    internal.abort("executor-fault");
+    await Promise.allSettled([...outstanding]);
+    try {
+      guarded(() => deps.ledger.terminateRun(run.runId, "failed", "executor-fault"), undefined);
+    } catch (secondary) {
+      // The original failure is the one the caller needs; this one is only reported.
+      try {
+        deps.reportIssue?.(secondary);
+      } catch {
+        // Reporting is best effort.
+      }
+    }
     throw error;
+  } finally {
+    run.signal.removeEventListener("abort", relay);
   }
 
   // finishRun records a run as over; it is honest only when no attempt is still live.
