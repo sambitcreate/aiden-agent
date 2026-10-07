@@ -356,9 +356,9 @@ export class AcpHarnessRuntime {
           image: capabilities?.image === true,
           embeddedContext: capabilities?.embeddedContext === true,
         });
-        if (next.length === 0) continue;
         binding.pendingContextCount = follow.count;
         binding.pendingContextFingerprint = follow.fingerprint;
+        if (next.length === 0) continue;
         const followed = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: next });
         response = { ...followed, usage: addUsage(response.usage, followed.usage) };
       }

@@ -197,8 +197,12 @@ export function buildFollowUpPrompt(
     }
     for (const block of message.content) {
       if (block.type === "text") prompt.push({ type: "text", text: block.text });
-      else if (block.type === "image" && capabilities.image) {
-        prompt.push({ type: "image", data: block.data, mimeType: block.mimeType });
+      else if (block.type === "image") {
+        prompt.push(
+          capabilities.image
+            ? { type: "image", data: block.data, mimeType: block.mimeType }
+            : { type: "text", text: "[The user attached an image this agent cannot read.]" },
+        );
       }
     }
   }

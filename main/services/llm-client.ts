@@ -1713,6 +1713,8 @@ async function prepareGeneration(
   };
 }
 
+const acpScratchFallbacks = new Map<string, Promise<string>>();
+
 /** Working directory for an agent turn in a chat without a folder. It grants no file access. */
 async function acpScratchDir(chatId: string): Promise<string> {
   const safe = chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
@@ -1724,8 +1726,14 @@ async function acpScratchDir(chatId: string): Promise<string> {
     // Never fail a generation over its working directory; this one grants no
     // file access either way.
     logger.warn("acp", "Could not prepare the agent scratch directory.", error);
-    // A private directory, never the shared temp folder itself.
-    return mkdtemp(join(tmpdir(), "aiden-acp-scratch-")).catch(() => join(tmpdir(), "aiden-acp-scratch-unavailable"));
+    // A private directory, never the shared temp folder itself, reused for the
+    // chat so its agent session is not rebuilt on every turn.
+    let fallback = acpScratchFallbacks.get(chatId);
+    if (!fallback) {
+      fallback = mkdtemp(join(tmpdir(), "aiden-acp-scratch-")).catch(() => tmpdir());
+      acpScratchFallbacks.set(chatId, fallback);
+    }
+    return fallback;
   }
 }
 

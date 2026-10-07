@@ -444,3 +444,20 @@ test("text the agent streams after Stop never appears in the next reply", async 
   assert.equal(text(next), "fresh");
   await h.runtime.close();
 });
+
+test("a message owed when the turn is stopped is delivered exactly once by the next turn", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const messages: Message[] = [userMessage("bridge-late:aiden_lookup")];
+  const first = await turn(h, messages, { tools: lookupTools });
+  messages.push(first, toolResultFor(first, "one"), userMessage("echo:STEER"));
+  const second = await turn(h, messages, { tools: lookupTools });
+  assert.equal(second.stopReason, "toolUse");
+  // Pi's loop stops without returning the second result (as after a Stop):
+  // the next user message arrives instead.
+  messages.push(second, userMessage("prompt-dump"));
+  const third = await turn(h, messages, { tools: lookupTools });
+  const delivered = text(third).split("STEER").length - 1;
+  assert.equal(delivered, 1, text(third));
+  await h.runtime.close();
+});
