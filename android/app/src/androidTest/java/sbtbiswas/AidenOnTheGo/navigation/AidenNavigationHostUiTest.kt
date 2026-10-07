@@ -72,6 +72,9 @@ class AidenNavigationHostUiTest {
 
     /** A predictive back gesture from the left edge, held at [progress] without releasing. */
     private fun dragBack(progress: Float) {
+        // A click only changes the stack; the host enables its back handler when it
+        // recomposes. A finger cannot start a gesture inside that same frame, so let it land.
+        compose.waitForIdle()
         compose.runOnUiThread {
             val dispatcher = compose.activity.onBackPressedDispatcher
             dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 400f, 0f, BackEventCompat.EDGE_LEFT))

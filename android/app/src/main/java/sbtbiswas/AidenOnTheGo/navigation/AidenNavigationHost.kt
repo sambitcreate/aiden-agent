@@ -109,6 +109,9 @@ fun AidenNavigationHost(
 
     val target = navigator.stack.current
     LaunchedEffect(target) {
+        // A live back gesture owns the transition and settles it itself; animating here
+        // would retarget the transition away from the screen it is revealing.
+        if (gesture.ownsTransition) return@LaunchedEffect
         // Also finishes a released back gesture from wherever the finger left it.
         if (currentReduceMotion) {
             transitionState.snapTo(target)
@@ -127,15 +130,32 @@ fun AidenNavigationHost(
                 if (previous == null || currentReduceMotion) return@collect
                 if (!seeking) {
                     seeking = true
+                    gesture.ownsTransition = true
+                    // A gesture can start before the push that opened this screen has
+                    // finished (or even started) animating. Land that push first so the
+                    // gesture scrubs from the current screen towards the one below it.
+                    if (transitionState.currentState != origin.current || transitionState.targetState != origin.current) {
+                        transitionState.snapTo(origin.current)
+                    }
                     gesture.begin(origin.current.stateKey, event.swipeEdge)
                 }
                 gesture.progress.snapTo(event.progress)
                 transitionState.seekTo(predictiveBackSeekFraction(event.progress), previous)
             }
             gesture.inProgress = false
-            if (navigator.stack == origin) navigator.back()
+            gesture.ownsTransition = false
+            if (navigator.stack == origin) {
+                navigator.back()
+            } else if (seeking) {
+                // Something else navigated mid-gesture; its own transition was held back above.
+                scope.launch {
+                    transitionState.animateTo(navigator.stack.current, NavigationFractionSpec)
+                    gesture.reset()
+                }
+            }
         } catch (cancelled: CancellationException) {
             gesture.inProgress = false
+            gesture.ownsTransition = false
             if (seeking && previous != null) {
                 // The handler's own job is cancelled with the gesture, so settle on the host's scope.
                 scope.launch { gesture.settleCancelled(transitionState, previous) { navigator.stack.current } }
@@ -239,6 +259,9 @@ private class PredictiveBackGestureState {
     var swipeEdge by mutableIntStateOf(BackEventCompat.EDGE_LEFT)
         private set
     var inProgress by mutableStateOf(false)
+
+    /** While true, stack changes do not start their own transition; the gesture settles it. */
+    var ownsTransition = false
 
     fun begin(key: String, edge: Int) {
         leavingKey = key
