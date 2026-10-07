@@ -85,7 +85,7 @@ export function isUserVisibleChat(chat): boolean; // chatSurface(chat) === "regu
 | 5 | `chat-fork-service.ts:130-135` | Assistant → `ineligible` | Assistant or feature → `ineligible`; also guarded in `copyVisibleHistory` | Desktop and Remote fork/copy |
 | 6 | `rpiv-btw/service-core.ts:108` | bot or Assistant → refuse | surface !== regular → refuse | Side questions |
 | 7 | `empty-chat-migration.ts:43-46` | not bot, not Assistant | surface === regular | Startup empty-chat sweep (it must never delete a freshly created, empty project chat) |
-| 8 | `aiden-remote-chats.ts:1418-1422` `botChatIds` | `botId !== undefined` | unchanged (the store rejects owner + bot) | Host-feed Bot runs |
+| 8 | `aiden-remote-chats.ts:1418-1422` `botChatIds` | `botId !== undefined` | `chatSurface === "bot"` (tightened in F-3.3 so an owner+bot record can never surface; the store also rejects owner + bot) | Host-feed Bot runs |
 | 9 | `aiden-remote-chats.ts:1856` skill catalog | Assistant → empty | unchanged (`classify` refuses feature chats first) | – |
 | 10 | `main/handlers/chats.ts:160` `chats:todoSnapshot` | Assistant → null | unchanged; a design chat has no todo tool, so this is not a projection | – |
 | 11 | `chat-workspace-authority.ts:40-45` | Assistant mode authority | **DS-1a**, per ADR-DS §1 (design runs only) | – |
