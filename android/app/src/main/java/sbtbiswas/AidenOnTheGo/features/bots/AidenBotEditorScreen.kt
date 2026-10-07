@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.activity.compose.BackHandler
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -797,6 +798,7 @@ fun AidenBotEditorScreen(
     if (showImagePlaygroundSheet) {
         ModalBottomSheet(
             onDismissRequest = { showImagePlaygroundSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas
         ) {
             AidenBotImagePlaygroundSheet(

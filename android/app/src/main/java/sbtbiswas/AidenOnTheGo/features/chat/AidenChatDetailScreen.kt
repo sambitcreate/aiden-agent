@@ -689,16 +689,13 @@ fun AidenChatDetailScreen(
                         }
                     },
                     pendingAttachments = pendingAttachments.map {
-                        if (it.kind == AidenAttachmentKind.IMAGE) {
-                            AidenAttachmentUpload.Image(name = it.name, mimeType = it.mimeType, data = "")
-                        } else {
-                            AidenAttachmentUpload.Text(name = it.name, mimeType = it.mimeType, text = "")
-                        }
+                        AidenComposerPendingAttachment(
+                            id = it.id,
+                            name = it.name,
+                            isImage = it.kind == AidenAttachmentKind.IMAGE
+                        )
                     },
-                    onRemoveAttachment = { att ->
-                        val target = pendingAttachments.firstOrNull { it.name == att.name }
-                        if (target != null) viewModel.removePendingAttachment(target.id)
-                    },
+                    onRemoveAttachment = { att -> viewModel.removePendingAttachment(att.id) },
                     onAddImage = {
                         dismissComposerKeyboard()
                         imagePickerLauncher.launch(

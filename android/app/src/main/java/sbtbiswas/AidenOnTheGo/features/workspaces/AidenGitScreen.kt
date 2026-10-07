@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -514,6 +515,7 @@ fun AidenGitScreen(
 
         ModalBottomSheet(
             onDismissRequest = { showBranchSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
@@ -722,6 +724,7 @@ fun AidenGitScreen(
 
         ModalBottomSheet(
             onDismissRequest = { showCompareDialog = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
@@ -831,6 +834,7 @@ fun AidenGitScreen(
 
         ModalBottomSheet(
             onDismissRequest = { showWorktreesSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled

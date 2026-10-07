@@ -79,8 +79,8 @@ fun AidenComposerView(
     isVoiceListening: Boolean,
     isVoiceBusy: Boolean = false,
     onToggleVoice: () -> Unit,
-    pendingAttachments: List<AidenMessageAttachmentUpload> = emptyList(),
-    onRemoveAttachment: (AidenMessageAttachmentUpload) -> Unit = {},
+    pendingAttachments: List<AidenComposerPendingAttachment> = emptyList(),
+    onRemoveAttachment: (AidenComposerPendingAttachment) -> Unit = {},
     onAddImage: () -> Unit = {},
     onAddFile: () -> Unit = {},
     selectedSkill: AidenRemoteSkillCatalogEntry? = null,
@@ -134,7 +134,7 @@ fun AidenComposerView(
                         .fillMaxWidth()
                         .padding(bottom = 8.dp)
                 ) {
-                    items(attachments, key = { it.name }) { attachment ->
+                    items(attachments, key = { it.id }) { attachment ->
                         Surface(
                             color = palette.canvas.copy(alpha = 0.7f),
                             shape = RoundedCornerShape(12.dp),
@@ -149,7 +149,7 @@ fun AidenComposerView(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (attachment is AidenAttachmentUpload.Image) Icons.Default.Image else Icons.Default.Description,
+                                    imageVector = if (attachment.isImage) Icons.Default.Image else Icons.Default.Description,
                                     contentDescription = null,
                                     tint = palette.accent,
                                     modifier = Modifier.size(14.dp)
@@ -170,7 +170,7 @@ fun AidenComposerView(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove attachment",
+                                        contentDescription = "Remove ${attachment.name}",
                                         tint = palette.secondary,
                                         modifier = Modifier.size(16.dp)
                                     )

@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
@@ -624,6 +625,7 @@ private fun AidenWorkspaceHome(
     if (showScheduledTasks) {
         ModalBottomSheet(
             onDismissRequest = { showScheduledTasks = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             dragHandle = null,

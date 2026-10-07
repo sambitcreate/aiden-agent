@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -779,6 +780,7 @@ fun AidenWorkspaceDirectoryScreen(
     if (showFolderBrowserSheet) {
         ModalBottomSheet(
             onDismissRequest = { showFolderBrowserSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
@@ -798,6 +800,7 @@ fun AidenWorkspaceDirectoryScreen(
     if (showSettingsSheet && workspaceToEditSettings != null) {
         ModalBottomSheet(
             onDismissRequest = { showSettingsSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas
         ) {
             AidenWorkspaceSettingsSheet(

@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
 import androidx.compose.ui.input.pointer.pointerInput
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.focusGroup
@@ -179,6 +180,7 @@ fun AidenProductShellScreen(
     if (showSettingsSheet) {
         ModalBottomSheet(
             onDismissRequest = { showSettingsSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.raised,
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             dragHandle = null,
@@ -200,6 +202,7 @@ fun AidenProductShellScreen(
     if (showPairingDialog) {
         ModalBottomSheet(
             onDismissRequest = { showPairingDialog = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.raised,
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             dragHandle = null,

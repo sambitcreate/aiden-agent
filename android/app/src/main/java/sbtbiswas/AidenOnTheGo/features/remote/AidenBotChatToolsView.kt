@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
 import androidx.compose.foundation.background
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -518,6 +519,7 @@ fun AidenBotChatAccessSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = rememberAidenFullSheetState(),
         containerColor = palette.canvas,
         dragHandle = null,
         sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled

@@ -63,6 +63,35 @@ class AidenComposerUiTest {
         compose.runOnIdle { assertEquals(1, fileClicks) }
     }
 
+    @Test
+    fun sameNamedAttachmentsRenderAndRemoveIndependently() {
+        val removed = mutableListOf<String>()
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = true,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    pendingAttachments = listOf(
+                        AidenComposerPendingAttachment(id = "first", name = "notes.txt", isImage = false),
+                        AidenComposerPendingAttachment(id = "second", name = "notes.txt", isImage = false)
+                    ),
+                    onRemoveAttachment = { removed += it.id }
+                )
+            }
+        }
+
+        val removeButtons = compose.onAllNodesWithContentDescription("Remove notes.txt")
+        removeButtons.assertCountEquals(2)
+        removeButtons[1].performClick()
+        compose.runOnIdle { assertEquals(listOf("second"), removed) }
+    }
+
     /** Hosts the busy composer with the mode held the way the chat screen
      * holds it, so relabelling is observable. */
     private fun setBusyComposer(

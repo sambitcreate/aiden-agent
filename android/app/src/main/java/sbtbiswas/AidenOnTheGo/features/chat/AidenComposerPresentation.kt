@@ -44,6 +44,9 @@ fun aidenComposerSelectedThinkingLevel(model: AidenModel, selected: String?): St
     return selected?.takeIf { it in levels } ?: model.effectiveThinkingLevel
 }
 
+/** A pending composer attachment, identified by its durable reference id (names may repeat). */
+data class AidenComposerPendingAttachment(val id: String, val name: String, val isImage: Boolean)
+
 data class AidenComposerModelRow(val model: AidenModel, val isCurrent: Boolean)
 
 data class AidenComposerModelSection(val provider: AidenProvider, val rows: List<AidenComposerModelRow>)

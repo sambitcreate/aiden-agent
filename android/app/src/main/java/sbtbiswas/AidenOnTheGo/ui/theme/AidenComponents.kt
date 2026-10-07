@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -41,6 +44,14 @@ object AidenUi {
     // vertical gestures so it cannot fight the sheet at the expanded boundary.
     const val ScrollableSheetGesturesEnabled = false
 }
+
+/**
+ * Sheet state for long-form sheets. They open fully expanded: their own scrolling
+ * surface owns vertical gestures, so a half-height detent could never be expanded.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun rememberAidenFullSheetState(): SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
 /** Tonal, borderless text-field colors used across forms and dialogs. */
 @Composable
