@@ -11,6 +11,7 @@ import {
 } from "./contracts.js";
 import type { SubagentRequestableMcpInventoryV2 } from "./request-capabilities-v2.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
+import { subagentModelKey, type SubagentModelToolOptions } from "./subagent-model-selection.js";
 import { SUBAGENT_PARENT_SECURITY_GUIDANCE } from "./role-catalog.js";
 
 function textResult(text: string): AgentToolResult<null> {
@@ -129,6 +130,7 @@ export function createSubagentTool(
   mcpMutationInventory: readonly SubagentRequestableMcpInventoryV2[] = [],
   shellEnabled = false,
   delegationEnabled = false,
+  modelOptions?: SubagentModelToolOptions,
 ): AgentTool {
   const inventoryDescription =
     mcpInventory.length === 0
@@ -168,10 +170,19 @@ export function createSubagentTool(
   const delegationDescription = delegationEnabled
     ? "Delegation is a positive foreground request. A permitted depth-1 child may launch one bounded depth-2 batch with fresh context by default or an explicit immutable user-visible fork; depth-2 children cannot delegate. "
     : "";
+  const modelKeys = modelOptions?.models.map(subagentModelKey) ?? [];
+  const modelDescription = modelOptions
+    ? `Omit model and effort unless the user asks for a specific model or reasoning effort; children inherit the current model (${modelKeys[0]}) by default. Requestable models: ${modelOptions.models
+        .map((model) => `${subagentModelKey(model)} (${model.modelLabel}, ${model.providerLabel})`)
+        .join("; ")}. A different model starts at its own default effort. An unsupported model or effort fails the batch. Model choice never changes a child's permissions or approvals. `
+    : "";
+  const taskFields = modelOptions
+    ? "role, label, task, optional maxTurns, optional narrower capabilities, optional model, and optional effort"
+    : "role, label, task, optional maxTurns, and optional narrower capabilities";
   return {
     name: "subagent",
     label: "Delegate to Subagents",
-    description: `${roleDescription} ${writeDescription}${shellDescription}${delegationDescription}Web and listed server-declared read-only MCP capabilities are requests, not grants; each exact egress call pauses for owner approval, and the configured server controls the actual effect. Mutating MCP is a separate positive request: every exact call pauses for one-shot owner approval, the configured server controls the effect, rollback is unavailable, and Aiden never retries automatically. When supplied, task capabilities may only narrow their matching root lane. ${inventoryDescription} ${mutationInventoryDescription} Context is fresh by default; request a bounded conversation fork only when persisted user-visible decisions or attachments are required. Timing, deadlines, and run IDs are host-owned. A read-only task may request maxTurns up to 128; omission keeps 24 turns. Never send execution, deadline, or other budget fields. Each task contains role, label, task, optional maxTurns, and optional narrower capabilities. Use for parallel evidence gathering, comparison, planning, implementation, or fresh review. You must reconcile their ordered results and write the final synthesis. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`,
+    description: `${roleDescription} ${writeDescription}${shellDescription}${delegationDescription}Web and listed server-declared read-only MCP capabilities are requests, not grants; each exact egress call pauses for owner approval, and the configured server controls the actual effect. Mutating MCP is a separate positive request: every exact call pauses for one-shot owner approval, the configured server controls the effect, rollback is unavailable, and Aiden never retries automatically. When supplied, task capabilities may only narrow their matching root lane. ${inventoryDescription} ${mutationInventoryDescription} Context is fresh by default; request a bounded conversation fork only when persisted user-visible decisions or attachments are required. Timing, deadlines, and run IDs are host-owned. A read-only task may request maxTurns up to 128; omission keeps 24 turns. Never send execution, deadline, or other budget fields. Each task contains ${taskFields}. ${modelDescription}Use for parallel evidence gathering, comparison, planning, implementation, or fresh review. You must reconcile their ordered results and write the final synthesis. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`,
     parameters: Type.Object(
       {
         context: Type.Optional(
@@ -210,6 +221,18 @@ export function createSubagentTool(
                 description: "Read-only investigation turn budget; default 24. Other host limits still apply.",
               })),
               capabilities: Type.Optional(capabilities),
+              ...(modelOptions
+                ? {
+                    model: Type.Optional(Type.String({
+                      enum: modelKeys,
+                      description: "Only when the user asks for a specific model. Omit to inherit the current model.",
+                    })),
+                    effort: Type.Optional(Type.String({
+                      enum: [...modelOptions.efforts],
+                      description: "Only when the user asks for a reasoning effort. Omit to use the chosen model's default.",
+                    })),
+                  }
+                : {}),
             },
             { additionalProperties: false },
           ),
