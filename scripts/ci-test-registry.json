@@ -672,6 +672,7 @@
         "renderer/shared/chat-message-contract.test.ts",
         "renderer/shared/chat-pull-requests.test.ts",
         "renderer/shared/chat-row-state.test.ts",
+        "renderer/shared/chat-visibility.test.ts",
         "renderer/shared/compaction.test.ts",
         "renderer/shared/context-pressure.test.ts",
         "renderer/shared/devices.test.ts",
