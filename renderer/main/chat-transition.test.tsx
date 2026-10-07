@@ -231,7 +231,7 @@ test("append reconciliation is surfaced across route remounts and chat creation 
   assert.match(root, /duration: Infinity/u);
   assert.match(layout, /appendReconciliationRequired \?/u);
   assert.match(layout, /\.catch\(\(error: unknown\)/u);
-  assert.match(sidebar, /disabled=\{!activeId \|\| appendReconciliationRequired\}/u);
+  assert.match(sidebar, /newAgentDisabled=\{!activeId \|\| appendReconciliationRequired\}/u);
   assert.match(sidebar, /Aiden could not create a chat/u);
   assert.match(sidebar, /list\.length === 0 && appendReconciliationRequired/u);
   assert.match(sidebar, /workspaceSwitchBlocked \|\| appendReconciliationRequired/u);

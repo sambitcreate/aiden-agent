@@ -1,6 +1,9 @@
 # Designer Mode Plan
 
-Status: revised implementation plan; Phase 0 is a go/no-go gate  
+Status: superseded (see note below); Phase 0 is a go/no-go gate  
+
+> **Superseded (2026-10-07):** folded into [Design Studio + Create Images rebuild](design-studio-create-images-rebuild-plan.md) as DS-4 "Connected app". This document remains the reference for DS-4 entry criteria.
+
 Date: 2026-07-22  
 Aiden baseline: `b6b0eff6bb55e0113a05cc8d069fce2c1be67b40`  
 Onlook baseline: `423e2e924366419e418ee049093872d535eea41a`
