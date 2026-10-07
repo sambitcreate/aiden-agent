@@ -59,11 +59,14 @@ export const PEER_WAKE_COALESCE_MS = 500;
 export interface PeerManagerRegistry {
   list(): Promise<PeerHostView[]>;
   connect(id: string, signal?: AbortSignal): Promise<PeerHostView>;
+  /** Verify a live host without replacing its feed or run streams. */
+  probe?(id: string, signal?: AbortSignal): Promise<void>;
+  preferReachableRoute?(id: string, signal?: AbortSignal): Promise<boolean>;
   request(
     id: string,
     input: Omit<PeerRequest, "credential">,
     onFrame?: (frame: string) => void,
-    options?: { partition?: PeerRequestPartition; binary?: boolean },
+    options?: { partition?: PeerRequestPartition; binary?: boolean; credentialIdentity?: string },
   ): Promise<unknown>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   remove(id: string): Promise<void>;
@@ -96,6 +99,10 @@ interface Supervisor {
   failures: number;
   retryTimer: unknown;
   stableTimer: unknown;
+  routeTimer?: unknown;
+  probing?: boolean;
+  lastSyncedAt?: number;
+  failure?: PeerHostStatus["failure"];
 }
 
 const realTimers: PeerRunTimers = {
@@ -281,6 +288,16 @@ export class PeerHostManager {
       this.wakeTimer = undefined;
       for (const sup of [...this.supervisors.values()]) {
         if (sup.state.kind === "blocked") continue;
+        if (sup.state.kind === "connected" && this.options.registry.probe) {
+          if (sup.probing) continue;
+          sup.probing = true;
+          const generation = sup.generation;
+          void this.options.registry.probe(sup.hostId, sup.controller.signal).catch((error: unknown) => {
+            if (this.current(sup, generation)) this.fail(sup, generation, error);
+          }).finally(() => { sup.probing = false; });
+          void this.checkPreferredRoute(sup, generation);
+          continue;
+        }
         sup.failures = 0;
         this.start(sup);
       }
@@ -295,6 +312,7 @@ export class PeerHostManager {
     hostId: unknown,
     operation: unknown,
     signal?: AbortSignal,
+    options: { credentialIdentity?: string } = {},
   ): Promise<PeerOperationOutcome> {
     let id: string;
     let request: Omit<PeerRequest, "credential">;
@@ -325,7 +343,7 @@ export class PeerHostManager {
         id,
         { ...request, ...(signal ? { signal } : {}) },
         undefined,
-        record.operation === "attachmentContent" ? { binary: true } : {},
+        { ...(record.operation === "attachmentContent" ? { binary: true } : {}), ...options },
       );
     } catch (error) {
       if (
@@ -453,6 +471,7 @@ export class PeerHostManager {
         continue;
       }
       sup.view = view;
+      if (sup.state.kind === "connected" && sup.routeTimer === undefined) this.scheduleRouteCheck(sup, sup.generation);
       // Grants refreshed while connected may enable the feed.
       if (
         sup.state.kind === "connected" &&
@@ -513,8 +532,10 @@ export class PeerHostManager {
   private clearTimers(sup: Supervisor): void {
     if (sup.retryTimer !== undefined) this.timers.clear(sup.retryTimer);
     if (sup.stableTimer !== undefined) this.timers.clear(sup.stableTimer);
+    if (sup.routeTimer !== undefined) this.timers.clear(sup.routeTimer);
     sup.retryTimer = undefined;
     sup.stableTimer = undefined;
+    sup.routeTimer = undefined;
   }
 
   private start(sup: Supervisor): void {
@@ -537,10 +558,29 @@ export class PeerHostManager {
           if (this.current(sup, live)) sup.failures = 0;
         }, PEER_STABLE_MS);
         void this.runFeed(sup, live);
+        this.scheduleRouteCheck(sup, live);
         this.wakeHost(sup.hostId);
       },
       (error: unknown) => this.fail(sup, generation, error),
     );
+  }
+
+  private async checkPreferredRoute(sup: Supervisor, generation: number): Promise<void> {
+    if (!this.options.registry.preferReachableRoute || !this.current(sup, generation)) return;
+    try {
+      const better = await this.options.registry.preferReachableRoute(sup.hostId, sup.controller.signal);
+      if (better && this.current(sup, generation)) this.start(sup);
+    } catch { /* Route preference must never interrupt a working fallback. */ }
+  }
+
+  private scheduleRouteCheck(sup: Supervisor, generation: number): void {
+    if (!this.options.registry.preferReachableRoute || sup.view.activeRouteKind !== "tailscale" || !sup.view.routes?.some((route) => route.kind === "lan")) return;
+    sup.routeTimer = this.timers.set(() => {
+      sup.routeTimer = undefined;
+      void this.checkPreferredRoute(sup, generation).finally(() => {
+        if (this.current(sup, generation)) this.scheduleRouteCheck(sup, generation);
+      });
+    }, 30_000);
   }
 
   private fail(sup: Supervisor, generation: number, error: unknown): void {
@@ -549,6 +589,9 @@ export class PeerHostManager {
     sup.controller.abort();
     this.leaveConnected(sup);
     const reason = blockedReason(error);
+    sup.failure = error instanceof PeerTransportError && error.code === "invalid_response"
+      ? "invalid_response"
+      : "unreachable";
     if (reason) {
       this.transition(sup, { kind: "blocked", reason });
     } else {
@@ -581,6 +624,8 @@ export class PeerHostManager {
       state: { ...sup.state },
       feed: sup.feed,
       stale: sup.cache.stale,
+      ...(sup.lastSyncedAt === undefined ? {} : { lastSyncedAt: sup.lastSyncedAt }),
+      ...(sup.failure === undefined ? {} : { failure: sup.failure }),
     };
   }
 
@@ -629,6 +674,8 @@ export class PeerHostManager {
   }
 
   private feedLive(sup: Supervisor): void {
+    sup.lastSyncedAt = this.now();
+    sup.failure = undefined;
     for (const change of sup.cache.markStale(false)) this.broadcastFeed(sup, change);
     this.setFeed(sup, "live");
   }

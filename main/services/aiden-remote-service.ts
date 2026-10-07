@@ -7,6 +7,7 @@ import { createServer as createHttpServer, type Server as HttpServer } from "nod
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import os from "node:os";
+import { peerLanInterfaceAddresses } from "./peer-routes.js";
 import type { Duplex } from "node:stream";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
 import {
@@ -103,7 +104,7 @@ export function aidenRemotePortCandidates(preferredPort: number): number[] {
 
 export interface AidenRemoteBonjourPublisher {
   start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void>;
   stop(): void;
@@ -366,7 +367,7 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
   ) {}
 
   async start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void> {
     this.stop();
@@ -379,6 +380,7 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
       [
         "-R", serviceName, "_aiden-agent._tcp", "local.",
         String(input.port), "v=1", `instance=${input.instanceId}`,
+        ...(input.hostname ? [`hostname=${input.hostname}`] : []),
       ],
       { stdio: "ignore", windowsHide: true },
     );
@@ -430,7 +432,7 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
   ) {}
 
   async start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void> {
     this.stop();
@@ -466,7 +468,7 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
       type: "aiden-agent",
       protocol: "tcp",
       port: input.port,
-      txt: { v: "1", instance: input.instanceId },
+      txt: { v: "1", instance: input.instanceId, ...(input.hostname ? { hostname: input.hostname } : {}) },
     });
     const readySignal = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
@@ -588,6 +590,7 @@ export class AidenRemoteService {
           })
         : null;
       if (pairingRequests) await this.loadPairingRequestSetting();
+      let routeCache: { key: string; expires: number; routes: Array<import("./peer-transport.js").PeerTrust & { addresses?: string[] }> } | undefined;
       const routerDependencies: AidenRemoteRouterDependencies = {
         instanceId: state.instanceId,
         displayName: () => this.activeState?.displayName ?? state.displayName,
@@ -599,6 +602,27 @@ export class AidenRemoteService {
         ...(this.options.simulators ? { simulators: this.options.simulators } : {}),
         ...(this.options.hostPlatform ? { platform: this.options.hostPlatform } : {}),
         connectionMode: () => this.activeState?.connectionMode ?? state.connectionMode,
+        peerRoutes: async () => {
+          const current = await this.options.state.snapshot();
+          const routes: Array<import("./peer-transport.js").PeerTrust & { addresses?: string[] }> = [];
+          if (!current.enabled) return routes;
+          const key = JSON.stringify([current.connectionMode, current.tailscaleOwnership, current.tailscalePendingOutcome, Boolean(this.lanServer), Boolean(this.tailscaleServer)]);
+          if (routeCache?.key === key && routeCache.expires > this.now()) return routeCache.routes;
+          for (const transport of ["lan", "tailscale"] as const) {
+            try {
+              const endpoint = await this.transportEndpoint(transport, current, tlsIdentity, { cachedTailscalePin: true });
+              const hostname = new URL(endpoint.endpoint).hostname;
+              if (transport === "lan" ? !hostname.endsWith(".local") : !hostname.endsWith(".ts.net")) continue;
+              const trust = this.transportTrust(transport, tlsIdentity);
+              routes.push({ ...endpoint,
+                ...(trust.mode === "private-ca" ? { caCertificateDerBase64: trust.caCertificateDerBase64 } : {}),
+                ...(transport === "lan" ? { addresses: peerLanInterfaceAddresses(os.networkInterfaces()) } : {}),
+              });
+            } catch { /* An unavailable or unowned transport must not be advertised. */ }
+          }
+          routeCache = { key, expires: this.now() + 30_000, routes };
+          return routes;
+        },
         now: this.now,
         log: (entry) => {
           this.options.log?.({
@@ -819,10 +843,12 @@ export class AidenRemoteService {
   }
 
   private async publishBonjour(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
   ): Promise<void> {
     try {
-      await this.options.bonjour.start(input, (error) => {
+      const hostname = localDnsName(this.hostname);
+      const hint = hostname.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.local$/u.test(hostname) ? { hostname } : {};
+      await this.options.bonjour.start({ ...input, ...hint }, (error) => {
         void this.serialized(async () => {
           if (
             this.activeState?.instanceId !== input.instanceId

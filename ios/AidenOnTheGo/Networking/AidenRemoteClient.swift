@@ -574,7 +574,26 @@ struct AidenManualPairingResult {
     let exchange: AidenRemoteContractFixture.PairingExchange
 }
 
+private final class AidenConditionalResponseCache: @unchecked Sendable {
+    struct Entry { let etag: String; let data: Data }
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+    func entry(_ key: String) -> Entry? { lock.withLock { entries[key] } }
+    func store(_ key: String, etag: String?, data: Data) {
+        lock.withLock {
+            entries.removeValue(forKey: key)
+            guard let etag, etag.utf8.count <= 256, data.count <= 1_048_576 else { return }
+            if entries.count >= 32 || entries.values.reduce(0, { $0 + $1.data.count }) + data.count > 4_194_304 {
+                entries.removeAll()
+            }
+            entries[key] = Entry(etag: etag, data: data)
+        }
+    }
+}
+
 final class AidenRemoteClient: @unchecked Sendable {
+    // A client belongs to one credential scope; cached bytes never cross pairings.
+    private let conditionalResponses = AidenConditionalResponseCache()
     private struct EmptyRequest: Encodable {}
 
     private struct PairingExchangeRequest: Encodable {
@@ -2225,13 +2244,17 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// as their stream identity and carry direct task/agent snapshots.
     func progressEvents(
         chatId: String,
-        after sequence: Int
+        after sequence: Int,
+        epoch: String? = nil,
+        onOpen: @escaping @Sendable (Bool) async -> Void = { _ in }
     ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
         eventStream(
             path: ["chats", chatId, "progress", "events"],
             expectedStreamId: chatId,
             progressOnly: true,
-            after: sequence
+            after: sequence,
+            headers: epoch.map { ["Aiden-Progress-Epoch": $0] } ?? [:],
+            onOpen: onOpen
         )
     }
 
@@ -2318,9 +2341,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         path: [String],
         expectedStreamId: String?,
         progressOnly: Bool,
-        after sequence: Int
+        after sequence: Int,
+        headers: [String: String] = [:],
+        onOpen: @escaping @Sendable (Bool) async -> Void = { _ in }
     ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
-        sseStream(path: path, after: sequence, parser: AidenSSEParser()) { event in
+        sseStream(path: path, after: sequence, parser: AidenSSEParser(), headers: headers, onOpen: onOpen) { event in
             if let expectedStreamId, event.streamId != expectedStreamId {
                 throw AidenRemoteClientError.invalidResponse
             }
@@ -2344,6 +2369,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         path: [String],
         after sequence: Int,
         parser initialParser: Parser,
+        headers: [String: String] = [:],
+        onOpen: @escaping @Sendable (Bool) async -> Void = { _ in },
         validate validateEvent: @escaping @Sendable (Parser.Event) throws -> Void
     ) -> AsyncThrowingStream<Parser.Event, Error> {
         AsyncThrowingStream { continuation in
@@ -2357,7 +2384,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                         path: path,
                         query: query,
                         body: nil,
-                        headers: sequence > 0 ? ["Last-Event-ID": String(sequence)] : [:],
+                        headers: headers.merging(sequence > 0 ? ["Last-Event-ID": String(sequence)] : [:]) { _, new in new },
                         authenticated: true
                     )
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -2376,6 +2403,8 @@ final class AidenRemoteClient: @unchecked Sendable {
                         try validate(response: response, data: body, acceptedStatus: [200])
                         throw AidenRemoteClientError.unexpectedStatus(httpResponse.statusCode)
                     }
+
+                    await onOpen(httpResponse.value(forHTTPHeaderField: "Aiden-Progress-Resumed") == "true")
 
                     func yield(_ event: Parser.Event) throws {
                         try validateEvent(event)
@@ -2464,7 +2493,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         acceptedStatus: Set<Int> = [200],
         maximumResponseBytes: Int = AidenRemoteProtocol.maxJSONBodyBytes
     ) async throws -> Response {
-        let request = try makeRequest(
+        var request = try makeRequest(
             method: method,
             path: path,
             query: query,
@@ -2472,13 +2501,22 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: headers,
             authenticated: authenticated
         )
-        let (data, response) = try await boundedData(
+        let cacheKey = request.url!.absoluteString
+        let cached = method == "GET" && authenticated ? conditionalResponses.entry(cacheKey) : nil
+        if let cached { request.setValue(cached.etag, forHTTPHeaderField: "If-None-Match") }
+        let (receivedData, response) = try await boundedData(
             for: request,
             maximumBytes: maximumResponseBytes
         )
-        try validate(response: response, data: data, acceptedStatus: acceptedStatus)
+        let unchanged = (response as? HTTPURLResponse)?.statusCode == 304 && cached != nil
+        let data = unchanged ? cached!.data : receivedData
+        try validate(response: response, data: receivedData, acceptedStatus: unchanged ? acceptedStatus.union([304]) : acceptedStatus)
         do {
-            return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
+            let decoded = try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
+            if method == "GET", authenticated, !unchanged {
+                conditionalResponses.store(cacheKey, etag: (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "ETag"), data: data)
+            }
+            return decoded
         } catch {
             AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteClientError.invalidResponse

@@ -1865,7 +1865,7 @@ struct AidenUsageSummary: Codable, Equatable, Sendable {
     let models: [AidenUsageModel]
 }
 
-struct AidenTurnStart: Encodable, Equatable, Sendable {
+struct AidenTurnStart: Codable, Equatable, Sendable {
     let text: String
     let providerId: String?
     let modelId: String?

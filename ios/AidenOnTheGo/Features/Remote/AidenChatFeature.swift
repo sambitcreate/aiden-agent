@@ -1066,6 +1066,7 @@ enum AidenDraftSendReconciliation {
     static func failedDraft(submitted: String, current: String) -> String {
         guard !current.isEmpty else { return submitted }
         guard current != submitted else { return current }
+        if !submitted.isEmpty, current.hasPrefix(submitted + "\n\n") { return current }
         return "\(submitted)\n\n\(current)"
     }
 
@@ -1162,6 +1163,27 @@ final class AidenChatViewModel {
     @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private let networkPath: AidenNetworkPathSource?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
+    private(set) var pendingSend: AidenChatDraftStore.PendingSend?
+    private(set) var sendRecoveryError: String?
+    var canRetrySend: Bool {
+        pendingSend?.canRetry() == true && isConnected && coordinator.activeInstanceId == instanceId && !isStarting && !isSubmittingRunInput && !isRestoringStream && (pendingSend?.streamId != nil || (activeStreamID == nil && !isStreaming))
+    }
+    var sendRecoveryMessage: String? {
+        if let sendRecoveryError { return sendRecoveryError }
+        guard let pendingSend, !isStarting, !isSubmittingRunInput else { return nil }
+        return pendingSend.canRetry()
+            ? "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
+            : "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message."
+    }
+    func discardPendingSend() async {
+        guard !isStarting, !isSubmittingRunInput, let session = draftSession else { return }
+        do {
+            try await draftStore.savePendingSend(nil, session: session)
+            pendingSend = nil
+            sendRecoveryError = nil
+            turnAttempts.reset()
+        } catch { presentedError = error.localizedDescription }
+    }
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
     @ObservationIgnored private var forkAttempt: AidenChatForkAttempt?
@@ -1427,7 +1449,7 @@ final class AidenChatViewModel {
     }
     var isStreaming: Bool { streamState.map { !$0.isTerminal } ?? false }
     var canSend: Bool {
-        guard !isReadOnlyPresentation, !isRemoved else { return false }
+        guard !isReadOnlyPresentation, !isRemoved, pendingSend == nil, sendRecoveryError == nil else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.activeInstanceId == instanceId
             && !isStarting && !isRestoringStream && activeStreamID == nil && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
@@ -1627,6 +1649,8 @@ final class AidenChatViewModel {
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             draftSession = session
+            do { pendingSend = try await draftStore.loadPendingSend(session: session, deviceId: context.deviceId) }
+            catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your desktop before dismissing it and sending again." }
             if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
                 guard !isRemoved, coordinator.isCurrent(context), draftSession == session else { return }
@@ -2219,7 +2243,9 @@ final class AidenChatViewModel {
 
     private func observeProgress(generation: UInt64, initialSnapshotLoaded: Bool = false) async {
         var skipsSnapshot = initialSnapshotLoaded
-        var failedAttempts = 0
+        var cursor = 0
+        var cursorEpoch: String?
+        var recovery = AidenStreamNetworkRecovery(path: networkPath ?? AidenNetworkAvailability())
         while !Task.isCancelled {
             guard let context = try? coordinator.requestContext(for: instanceId) else {
                 clearProgressState()
@@ -2227,6 +2253,10 @@ final class AidenChatViewModel {
             }
             guard isCurrentProgressObservation(generation, context: context),
                   canReadTaskProgress || canReadAgentRoster else { return }
+            do {
+                _ = try await recovery.shouldProbeAfterStreamFailure(onWaiting: { _ in })
+            } catch { return }
+            guard isCurrentProgressObservation(generation, context: context) else { return }
             if !skipsSnapshot {
                 await loadProgressSnapshot(context: context, observationGeneration: generation)
             }
@@ -2235,7 +2265,15 @@ final class AidenChatViewModel {
             do {
                 let events = try coordinator.remoteClient(for: context).progressEvents(
                     chatId: chat.id,
-                    after: 0
+                    after: cursor,
+                    epoch: cursorEpoch,
+                    onOpen: { [weak self] resumed in
+                        await MainActor.run {
+                            guard let self, resumed, self.isCurrentProgressObservation(generation, context: context) else { return }
+                            self.isTaskProgressStale = false
+                            self.isAgentRosterStale = false
+                        }
+                    }
                 )
                 for try await event in events {
                     try Task.checkCancellation()
@@ -2243,8 +2281,10 @@ final class AidenChatViewModel {
                           event.streamId == chat.id else { return }
                     // A delivered event proves the channel is healthy, so the
                     // next reconnect starts again from the shortest delay.
-                    failedAttempts = 0
+                    recovery.recordHealthy()
                     applyProgress(event)
+                    cursor = event.sequence
+                    cursorEpoch = event.taskProgress?.epoch ?? event.agentRoster?.epoch
                 }
                 if isCurrentProgressObservation(generation, context: context) {
                     isTaskProgressStale = taskProgress != nil
@@ -2263,10 +2303,8 @@ final class AidenChatViewModel {
                 isTaskProgressStale = taskProgress != nil
                 isAgentRosterStale = agentRoster != nil
             }
-            let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: failedAttempts)
-            failedAttempts += 1
             do {
-                try await Task.sleep(for: .milliseconds(delay))
+                _ = try await recovery.recoverAfterProbeFailure(onBackoff: {}, onWaiting: { _ in })
             } catch {
                 return
             }
@@ -2308,7 +2346,7 @@ final class AidenChatViewModel {
             }
             guard let snapshot = event.taskProgress,
                   snapshot.chatId == chat.id else { return }
-            if acceptTaskProgress(snapshot) {
+            if acceptTaskProgress(snapshot) || (taskProgress?.epoch == snapshot.epoch && taskProgress?.revision == snapshot.revision) {
                 isTaskProgressStale = false
             }
         case .agentsUpdate:
@@ -2318,7 +2356,7 @@ final class AidenChatViewModel {
             }
             guard let snapshot = event.agentRoster,
                   snapshot.chatId == chat.id else { return }
-            if acceptAgentRoster(snapshot) {
+            if acceptAgentRoster(snapshot) || (agentRoster?.epoch == snapshot.epoch && agentRoster?.revision == snapshot.revision) {
                 isAgentRosterStale = false
             }
         case .heartbeat:
@@ -2500,10 +2538,12 @@ final class AidenChatViewModel {
         rememberExplicitModelSelection()
     }
 
-    func send() async {
+    func send(retry: Bool = false) async {
+        if retry, let mode = pendingSend?.inputMode { await submitRunInput(mode, retry: true); return }
         guard !isReadOnlyPresentation else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend else { return }
+        let retryAttempt = retry ? pendingSend : nil
+        guard retry ? canRetrySend : canSend else { return }
+        let text = retryAttempt?.request.text ?? draft.trimmingCharacters(in: .whitespacesAndNewlines)
         switch aidenImageSendRecovery(
             isBotChat: chat.isBotChat,
             acceptsImages: acceptsImageAttachments,
@@ -2519,10 +2559,10 @@ final class AidenChatViewModel {
             return
         }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
-        let submittedAttachments = pendingAttachments
+        let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
-        let request = AidenTurnRequestBuilder.make(
+        let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
             modelId: modelSelection.modelId,
@@ -2563,15 +2603,27 @@ final class AidenChatViewModel {
         presentedError = nil
         draftPersistenceTask?.cancel()
         suppressesDraftPersistence = true
-        draft = ""
+        if retryAttempt == nil || draft == text { draft = "" }
         suppressesDraftPersistence = false
         let clearedDraftGeneration = draftGeneration
-        pendingAttachments = []
+        pendingAttachments = retryAttempt == nil ? [] : pendingAttachments.filter { attachment in !submittedAttachments.contains { $0.id == attachment.id } }
         chat.messages.append(optimisticMessage)
         chat.updatedAt = now
         streamState = .queued
-        let idempotencyKey = turnAttempts.key(for: request)
+        let attempt = retryAttempt ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: request,
+            key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments)
+        let idempotencyKey = attempt.key
         do {
+            let session: AidenChatDraftStore.Session
+            if let existing = draftSession { session = existing }
+            else {
+                session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
+                draftSession = session
+            }
+            try await draftStore.savePendingSend(attempt, session: session)
+            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            pendingSend = attempt
+            guard attempt.canRetry(), coordinator.isCurrent(context) else { throw AidenRemoteClientError.invalidResponse }
             let response = try await coordinator.remoteClient(for: context).startTurn(
                 chatId: chat.id,
                 request: request,
@@ -2648,9 +2700,12 @@ final class AidenChatViewModel {
                 return
             }
             guard !isRemoved, coordinator.isCurrent(context) else { return }
+            await draftStore.settlePendingSend(key: attempt.key, session: session)
+            pendingSend = nil
             turnAttempts.reset()
             chat = acceptedChat
-            selectedSkill = nil
+            if retryAttempt == nil { selectedSkill = nil }
+            if retryAttempt != nil, draft == text || draft.hasPrefix(text + "\n\n") { consumeRunInputDraft(text) }
             liveText = ""
             reasoning = ""
             tools = []
@@ -2681,7 +2736,13 @@ final class AidenChatViewModel {
                 current: pendingAttachments
             )
             streamState = nil
-            presentedError = error.localizedDescription
+            if case AidenRemoteClientError.server(let status, _) = error,
+               [400, 401, 403, 404, 413, 422, 429].contains(status), let session = draftSession {
+                await draftStore.settlePendingSend(key: attempt.key, session: session)
+                pendingSend = nil
+                turnAttempts.reset()
+            }
+            if pendingSend == nil { presentedError = error.localizedDescription }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
@@ -3066,7 +3127,7 @@ final class AidenChatViewModel {
     }
 
     var canSubmitRunInput: Bool {
-        showsRunInputOptions && !isSubmittingRunInput && !isStopping
+        showsRunInputOptions && pendingSend == nil && sendRecoveryError == nil && pendingAttachments.isEmpty && selectedSkill == nil && !isSubmittingRunInput && !isStopping
             && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -3078,13 +3139,15 @@ final class AidenChatViewModel {
         await submitRunInput(mode)
     }
 
-    func submitRunInput(_ mode: AidenStreamInputMode) async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSubmitRunInput, !text.isEmpty,
-              let streamID = activeStreamID,
+    func submitRunInput(_ mode: AidenStreamInputMode, retry: Bool = false) async {
+        let saved = retry ? pendingSend : nil
+        let text = saved?.request.text ?? draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (retry ? canRetrySend : canSubmitRunInput), !text.isEmpty,
+              let streamID = saved?.streamId ?? activeStreamID,
               let context = try? coordinator.requestContext(for: instanceId) else { return }
         let key: UUID
-        if AidenRunInputPresentation.reusesIdempotencyKey(
+        if let saved { key = saved.key }
+        else if AidenRunInputPresentation.reusesIdempotencyKey(
             last: lastRunInputAttempt, streamId: streamID, mode: mode, text: text
         ), let last = lastRunInputAttempt {
             key = last.key
@@ -3098,6 +3161,14 @@ final class AidenChatViewModel {
         isSubmittingRunInput = true
         defer { isSubmittingRunInput = false }
         do {
+            let session: AidenChatDraftStore.Session
+            if let existing = draftSession { session = existing }
+            else { session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id); draftSession = session }
+            let pending = saved ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: AidenTurnStart(text: text), key: key,
+                createdAt: Date(), attachments: [], streamId: streamID, inputMode: mode)
+            try await draftStore.savePendingSend(pending, session: session)
+            pendingSend = pending
+            guard pending.canRetry(), coordinator.isCurrent(context) else { throw AidenRemoteClientError.invalidResponse }
             let result = try await coordinator.remoteClient(for: context).submitStreamInput(
                 id: streamID,
                 input: AidenStreamInputRequest(mode: mode, text: text),
@@ -3106,10 +3177,12 @@ final class AidenChatViewModel {
             guard coordinator.isCurrent(context) else { return }
             // The response must bind to the stream that was displayed when the
             // submission left; a mismatched receipt is never trusted.
-            guard result.streamId == streamID, result.chatId == chat.id else {
+            guard result.streamId == streamID, result.chatId == chat.id, result.mode == mode else {
                 presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
                 return
             }
+            await draftStore.settlePendingSend(key: key, session: session)
+            pendingSend = nil
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {
                 consumeRunInputDraft(text)
@@ -5009,6 +5082,15 @@ struct AidenChatDetailView: View {
 
     private var composer: some View {
         VStack(spacing: 0) {
+            if let message = model.sendRecoveryMessage {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(message).font(.footnote).accessibilityAddTraits(.updatesFrequently)
+                    HStack {
+                        Button("Retry message") { Task { await model.send(retry: true) } }.disabled(!model.canRetrySend)
+                        Button("I checked — dismiss") { Task { await model.discardPendingSend() } }
+                    }.font(.footnote)
+                }.padding(12).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16)).padding(.bottom, 8)
+            }
             AidenChatProgressControls(
                 taskProgress: model.taskProgress,
                 agentRoster: model.agentRoster,

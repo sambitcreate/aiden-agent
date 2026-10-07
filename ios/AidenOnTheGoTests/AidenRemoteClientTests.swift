@@ -15,6 +15,40 @@ final class AidenRemoteClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testQuietProgressResumeCarriesEpochAndReportsOpenWithoutASnapshot() async throws {
+        let opened = expectation(description: "Recognized progress cursor is live")
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Progress-Epoch"), "epoch-original")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "42")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream", "Aiden-Progress-Resumed": "true"])!, Data())
+        }
+        for try await _ in makeClient().progressEvents(chatId: "chat-1", after: 42, epoch: "epoch-original", onOpen: { resumed in
+            XCTAssertTrue(resumed)
+            opened.fulfill()
+        }) { XCTFail("A quiet resumed channel must not manufacture a snapshot") }
+        await fulfillment(of: [opened], timeout: 1)
+    }
+
+    func testConditionalReadReusesValidatedBytesAndRejectsUnsolicited304() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            let cached = request.value(forHTTPHeaderField: "If-None-Match") != nil
+            let response = HTTPURLResponse(url: request.url!, statusCode: cached ? 304 : 200, httpVersion: nil, headerFields: ["ETag": "W/\"snapshot\""])!
+            let body = #"{"protocolVersion":1,"instanceId":"instance-1","name":"Home","appVersion":"1","capabilities":["server:read"],"serverCapabilities":["server:read"],"connectionMode":"lan","serverTime":"2026-10-06T00:00:00Z"}"#
+            return (response, cached ? Data() : Data(body.utf8))
+        }
+        let first = try await client.server()
+        let second = try await client.server()
+        XCTAssertEqual(first.name, "Home")
+        XCTAssertEqual(second.name, "Home")
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "If-None-Match"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 304, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        do { _ = try await makeClient().server(); XCTFail("A new client must not reuse another client's private bytes") } catch { }
+    }
+
     func testClientDeviceIdentityPrefersSpecificUserAssignedName() {
         XCTAssertEqual(
             AidenClientDeviceIdentity.displayName(

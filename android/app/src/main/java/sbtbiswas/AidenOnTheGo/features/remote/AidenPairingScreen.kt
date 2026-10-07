@@ -59,9 +59,11 @@ fun AidenPairingScreen(
     val activeId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
 
     var manualCode by remember { mutableStateOf("") }
-    var endpointUrl by remember { mutableStateOf("https://127.0.0.1:8765/api/aiden/v1") }
+    var endpointUrl by remember { mutableStateOf("") }
     var qrJsonInput by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Scan QR, 1: Setup Code, 2: Paste JSON
+    var discoveryRefresh by remember { mutableIntStateOf(0) }
+    val (nearbyDesktops, discoveryError) = rememberNearbyDesktops(selectedTab == 1, discoveryRefresh)
     var isPairing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var installationPendingRemoval by remember { mutableStateOf<AidenInstallation?>(null) }
@@ -198,7 +200,7 @@ fun AidenPairingScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "On your desktop, open Settings → Aiden On The Go → Connect a device. Then scan its code here. Read Aloud uses your desktop’s setup: enable it there. Pressing Play sends selected response text from your desktop to Google; charges may apply.",
+                text = "On your desktop, open Settings → Aiden On The Go → Connect a device. Then scan its code here, or use the setup code with a nearby desktop or private Tailscale address.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = palette.secondary
             )
@@ -251,6 +253,14 @@ fun AidenPairingScreen(
                     }
                 }
                 1 -> {
+                    Text("Nearby desktops", style = MaterialTheme.typography.titleSmall)
+                    Text(discoveryError ?: if (nearbyDesktops.isEmpty()) "Searching your local network. Keep Aiden open and enable device connections on your desktop. You can also enter its address below." else "Choose your desktop, then enter the setup code shown there.",
+                        style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                    nearbyDesktops.forEach { desktop ->
+                        TextButton(onClick = { endpointUrl = desktop.endpoint }, shape = AidenShape.Button) { Text(desktop.name) }
+                    }
+                    TextButton(onClick = { discoveryRefresh++ }, shape = AidenShape.Button) { Text("Search again") }
+                    Spacer(modifier = Modifier.height(12.dp))
                     // Manual 20-character Crockford code
                     TextField(
                         colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
@@ -273,6 +283,7 @@ fun AidenPairingScreen(
                         value = endpointUrl,
                         onValueChange = { endpointUrl = it },
                         label = { Text("Desktop address") },
+                        placeholder = { Text("https://your-desktop.local:8765/api/aiden/v1") },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -283,7 +294,7 @@ fun AidenPairingScreen(
                     AidenPairingActionButton(
                         text = "Connect & Pair",
                         busy = isPairing,
-                        enabled = manualCode.replace("-", "").length == 20 && !isPairing,
+                        enabled = manualCode.replace("-", "").length == 20 && endpointUrl.isNotBlank() && !isPairing,
                         onClick = {
                             scope.launch {
                                 isPairing = true

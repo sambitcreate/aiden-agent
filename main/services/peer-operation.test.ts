@@ -302,3 +302,11 @@ test("fork answers are parsed into the contract's chat and prefill shapes", asyn
     await assert.rejects(peerOperationResult({ operation }, {}), operation);
   await assert.rejects(peerOperationResult({ operation: "forkSummaryCancel" }, { cancelled: "yes" }));
 });
+
+
+test("server reads strip route trust before crossing into the renderer", async () => {
+  const server = { ...contract.server, peerRoutes: [{ endpoint: "https://private.local/api/aiden/v1", caCertificateDerBase64: "private-route-trust", serverSpkiSha256: "secret-pin" }] };
+  const result = await peerOperationResult({ operation: "server" }, server);
+  assert.deepEqual(result, contract.server);
+  await assert.rejects(peerOperationResult({ operation: "server" }, { ...server, nested: { credential: "still-forbidden" } }));
+});

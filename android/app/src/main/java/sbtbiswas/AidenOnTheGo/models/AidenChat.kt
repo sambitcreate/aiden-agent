@@ -1713,6 +1713,7 @@ object AidenTurnRequestBuilder {
 object AidenDraftSendReconciliation {
     fun failedDraft(submitted: String, current: String): String {
         if (current.isEmpty()) return submitted
+        if (current == submitted || (submitted.isNotEmpty() && current.startsWith("$submitted\n\n"))) return current
         return "$submitted\n\n$current"
     }
 

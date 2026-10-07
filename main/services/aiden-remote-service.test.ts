@@ -173,7 +173,7 @@ async function fixture(
   const bonjour: {
     starts: number;
     stops: number;
-    inputs: Array<{ instanceId: string; displayName: string; port: number }>;
+    inputs: Array<{ instanceId: string; displayName: string; port: number; hostname?: string }>;
     failure?: (error: Error) => void;
     start(
       input: { instanceId: string; displayName: string; port: number },
@@ -470,6 +470,7 @@ test("a fresh profile moves to the next complete port pair and advertises only t
     assert.equal(app.persisted().lanPort, fallbackPort);
     assert.equal(app.persisted().lanPortCommitted, true);
     assert.deepEqual(app.bonjour.inputs.map((input) => input.port), [fallbackPort]);
+    assert.equal(app.bonjour.inputs[0]?.hostname, "aiden-test.local", "discovery carries the certificate hostname, never an IP substitute");
     assert.deepEqual(await insecureHealth(fallbackPort), {
       status: 200,
       body: { ok: true, protocolVersion: 1 },

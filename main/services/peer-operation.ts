@@ -119,6 +119,11 @@ export async function peerOperationResult(
   const input = peerRecord(operation);
   const name = peerText(input.operation, 40);
   if (name === "attachmentContent") return binaryContent(value);
+  if (name === "server") {
+    const { peerRoutes: _mainOnlyRoutes, ...projection } = peerRecord(value);
+    await validatePeerResponse(name, projection);
+    return projection;
+  }
   await validatePeerResponse(name, value);
   if (name === "summaries")
     return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");

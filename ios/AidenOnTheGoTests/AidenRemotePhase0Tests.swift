@@ -5,6 +5,18 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenRemotePhase0Tests: XCTestCase {
+    func testConnectionRecoveryDistinguishesOfflineTrustAndVersionFailures() {
+        let offline = AidenConnectionIssue.classify(URLError(.notConnectedToInternet))
+        XCTAssertEqual(offline.title, "Waiting for network")
+        XCTAssertTrue(offline.canRetry)
+        let trust = AidenConnectionIssue.classify(AidenServerTrustError.publicKeyPinMismatch)
+        XCTAssertEqual(trust.title, "Verify this computer")
+        XCTAssertFalse(trust.canRetry, "reconnecting must not imply bypassing a changed identity")
+        let version = AidenConnectionIssue.classify(AidenRemoteContractError.invalidProtocolVersion)
+        XCTAssertEqual(version.title, "Update required")
+        XCTAssertTrue(version.message.contains("both devices"))
+    }
+
     private let approvedKeychainService = "sbtbiswas.AidenOnTheGo.pairing"
     private let caCertificateDER = "MIIBpzCCAU6gAwIBAgIUIHmU6u43BGrkVPj4FQ5phcJ7K8EwCgYIKoZIzj0EAwIwIDEeMBwGA1UEAwwVQWlkZW4tUGhhc2UwLUxvY2FsLUNBMB4XDTI2MDgxODIwNTgwM1oXDTM2MDgxNTIwNTgwM1owIDEeMBwGA1UEAwwVQWlkZW4tUGhhc2UwLUxvY2FsLUNBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZwqoZbvPSf8paC937p5+TnciNpAxHE/4fwll/5YlUGW6xkSUmvFj7CpD3IPvY0PRgN+sZl/CzBFzn+wv9atnkaNmMGQwHQYDVR0OBBYEFK2vesnPv0ymHuSE6yQ9EoM+B7EYMB8GA1UdIwQYMBaAFK2vesnPv0ymHuSE6yQ9EoM+B7EYMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMCA0cAMEQCIHawuTBf/AOiSWTY+XpLIUzSxxFdKmTZl1Vol4HRJQ5VAiBpYlpHpxEzMd2j/VK8fUfZ8DU6y7XKme2iJFS8M7d1lw=="
     private let originalCertificateDER = "MIIB4jCCAYmgAwIBAgIULA5eC0u0KgewVf5FJD89CeRl5icwCgYIKoZIzj0EAwIwIDEeMBwGA1UEAwwVQWlkZW4tUGhhc2UwLUxvY2FsLUNBMB4XDTI2MDgxODIwNTgwM1oXDTI2MDkxNzIwNTgwM1owJDEiMCAGA1UEAwwZYWlkZW4tcGhhc2UwLmV4YW1wbGUudGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABI5u4+Ne8MXXQeyVvmFDduB1soFoJQvIv296OVjGuty9Z0VyUpKn2+oBKTSuD0GNooaSlIHqptxLFT/cpEYxrRqjgZwwgZkwJAYDVR0RBB0wG4IZYWlkZW4tcGhhc2UwLmV4YW1wbGUudGVzdDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAdBgNVHQ4EFgQUnnUkXuqHkoGw2LKXeyU7bjyCVYcwHwYDVR0jBBgwFoAUra96yc+/TKYe5ITrJD0Sgz4HsRgwCgYIKoZIzj0EAwIDRwAwRAIgd2WNDX68uxSxGQYJsDiUXohxKlBeEjXESlgHx6WRrJgCIFJN5ineCyCIYL17DW2sJ/9h2qA3GdOo/aiUWc+e6FCV"
@@ -136,7 +148,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 24)
+        XCTAssertEqual(fixture.contractRevision, 25)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)

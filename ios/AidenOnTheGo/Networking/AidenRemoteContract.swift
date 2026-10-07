@@ -2130,7 +2130,7 @@ struct AidenRemoteSkillCatalog: Decodable, Equatable, Sendable {
 /// Opaque invocation lease redeemed on POST /chats/{chatId}/turns. The Mac
 /// resolves, expands, and binds it to the appended user message exactly like a
 /// desktop slash selection; the client never expands skill content itself.
-struct AidenSkillInvocation: Encodable, Equatable, Sendable {
+struct AidenSkillInvocation: Codable, Equatable, Sendable {
     let version = 1
     let invocationId: String
     let displayName: String

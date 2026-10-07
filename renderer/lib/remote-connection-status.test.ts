@@ -50,5 +50,5 @@ test("connection summary favors actionable service state over device counts", ()
   assert.equal(remoteConnectionSummary({ enabled: false, running: false, activeDeviceCount: 2 }), "Off");
   assert.equal(remoteConnectionSummary({ enabled: true, running: false, activeDeviceCount: 2 }), "Needs attention");
   assert.equal(remoteConnectionSummary({ enabled: true, running: true, activeDeviceCount: 0 }), "Ready for a device");
-  assert.equal(remoteConnectionSummary({ enabled: true, running: true, activeDeviceCount: 2 }), "2 active");
+  assert.equal(remoteConnectionSummary({ enabled: true, running: true, activeDeviceCount: 2 }), "2 recently active");
 });

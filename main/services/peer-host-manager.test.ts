@@ -697,7 +697,9 @@ test("a chat's stream parks after its run, ignores the replay on reconnect and f
     assert.equal(last(harness.events("host_a"))?.type, "run.ended");
     assert.equal(streamState(harness.frames("host_a")), "idle");
 
-    // Reconnecting probes the chat again; the host replays the finished run.
+    // A dropped feed forces reconnection; the host replays the finished run.
+    host.streams("/host/events")[0]!.drop();
+    await settle();
     harness.manager.wake();
     await harness.advance(PEER_WAKE_COALESCE_MS);
     assert.equal(host.calls.filter((call) => call === "EVENTS /chats/chat-1/runs/current/events").length, 2);
@@ -808,7 +810,7 @@ test("a disabled host makes no requests at all", async () => {
   }
 });
 
-test("sleep, unlock and network changes coalesce into one reconnect that resumes the feed", async () => {
+test("sleep, unlock and network changes probe the healthy connection without stale flashes", async () => {
   const host = new FakeHost("host_a", "Plans");
   const harness = setup([host]);
   try {
@@ -822,12 +824,12 @@ test("sleep, unlock and network changes coalesce into one reconnect that resumes
     harness.manager.wake();
     await harness.advance(PEER_WAKE_COALESCE_MS);
     assert.deepEqual(host.calls.filter((call) => call === "GET /server").length, 2);
-    assert.equal(host.calls.filter((call) => call.startsWith("EVENTS /host/events @")).length, 1);
+    assert.equal(host.calls.filter((call) => call.startsWith("EVENTS /host/events @")).length, 0);
     assert.equal(resets(), 1);
     assert.deepEqual(
       harness.feed("host_a").flatMap((message) => (message.change.type === "stale" ? [message.change.stale] : [])),
-      [true, false],
-      "rows were marked stale while reconnecting",
+      [],
+      "healthy rows never become stale during a wake probe",
     );
   } finally {
     harness.close();
@@ -944,6 +946,8 @@ test("a request admitted by a superseded connection cannot block the reconnected
     const held = harness.manager.call("host_a", { operation: "summaries" });
     await settle();
 
+    host.streams("/host/events")[0]!.drop();
+    await settle();
     harness.manager.wake();
     await harness.advance(PEER_WAKE_COALESCE_MS);
     const reconnected = harness.status("host_a");
@@ -1030,7 +1034,7 @@ for (const hostCount of [1, 5, 10]) {
     }
   });
 
-  test(`one wake reconnects ${hostCount} host(s) with one identity check and one feed resume each`, async () => {
+  test(`one wake checks ${hostCount} healthy host(s) without reopening feeds`, async () => {
     const hosts = Array.from({ length: hostCount }, (_, index) => new FakeHost(`host_${index}`, `Chat ${index}`));
     const off = new FakeHost("host_off", "Off");
     const harness = setup(
@@ -1048,12 +1052,11 @@ for (const hostCount of [1, 5, 10]) {
       harness.manager.wake();
       await harness.advance(PEER_WAKE_COALESCE_MS);
       const requests = hosts.flatMap((host) => host.calls);
-      assert.equal(requests.length, 2 * hostCount, requests.join("\n"));
+      assert.equal(requests.length, hostCount, requests.join("\n"));
       for (const host of hosts) {
-        assert.equal(host.calls.length, 2, host.calls.join("\n"));
+        assert.equal(host.calls.length, 1, host.calls.join("\n"));
         assert.equal(host.calls[0], "GET /server");
-        assert.match(host.calls[1]!, /^EVENTS \/host\/events @epoch_host_\d+:\d+$/u);
-        // The feed resumed from its cursor rather than reading a new snapshot.
+        // The existing feed remained live without reading a new snapshot.
         assert.equal(harness.feed(host.id).filter((message) => message.change.type === "reset").length, 1);
         assert.equal(harness.status(host.id).state.kind, "connected");
       }

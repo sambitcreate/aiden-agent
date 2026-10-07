@@ -1286,7 +1286,8 @@ export function OnboardingFlow() {
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
                       Phone and tablet access starts off. After setup, choose Connect a device in
                       Settings → Connections; Aiden must stay running, and Tailscale is
-                      optional.
+                      optional. Paired computers can switch between verified local-network and Tailscale
+                      routes. If delivery is uncertain, review the saved request before choosing Retry.
                     </Text>
                   </div>
                 </div>

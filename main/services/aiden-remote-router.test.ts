@@ -33,6 +33,7 @@ import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-cod
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
+  peerRoutes?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["peerRoutes"];
   providers?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["providers"];
   readAloud?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"];
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
@@ -57,7 +58,7 @@ async function fixture(options: {
   questionsAvailable?: boolean;
   skillsAvailable?: boolean;
   agentInterruptAvailable?: boolean;
-  deviceType?: "iphone" | "mac" | "linux";
+  deviceType?: "iphone" | "android" | "mac" | "linux";
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
@@ -153,6 +154,7 @@ async function fixture(options: {
   };
   const dependencies: Parameters<typeof createAidenRemoteRequestHandler>[0] = {
     readAloud: options.readAloud,
+    peerRoutes: options.peerRoutes,
     instanceId: "instance-1",
     displayName: () => "Studio Mac",
     appVersion: "0.30.0",
@@ -4035,7 +4037,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 24,
+      contractRevision: 25,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4549,5 +4551,33 @@ test("forking is advertised with the host wiring and needs a revision and an ide
     );
   } finally {
     await summary.close();
+  }
+});
+
+
+test("route trust is disclosed only after desktop authentication", async () => {
+  for (const deviceType of ["mac", "linux", "iphone", "android"] as const) {
+    let reads = 0;
+    const route = { endpoint: "https://peer.fixture.ts.net/api/aiden/v1", serverSpkiSha256: `sha256/${Buffer.alloc(32).toString("base64")}` };
+    const app = await fixture({ deviceType, peerRoutes: async () => { reads++; return [route]; } });
+    try {
+      const publicResponse = await fetch(`${app.base}/health?detail=host`);
+      assert.equal("peerRoutes" in await publicResponse.json(), false);
+      assert.equal(reads, 0, "discovery cannot read route trust");
+      const rejected = await fetch(`${app.base}/server`);
+      assert.notEqual(rejected.status, 200);
+      assert.equal(reads, 0, "unauthenticated requests cannot read route trust");
+      const response = await fetch(`${app.base}/server`, { headers: { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" } });
+      const server = await response.json();
+      if (deviceType === "mac" || deviceType === "linux") {
+        assert.deepEqual(server.peerRoutes, [route]);
+        assert.ok(server.features.includes("peer-routes-v1"));
+        assert.equal(reads, 1);
+      } else {
+        assert.equal("peerRoutes" in server, false);
+        assert.equal(server.features.includes("peer-routes-v1"), false);
+        assert.equal(reads, 0, "phone requests cannot trigger route discovery");
+      }
+    } finally { await app.close(); }
   }
 });

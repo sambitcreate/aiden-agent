@@ -7,6 +7,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentReference
+import sbtbiswas.AidenOnTheGo.models.AidenTurnStart
+import java.util.UUID
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -22,6 +24,58 @@ class AidenChatDraftStore(
     private val storageDir: File? = null,
     root: File? = null
 ) {
+    @Serializable
+    data class PendingSend(
+        val deviceId: String,
+        val request: AidenTurnStart,
+        val key: String,
+        val createdAtMillis: Long,
+        val attachments: List<AidenAttachmentReference>,
+        val streamId: String? = null,
+        val inputMode: sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode? = null
+    ) {
+        fun canRetry(nowMillis: Long = System.currentTimeMillis()): Boolean =
+            nowMillis >= createdAtMillis && nowMillis - createdAtMillis < 24 * 60 * 60 * 1000L
+    }
+
+    @Synchronized
+    fun loadPendingSend(session: Session, deviceId: String): PendingSend? {
+        if (!isCurrent(session)) return null
+        val file = attemptFile(session)
+        if (!file.exists()) return null
+        check(file.length() <= maximumDraftBytes) { "The saved send needs review before another message can be sent." }
+        val pending = json.decodeFromString<PendingSend>(file.readText())
+        UUID.fromString(pending.key)
+        check((pending.streamId == null) == (pending.inputMode == null))
+        return pending.takeIf { it.deviceId == deviceId }
+    }
+
+    @Synchronized
+    fun savePendingSend(pending: PendingSend?, session: Session) {
+        check(isCurrent(session)) { "The pairing changed before the message could be saved." }
+        val file = attemptFile(session)
+        if (pending == null) { check(!file.exists() || file.delete()); return }
+        val previous = loadPendingSend(session, pending.deviceId)
+        check(previous == null || previous == pending) { "Resolve the saved send before sending another message." }
+        val bytes = json.encodeToString(pending).toByteArray(Charsets.UTF_8)
+        check(bytes.size <= maximumDraftBytes) { "The pending message is too large." }
+        file.parentFile?.mkdirs()
+        val temporary = File(file.parentFile, file.name + ".tmp")
+        temporary.outputStream().use { it.write(bytes); it.fd.sync() }
+        check(temporary.renameTo(file)) { "Could not save the pending message." }
+    }
+
+    @Synchronized
+    fun settlePendingSend(key: String, session: Session) {
+        val file = attemptFile(session)
+        if (!file.exists() || file.length() > maximumDraftBytes) return
+        val pending = runCatching { json.decodeFromString<PendingSend>(file.readText()) }.getOrNull()
+        if (pending?.key == key) file.delete()
+    }
+
+    private fun attemptFile(session: Session): File =
+        File(fileURL(session.instanceId, session.chatId).parentFile, "${digest(session.chatId)}.attempt.json")
+
     data class Session(
         val instanceId: String,
         val chatId: String,
@@ -151,6 +205,7 @@ class AidenChatDraftStore(
 
     @Synchronized
     fun remove(instanceId: String, chatId: String) {
+        attemptFile(Session(instanceId, chatId, 0)).delete()
         stagedAttachments.remove(sessionKey(instanceId, chatId))
         invalidate(instanceId, chatId)
         val file = fileURL(instanceId, chatId)

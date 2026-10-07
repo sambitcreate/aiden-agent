@@ -1256,18 +1256,19 @@
       ],
       "get": {
         "operationId": "chatProgressEvents",
-    "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after remain accepted for client compatibility, but this channel has no durable replay journal: a reconnect/full snapshot resync supersedes any requested offset. A device needs chat:read and at least one of tasks:read or agents:read. These progress events are not emitted on ordinary parent turn streams.",
+    "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after are scoped by optional Aiden-Progress-Epoch. A matching retained projection resumes without duplicate snapshots; epoch mismatch or missing history hydrates current snapshots. This channel has no durable replay journal across host lifetimes. A device needs chat:read and at least one of tasks:read or agents:read. These progress events are not emitted on ordinary parent turn streams.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "parameters": [
           {
             "$ref": "#/components/parameters/ChatId"
           },
+          { "name": "Aiden-Progress-Epoch", "in": "header", "required": false, "schema": {"type":"string", "pattern":"^[A-Za-z0-9._:-]{1,64}$"}, "description":"Epoch from the last authenticated task/agent snapshot. A mismatch resets the cursor and hydrates fresh snapshots. Missing preserves legacy behavior." },
       {
         "name": "Last-Event-ID",
         "in": "header",
         "required": false,
-        "description": "Accepted for client compatibility; progress subscriptions still hydrate current snapshots rather than replaying a durable journal.",
+        "description": "Last received progress sequence. Supply Aiden-Progress-Epoch to resume only within the same host projection lifetime; mismatches hydrate snapshots.",
         "schema": {
               "type": "integer",
               "minimum": 0,
@@ -1278,7 +1279,7 @@
         "name": "after",
         "in": "query",
         "required": false,
-        "description": "Accepted for client compatibility; the progress channel does not provide durable replay or missing-change detection.",
+        "description": "Progress cursor, scoped by optional Aiden-Progress-Epoch. The channel does not provide durable replay across epochs.",
         "schema": {
               "type": "integer",
               "minimum": 0,
@@ -1288,7 +1289,8 @@
         ],
         "responses": {
           "200": {
-        "description": "Live chat progress snapshot event stream; each subscription starts with current snapshots. Last-Event-ID and after are accepted for compatibility but do not replay a durable progress journal.",
+            "headers": {"Aiden-Progress-Resumed": {"schema":{"type":"string","enum":["true","false"]},"description":"True only if the supplied progress epoch and cursor match retained current projections; otherwise fresh snapshots follow."}},
+        "description": "Live chat progress snapshot event stream. Aiden-Progress-Resumed reports whether the epoch-scoped cursor resumed; otherwise current snapshots hydrate the client.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -5433,6 +5435,7 @@
             "enum": [
               "iphone",
               "ipad",
+              "android",
               "mac",
               "linux"
             ]
@@ -5549,6 +5552,16 @@
         ],
         "additionalProperties": false
       },
+      "PeerRoute": {
+        "type": "object", "additionalProperties": false,
+        "required": ["endpoint", "serverSpkiSha256"],
+        "properties": {
+          "endpoint": {"type":"string", "format":"uri", "maxLength":2048, "description":"HTTPS canonical .local or .ts.net endpoint. Never an IP literal."},
+          "serverSpkiSha256": {"type":"string", "pattern":"^sha256/[A-Za-z0-9+/]{43}=$"},
+          "caCertificateDerBase64": {"type":"string", "maxLength":8192, "description":"Required private CA DER for LAN; absent for system-trusted Tailscale."},
+          "addresses": {"type":"array", "maxItems":8, "uniqueItems":true, "items":{"type":"string","format":"ipv4"}, "description":"Optional LAN-only RFC1918 lookup hints. TLS still checks the canonical hostname, CA and pin before credentials are transmitted."}
+        }
+      },
       "Server": {
         "type": "object",
         "required": [
@@ -5562,6 +5575,11 @@
           "serverTime"
         ],
         "properties": {
+          "peerRoutes": {
+            "type": "array", "maxItems": 2,
+            "description": "Revision 25. Emitted only for authenticated mac/linux devices with peer-routes-v1. Route-specific trust learned over the authenticated channel; never present on health, discovery or phone projections.",
+            "items": { "$ref": "#/components/schemas/PeerRoute" }
+          },
           "protocolVersion": {
             "const": 1
           },
@@ -5744,7 +5762,7 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices (also android since revision 25) negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only.",
             "minItems": 1,
             "maxItems": 8,
             "items": {

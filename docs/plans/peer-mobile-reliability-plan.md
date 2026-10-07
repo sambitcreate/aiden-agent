@@ -1,6 +1,6 @@
 # Peer and mobile reliability; subagent result delivery
 
-Status: Active — plan approved 2026-10-05; mobile agent ancestry is the first implementation slice. Other slices remain pending their dependency and design gates.
+Status: Active — mobile agent ancestry and connection reliability are implemented; physical-network acceptance, idle measurements, and background delivery slices remain open.
 
 The reviewed decisions below supersede the historical research recommendations where they differ.
 > Research snapshot: 2026-10-05 ~2 PM ET. Aiden `origin/main` = `43d8adb0` (past v0.53.0 `7e339cf1`; includes #343–#347). Upstream refs: t3code `3e6b45028`, pi-subagents tag `v0.76.0` = `99ccd391` (main `6826b054`), Pi `v1.0.3`.
@@ -47,8 +47,31 @@ Do not mark existing physical-device acceptance gates complete based on simulato
   `Medium_Phone_API_36.1` (Android 16). iOS test build and the final 235-test
   chat suite pass on the simulator recorded above. `npm run test:ci-policy`
   passes. Physical-device acceptance remains open.
-- Items 1, 2 and 4 are not implemented by this initial work. No background activation,
+- Items 1, 2 and 4 were not implemented by the initial navigation work. No background activation,
   Remote revision change, new network call, or onboarding capability is introduced.
+
+### Connection implementation follow-up (2026-10-06)
+
+Desktop route learning, encrypted persistence, LAN preference, failover, preference
+preflight, route suppression/restore, and authenticated LAN CA delivery are implemented
+in the connection-reliability change. Healthy wake notifications probe before replacing
+feeds. Contract revision 25 adds desktop-only route trust, explicit Android phone
+identity, and epoch-fenced progress resumes. Behavioral/TLS fixtures cover both initial
+pairing directions, key renewal, rejected identity before request bytes, suppression,
+and retaining healthy streams. Physical packaged LAN/Tailscale acceptance and idle
+CPU/wakeup measurements remain open; this plan stays Active pending those gates.
+
+Approved initial-discovery clarification: Bonjour may publish one bounded canonical
+`.local` hostname hint for Android pairing because its DNS-SD API can expose only the
+IP address. This is not trusted learned-route advertising: no endpoints list, pins,
+CA material or credentials appear in TXT, and setup-code/QR trust remains mandatory.
+
+Desktop and native uncertain turn/run-input requests now retain their original request
+identity across recreation, require explicit retry inside the replay window, and retain
+expired ambiguity for review. Desktop records are encrypted and admission checks the
+original pairing. Native recovery parks offline and preserves epoch-scoped progress
+cursors and credential-scoped conditional-read caches. Connection UI distinguishes
+transport readiness from chat synchronization and provides recovery guidance.
 
 ### Required design corrections and gates
 

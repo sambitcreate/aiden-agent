@@ -397,7 +397,7 @@ test("a lost send acknowledgement holds the message for a same-key retry and blo
   const banner = view.all.find((node) => node.getAttribute("data-remote-unresolved"));
   assert.ok(banner, "the reconciliation state is shown");
   assert.equal(banner.getAttribute("role"), "alert");
-  assert.match(banner.textContent ?? "", /Your message may not have been sent\./);
+  assert.match(banner.textContent ?? "", /Couldn't confirm delivery\./);
   assert.match(banner.textContent ?? "", /Tag the release/);
   assert.ok(view.button(/^Retry$/));
   assert.ok(view.button(/^Dismiss$/));

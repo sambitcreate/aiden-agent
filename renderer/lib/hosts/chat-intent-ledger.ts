@@ -1,3 +1,5 @@
+import { peerHostsApi } from "../ipc";
+import { chatIntentRetryAllowed, replayChatRequest, type SavedChatIntent, type SavedChatRequest } from "../../shared/chat-intent";
 import type { HostChatAdapter } from "./host-chat-adapter";
 
 /** The chat an intent belongs to. */
@@ -24,6 +26,8 @@ export interface ChatIntent {
    * host's limit on unused uploads.
    */
   attachmentIds?: readonly string[];
+  createdAt?: number;
+  request?: SavedChatRequest;
   replay(adapter: HostChatAdapter, idempotencyKey: string): Promise<unknown>;
 }
 
@@ -36,6 +40,9 @@ export interface ChatForkIntent {
   /** The request the host fingerprints with the key: message, position, summary and revision. */
   signature: string;
   idempotencyKey: string;
+  createdAt?: number;
+  request?: SavedChatRequest;
+  uncertain?: boolean;
 }
 
 export interface ChatIntentUnresolved {
@@ -54,6 +61,7 @@ interface Entry {
   pending: Map<string, PendingIntent>;
   unresolved: ChatIntentUnresolved | null;
   fork: ChatForkIntent | null;
+  waiting: ChatIntent[];
 }
 
 const refKey = ({ hostId, chatId }: ChatIntentRef) => `${hostId}\u0000${chatId}`;
@@ -64,12 +72,75 @@ const refKey = ({ hostId, chatId }: ChatIntentRef) => `${hostId}\u0000${chatId}`
  * records its outcome here, so reopening the chat recovers the unknown
  * outcome and its key instead of losing the text or resending under a new key.
  */
+export interface ChatIntentPersistence {
+  list(hostId: string, chatId: string): Promise<SavedChatIntent[]>;
+  put(intent: SavedChatIntent): Promise<void>;
+  remove(hostId: string, chatId: string, key: string): Promise<void>;
+}
 export class ChatIntentLedger {
+  get durable(): boolean { return Boolean(this.persistence); }
+  private readonly hydrated = new Set<string>();
+  private readonly hydration = new Map<string, Promise<void>>();
+  constructor(private readonly persistence?: ChatIntentPersistence, private readonly now: () => number = Date.now) {}
+  isReady(ref: ChatIntentRef): boolean { return !this.persistence || ref.hostId === "local" || this.hydrated.has(refKey(ref)); }
+  ready(ref: ChatIntentRef): Promise<void> {
+    if (!this.persistence || ref.hostId === "local") return Promise.resolve();
+    const key = refKey(ref);
+    let loading = this.hydration.get(key);
+    if (!loading) {
+      loading = this.persistence.list(ref.hostId, ref.chatId).then(rows => {
+        for (const row of rows) {
+          if (row.hostId !== ref.hostId || row.chatId !== ref.chatId) continue;
+          const request = row.request;
+          if (request.kind === "fork") {
+            if (this.entry(ref).fork && this.entry(ref).fork!.idempotencyKey !== row.idempotencyKey) throw new Error("Several saved forks need recovery on the host.");
+            this.entry(ref).fork = { uncertain: true, signature: request.signature, idempotencyKey: row.idempotencyKey, createdAt: row.createdAt, request };
+          } else {
+            const intent: ChatIntent = { kind: request.kind, idempotencyKey: row.idempotencyKey, createdAt: row.createdAt, request,
+              ...("text" in request.input ? { text: request.input.text } : {}),
+              ...(request.kind === "send" ? { attachmentIds: request.input.attachmentIds } : {}),
+              replay: adapter => replayChatRequest(adapter, ref.chatId, request, this.durable) };
+            this.begin(ref, intent); this.settle(ref, intent.idempotencyKey, "unknown");
+          }
+        }
+        this.hydrated.add(key);
+        this.changed(ref);
+      }).catch(error => { this.hydration.delete(key); throw error; });
+      this.hydration.set(key, loading);
+    }
+    return loading;
+  }
+  async persist(ref: ChatIntentRef, intent: ChatIntent | ChatForkIntent): Promise<void> {
+    intent.createdAt ??= this.now();
+    if (this.persistence && ref.hostId !== "local") {
+      if (!intent.request) throw new Error("The request could not be saved. Nothing was sent.");
+      await this.persistence.put({ ...ref, idempotencyKey: intent.idempotencyKey, createdAt: intent.createdAt, request: intent.request });
+    }
+  }
+  async validateRetry(ref: ChatIntentRef, intent: ChatIntent | ChatForkIntent): Promise<void> {
+    if (this.persistence && ref.hostId !== "local") {
+      const rows = await this.persistence.list(ref.hostId, ref.chatId);
+      if (!rows.some(row => row.idempotencyKey === intent.idempotencyKey && row.createdAt === intent.createdAt
+        && JSON.stringify(row.request) === JSON.stringify(intent.request))) {
+        throw new Error("The saved request no longer belongs to this pairing. Check the host before dismissing it.");
+      }
+    }
+    if (!this.retryAllowed(intent)) throw new Error("The safe retry window has ended. Check the host before dismissing this request.");
+  }
+  retryAllowed(intent: ChatIntent | ChatForkIntent): boolean {
+    return chatIntentRetryAllowed(intent.createdAt ?? 0, this.now());
+  }
+  async forgetSaved(ref: ChatIntentRef, key: string): Promise<void> {
+    if (ref.hostId !== "local") await this.persistence?.remove(ref.hostId, ref.chatId, key);
+  }
+  forkIntent(ref: ChatIntentRef): ChatForkIntent | null { return this.entries.get(refKey(ref))?.fork ?? null; }
+
   private readonly entries = new Map<string, Entry>();
   private readonly listeners = new Map<string, Set<() => void>>();
 
   /** Records an intent as in flight. */
   begin(ref: ChatIntentRef, intent: ChatIntent): void {
+    intent.createdAt ??= this.now();
     let done!: () => void;
     const settled = new Promise<void>((resolve) => {
       done = resolve;
@@ -87,8 +158,9 @@ export class ChatIntentLedger {
     const pending = entry?.pending.get(idempotencyKey);
     if (!entry || !pending) return;
     entry.pending.delete(idempotencyKey);
-    if (outcome === "unknown" && entry.unresolved?.intent.kind !== "send") {
-      entry.unresolved = { intent: pending.intent, retrying: false };
+    if (outcome === "unknown") {
+      if (!entry.unresolved) entry.unresolved = { intent: pending.intent, retrying: false };
+      else if (entry.unresolved.intent.idempotencyKey !== idempotencyKey) entry.waiting.push(pending.intent);
     }
     pending.done();
     this.prune(ref, entry);
@@ -128,7 +200,8 @@ export class ChatIntentLedger {
   resolve(ref: ChatIntentRef, idempotencyKey: string): void {
     const entry = this.entries.get(refKey(ref));
     if (entry?.unresolved?.intent.idempotencyKey !== idempotencyKey) return;
-    entry.unresolved = null;
+    const next = entry.waiting.shift();
+    entry.unresolved = next ? { intent: next, retrying: false } : null;
     this.prune(ref, entry);
     this.changed(ref);
   }
@@ -142,6 +215,7 @@ export class ChatIntentLedger {
   /** Remembers the fork now being sent, replacing any earlier one for this chat. */
   beginFork(ref: ChatIntentRef, fork: ChatForkIntent): void {
     this.entry(ref).fork = fork;
+    this.changed(ref);
   }
 
   /** Forgets the fork sent under `idempotencyKey` once its outcome is known; ignored if it was replaced. */
@@ -150,6 +224,7 @@ export class ChatIntentLedger {
     if (entry?.fork?.idempotencyKey !== idempotencyKey) return;
     entry.fork = null;
     this.prune(ref, entry);
+    this.changed(ref);
   }
 
   subscribe(ref: ChatIntentRef, listener: () => void): () => void {
@@ -167,7 +242,7 @@ export class ChatIntentLedger {
     const key = refKey(ref);
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { pending: new Map(), unresolved: null, fork: null };
+      entry = { pending: new Map(), unresolved: null, fork: null, waiting: [] };
       this.entries.set(key, entry);
     }
     return entry;
@@ -183,4 +258,8 @@ export class ChatIntentLedger {
 }
 
 /** This window's ledger, shared by every chat pane it opens. */
-export const chatIntentLedger = new ChatIntentLedger();
+export const chatIntentLedger = new ChatIntentLedger(typeof window === "undefined" ? undefined : {
+  list: peerHostsApi.pendingIntents,
+  put: peerHostsApi.saveIntent,
+  remove: peerHostsApi.removeIntent,
+});

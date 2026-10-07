@@ -9,6 +9,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -48,6 +54,7 @@ fun ContentView(
 ) {
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val errorMessage by coordinator.errorMessage.collectAsStateWithLifecycle()
+    val connectionIssue by coordinator.connectionIssue.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(errorMessage) {
@@ -62,6 +69,22 @@ fun ContentView(
     ) {
         Box(Modifier.fillMaxSize()) {
             val reduceMotion = aidenReduceMotion()
+            Column(Modifier.fillMaxSize()) {
+            if (connectionState == AidenConnectionState.OFFLINE) connectionIssue?.let { issue ->
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+                    Column(Modifier.fillMaxWidth().statusBarsPadding().padding(16.dp)) {
+                        Text(issue.title, style = MaterialTheme.typography.titleSmall)
+                        installationStore.activeInstallation?.let { installation ->
+                            Text(installation.name, style = MaterialTheme.typography.labelMedium)
+                            installation.lastConnectedAt?.let { last ->
+                                Text("Last connected " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date.from(last)), style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Text(issue.message, style = MaterialTheme.typography.bodySmall)
+                        if (issue.canRetry) TextButton(onClick = { coordinator.refreshClient() }) { Text("Retry connection") }
+                    }
+                }
+            }
             AnimatedContent(
                 targetState = connectionState,
                 contentKey = { it == AidenConnectionState.NEEDS_PAIRING },
@@ -98,6 +121,7 @@ fun ContentView(
                     )
                 }
                 }
+            }
             }
             SnackbarHost(
                 hostState = snackbarHostState,

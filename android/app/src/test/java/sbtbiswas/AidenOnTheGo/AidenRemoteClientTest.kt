@@ -80,6 +80,33 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun quietProgressResumeCarriesEpochAndReportsOpenWithoutASnapshot() = runBlocking {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setHeader("Aiden-Progress-Resumed", "true"))
+        val opened = AtomicBoolean(false)
+        val events = client.progressEvents("chat-1", after = 42, epoch = "epoch-original", onOpen = { opened.set(it) }).toList()
+        assertTrue(events.isEmpty())
+        assertTrue(opened.get())
+        val request = server.takeRequest()
+        assertEquals("epoch-original", request.getHeader("Aiden-Progress-Epoch"))
+        assertEquals("42", request.getHeader("Last-Event-ID"))
+    }
+
+    @Test
+    fun conditionalReadsReuseBytesOnlyWithinTheSameCredentialClient() = runBlocking {
+        val body = """{"protocolVersion":1,"instanceId":"test_instance","name":"Home","capabilities":["server:read"],"serverCapabilities":["server:read"],"appVersion":"1","connectionMode":"lan","serverTime":"2026-10-06T00:00:00Z"}"""
+        server.enqueue(MockResponse().setBody(body).setHeader("ETag", "W/\"snapshot\""))
+        server.enqueue(MockResponse().setResponseCode(304))
+        assertEquals("Home", client.server().name)
+        assertEquals("Home", client.server().name)
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
+        assertEquals("W/\"snapshot\"", server.takeRequest().getHeader("If-None-Match"))
+        val replacement = AidenRemoteClient(server.url("/api/aiden/v1").toString(), "replacement", httpClient)
+        server.enqueue(MockResponse().setResponseCode(304))
+        try { replacement.server(); fail("Unsolicited 304 must not recover another credential's cached bytes") } catch (_: AidenRemoteClientException.Server) { }
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
+    }
+
+    @Test
     fun testServerInfoEndpoint() = runBlocking {
         val jsonResponse = """
             {

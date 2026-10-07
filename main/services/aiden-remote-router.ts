@@ -116,6 +116,7 @@ export interface AidenRemoteServerProjection {
   minimumClientVersion?: string;
   features: string[];
   serverTime: string;
+  peerRoutes?: import("./peer-transport.js").PeerTrust[];
 }
 
 type AidenRemoteRouterAuthenticatedDevice = Omit<
@@ -145,6 +146,8 @@ export interface AidenRemoteRouterDependencies {
   instanceId: string;
   displayName(): string;
   appVersion: string;
+  /** Trust material disclosed only after authentication by a paired desktop. */
+  peerRoutes?(): Promise<import("./peer-transport.js").PeerTrust[]>;
   devices: AidenRemoteRouterDeviceRegistry;
   pairing: Pick<AidenRemotePairingService, "exchange">
     & Partial<Pick<AidenRemotePairingService, "manualBootstrap">>;
@@ -205,6 +208,7 @@ export interface AidenRemoteRouterDependencies {
       grants: ReadonlySet<AidenRemoteCapability>,
       after: number,
       response: ServerResponse,
+      epoch?: string,
     ): void | Promise<void>;
   };
   models?: Pick<AidenRemoteModelService, "list">;
@@ -1652,11 +1656,14 @@ export function createAidenRemoteRequestHandler(
         route = "server";
         const device = await authenticate(request, dependencies.devices, "server:read");
         deviceIdSuffix = device.id.slice(-8);
+        const peerRoutes = (device.type === "mac" || device.type === "linux") && dependencies.peerRoutes
+          ? await dependencies.peerRoutes() : undefined;
         const projection: AidenRemoteServerProjection = {
           protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
           instanceId: dependencies.instanceId,
           name: dependencies.displayName(),
           appVersion: dependencies.appVersion,
+          ...(peerRoutes === undefined ? {} : { peerRoutes }),
           capabilities: [...device.capabilities],
           ...(device.name ? { deviceName: device.name } : {}),
           ...(device.acceptsBotCapabilities === true ||
@@ -1670,6 +1677,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: [
+            ...(peerRoutes === undefined ? [] : ["peer-routes-v1"]),
             ...(dependencies.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
             ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
@@ -3073,12 +3081,17 @@ export function createAidenRemoteRequestHandler(
         if (canReadTasks) progressGrants.add("tasks:read");
         if (canReadAgents) progressGrants.add("agents:read");
         await requireChatAccess(dependencies.chats, device, chatProgressEventsMatch[1]!, "read");
+        const progressEpoch = request.headers["aiden-progress-epoch"];
+        if (progressEpoch !== undefined && (typeof progressEpoch !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/u.test(progressEpoch))) {
+          throw new AidenRemoteServiceError("invalid_request", "The progress epoch is invalid.", 400);
+        }
         await dependencies.chatProgress.openEvents(
           device.id,
           chatProgressEventsMatch[1]!,
           progressGrants,
           streamAfter(request, query),
           response,
+          progressEpoch,
         );
         return;
       }

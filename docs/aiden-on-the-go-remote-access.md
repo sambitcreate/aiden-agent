@@ -96,3 +96,32 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Port already in use:** stop the other local service or repair the saved Remote Access configuration before enabling it again.
 
 Remote Access diagnostics keep only closed route categories, outcome/status classes, bounded latency, stable Aiden-owned error codes, and categorical Tailscale inspection phase/reason/attempt counts. Successful production traffic is reduced to daily aggregate counts; durable records never contain Tailscale command output, request IDs, device or instance suffixes, bearer credentials, pairing secrets, provider keys, request/response bodies, URLs, or filesystem paths.
+
+## Connection recovery
+
+Settings → Connections separates computers that control this device from computers
+this device controls. A paired computer shows its current route, route count, and last
+successful chat synchronization. “Syncing chats” means the secure connection is open
+but the chat feed is not ready. “Recently active” describes recent contact, not a live
+connection guarantee.
+
+Paired desktop computers can learn local-network and Tailscale alternatives through
+their verified connection. Aiden checks each route's certificate and paired identity
+before using it, switches when a route fails, and checks for a preferred local route
+while on a fallback. Removing a learned route suppresses it until **Restore learned
+routes** is selected. The computer still needs to be awake with Aiden running.
+
+A send whose response is lost remains a saved, unconfirmed request. Reopening the
+conversation restores its notice. **Retry** uses that exact request and its original
+key within the safe retry window; it never runs automatically. When the window ends,
+review the conversation on the host before dismissing the notice and making a new
+attempt. New draft edits remain separate from the saved request. Desktop saved
+requests are encrypted locally and bound to the original pairing; mobile records
+stay in the app's private storage and are scoped to that pairing.
+
+On Android, **Nearby** discovers desktops on the local network. Older desktops may
+require QR or manual-address pairing. Discovery only supplies an address hint;
+setup-code verification and certificate validation still establish trust. Connection
+errors distinguish network reachability, secure-identity verification, and app-version
+problems. A secure-identity failure requires verification and pairing repair, rather
+than a trust-bypass retry.
