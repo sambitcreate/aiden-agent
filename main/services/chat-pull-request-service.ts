@@ -94,6 +94,21 @@ export type {
 
 export type ChatPullRequestPendingIntent = ChatPullRequestPendingCreate;
 
+/** Whether a refreshed snapshot differs in anything a viewer would notice. */
+function snapshotChanged(
+  previous: ChatPullRequestSnapshot | undefined,
+  next: ChatPullRequestSnapshot,
+): boolean {
+  if (!previous) return true;
+  const { syncedAt: _previousSyncedAt, ...before } = previous;
+  const { syncedAt: _nextSyncedAt, ...after } = next;
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].some(
+    (key) =>
+      before[key as keyof typeof before] !== after[key as keyof typeof after],
+  );
+}
+
 function snapshotFromSummary(
   summary: GitHubPullRequestSummary,
 ): ChatPullRequestSnapshot {
@@ -377,25 +392,28 @@ export class ChatPullRequestService {
         )
       : links;
     const cwd = await this.cwdFor(chatId);
+    // Issued together so the GitHub reader answers them in one request.
+    const statuses = await Promise.all(
+      targets.map((link) =>
+        this.deps.github.getPullRequest(
+          cwd,
+          repoSelector(link.host, link.repository),
+          link.number,
+        ),
+      ),
+    );
     let changed = false;
     let rateLimitedUntil: number | undefined;
-    for (const link of targets) {
-      const status = await this.deps.github.getPullRequest(
-        cwd,
-        repoSelector(link.host, link.repository),
-        link.number,
-      );
+    for (const [index, link] of targets.entries()) {
+      const status = statuses[index]!;
       if (status.availability === "rate-limited") {
         rateLimitedUntil = status.retryAt;
-        break;
+        continue;
       }
       if (status.availability !== "ready" || !status.pullRequest) continue;
-      await this.deps.store.updateSnapshot(
-        chatId,
-        link,
-        snapshotFromSummary(status.pullRequest),
-      );
-      changed = true;
+      const snapshot = snapshotFromSummary(status.pullRequest);
+      await this.deps.store.updateSnapshot(chatId, link, snapshot);
+      if (snapshotChanged(link.snapshot, snapshot)) changed = true;
     }
     if (changed) this.notify(chatId);
     const list = await this.list(chatId);
@@ -437,11 +455,20 @@ export class ChatPullRequestService {
       );
     };
 
-    if (context.branch) {
-      const forBranch = await this.deps.github.findForBranch(
-        context.folderPath,
-        context.branch,
-      );
+    // Both reads start together so they share one GitHub request.
+    const [forBranch, open] = await Promise.all([
+      context.branch
+        ? this.deps.github.listPullRequests(context.folderPath, {
+            state: "open",
+            headBranch: context.branch,
+          })
+        : undefined,
+      this.deps.github.listPullRequests(context.folderPath, {
+        state: "open",
+        limit: 30,
+      }),
+    ]);
+    if (forBranch) {
       if (forBranch.availability !== "ready") {
         return {
           availability: forBranch.availability,
@@ -454,10 +481,6 @@ export class ChatPullRequestService {
         if (summary.state === "open") push(summary);
       }
     }
-    const open = await this.deps.github.listPullRequests(context.folderPath, {
-      state: "open",
-      limit: 30,
-    });
     if (open.availability !== "ready") {
       // Branch results are still useful if the wider list call failed.
       return views.length > 0
@@ -503,7 +526,6 @@ export class ChatPullRequestService {
       input.headBranch,
       undefined,
       repository,
-      expectedSha ? { version: expectedSha } : {},
     );
     if (found.availability !== "ready" || !found.pullRequests) {
       return {

@@ -96,6 +96,8 @@
         "main/services/github/github-api.test.ts",
         "main/services/github/github-request-gate.test.ts",
         "main/services/github/github-local-repository.test.ts",
+        "main/services/github/github-pull-request-reader.test.ts",
+        "main/services/github/github-replay.test.ts",
         "main/services/linux-dictation-portal.test.ts",
         "main/services/local-runtime-status.test.ts",
         "main/services/main-window-state-core.test.ts",

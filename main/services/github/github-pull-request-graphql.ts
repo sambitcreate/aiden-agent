@@ -215,6 +215,8 @@ export interface PullRequestReadOptions {
    * last pushed. A cached answer read for a different version is not reused.
    */
   version?: string;
+  /** Skip cached answers; interactive reads always do. */
+  fresh?: boolean;
 }
 
 /** Reads one entry; implementations may batch, share, or cache reads. */

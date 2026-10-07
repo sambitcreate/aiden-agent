@@ -794,3 +794,39 @@ test("a rate limit keeps cached snapshots and tells the caller when reads resume
   assert.equal(current.rateLimitedUntil, retryAt);
   assert.equal(current.message, "paused");
 });
+
+test("refresh reads every link together and announces only real changes", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let checksState: "passing" | "failing" = "passing";
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let changes = 0;
+  const { service } = fakeService(
+    directory,
+    {
+      getPullRequestByUrl: async (_cwd: string, url: string) =>
+        ready({ pullRequest: summary(Number(url.split("/").at(-1))) }) as GitHubPullRequestStatus,
+      getPullRequest: async (_cwd: string, _repo: string, number: number) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setImmediate(resolve));
+        inFlight -= 1;
+        return ready({ pullRequest: summary(number, number === 13 ? { checksState } : {}) }) as GitHubPullRequestStatus;
+      },
+    } as never,
+    { onChanged: () => (changes += 1) },
+  );
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/13" });
+  const linked = changes;
+
+  await service.refresh(CHAT);
+  assert.equal(changes, linked, "an unchanged refresh is silent");
+  assert.equal(maxInFlight, 2);
+
+  checksState = "failing";
+  const refreshed = await service.refresh(CHAT);
+  assert.equal(changes, linked + 1);
+  assert.equal(refreshed.links.find((link) => link.number === 13)?.checksState, "failing");
+});

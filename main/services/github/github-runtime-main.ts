@@ -6,7 +6,7 @@ import { GitHubPullRequestService } from "../github-pull-request.js";
 import { GitHubApi } from "./github-api.js";
 import { GitHubCredentialSource } from "./github-credentials.js";
 import { isWellKnownGitHubHost, LocalRepositoryResolver } from "./github-local-repository.js";
-import { DirectPullRequestReader } from "./github-pull-request-graphql.js";
+import { BatchedPullRequestReader } from "./github-pull-request-reader.js";
 import { GitHubRateLimitGate } from "./github-request-gate.js";
 
 const credentials = new GitHubCredentialSource();
@@ -20,7 +20,7 @@ const repositories = new LocalRepositoryResolver({
 });
 
 export const githubPullRequests = new GitHubPullRequestService({
-  reader: new DirectPullRequestReader(githubApi),
+  reader: new BatchedPullRequestReader({ api: githubApi }),
   repositories,
 });
 

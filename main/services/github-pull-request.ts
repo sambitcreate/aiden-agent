@@ -240,13 +240,14 @@ export class GitHubPullRequestService {
     entry: PullRequestQueryEntry,
     operation: string,
     signal: AbortSignal | undefined,
-    options: GitHubPullRequestReadOptions & { version?: string },
+    options: GitHubPullRequestReadOptions & { version?: string; fresh?: boolean },
   ): Promise<PullRequestEntryResult> {
     return this.reader.read(target.host, entry, {
       operation,
       signal,
       ...(options.interactive ? { interactive: true } : {}),
       ...(options.version ? { version: options.version } : {}),
+      ...(options.fresh ? { fresh: true } : {}),
     });
   }
 
@@ -354,14 +355,16 @@ export class GitHubPullRequestService {
 
   /**
    * Pull requests whose head branch matches exactly, including closed and
-   * merged ones so callers can tell "no PR" from "closed PR".
+   * merged ones so callers can tell "no PR" from "closed PR". Always read
+   * fresh: post-push detection and create reconciliation must see a PR that
+   * was opened moments ago.
    */
   async findForBranch(
     cwd: string,
     branch: string,
     signal?: AbortSignal,
     repository?: string,
-    options: GitHubPullRequestReadOptions & { version?: string } = {},
+    options: GitHubPullRequestReadOptions = {},
   ): Promise<GitHubPullRequestListStatus> {
     const resolved = await this.target(cwd, repository, signal);
     if (!resolved.ok) return resolved.failure;
@@ -371,7 +374,7 @@ export class GitHubPullRequestService {
       { kind: "head", owner: target.owner, name: target.name, headBranch: branch },
       "pr.branch",
       signal,
-      options,
+      { ...options, fresh: true },
     );
     if (result.kind !== "ok") return failureFrom(result, target.host);
     if (result.pullRequests.length >= BRANCH_LOOKUP_LIMIT) {
