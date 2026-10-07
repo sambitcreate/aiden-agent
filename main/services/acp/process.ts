@@ -76,6 +76,15 @@ export class AcpProcess {
     const finish = (code: number | null, signal: NodeJS.Signals | null, note?: string) => {
       if (this.settled) return;
       this.settled = true;
+      // The leader is gone, but helpers it started may live on in its group.
+      // The group id cannot be reused while any member exists.
+      if (this.platform !== "win32" && child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          // ESRCH: nothing left in the group.
+        }
+      }
       this.flushStderr(options.onStderrLine);
       options.onExit?.(child.pid);
       const tail = note ? `${this.stderr}\n${note}` : this.stderr;

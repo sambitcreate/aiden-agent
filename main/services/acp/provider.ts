@@ -17,8 +17,9 @@ import type {
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 
+import type { AssistantMessageEventStream, TranscriptContext } from "@earendil-works/pi-ai";
+
 import type { AcpHarnessDefinition } from "./harness.js";
-import type { AcpHarnessRuntime } from "./runtime.js";
 
 export const ACP_MANAGED_CREDENTIAL = "aiden-acp:managed-by-agent";
 
@@ -32,7 +33,8 @@ export interface AcpProviderSignIn {
 
 export interface AcpHarnessProviderOptions {
   definition: AcpHarnessDefinition;
-  runtime: AcpHarnessRuntime;
+  /** Usually `runtime.stream`; resolved lazily so the runtime can start on first use. */
+  stream(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream;
   signIn: AcpProviderSignIn;
   /** Authenticated catalog discovery (starts the agent). */
   discoverModels(signal: AbortSignal): Promise<Model<Api>[]>;
@@ -51,7 +53,7 @@ function isModel(value: unknown, providerId: string): value is Model<Api> {
 }
 
 export function createAcpHarnessProvider(options: AcpHarnessProviderOptions): Provider<Api> {
-  const { definition, runtime } = options;
+  const { definition } = options;
   let models: Model<Api>[] = definition.fallbackModels();
   let discoveryDue = false;
 
@@ -89,6 +91,9 @@ export function createAcpHarnessProvider(options: AcpHarnessProviderOptions): Pr
       if (stored.length > 0) await context.publish({ update: () => (models = stored) });
       if (!context.allowNetwork || !context.credential) return;
       if (!discoveryDue && !context.force) return;
+      // One attempt per sign-in: a failure must not relaunch the agent on
+      // every later background refresh.
+      discoveryDue = false;
       let discovered: Model<Api>[];
       try {
         discovered = await options.discoverModels(context.signal);
@@ -97,15 +102,14 @@ export function createAcpHarnessProvider(options: AcpHarnessProviderOptions): Pr
         return;
       }
       if (discovered.length === 0) return;
-      discoveryDue = false;
       const entry: ModelsStoreEntry = { models: discovered, checkedAt: Date.now() };
       await context.publish({ persist: entry, update: () => (models = discovered) });
     },
     stream(model, context, streamOptions) {
-      return runtime.stream(model, context, streamOptions as SimpleStreamOptions | undefined);
+      return options.stream(model, context, streamOptions as SimpleStreamOptions | undefined);
     },
     streamSimple(model, context, streamOptions) {
-      return runtime.stream(model, context, streamOptions);
+      return options.stream(model, context, streamOptions);
     },
   };
 }

@@ -1,8 +1,8 @@
 /**
  * Answer an agent's `session/request_permission` with Aiden's policy.
  *
- * Read-like operations are allowed in every mode (T3 Code
- * AcpClientPolicy.ts @ f870c419fc, MIT). Mutations follow the generation's
+ * Local read-like operations are allowed in every mode (T3 Code
+ * AcpClientPolicy.ts @ f870c419fc, MIT). Mutations and network fetches follow the generation's
  * workspace permission: Full allows, Ask shows Aiden's approval card, and
  * read-only or no-access refuses. A dismissed or failed approval is always a
  * refusal, never an implicit allow.
@@ -19,7 +19,8 @@ import { relativeDisplayPath } from "./activity.js";
 import type { AcpPermissionClassification } from "./harness.js";
 import type { AcpApprovalRequest, AcpTurnHost } from "./host.js";
 
-const READ_LIKE: ReadonlySet<ToolKind> = new Set<ToolKind>(["read", "search", "think", "fetch"]);
+/** Local reads only. Network fetches can carry data out, so they follow mutation policy. */
+const READ_LIKE: ReadonlySet<ToolKind> = new Set<ToolKind>(["read", "search", "think"]);
 const CANCELLED: RequestPermissionResponse = { outcome: { outcome: "cancelled" } };
 
 export function optionFor(

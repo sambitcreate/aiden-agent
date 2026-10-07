@@ -27,7 +27,7 @@ function setup(discovered: Model<Api>[] = [FAKE_PRO]) {
   let signIns = 0;
   const provider = createAcpHarnessProvider({
     definition: fakeDefinition,
-    runtime,
+    stream: (model, context, options) => runtime.stream(model, context, options),
     signIn: {
       name: "Fake sign-in",
       loginLabel: "Sign in with Fake",

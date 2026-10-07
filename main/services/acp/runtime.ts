@@ -30,6 +30,7 @@ import type {
   TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { getCurrentTools } from "@earendil-works/pi-ai";
+import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { AcpToolCallTracker, timelineStepFor, type AcpToolActivity } from "./activity.js";
@@ -59,7 +60,11 @@ export interface AcpLaunchedProcess {
 }
 
 export interface AcpProcessLauncher {
-  launch(purpose: AcpLaunchPurpose, cwd: string): Promise<AcpLaunchedProcess>;
+  launch(
+    purpose: AcpLaunchPurpose,
+    cwd: string,
+    observers?: { onStderrLine?(line: string): void },
+  ): Promise<AcpLaunchedProcess>;
 }
 
 export interface AcpRuntimeOptions {
@@ -74,6 +79,8 @@ export interface AcpRuntimeOptions {
 
 interface PendingTool {
   invocation: BridgeInvocation;
+  /** Whether the call has been shown to Pi as a tool call yet. */
+  announced: boolean;
   resolve(result: CallToolResult): void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -82,6 +89,10 @@ interface Turn {
   completion: Promise<void>;
   controller: AbortController;
   abortRequested: boolean;
+  /** Absolute paths the user approved writing to during this turn (Ask mode). */
+  writeGrants: Set<string>;
+  /** Approved edits whose request named no path; each allows one write. */
+  unscopedWriteGrants: number;
 }
 
 interface Binding {
@@ -115,6 +126,8 @@ interface Binding {
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   restored: boolean;
   closed: boolean;
+  /** "Always allow" granted for edits in this session (Ask mode). */
+  sessionWriteGrant: boolean;
 }
 
 export interface AcpRuntimeSnapshot {
@@ -142,6 +155,8 @@ export class AcpHarnessRuntime {
   private readonly live = new Set<Binding>();
   private readonly options: Required<AcpRuntimeOptions>;
   private disposed = false;
+  /** Called when a chat discovers the saved sign-in stopped working. */
+  onSignInLost: (() => void) | undefined;
 
   constructor(
     private readonly definition: AcpHarnessDefinition,
@@ -241,23 +256,7 @@ export class AcpHarnessRuntime {
     let binding = await this.bindingFor(host, signal);
 
     if (binding.pendingTools.size > 0) {
-      const results = [...binding.pendingTools.values()].map((pending) => ({
-        pending,
-        message: findToolResult(context, pending.invocation.id, pending.invocation.name),
-      }));
-      if (results.every((result) => result.message !== undefined)) {
-        this.attachWriter(binding, writer, host, context);
-        this.linkAbort(binding, signal);
-        for (const { pending, message } of results) {
-          clearTimeout(pending.timer);
-          binding.pendingTools.delete(pending.invocation.id);
-          pending.resolve(toMcpResult(message as ToolResultMessage));
-        }
-        await binding.turn?.completion;
-        return;
-      }
-      cancelTools(binding, "The response continued without returning every tool result.");
-      await this.drop(binding, false);
+      if (await this.continueTurn(binding, host, context, writer, signal)) return;
       binding = await this.bindingFor(host, signal);
     }
 
@@ -267,7 +266,13 @@ export class AcpHarnessRuntime {
       release = resolve;
     });
     await previous;
+    if (binding.closed) {
+      // The session closed while this turn waited its turn; start over.
+      release();
+      return this.run(model, context, options, writer);
+    }
     let completeTurn: (() => void) | undefined;
+    let turn: Turn | undefined;
     try {
       const conversation = conversationMessages(context);
       if (
@@ -277,8 +282,9 @@ export class AcpHarnessRuntime {
         // Rewind, edit, fork or compaction: ACP history cannot be edited, so
         // start a fresh session that receives a bounded reconstruction.
         this.sessions.remove(binding.chatId);
+        release();
         await this.drop(binding, false);
-        binding = await this.bindingFor(host, signal, { fresh: true });
+        return this.run(model, context, options, writer);
       }
       clearTimeout(binding.idleTimer);
       binding.bridge?.setTools(host.bridgeableTools(getCurrentTools(context.messages)));
@@ -312,31 +318,36 @@ export class AcpHarnessRuntime {
       if (built.reconstructed && conversation.length > 1) {
         host.notice?.(`${this.definition.label} started a fresh session with a summary of earlier messages.`);
       }
-      const controller = new AbortController();
-      binding.turn = {
+      turn = {
         completion: new Promise<void>((resolve) => {
           completeTurn = resolve;
         }),
-        controller,
+        controller: new AbortController(),
         abortRequested: false,
+        writeGrants: new Set(),
+        unscopedWriteGrants: 0,
       };
-      this.attachWriter(binding, writer, host, context);
-      this.linkAbort(binding, signal);
+      binding.turn = turn;
+      binding.buffered = [];
       binding.tracker.clear();
       binding.startedActivities.clear();
       binding.lastPlan = undefined;
+      this.attachWriter(binding, writer, host, conversation);
+      this.linkAbort(binding, turn, signal);
 
       const response = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: built.prompt });
       const active = binding.writer ?? writer;
       this.flushBuffered(binding);
-      if (binding.turn?.abortRequested || response.stopReason === "cancelled") throw abortError();
+      // The agent saw this turn's input whether it finished or was stopped.
       active.message.usage = usageFromPrompt(response as PromptResponse);
       active.message.rawStopReason = response.stopReason;
       binding.messageCount = binding.pendingContextCount || built.messageCount;
       binding.historyFingerprint = binding.pendingContextFingerprint;
       binding.expectedAssistantFingerprint = messageFingerprint(active.message as Message);
       this.persist(binding);
-      if (response.stopReason === "max_tokens" || response.stopReason === "max_turn_requests") {
+      if (turn.abortRequested || response.stopReason === "cancelled") {
+        active.fail(abortError(), true);
+      } else if (response.stopReason === "max_tokens" || response.stopReason === "max_turn_requests") {
         active.done("length");
       } else if (response.stopReason === "refusal") {
         active.fail(new AcpHarnessError("protocol", `${this.definition.label} declined this request.`));
@@ -345,48 +356,92 @@ export class AcpHarnessRuntime {
       }
     } catch (error) {
       binding.writer?.fail(error, isAbortError(error) || signal?.aborted === true);
-      cancelTools(binding, "The response ended before the tool finished.");
-      if (!binding.launched.process.alive || binding.turn?.abortRequested) await this.drop(binding, false);
+      if (!binding.launched.process.alive) await this.drop(binding, false);
       throw error;
     } finally {
+      // Calls the agent abandoned must not keep a later stream waiting.
+      cancelTools(binding, "The agent's turn ended before the tool finished.");
       completeTurn?.();
-      binding.turn = undefined;
+      if (binding.turn === turn) binding.turn = undefined;
       binding.writer = undefined;
       binding.host = undefined;
+      binding.buffered = [];
       release();
       this.scheduleIdle(binding);
     }
   }
 
-  private attachWriter(
+  /**
+   * Resume an in-flight ACP prompt with the results of bridged tools. Returns
+   * false when this stream call is not a continuation (the turn already ended,
+   * or Pi stopped without returning a result); pending calls are then
+   * resolved as failed so the agent's turn can settle, and the caller runs a
+   * normal turn.
+   */
+  private async continueTurn(
     binding: Binding,
-    writer: PiEventWriter,
     host: AcpTurnHost,
     context: TranscriptContext,
-  ): void {
+    writer: PiEventWriter,
+    signal: AbortSignal | undefined,
+  ): Promise<boolean> {
+    const turn = binding.turn;
+    const conversation = conversationMessages(context);
+    const announced = [...binding.pendingTools.values()].filter((pending) => pending.announced);
+    const results = announced.map((pending) => ({
+      pending,
+      index: findToolResultIndex(conversation, pending.invocation.id, pending.invocation.name),
+    }));
+    if (!turn || results.length === 0 || results.some((result) => result.index < 0)) {
+      cancelTools(binding, "The tool result never came back.");
+      if (turn) {
+        this.requestCancel(binding, turn);
+        if (!(await settlesWithin(turn.completion, this.options.cancelGraceMs))) await this.drop(binding, false);
+      }
+      return false;
+    }
+    // Messages after the last tool result (for example, a message the user
+    // sent mid-turn) stay unseen and go out with the next prompt.
+    const boundary = Math.max(...results.map((result) => result.index)) + 1;
+    this.attachWriter(binding, writer, host, conversation.slice(0, boundary));
+    this.linkAbort(binding, turn, signal);
+    await this.syncMode(binding, host, signal).catch(() => undefined);
+    for (const { pending, index } of results) {
+      clearTimeout(pending.timer);
+      binding.pendingTools.delete(pending.invocation.id);
+      pending.resolve(toMcpResult(conversation[index] as ToolResultMessage));
+    }
+    // Calls that arrived while no stream was attached are announced now.
+    this.announcePending(binding);
+    await Promise.race([turn.completion, writer.stream.result().then(() => undefined)]);
+    return true;
+  }
+
+  private attachWriter(binding: Binding, writer: PiEventWriter, host: AcpTurnHost, seen: readonly Message[]): void {
     binding.writer = writer;
     binding.host = host;
     binding.lastUsed = Date.now();
-    const conversation = conversationMessages(context);
-    binding.pendingContextCount = conversation.length;
-    binding.pendingContextFingerprint = messagesFingerprint(conversation);
+    binding.pendingContextCount = seen.length;
+    binding.pendingContextFingerprint = messagesFingerprint(seen);
     this.flushBuffered(binding);
   }
 
-  private linkAbort(binding: Binding, signal: AbortSignal | undefined): void {
-    if (!signal || !binding.turn) return;
-    const turn = binding.turn;
-    const abort = () => {
-      if (turn.abortRequested) return;
-      turn.abortRequested = true;
-      turn.controller.abort();
-      void binding.connection.cancel(binding.sessionId);
-      const timer = setTimeout(() => {
-        if (binding.turn === turn) void this.drop(binding, false);
-      }, this.options.cancelGraceMs);
-      timer.unref?.();
-      void turn.completion.then(() => clearTimeout(timer));
-    };
+  private requestCancel(binding: Binding, turn: Turn): void {
+    if (turn.abortRequested) return;
+    turn.abortRequested = true;
+    turn.controller.abort();
+    void binding.connection.cancel(binding.sessionId);
+    // A clean cancel keeps the session; only an agent that will not settle is killed.
+    const timer = setTimeout(() => {
+      if (binding.turn === turn) void this.drop(binding, false);
+    }, this.options.cancelGraceMs);
+    timer.unref?.();
+    void turn.completion.then(() => clearTimeout(timer));
+  }
+
+  private linkAbort(binding: Binding, turn: Turn, signal: AbortSignal | undefined): void {
+    if (!signal) return;
+    const abort = () => this.requestCancel(binding, turn);
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
     void turn.completion.then(() => signal.removeEventListener("abort", abort));
@@ -397,6 +452,7 @@ export class AcpHarnessRuntime {
     signal: AbortSignal | undefined,
     options: { fresh?: boolean } = {},
   ): Promise<Binding> {
+    this.assertActive();
     const existing = this.bindings.get(host.chatId);
     if (existing) {
       const binding = await existing.catch(() => undefined);
@@ -416,18 +472,35 @@ export class AcpHarnessRuntime {
   }
 
   private async makeRoom(): Promise<void> {
-    const idle = [...this.live]
-      .filter((binding) => !binding.turn && binding.pendingTools.size === 0)
-      .sort((left, right) => left.lastUsed - right.lastUsed);
-    while (this.live.size >= this.options.maxLiveSessions && idle.length > 0) {
-      const oldest = idle.shift();
-      if (oldest) await this.drop(oldest, true);
+    while (this.live.size >= this.options.maxLiveSessions) {
+      // Re-evaluate each time: a session may have started a turn meanwhile.
+      const oldest = [...this.live]
+        .filter((binding) => !binding.turn && binding.pendingTools.size === 0)
+        .sort((left, right) => left.lastUsed - right.lastUsed)[0];
+      if (!oldest) return;
+      await this.drop(oldest, true);
     }
   }
 
   private async create(host: AcpTurnHost, signal: AbortSignal | undefined, fresh: boolean): Promise<Binding> {
-    const launched = await this.launcher.launch("chat", host.cwd);
     let binding: Binding | undefined;
+    let signInLost = false;
+    let pendingLaunch: AcpLaunchedProcess | undefined;
+    const launched = await this.launcher.launch("chat", host.cwd, {
+      onStderrLine: (line) => {
+        if (signInLost || !this.definition.detectSignInPrompt?.(line)) return;
+        // The agent is waiting for an interactive sign-in nobody will finish.
+        signInLost = true;
+        this.onSignInLost?.();
+        if (binding) {
+          binding.writer?.fail(this.signInError());
+          void this.drop(binding, true);
+        } else {
+          void pendingLaunch?.dispose();
+        }
+      },
+    });
+    pendingLaunch = launched;
     const connection = new AcpConnection(
       launched.process,
       {
@@ -442,11 +515,13 @@ export class AcpHarnessRuntime {
         },
         writeTextFile: async (request) => {
           const current = binding?.host;
-          if (!current) throw new AcpHarnessError("unavailable", "No response is running.");
-          const permission = current.permission();
+          const turn = binding?.turn;
+          if (!binding || !current || !turn) throw new AcpHarnessError("unavailable", "No response is running.");
+          // Evaluate once: a one-time grant must not be consumed by the recheck.
+          const allowed = writeAllowed(binding, turn, current, request.path);
           return writeClientTextFile(request, {
             roots: current.roots,
-            canWrite: () => permission === "full" || permission === "ask",
+            canWrite: () => allowed && (current.permission() === "full" || current.permission() === "ask"),
             onWrite: (file, before, after) => current.onFileWrite?.(file, before, after),
           });
         },
@@ -520,6 +595,7 @@ export class AcpHarnessRuntime {
         idleTimer: undefined,
         restored,
         closed: false,
+        sessionWriteGrant: false,
       };
       const created = binding;
       this.live.add(created);
@@ -529,7 +605,7 @@ export class AcpHarnessRuntime {
       return created;
     } catch (error) {
       await Promise.allSettled([bridge?.close() ?? Promise.resolve(), launched.dispose()]);
-      throw error;
+      throw signInLost ? this.signInError() : error;
     }
   }
 
@@ -676,12 +752,20 @@ export class AcpHarnessRuntime {
       binding.startedActivities.add(id);
       host.activity.started(id, step.toolName, step.args);
     }
-    const response = await answerPermission(request, classification, host, binding.turn.controller.signal);
-    if (step && response.outcome.outcome === "selected") {
-      const option = request.options.find((candidate) => candidate.optionId === (response.outcome as { optionId: string }).optionId);
-      if (option?.kind.startsWith("reject")) host.activity.finished(id, "blocked");
-    } else if (step) {
-      host.activity.finished(id, "cancelled");
+    const turn = binding.turn;
+    const response = await answerPermission(request, classification, host, turn.controller.signal);
+    const chosen =
+      response.outcome.outcome === "selected"
+        ? request.options.find((candidate) => candidate.optionId === (response.outcome as { optionId: string }).optionId)
+        : undefined;
+    if (chosen?.kind.startsWith("allow") && classification.kind === "approval" && isMutation(request.toolCall.kind)) {
+      if (chosen.kind === "allow_always") binding.sessionWriteGrant = true;
+      const paths = (request.toolCall.locations ?? []).map((location) => path.resolve(location.path));
+      if (paths.length === 0) turn.unscopedWriteGrants += 1;
+      for (const target of paths) turn.writeGrants.add(target);
+    }
+    if (step && (!chosen || chosen.kind.startsWith("reject"))) {
+      host.activity.finished(id, chosen ? "blocked" : "cancelled");
     }
     return response;
   }
@@ -696,16 +780,36 @@ export class AcpHarnessRuntime {
         resolve(toolError("The tool did not finish in time."));
       }, this.options.toolTimeoutMs);
       timer.unref?.();
-      binding.pendingTools.set(invocation.id, { invocation, resolve, timer });
-      binding.writer?.toolCall(invocation.id, invocation.name, invocation.arguments);
-      if (binding.toolBatchTimer) clearTimeout(binding.toolBatchTimer);
-      binding.toolBatchTimer = setTimeout(() => {
-        binding.toolBatchTimer = undefined;
-        binding.writer?.done("toolUse");
-        binding.writer = undefined;
-      }, TOOL_BATCH_MS);
-      binding.toolBatchTimer.unref?.();
+      binding.pendingTools.set(invocation.id, { invocation, announced: false, resolve, timer });
+      this.announcePending(binding);
     });
+  }
+
+  /**
+   * Show parked calls to Pi on the attached stream, then end that stream with
+   * `toolUse` once a short batch window passes. A call that arrives while no
+   * stream is attached waits for the next one.
+   */
+  private announcePending(binding: Binding): void {
+    const writer = binding.writer;
+    if (!writer || writer.finished) return;
+    let announced = false;
+    for (const pending of binding.pendingTools.values()) {
+      if (pending.announced) continue;
+      pending.announced = true;
+      announced = true;
+      writer.toolCall(pending.invocation.id, pending.invocation.name, pending.invocation.arguments);
+    }
+    if (!announced) return;
+    if (binding.toolBatchTimer) clearTimeout(binding.toolBatchTimer);
+    binding.toolBatchTimer = setTimeout(() => {
+      binding.toolBatchTimer = undefined;
+      if (binding.writer === writer) {
+        writer.done("toolUse");
+        binding.writer = undefined;
+      }
+    }, TOOL_BATCH_MS);
+    binding.toolBatchTimer.unref?.();
   }
 
   private persist(binding: Binding): void {
@@ -761,9 +865,37 @@ export class AcpHarnessRuntime {
     );
   }
 
+  private signInError(): AcpHarnessError {
+    return new AcpHarnessError(
+      "auth",
+      `Your ${this.definition.label} sign-in expired. Sign in again in Settings → Providers.`,
+    );
+  }
+
   private assertActive(): void {
     if (this.disposed) throw new AcpHarnessError("unavailable", `${this.definition.label} is shutting down.`);
   }
+}
+
+function isMutation(kind: string | null | undefined): boolean {
+  return kind === "edit" || kind === "delete" || kind === "move";
+}
+
+/**
+ * Full permits any write inside the roots. Ask permits only writes the user
+ * approved this turn (or "always" for the session). Read-only and no-access
+ * permit none, whatever the agent's native mode allows.
+ */
+function writeAllowed(binding: Binding, turn: Turn, host: AcpTurnHost, requested: string): boolean {
+  const permission = host.permission();
+  if (permission === "full") return true;
+  if (permission !== "ask") return false;
+  if (binding.sessionWriteGrant || turn.writeGrants.has(path.resolve(requested))) return true;
+  if (turn.unscopedWriteGrants > 0) {
+    turn.unscopedWriteGrants -= 1;
+    return true;
+  }
+  return false;
 }
 
 function selectValues(option: SessionConfigOption): string[] {
@@ -783,12 +915,23 @@ function currentConfigValue(options: readonly SessionConfigOption[], category: s
   return option && option.type === "select" ? option.currentValue : undefined;
 }
 
-function findToolResult(context: TranscriptContext, id: string, name: string): ToolResultMessage | undefined {
-  for (let index = context.messages.length - 1; index >= 0; index -= 1) {
-    const message = context.messages[index];
-    if (message?.role === "toolResult" && message.toolCallId === id && message.toolName === name) return message;
+function findToolResultIndex(messages: readonly Message[], id: string, name: string): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "toolResult" && message.toolCallId === id && message.toolName === name) return index;
   }
-  return undefined;
+  return -1;
+}
+
+function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    timer.unref?.();
+    void promise.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 function toMcpResult(message: ToolResultMessage): CallToolResult {

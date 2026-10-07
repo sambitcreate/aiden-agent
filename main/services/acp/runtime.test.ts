@@ -154,7 +154,7 @@ test("a denied approval leaves the file untouched and marks the activity blocked
   await h.runtime.close();
 });
 
-test("read-only chats refuse native mutations without asking, even when the agent writes anyway", async () => {
+test("read-only chats refuse native commands without asking", async () => {
   const h = harness();
   const file = path.join(h.dir, "notes.txt");
   writeFileSync(file, "old line\n");
@@ -275,5 +275,113 @@ test("at most the configured number of idle sessions stay alive", async () => {
   await turn(h, [userMessage("echo:b")], { chatId: "chat-b" });
   assert.equal(h.runtime.liveCount, 1);
   assert.equal(h.launcher.processes.filter((process) => process.alive).length, 1);
+  await h.runtime.close();
+});
+
+function toolResultFor(message: AssistantMessage, textValue: string): ToolResultMessage {
+  const call = message.content.find((block) => block.type === "toolCall");
+  assert.ok(call && call.type === "toolCall", "expected a tool call");
+  return {
+    role: "toolResult",
+    toolCallId: call.id,
+    toolName: call.name,
+    content: [{ type: "text", text: textValue }],
+    isError: false,
+    timestamp: Date.now(),
+  };
+}
+
+const lookupTools = [{ name: "lookup", description: "Look something up", parameters: Type.Object({ value: Type.String() }) }];
+
+test("a message sent mid-turn is not lost: it reaches the agent with the next prompt", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools: lookupTools });
+  const result = toolResultFor(first, "found it");
+  const steer = userMessage("echo:steer this way");
+  const second = await turn(h, [userMessage("bridge:aiden_lookup"), first, result, steer], { tools: lookupTools });
+  assert.equal(text(second), "bridge:found it");
+  const third = await turn(
+    h,
+    [userMessage("bridge:aiden_lookup"), first, result, steer, second, userMessage("prompt-dump")],
+    { tools: lookupTools },
+  );
+  assert.match(text(third), /steer this way/u);
+  await h.runtime.close();
+});
+
+test("a bridged call that arrives after the stream ended is shown on the next stream", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const messages: Message[] = [userMessage("bridge-late:aiden_lookup")];
+  const first = await turn(h, messages, { tools: lookupTools });
+  assert.equal(first.stopReason, "toolUse");
+  messages.push(first, toolResultFor(first, "one"));
+  const second = await turn(h, messages, { tools: lookupTools });
+  assert.equal(second.stopReason, "toolUse", "the late call is announced instead of killing the session");
+  messages.push(second, toolResultFor(second, "two"));
+  const third = await turn(h, messages, { tools: lookupTools });
+  assert.equal(text(third), "bridge-late:one,two");
+  assert.equal(h.launcher.launches.length, 1);
+  await h.runtime.close();
+});
+
+test("a tool result arriving after the agent gave up does not hang the next stream", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const messages: Message[] = [userMessage("bridge-abandon:aiden_lookup")];
+  const first = await turn(h, messages, { tools: lookupTools });
+  assert.equal(first.stopReason, "toolUse");
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  messages.push(first, toolResultFor(first, "late"));
+  const second = await turn(h, messages, { tools: lookupTools });
+  assert.equal(second.stopReason, "stop");
+  await h.runtime.close();
+});
+
+test("after a clean Stop the same agent session continues", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const controller = new AbortController();
+  const pending = turn(h, [userMessage("slow")], { signal: controller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  controller.abort();
+  const stopped = await pending;
+  assert.equal(stopped.stopReason, "aborted");
+  const next = await turn(h, [userMessage("slow"), stopped, userMessage("history")]);
+  assert.equal(text(next), "prompts:2");
+  assert.equal(h.launcher.launches.length, 1);
+  await h.runtime.close();
+});
+
+test("eviction never closes a session that is mid-turn", async () => {
+  const h = harness(undefined, undefined, { maxLiveSessions: 1 });
+  h.hosts.register(new RecordingHost("chat-a", h.dir));
+  h.hosts.register(new RecordingHost("chat-b", h.dir));
+  const controller = new AbortController();
+  const busy = turn(h, [userMessage("slow")], { chatId: "chat-a", signal: controller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await turn(h, [userMessage("echo:b")], { chatId: "chat-b" });
+  assert.equal(h.runtime.liveCount, 2);
+  controller.abort();
+  assert.equal((await busy).stopReason, "aborted");
+  await h.runtime.close();
+});
+
+test("writes the user did not approve are refused in Ask, and every write is refused when read-only", async () => {
+  const h = harness();
+  const file = path.join(h.dir, "notes.txt");
+  writeFileSync(file, "old line\n");
+  const host = new RecordingHost("chat-1", h.dir);
+  h.hosts.register(host);
+  const asked = await turn(h, [userMessage(`write:${file}`)]);
+  assert.match(text(asked), /^write refused:/u);
+  host.currentPermission = "read-only";
+  const readOnly = await turn(h, [userMessage(`write:${file}`), asked, userMessage(`write:${file}`)]);
+  assert.match(text(readOnly), /^write refused:/u);
+  assert.equal(readFileSync(file, "utf8"), "old line\n");
+  host.currentPermission = "full";
+  const full = await turn(h, [userMessage(`write:${file}`), asked, userMessage(`write:${file}`), readOnly, userMessage(`write:${file}`)]);
+  assert.equal(text(full), "wrote");
   await h.runtime.close();
 });

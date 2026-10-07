@@ -11,6 +11,9 @@
  *   exec                ask permission for a command; reply allowed/denied
  *   question            ask a fixed-choice question via an interaction_ permission request
  *   bridge:<tool>       call <tool> on the first HTTP MCP server and reply with its text
+ *   bridge-late:<tool>  call <tool>, then call it again 400 ms later; reply with both results
+ *   bridge-abandon:<tool> call <tool> but give up after 300 ms and end the turn
+ *   write:<abs path>    write through fs/write_text_file without asking first
  *   slow                wait until cancelled
  *   crash               exit the process mid-turn
  *   history             reply with the number of prompts this session received
@@ -280,6 +283,33 @@ const connection = new AgentSideConnection(
           await client.close();
           const resultText = result.content.map((item) => item.text ?? "").join("");
           await say(`bridge:${resultText}`);
+          break;
+        }
+        case "bridge-late":
+        case "bridge-abandon": {
+          const server = session.mcpServers.find((candidate) => candidate.type === "http");
+          const headers = Object.fromEntries(server.headers.map((header) => [header.name, header.value]));
+          const client = new Client({ name: "fake-agent", version: "1.0.0" });
+          await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } }));
+          const call = (value) =>
+            client
+              .callTool({ name: argument, arguments: { value } }, undefined, command === "bridge-abandon" ? { timeout: 300 } : undefined)
+              .then((result) => result.content.map((item) => item.text ?? "").join(""))
+              .catch(() => "gave-up");
+          const results = command === "bridge-late"
+            ? await Promise.all([call("first"), new Promise((resolve) => setTimeout(resolve, 400)).then(() => call("second"))])
+            : [await call("only")];
+          await client.close().catch(() => {});
+          await say(`${command}:${results.join(",")}`);
+          break;
+        }
+        case "write": {
+          try {
+            await connection.writeTextFile({ sessionId: session.id, path: argument, content: "unasked\n" });
+            await say("wrote");
+          } catch (error) {
+            await say(`write refused: ${error.message}`);
+          }
           break;
         }
         case "slow":

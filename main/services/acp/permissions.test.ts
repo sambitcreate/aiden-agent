@@ -23,9 +23,9 @@ async function decide(kind: ToolKind, permission: RecordingHost["currentPermissi
   return { host, chosen: response.outcome.outcome === "selected" ? response.outcome.optionId : "cancelled" };
 }
 
-test("read-like operations are allowed in every mode without asking", async () => {
+test("local read-like operations are allowed in every mode without asking", async () => {
   for (const permission of ["ask", "read-only", "none"] as const) {
-    for (const kind of ["read", "search", "fetch", "think"] as const) {
+    for (const kind of ["read", "search", "think"] as const) {
       const { host, chosen } = await decide(kind, permission);
       assert.equal(chosen, "allow_once", `${kind} in ${permission}`);
       assert.equal(host.approvals.length, 0);
@@ -33,8 +33,8 @@ test("read-like operations are allowed in every mode without asking", async () =
   }
 });
 
-test("Full allows mutations; read-only and no-access refuse them without asking", async () => {
-  for (const kind of ["edit", "execute", "delete", "move", "other"] as const) {
+test("Full allows mutations and fetches; read-only and no-access refuse them without asking", async () => {
+  for (const kind of ["edit", "execute", "delete", "move", "fetch", "other"] as const) {
     assert.equal((await decide(kind, "full")).chosen, "allow_once");
     for (const permission of ["read-only", "none"] as const) {
       const { host, chosen } = await decide(kind, permission);
@@ -51,6 +51,9 @@ test("Ask shows Aiden's approval and maps each answer to the agent's own option"
   assert.deepEqual(allowOnce.host.approvals[0]?.paths, ["file.ts"]);
   assert.equal((await decide("edit", "ask", "allow_always")).chosen, "allow_always");
   assert.equal((await decide("edit", "ask", "reject")).chosen, "reject_once");
+  // Network fetches can exfiltrate data, so Ask asks for them too.
+  const fetchAsk = await decide("fetch", "ask", "allow_once");
+  assert.equal(fetchAsk.host.approvals[0]?.kind, "fetch");
   // A dismissed card (not a Stop) is a refusal, never an implicit allow.
   assert.equal((await decide("edit", "ask", "cancelled")).chosen, "reject_once");
 });

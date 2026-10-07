@@ -111,6 +111,11 @@ export interface AcpHarnessDefinition {
   classifyPermission?(request: RequestPermissionRequest): AcpPermissionClassification;
   /** Reclassify a tool call (for example, subagent batches). */
   isSubagentCall?(update: ToolCall | ToolCallUpdate): boolean;
+  /**
+   * True when a stderr line shows the agent asking for an interactive
+   * sign-in. During a chat that means the saved sign-in no longer works.
+   */
+  detectSignInPrompt?(line: string): boolean;
   /** Stdout lines that are known noise; they are dropped either way. */
   observeStdoutNoise?(line: string): void;
   /** Extra short instructions prepended to Aiden's system prompt for this agent. */
