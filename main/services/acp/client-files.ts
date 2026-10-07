@@ -26,9 +26,33 @@ import { AcpHarnessError } from "./errors.js";
 export const MAX_CLIENT_READ_BYTES = 8 * 1024 * 1024;
 export const MAX_CLIENT_WRITE_BYTES = 8 * 1024 * 1024;
 
+/**
+ * A folder the agent may touch, captured once (canonical path plus device and
+ * inode) when the turn starts. A captured root is used only while its path
+ * still names that same directory, so swapping an ancestor of the folder
+ * cannot move the agent's file access elsewhere.
+ */
+export interface AcpRootIdentity {
+  path: string;
+  device: string;
+  inode: string;
+}
+
+/** A plain absolute path (resolved on use) or a captured identity. */
+export type AcpRoot = string | AcpRootIdentity;
+
+export function rootPath(root: AcpRoot): string {
+  return typeof root === "string" ? root : root.path;
+}
+
+export async function captureRootIdentity(directory: string): Promise<AcpRootIdentity> {
+  const identity = await captureManagedWorktreeRootIdentity(directory);
+  return { path: identity.path, device: identity.device, inode: identity.inode };
+}
+
 export interface AcpClientFilePolicy {
-  /** Absolute directories the agent may touch. The first is the workspace. */
-  roots: readonly string[];
+  /** Directories the agent may touch. The first is the workspace. */
+  roots: readonly AcpRoot[];
   /** Whether writes are currently allowed; read at the moment of each write. */
   canWrite(): boolean;
   /** Called after a successful write with the absolute real path. */
@@ -48,9 +72,28 @@ export interface WriteTextFileParams {
   content: string;
 }
 
-async function canonicalRoots(roots: readonly string[]): Promise<string[]> {
+async function verifiedIdentity(root: AcpRootIdentity): Promise<boolean> {
+  try {
+    const info = await lstat(root.path, { bigint: true });
+    return (
+      info.isDirectory() &&
+      !info.isSymbolicLink() &&
+      info.dev.toString() === root.device &&
+      info.ino.toString() === root.inode
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function canonicalRoots(roots: readonly AcpRoot[]): Promise<string[]> {
   const output: string[] = [];
   for (const root of roots) {
+    if (typeof root !== "string") {
+      // A captured root grants nothing once its path names another directory.
+      if (await verifiedIdentity(root)) output.push(root.path);
+      continue;
+    }
     if (!path.isAbsolute(root)) continue;
     try {
       output.push(await realpath(root));
@@ -73,7 +116,7 @@ function within(candidate: string, root: string): boolean {
  */
 export async function resolveConfinedPath(
   requested: string,
-  roots: readonly string[],
+  roots: readonly AcpRoot[],
 ): Promise<string> {
   if (typeof requested !== "string" || requested.length === 0 || requested.includes("\0")) {
     throw new AcpHarnessError("invalid_input", "The agent asked for an invalid file path.");
@@ -130,7 +173,7 @@ function sameFile(left: Stats, right: Stats): boolean {
 }
 
 /** Aiden's parent read policy: `.env` and `.env.*` (except examples) stay out of model context. */
-async function rejectEnvironmentSecret(target: string, roots: readonly string[]): Promise<void> {
+async function rejectEnvironmentSecret(target: string, roots: readonly AcpRoot[]): Promise<void> {
   for (const root of await canonicalRoots(roots)) {
     if (within(target, root) && isEnvironmentSecretPath(path.relative(root, target))) {
       throw new AcpHarnessError(
@@ -149,7 +192,7 @@ async function rejectEnvironmentSecret(target: string, roots: readonly string[])
  */
 async function assertStillConfined(
   requested: string,
-  roots: readonly string[],
+  roots: readonly AcpRoot[],
   opened: Stats,
 ): Promise<string> {
   const verified = await resolveConfinedPath(requested, roots);
@@ -173,17 +216,25 @@ const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
  * Aiden's packaged native helper (openat/mkdirat with O_NOFOLLOW); Linux walks
  * /proc/self/fd, which resolves each step through the previous descriptor.
  */
-async function createAnchored(target: string, content: string, roots: readonly string[]): Promise<void> {
-  const root = (await canonicalRoots(roots)).find((candidate) => within(target, candidate));
-  if (!root) throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
-  const relative = path.relative(root, target);
+async function createAnchored(target: string, content: string, roots: readonly AcpRoot[]): Promise<void> {
+  let identity: AcpRootIdentity | undefined;
+  for (const root of roots) {
+    const candidate = typeof root === "string" ? await captureRootIdentity(root).catch(() => undefined) : root;
+    if (candidate && within(target, candidate.path) && (await verifiedIdentity(candidate))) {
+      identity = candidate;
+      break;
+    }
+  }
+  if (!identity) throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
+  const relative = path.relative(identity.path, target);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
   }
   const bytes = Buffer.from(content, "utf8");
   if (process.platform === "darwin") {
     try {
-      const identity = await captureManagedWorktreeRootIdentity(root);
+      // The helper reaches the root by a no-follow walk from "/" and checks
+      // the captured device and inode before creating anything.
       await createConfinedWorkspaceFile(identity, relative.split(path.sep).join("/"), bytes);
     } catch (error) {
       if (error instanceof ManagedWorktreeFileIoError && error.code === "destination_exists") {
@@ -198,19 +249,31 @@ async function createAnchored(target: string, content: string, roots: readonly s
   if (process.platform !== "linux") {
     throw new AcpHarnessError("unavailable", "Creating files is not supported on this platform.");
   }
-  const parts = relative.split(path.sep);
-  const leaf = parts.pop()!;
-  let current = await open(root, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | NO_FOLLOW);
+  const NO_FOLLOW_DIRECTORY = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | NO_FOLLOW;
+  // Walk from "/" one component at a time through the previous descriptor,
+  // then require the root's captured identity before going further.
+  let current = await open("/", NO_FOLLOW_DIRECTORY);
   try {
+    for (const part of identity.path.split("/").filter(Boolean)) {
+      const next = await open(`/proc/self/fd/${current.fd}/${part}`, NO_FOLLOW_DIRECTORY);
+      await current.close();
+      current = next;
+    }
+    const rootInfo = await current.stat({ bigint: true });
+    if (rootInfo.dev.toString() !== identity.device || rootInfo.ino.toString() !== identity.inode) {
+      throw new AcpHarnessError("invalid_input", "This chat's folder moved; the file was not created.");
+    }
+    const parts = relative.split(path.sep);
+    const leaf = parts.pop()!;
     for (const part of parts) {
       const step = `/proc/self/fd/${current.fd}/${part}`;
       let next: FileHandle;
       try {
-        next = await open(step, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | NO_FOLLOW);
+        next = await open(step, NO_FOLLOW_DIRECTORY);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         await mkdir(step);
-        next = await open(step, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | NO_FOLLOW);
+        next = await open(step, NO_FOLLOW_DIRECTORY);
       }
       await current.close();
       current = next;

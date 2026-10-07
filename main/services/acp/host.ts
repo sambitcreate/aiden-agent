@@ -10,6 +10,7 @@
  */
 import type { Tool } from "@earendil-works/pi-ai";
 
+import type { AcpRoot } from "./client-files.js";
 import type { AcpHostPermission, AcpQuestion } from "./harness.js";
 
 export type AcpApprovalOutcome = "allow_once" | "allow_always" | "reject" | "cancelled";
@@ -36,7 +37,7 @@ export interface AcpTurnHost {
   /** The agent's working directory. */
   cwd: string;
   /** Directories file callbacks may touch; the first is the workspace. */
-  roots: readonly string[];
+  roots: readonly AcpRoot[];
   permission(): AcpHostPermission;
   /** Ask the user through Aiden's approval surface. */
   requestApproval(request: AcpApprovalRequest, signal: AbortSignal): Promise<AcpApprovalOutcome>;

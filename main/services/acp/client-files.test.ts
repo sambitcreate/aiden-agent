@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync,
 import path from "node:path";
 import test from "node:test";
 
-import { readClientTextFile, writeClientTextFile } from "./client-files.js";
+import { captureRootIdentity, readClientTextFile, writeClientTextFile } from "./client-files.js";
 import { tempDir } from "./test-support.js";
 
 function workspace() {
@@ -129,4 +129,29 @@ test("a parent swapped for a link out right before creation never creates anythi
     /could not be created safely|outside/u,
   );
   assert.deepEqual(readdirSync(outside).sort(), before, "nothing was created outside the folder");
+});
+
+test("an ancestor of the folder swapped after the turn started cannot move file access elsewhere", { skip: process.platform !== "darwin" && process.platform !== "linux" }, async () => {
+  const base = realpathSync(tempDir());
+  const outside = realpathSync(tempDir());
+  mkdirSync(path.join(base, "a", "ws"), { recursive: true });
+  writeFileSync(path.join(base, "a", "ws", "notes.txt"), "inside");
+  mkdirSync(path.join(outside, "ws"));
+  writeFileSync(path.join(outside, "ws", "notes.txt"), "outside");
+  const identity = await captureRootIdentity(path.join(base, "a", "ws"));
+  // Replace an ancestor (not the folder itself) with a link out.
+  renameSync(path.join(base, "a"), path.join(base, "a-moved"));
+  symlinkSync(outside, path.join(base, "a"));
+  const policy = { roots: [identity], canWrite: () => true };
+  await assert.rejects(
+    writeClientTextFile({ path: path.join(base, "a", "ws", "new.txt"), content: "x" }, policy),
+    /no folder|outside|could not be created/u,
+  );
+  await assert.rejects(
+    writeClientTextFile({ path: path.join(base, "a", "ws", "notes.txt"), content: "x" }, policy),
+    /no folder|outside/u,
+  );
+  await assert.rejects(readClientTextFile({ path: path.join(base, "a", "ws", "notes.txt") }, policy), /no folder|outside/u);
+  assert.deepEqual(readdirSync(path.join(outside, "ws")), ["notes.txt"]);
+  assert.equal(readFileSync(path.join(outside, "ws", "notes.txt"), "utf8"), "outside");
 });

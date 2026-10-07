@@ -17,6 +17,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 
 import { lineChangeCounts } from "../coding-tools.js";
+import { rootPath, type AcpRoot } from "./client-files.js";
 
 export type AcpActivityStatus = "pending" | "running" | "completed" | "failed";
 
@@ -165,8 +166,9 @@ export class AcpToolCallTracker {
 }
 
 /** A workspace-relative display path, or undefined when outside every root. */
-export function relativeDisplayPath(absolute: string, roots: readonly string[]): string | undefined {
-  for (const root of roots) {
+export function relativeDisplayPath(absolute: string, roots: readonly AcpRoot[]): string | undefined {
+  for (const entry of roots) {
+    const root = rootPath(entry);
     if (!root) continue;
     const relative = path.relative(root, absolute);
     if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
@@ -183,7 +185,7 @@ export function relativeDisplayPath(absolute: string, roots: readonly string[]):
  */
 export function timelineStepFor(
   activity: AcpToolActivity,
-  roots: readonly string[],
+  roots: readonly AcpRoot[],
 ): AcpTimelineStep | undefined {
   const target = activity.locations
     .map((location) => relativeDisplayPath(location, roots))

@@ -218,6 +218,7 @@ import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
 import { canHostAcpHarness, createAcpGenerationHost } from "./acp/generation-host.js";
 import { acpHosts } from "./acp/hosts.js";
+import { captureRootIdentity } from "./acp/client-files.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
@@ -3847,6 +3848,10 @@ export const llmClient = {
               streamId,
               label: runtime.provider.label,
               folderPath,
+              // Bind file access to this exact directory for the whole turn.
+              ...(folderPath
+                ? { folderIdentity: await captureRootIdentity(folderPath).catch(() => undefined) }
+                : {}),
               scratchDir: await acpScratchDir(params.chatId),
               permission: () => permission,
               timeline,

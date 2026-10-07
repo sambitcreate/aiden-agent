@@ -13,6 +13,7 @@ import type {
 import type { ToolApprovalScope } from "../../../renderer/shared/tool-approval-scope.js";
 import type { AgentStepStatus } from "../../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalOutcome } from "../tool-approval.js";
+import type { AcpRootIdentity } from "./client-files.js";
 import type { AcpHostPermission, AcpQuestion } from "./harness.js";
 import type { AcpApprovalOutcome, AcpApprovalRequest, AcpTurnHost } from "./host.js";
 
@@ -47,6 +48,8 @@ export interface AcpGenerationHostOptions {
   label: string;
   /** The chat's folder, or undefined for a chat without one. */
   folderPath: string | undefined;
+  /** The folder's identity, captured when the turn started. */
+  folderIdentity?: AcpRootIdentity;
   /** Working directory for chats without a folder; it grants no file access. */
   scratchDir: string;
   permission(): AcpHostPermission;
@@ -134,7 +137,10 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
   return {
     chatId: options.chatId,
     cwd: options.folderPath ?? options.scratchDir,
-    roots: options.folderPath && options.permission() !== "none" ? [options.folderPath] : [],
+    roots:
+      options.folderPath && options.permission() !== "none"
+        ? [options.folderIdentity ?? options.folderPath]
+        : [],
     permission: options.permission,
     async requestApproval(request, signal): Promise<AcpApprovalOutcome> {
       const id = request.activityId ?? request.toolCallId;
