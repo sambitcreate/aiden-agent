@@ -8059,7 +8059,7 @@
               "focus",
               "wink"
             ],
-            "description": "Retired in revision 26: accepted and ignored on input, never emitted."
+            "description": "Retired in revision 25: accepted and ignored on input, never emitted."
           },
           "detail": {
             "enum": [
@@ -8070,7 +8070,7 @@
               "antenna",
               "bolts"
             ],
-            "description": "Retired in revision 26: accepted and ignored on input, never emitted."
+            "description": "Retired in revision 25: accepted and ignored on input, never emitted."
           }
         },
         "additionalProperties": false

@@ -123,7 +123,7 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertEqual(fixture.botAvatarMetadata.mimeType, .png)
         XCTAssertEqual(fixture.botAvatarMetadata.width, 512)
         XCTAssertEqual(fixture.botCreate.response.avatar.semantic, fixture.botCreate.request.avatar)
-        // Omitted create access is Full on revision 26.
+        // Omitted create access is Full on revision 25.
         XCTAssertNil(fixture.botCreate.request.access)
         XCTAssertNil(fixture.botIdentity.response.openingGreeting)
         XCTAssertEqual(fixture.botConversation.activityState, .waitingForApproval)
@@ -137,7 +137,7 @@ final class AidenBotContractTests: XCTestCase {
             fixture.botPolicyUpdate.request.catalogRevision,
             fixture.botCapabilityCatalog.revision
         )
-        // Revision 26 durable sessions, routines and presets.
+        // Revision 25 durable sessions, routines and presets.
         XCTAssertEqual(fixture.botSession.state, .interrupted)
         XCTAssertTrue(fixture.botSession.stateView.interrupted)
         XCTAssertEqual(fixture.botSessionNeedsModel.state, .needsModel)
@@ -656,7 +656,7 @@ final class AidenBotContractTests: XCTestCase {
           "avatar":{"version":1,"shape":"orb","color":"sky","eyes":"wide","detail":"orbit"}
         }
         """#.utf8)
-        // Omitted access is Full on revision 26, so the create request is valid.
+        // Omitted access is Full on revision 25, so the create request is valid.
         let omitted = try AidenRemoteJSONDecoder.decode(AidenBotCreateRequest.self, from: createWithoutAccess)
         XCTAssertNil(omitted.access)
     }

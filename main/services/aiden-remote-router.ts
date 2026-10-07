@@ -243,7 +243,7 @@ export interface AidenRemoteRouterDependencies {
   >>;
   /**
    * Durable Bot sessions, routines, connection requests and starter presets
-   * (contract revision 26). Absent: those routes are `not_found` and their
+   * (contract revision 25). Absent: those routes are `not_found` and their
    * feature tokens are never advertised.
    */
   botSessions?: Pick<
