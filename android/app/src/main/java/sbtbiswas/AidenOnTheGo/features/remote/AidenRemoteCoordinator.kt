@@ -358,6 +358,8 @@ class AidenRemoteCoordinator(
         _isMutating.value = true
         return try {
             val created = currentClient.createWorkspace(create)
+            // Reconcile at once with the server's answer; the refresh follows.
+            if (_workspaces.value.none { it.id == created.id }) _workspaces.value = _workspaces.value + created
             refreshWorkspaces()
             created
         } finally {
@@ -379,6 +381,7 @@ class AidenRemoteCoordinator(
                 revision = workspace.revision,
                 patch = AidenWorkspacePatch(name = name, permission = permission, memoryEnabled = memoryEnabled)
             )
+            _workspaces.value = _workspaces.value.map { if (it.id == updated.id) updated else it }
             refreshWorkspaces()
             updated
         } finally {
@@ -392,6 +395,7 @@ class AidenRemoteCoordinator(
         try {
             currentClient.removeWorkspace(workspace.id, workspace.revision)
             archiveStore.forget(workspace.id, activeInstanceId)
+            _workspaces.value = _workspaces.value.filterNot { it.id == workspace.id }
             refreshWorkspaces()
         } finally {
             _isMutating.value = false
@@ -408,6 +412,7 @@ class AidenRemoteCoordinator(
                 idempotencyKey = UUID.randomUUID()
             )
             archiveStore.forget(workspace.id, activeInstanceId)
+            _workspaces.value = _workspaces.value.filterNot { it.id == workspace.id }
             refreshWorkspaces()
             res
         } finally {

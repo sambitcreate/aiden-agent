@@ -13,12 +13,12 @@ class AidenChatRowStatusTest {
         val presentation = AidenChatRowStatusPresentation.of(AidenChatRowState.IDLE, unread = false)
         assertNull(presentation.contentDescription)
         assertNull(presentation.pillTitle)
-        assertFalse(presentation.showsSpinner)
+        assertFalse(presentation.showsActivity)
         assertFalse(presentation.showsUnreadDot)
     }
 
     @Test
-    fun attentionStatesUseDistinctSoftPillsWithoutASpinner() {
+    fun attentionStatesUseDistinctSoftPillsWithoutTheWorkingDot() {
         val approval = AidenChatRowStatusPresentation.of(AidenChatRowState.NEEDS_APPROVAL, unread = false)
         val input = AidenChatRowStatusPresentation.of(AidenChatRowState.NEEDS_INPUT, unread = false)
 
@@ -26,19 +26,19 @@ class AidenChatRowStatusTest {
         assertEquals(AidenChatRowStatusTone.ACCENT, input.pillTone)
         assertEquals("Needs approval", approval.contentDescription)
         assertEquals("Needs input", input.contentDescription)
-        assertFalse(approval.showsSpinner || input.showsSpinner)
+        assertFalse(approval.showsActivity || input.showsActivity)
     }
 
     @Test
     fun workingAndUnreadAreIndependentAndBothSpoken() {
         val presentation = AidenChatRowStatusPresentation.of(AidenChatRowState.WORKING, unread = true)
         assertNull(presentation.pillTitle)
-        assertTrue(presentation.showsSpinner)
+        assertTrue(presentation.showsActivity)
         assertTrue(presentation.showsUnreadDot)
         assertEquals("Working, Unread", presentation.contentDescription)
 
         val unreadOnly = AidenChatRowStatusPresentation.of(AidenChatRowState.IDLE, unread = true)
         assertEquals("Unread", unreadOnly.contentDescription)
-        assertFalse(unreadOnly.showsSpinner)
+        assertFalse(unreadOnly.showsActivity)
     }
 }

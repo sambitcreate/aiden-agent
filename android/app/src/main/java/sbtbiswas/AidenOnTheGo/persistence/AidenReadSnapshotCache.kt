@@ -119,6 +119,7 @@ class AidenReadSnapshotCache(
 /** Snapshot keys, one namespace per screen so Workspace ids cannot collide across them. */
 object AidenReadSnapshotKeys {
     const val WORKSPACES = "workspaces"
+    fun workspaceChats(workspaceId: String) = "workspace-chats\u0000$workspaceId"
     fun gitReview(workspaceId: String) = "git-review\u0000$workspaceId"
     fun gitBranches(workspaceId: String) = "git-branches\u0000$workspaceId"
     fun gitWorktrees(workspaceId: String) = "git-worktrees\u0000$workspaceId"
