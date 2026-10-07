@@ -21,8 +21,8 @@ import {
 } from "lucide-react";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
+import { paletteCommands } from "../lib/command-system-core";
 import {
-  COMMANDS,
   ariaKeyShortcut,
   prettyAccelerator,
   type CommandCategory,
@@ -161,12 +161,12 @@ export function AppCommandPalette({
   );
   const rootCommands = React.useMemo(() => {
     const order = new Map(recentCommands.map((id, index) => [id, index]));
-    return COMMANDS.filter((definition) => definition.showInPalette).sort(
+    return paletteCommands(capabilities).sort(
       (left, right) =>
         (order.get(left.id) ?? Number.POSITIVE_INFINITY) -
         (order.get(right.id) ?? Number.POSITIVE_INFINITY),
     );
-  }, [recentCommands]);
+  }, [capabilities, recentCommands]);
   const chatResults = React.useMemo(
     () => [...(chats.data ?? [])]
       .sort((left, right) => right.updatedAt - left.updatedAt)

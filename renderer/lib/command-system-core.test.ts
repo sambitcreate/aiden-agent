@@ -3,6 +3,7 @@ import test from "node:test";
 import { applyKeybindingMutation, effectiveBindings } from "../shared/keybindings";
 import {
   commandExecutionAllowed,
+  paletteCommands,
   resolveCommandForKeyEvent,
   workspaceCommandVisibility,
   type CommandDispatchContext,
@@ -163,4 +164,28 @@ test("studio surfaces hide the Environment and terminal commands", () => {
   assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), { environment: true, terminal: true });
   assert.deepEqual(workspaceCommandVisibility("/settings"), { environment: false, terminal: false });
   assert.deepEqual(workspaceCommandVisibility("/scheduled"), { environment: true, terminal: false });
+});
+
+test("palette omits studio commands while their capability is off", () => {
+  const studio = (capabilities: { designStudio: boolean; createImages: boolean }) =>
+    paletteCommands(capabilities)
+      .map(({ id }) => id)
+      .filter((id) => id === "design.open" || id === "images.open");
+
+  assert.deepEqual(studio({ designStudio: false, createImages: false }), []);
+  assert.deepEqual(studio({ designStudio: true, createImages: false }), ["design.open"]);
+  assert.deepEqual(studio({ designStudio: false, createImages: true }), ["images.open"]);
+  assert.deepEqual(studio({ designStudio: true, createImages: true }), ["design.open", "images.open"]);
+  // With both flags off, nothing capability-gated remains in the palette.
+  assert.ok(
+    paletteCommands({ designStudio: false, createImages: false }).every(
+      (definition) => definition.requiresCapability === undefined,
+    ),
+  );
+});
+
+test("studio commands never reserve a shortcut", () => {
+  const bindings = effectiveBindings(undefined);
+  assert.equal(bindings["design.open"], null);
+  assert.equal(bindings["images.open"], null);
 });
