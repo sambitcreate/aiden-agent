@@ -1,5 +1,4 @@
-import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
-import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { ChatProgressEvents } from "./chat-progress-events.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
@@ -73,10 +72,8 @@ export function createChatProgressAuthorizer(
       const metadata = (await ports.chatMetadata()).find(
         (entry) => entry.id === chatId,
       );
-      if (
-        !metadata ||
-        persistedChatWorkspaceId(metadata.workspaceId) === ASSISTANT_WORKSPACE_ID
-      ) {
+      const surface = metadata ? chatSurface(metadata) : undefined;
+      if (!metadata || (surface !== "regular" && surface !== "bot")) {
         throw new AidenRemoteServiceError(
           "not_found",
           "This chat is unavailable.",

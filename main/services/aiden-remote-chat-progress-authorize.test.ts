@@ -182,3 +182,15 @@ test("the authorization fence releases on success and failure", async () => {
   await assert.rejects(denied.authorize("d", "chat-1", "tasks:read"));
   assert.equal(denied.held(), 0);
 });
+
+test("feature-owned chats report not found to progress readers", async () => {
+  let chatsRead = 0;
+  const owned = fixture({
+    metadata: [{ ...meta, owner: { kind: "design-project", projectId: "project-1" } }],
+    readChat: async () => { chatsRead += 1; return chat; },
+  });
+  await assert.rejects(owned.authorize("device-1", "chat-1", "tasks:read"), /unavailable/);
+  await assert.rejects(owned.authorize("device-1", "chat-1", "agents:read"), /unavailable/);
+  assert.equal(chatsRead, 0);
+  assert.equal(owned.held(), 0);
+});
