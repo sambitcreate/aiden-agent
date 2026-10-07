@@ -135,6 +135,11 @@ class AidenSettingsStore(
     private var speechJob: Job? = null
     private var speechPollJob: Job? = null
 
+    // Last desktop-confirmed values behind an in-flight optimistic change. A rebind abandons
+    // that change's reconciliation, so it restores these instead of keeping unconfirmed values.
+    private var unconfirmedMemoryBaseline: AidenMemorySettings? = null
+    private var unconfirmedSpeechBaseline: AidenSpeechStatus? = null
+
     /** Points Settings at the active installation and its client. The same installation keeps its values. */
     fun bind(instanceId: String?, remote: AidenSettingsRemote?) {
         generation += 1
@@ -143,8 +148,14 @@ class AidenSettingsStore(
         speechPollJob?.cancel()
         this.remote = remote
         val current = _state.value
+        val memoryBaseline = unconfirmedMemoryBaseline
+        val speechBaseline = unconfirmedSpeechBaseline
+        unconfirmedMemoryBaseline = null
+        unconfirmedSpeechBaseline = null
         _state.value = if (instanceId != null && instanceId == current.instanceId) {
             current.copy(
+                memory = memoryBaseline ?: current.memory,
+                speech = speechBaseline ?: current.speech,
                 isConnected = remote != null,
                 isSavingMemory = false,
                 providersFailure = null,
@@ -215,17 +226,23 @@ class AidenSettingsStore(
         val previous = state.memory ?: return
         if (state.isSavingMemory || previous.enabled == enabled) return
         val gen = generation
+        unconfirmedMemoryBaseline = previous
         _state.value = state.copy(memory = previous.copy(enabled = enabled), isSavingMemory = true, memoryFailure = null)
         scope.launch {
             val saved = try {
                 remote.updateMemorySettings(previous.revision, enabled)
             } catch (cancelled: CancellationException) {
-                if (gen == generation) _state.update { it.copy(memory = previous, isSavingMemory = false) }
+                if (gen == generation) {
+                    unconfirmedMemoryBaseline = null
+                    _state.update { it.copy(memory = previous, isSavingMemory = false) }
+                }
                 throw cancelled
             } catch (_: Exception) {
                 null
             }
+            // A rebind already restored the confirmed value; its refresh reads the truth.
             if (gen != generation) return@launch
+            unconfirmedMemoryBaseline = null
             _state.update {
                 if (saved == null) it.copy(memory = previous, isSavingMemory = false, memoryFailure = AidenSettingsFailure.SAVE_FAILED)
                 else it.copy(memory = saved, isSavingMemory = false, memoryFailure = null)
@@ -263,6 +280,7 @@ class AidenSettingsStore(
         val remote = remote ?: return
         val previous = _state.value.speech ?: return
         val gen = generation
+        if (unconfirmedSpeechBaseline == null) unconfirmedSpeechBaseline = previous
         _state.update { it.copy(speech = optimistic(previous), speechFailure = null) }
         scope.launch {
             val result = try {
@@ -273,6 +291,7 @@ class AidenSettingsStore(
                 null
             }
             if (gen != generation) return@launch
+            unconfirmedSpeechBaseline = null
             _state.update {
                 if (result == null) it.copy(speech = previous, speechFailure = AidenSettingsFailure.SAVE_FAILED)
                 else it.copy(speech = result, speechFailure = null)

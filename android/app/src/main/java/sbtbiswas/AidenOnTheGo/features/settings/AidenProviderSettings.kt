@@ -10,7 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -253,7 +253,7 @@ fun AidenAddProviderScreen(
                     AidenSettingsSwitchRow(stringResource(R.string.providers_vision), vision, { vision = it }, enabled = !saving, leadingIcon = Icons.Outlined.Visibility)
                 }
                 row {
-                    AidenSettingsSwitchRow(stringResource(R.string.providers_reasoning), reasoning, { reasoning = it }, enabled = !saving, leadingIcon = Icons.Outlined.Psychology)
+                    AidenSettingsSwitchRow(stringResource(R.string.providers_reasoning), reasoning, { reasoning = it }, enabled = !saving, leadingIcon = Icons.Outlined.Lightbulb)
                 }
             }
         }

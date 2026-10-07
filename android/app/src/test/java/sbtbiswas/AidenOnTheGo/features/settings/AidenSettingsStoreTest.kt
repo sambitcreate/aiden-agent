@@ -95,6 +95,47 @@ class AidenSettingsStoreTest {
     }
 
     @Test
+    fun aReconnectDuringAnUnconfirmedMemoryChangeRestoresTheConfirmedValue() = runTest {
+        val store = store()
+        val remote = FakeRemote()
+        store.bind("mac", remote)
+        store.refresh()
+        advanceUntilIdle()
+        assertEquals(true, store.state.value.memory?.enabled)
+
+        remote.memoryGate = CompletableDeferred()
+        remote.failMemoryUpdate = true
+        store.setMemoryEnabled(false)
+        runCurrent()
+        assertEquals("optimistic value shows at once", false, store.state.value.memory?.enabled)
+
+        // The client reconnects to the same desktop while the change is still in flight.
+        store.bind("mac", FakeRemote().apply { failReads = true })
+        remote.memoryGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("the desktop never confirmed the change", true, store.state.value.memory?.enabled)
+        assertFalse(store.state.value.isSavingMemory)
+    }
+
+    @Test
+    fun aReconnectDuringAnUnconfirmedSpeechChangeRestoresTheConfirmedStatus() = runTest {
+        val store = store()
+        val remote = FakeRemote()
+        store.bind("mac", remote)
+        store.refreshSpeech()
+        advanceUntilIdle()
+        val confirmed = store.state.value.speech
+        assertEquals("small", confirmed?.selectedModelId)
+
+        store.downloadSpeechModel("large")
+        store.bind("mac", FakeRemote().apply { failReads = true })
+        advanceUntilIdle()
+
+        assertEquals(confirmed, store.state.value.speech)
+    }
+
+    @Test
     fun aFailedRefreshKeepsTheLastKnownValues() = runTest {
         val store = store()
         val remote = FakeRemote()

@@ -66,6 +66,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Whether the scanner can show the camera, ask for it, or must send the user to Settings. */
 enum class AidenCameraAccess { GRANTED, REQUESTABLE, BLOCKED }
@@ -233,8 +234,12 @@ private fun CameraPreview(
     }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    // The provider future can complete after the scanner has left composition; the listener
+    // must then not bind the camera to the still-resumed host lifecycle.
+    val disposed = remember { AtomicBoolean(false) }
     DisposableEffect(Unit) {
         onDispose {
+            disposed.set(true)
             // Release the camera and the analyzer thread when the scanner leaves composition.
             if (cameraProviderFuture.isDone) runCatching { cameraProviderFuture.get().unbindAll() }
             scanner.close()
@@ -249,6 +254,7 @@ private fun CameraPreview(
             }
 
             cameraProviderFuture.addListener({
+                if (disposed.get()) return@addListener
                 val cameraProvider = cameraProviderFuture.get()
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
@@ -260,7 +266,7 @@ private fun CameraPreview(
 
                 imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                     val mediaImage = imageProxy.image
-                    if (mediaImage != null && !deliveredCode) {
+                    if (mediaImage != null && !deliveredCode && !disposed.get()) {
                         val image = InputImage.fromMediaImage(
                             mediaImage,
                             imageProxy.imageInfo.rotationDegrees
