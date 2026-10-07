@@ -101,11 +101,11 @@ export class AcpRuntimeInstaller {
     if (!this.installing) {
       try {
         const entries = await readdir(this.platformDir);
-        await Promise.all(
-          entries
-            .filter((entry) => entry.startsWith("staging-"))
-            .map((entry) => rm(path.join(this.platformDir, entry), { recursive: true, force: true })),
-        );
+        for (const entry of entries) {
+          // An install may start while this sweep runs; never touch its tree.
+          if (this.installing || !entry.startsWith("staging-")) continue;
+          await rm(path.join(this.platformDir, entry), { recursive: true, force: true });
+        }
       } catch {
         // Nothing installed yet.
       }

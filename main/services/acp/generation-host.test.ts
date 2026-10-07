@@ -5,6 +5,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { GenerationTimeline } from "../../../renderer/shared/generation-timeline.js";
 import { GenerationTimelineProjector } from "../generation-timeline.js";
 import type { ToolApprovalOutcome } from "../tool-approval.js";
+import { parseAskUserQuestionPrompt } from "../../../renderer/shared/ask-user-question.js";
 import { canHostAcpHarness, createAcpGenerationHost, questionFor, type AcpGenerationHostOptions } from "./generation-host.js";
 
 function setup(overrides: Partial<AcpGenerationHostOptions> = {}, outcome: ToolApprovalOutcome = "allowed", scope?: "once" | "chat") {
@@ -89,7 +90,40 @@ test("agent questions use the question prompt; custom or skipped answers are no 
     assert.equal(await host.askQuestion!(question, signal), expected);
   }
   assert.equal(questionFor({ title: "Only one", options: [{ id: "a", label: "A" }] }), undefined);
-  assert.equal(questionFor({ title: "Many", options: ["a", "b", "c", "d", "e"].map((id) => ({ id, label: id })) })?.options.length, 4);
+  assert.equal(questionFor({ title: "Many", options: ["a", "b", "c", "d", "e"].map((id) => ({ id, label: id })) })?.question.options.length, 4);
+});
+
+test("mapped agent questions pass the renderer's question contract and answers map back", async () => {
+  const awkward = {
+    title: "Pick one",
+    options: [
+      { id: "long", label: "x".repeat(120) },
+      { id: "dup-1", label: "Same" },
+      { id: "dup-2", label: "Same" },
+      { id: "reserved", label: "Other" },
+    ],
+  };
+  const mapped = questionFor(awkward)!;
+  const prompt = parseAskUserQuestionPrompt({
+    version: 1,
+    promptId: "q-1",
+    streamId: "s-1",
+    toolCallId: "acp-question-1",
+    questions: [mapped.question],
+  });
+  assert.ok(prompt, "the renderer accepts the prompt");
+  const labels = prompt.questions[0]!.options.map((option) => option.label);
+  assert.equal(new Set(labels).size, 4);
+  for (const label of labels) assert.ok(Array.from(label).length <= 60);
+  const { host } = setup({
+    requestQuestion: async () => ({
+      version: 1,
+      promptId: "q-1",
+      cancelled: false,
+      answers: [{ questionIndex: 0, kind: "option", answer: labels[2]! }],
+    }),
+  });
+  assert.equal(await host.askQuestion!(awkward, signal), "dup-2");
 });
 
 test("tools the agent already has are not bridged; Aiden-only tools are", () => {

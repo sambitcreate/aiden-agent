@@ -107,7 +107,11 @@ export class AntigravityService {
     this.loaded ??= (async () => {
       await this.installer.load();
       await this.launcher.sweep();
-    })();
+    })().catch((error: unknown) => {
+      // Retry on the next call rather than caching the failure forever.
+      this.loaded = undefined;
+      throw error;
+    });
     return this.loaded;
   }
 

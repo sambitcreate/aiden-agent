@@ -131,3 +131,16 @@ export function harnessRuntimeSummary(status: AcpHarnessStatus["runtime"]): stri
       return status.message ?? "The last installation did not finish.";
   }
 }
+
+const HARNESS_LABELS: Record<string, string> = { antigravity: "Google Antigravity" };
+
+/**
+ * Why an agent-backed provider cannot serve this surface. Agent harnesses run
+ * only in chats open on this computer, where someone can answer approvals:
+ * never in Bots, scheduled tasks, Telegram, subagents, or phone-started runs.
+ */
+export function acpHarnessUnavailableReason(providerId: string | undefined | null): string | undefined {
+  if (!providerId || !isAcpHarnessProvider(providerId)) return undefined;
+  const label = HARNESS_LABELS[providerId] ?? "This provider";
+  return `${label} runs only in chats you have open on this computer. Choose another model here.`;
+}

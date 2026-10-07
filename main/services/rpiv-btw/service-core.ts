@@ -16,6 +16,7 @@ import {
   type BtwHistoryTurn,
 } from "./context.js";
 import { BtwOperationRegistry } from "./operation-registry.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 
 export interface BtwOwner {
   documentId: string;
@@ -174,6 +175,9 @@ export class BtwService {
     timeout.unref?.();
     let runtime: ResolvedModelRuntime | undefined;
     try {
+      if (isAcpHarnessProvider(input.chat.providerId ?? "")) {
+        throw new Error("Side questions are not available with agent-backed models. Switch models to ask one.");
+      }
       runtime = await this.deps.resolveRuntime(
         input.chat.providerId!,
         input.chat.model!,

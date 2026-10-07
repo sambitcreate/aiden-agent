@@ -352,3 +352,14 @@ test("keyless provider replay does not require a credential backend", async () =
   assert.deepEqual(await service.create("device", "keyless-request-key", input), receipt);
   assert.equal(writes, 1);
 });
+
+test("phones never see agent-backed providers and cannot start turns on them", async () => {
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({ id: "antigravity", label: "Google Antigravity" }), provider()],
+    getSettings: async () => ({ lastProviderId: "antigravity", lastModel: "chat-model" }),
+  });
+  const catalog = await service.list();
+  assert.deepEqual(catalog.providers.map((entry) => entry.id), ["provider-1"]);
+  assert.notEqual(catalog.defaults.providerId, "antigravity");
+  await assert.rejects(service.resolve("antigravity", "chat-model"), /runs only in chats you have open on this computer/u);
+});

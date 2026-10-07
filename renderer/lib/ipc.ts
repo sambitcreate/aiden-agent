@@ -131,7 +131,7 @@ import type {
   ChatRunInputMode,
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
-import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
+import { parseToolApprovalScope, type ToolApprovalRuleView, type ToolApprovalScope } from "../shared/tool-approval-scope";
 import {
   parseSubagentHistoryDetailV1,
   parseSubagentRunSnapshot,
@@ -1559,6 +1559,9 @@ export function startGeneration(
           toolName: p.toolName,
           summary: p.summary,
           details: p.details,
+          // Offered allow scopes ("this chat", "always"); absent means once only.
+          ...(Array.isArray(p.scopes) ? { scopes: p.scopes.filter((scope) => parseToolApprovalScope(scope)) } : {}),
+          ...(typeof p.canAllow === "boolean" ? { canAllow: p.canAllow } : {}),
         });
     }),
   );

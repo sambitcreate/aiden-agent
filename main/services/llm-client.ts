@@ -24,6 +24,7 @@ import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -955,6 +956,7 @@ async function prepareGeneration(
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
   const allowSubagents = subagentsAllowedForGeneration({
     assistantMode,
+    providerId: params.providerId,
     allowSubagents:
       options.allowSubagents !== false &&
       (!botContext || botHasOrdinaryCapability(botContext, "subagents")),
@@ -1715,8 +1717,15 @@ async function prepareGeneration(
 async function acpScratchDir(chatId: string): Promise<string> {
   const safe = chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
   const directory = join(app.getPath("userData"), "acp", "scratch", safe);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  return directory;
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    return directory;
+  } catch (error) {
+    // Never fail a generation over its working directory; this one grants no
+    // file access either way.
+    logger.warn("acp", "Could not prepare the agent scratch directory.", error);
+    return tmpdir();
+  }
 }
 
 export const llmClient = {

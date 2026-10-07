@@ -87,15 +87,45 @@ export function approvalSummary(label: string, request: AcpApprovalRequest): str
   return lines.join("\n");
 }
 
-/** Map an agent question (2–4 fixed choices) onto Aiden's question prompt. */
-export function questionFor(question: AcpQuestion): AskUserQuestionV1 | undefined {
+const RESERVED_LABELS = new Set(["Other", "Type something.", "Next"]);
+const MAX_LABEL = 60;
+
+function promptLabel(label: string, index: number, used: Set<string>): string {
+  let candidate = Array.from(label.replace(/\s+/gu, " ").trim()).slice(0, MAX_LABEL).join("").trim();
+  if (!candidate || RESERVED_LABELS.has(candidate) || used.has(candidate)) {
+    const suffix = ` (${index + 1})`;
+    candidate = `${Array.from(candidate || "Option").slice(0, MAX_LABEL - suffix.length).join("")}${suffix}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+/**
+ * Map an agent question (2–4 fixed choices) onto Aiden's question prompt,
+ * meeting its contract: bounded unique labels that avoid the composer's
+ * reserved ones, and a non-empty description per option. Returns the label
+ * each agent option is shown as, so the answer maps back exactly.
+ */
+export function questionFor(
+  question: AcpQuestion,
+): { question: AskUserQuestionV1; labels: Map<string, string> } | undefined {
   const options = question.options.slice(0, 4);
   if (options.length < 2) return undefined;
+  const used = new Set<string>();
+  const labels = new Map<string, string>();
+  const mapped = options.map((option, index) => {
+    const label = promptLabel(option.label, index, used);
+    labels.set(label, option.id);
+    return { label, description: option.label.trim() || label };
+  });
   return {
-    question: question.title.slice(0, 1_000),
-    header: "Question",
-    multiSelect: false,
-    options: options.map((option) => ({ label: option.label.slice(0, 120), description: "" })),
+    question: {
+      question: question.title.trim().slice(0, 1_000) || "Choose an option.",
+      header: "Question",
+      multiSelect: false,
+      options: mapped,
+    },
+    labels,
   };
 }
 
@@ -133,10 +163,10 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
           async askQuestion(question, signal) {
             const mapped = questionFor(question);
             if (!mapped) return undefined;
-            const response = await options.requestQuestion!(`acp-question-${Date.now()}`, [mapped], signal);
+            const response = await options.requestQuestion!(`acp-question-${Date.now()}`, [mapped.question], signal);
             const answer = response.answers[0];
             if (response.cancelled || !answer || answer.kind !== "option") return undefined;
-            return question.options.find((option) => option.label.slice(0, 120) === answer.answer)?.id;
+            return mapped.labels.get(answer.answer);
           },
         }
       : {}),

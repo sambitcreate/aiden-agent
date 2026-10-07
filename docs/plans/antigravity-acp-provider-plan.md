@@ -1,6 +1,40 @@
 # Google Antigravity provider over ACP
 
-Status: Proposed (2026-10-06, revised the same day after a T3 Code review). This is a feasibility study; nothing is implemented.
+Status: Implemented (2026-10-07) on `feature/antigravity-aiden-integration-0631d1`, pending live acceptance with a signed-in Google account. Plan written 2026-10-06 and revised the same day after a T3 Code review.
+
+## Implementation status
+
+**Shared ACP primitives (`main/services/acp/`)** let further ACP harnesses plug in with one `AcpHarnessDefinition` plus a sign-in flow:
+- process supervision, pid ledger, connection, workspace-confined fs callbacks, and permission policy;
+- the loopback MCP bridge, prompt reconstruction, and activity mapping;
+- the session store, runtime, provider wrapper, pinned-release installer, launcher, and generation host.
+
+**Antigravity (`main/services/antigravity/`)** pins runtime 1.3.0 for macOS (arm64 and Intel) and Linux (x64 and arm64), and adds an isolated profile, Google sign-in with a paste-back fallback, and the service with its lazy provider.
+
+**Integration points:**
+- `providers:harness:*` IPC drives the runtime section in the provider setup dialog.
+- `llm-client` registers a host only for attended desktop chats.
+- Approvals use the approval card; agent questions use the question prompt.
+- Native activity appears as timeline steps with new labels.
+- Network posture is recorded in `AGENTS.md`.
+
+**Tests:** `npm run test:acp` runs fake-ACP-agent behavioural suites end to end through the real process and connection stack, plus the installer, launcher, auth, service and UI tests.
+
+**Deviations from the plan below:**
+- **Runtime version.** 1.3.0 replaced 1.1.1/1.2.x and adds an Intel macOS build. The spike found its temp footprint negligible.
+- **Rewind and edit-resubmit stay enabled.** A history mismatch starts a fresh agent session with a bounded reconstruction and a visible "Started a fresh agent session" activity row, instead of hiding those controls.
+- **No origin label.** Native activity reuses Aiden's tool rows without an "Antigravity" origin field, so the Remote contract is unchanged; the assistant message already names the provider.
+- **No logo.** Antigravity uses the neutral initial provider icon until brand-asset terms are confirmed.
+- **No quota card.** It waits on live evidence that `_meta.quota` is reported.
+
+**Open acceptance gates** (each needs a signed-in account):
+- writes routed through `fs/write_text_file`;
+- the `model` and `mode` config options;
+- `session/resume` across a restart;
+- the HTTP MCP bridge;
+- idle network traffic;
+- Google's terms for third-party ACP clients;
+- a packaged, signed macOS build.
 
 ## References
 

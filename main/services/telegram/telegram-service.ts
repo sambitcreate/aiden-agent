@@ -80,6 +80,7 @@ import {
 import { createTelegramBotBindingValidator } from "./telegram-bot-binding-validation.js";
 import { telegramProfileMutationFence } from "./telegram-profile-mutation-fence.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
 let profileSettingsMutation = Promise.resolve();
@@ -152,6 +153,8 @@ async function resolveProvider(
     (await configStore.getProvider(providerId));
   if (!provider) return null;
   if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) return null;
+  // Telegram turns run unattended; agent harnesses need approvals answered here.
+  if (isAcpHarnessProvider(providerId)) return null;
   const model =
     requestedModel ?? settings.telegramModel ??
     firstVisibleModelForProvider(
@@ -188,7 +191,7 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
   ]);
   const byId = new Map<string, Provider>();
   for (const provider of [...builtin, ...custom]) {
-    if (provider.hasKey || !provider.needsKey) byId.set(provider.id, provider);
+    if ((provider.hasKey || !provider.needsKey) && !isAcpHarnessProvider(provider.id)) byId.set(provider.id, provider);
   }
   if (codex?.configured) {
     byId.set(OPENAI_CODEX_PROVIDER_ID, {

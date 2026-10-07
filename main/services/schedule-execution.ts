@@ -29,6 +29,7 @@ import {
   scheduledGenerationSurface,
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
+import { acpHarnessUnavailableReason } from "../../renderer/shared/acp-harness.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -239,6 +240,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       (await providerRegistry.selectionProvider(providerId)) ??
       (await configStore.getProvider(providerId));
     if (!provider) throw new Error("The task provider no longer exists.");
+    const harnessReason = acpHarnessUnavailableReason(providerId);
+    if (harnessReason) throw new Error(harnessReason);
     if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) {
       throw new Error(
         "Google chat models are off while Gemini is configured for transcription only.",

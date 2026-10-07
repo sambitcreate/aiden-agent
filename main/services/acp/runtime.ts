@@ -89,6 +89,7 @@ interface Turn {
   completion: Promise<void>;
   controller: AbortController;
   abortRequested: boolean;
+  failed?: boolean;
   /** Messages sent mid-turn that the agent must answer before the turn ends. */
   followUp: { context: TranscriptContext; boundary: number; count: number; fingerprint: string } | undefined;
   /** Absolute paths the user approved writing to during this turn (Ask mode). */
@@ -382,15 +383,21 @@ export class AcpHarnessRuntime {
       } else if (response.stopReason === "max_tokens" || response.stopReason === "max_turn_requests") {
         active.done("length");
       } else if (response.stopReason === "refusal") {
+        turn.failed = true;
         active.fail(new AcpHarnessError("protocol", `${this.definition.label} declined this request.`));
       } else {
         active.done("stop");
       }
     } catch (error) {
       binding.writer?.fail(error, isAbortError(error) || signal?.aborted === true);
+      if (turn) turn.failed = true;
       if (!binding.launched.process.alive) await this.drop(binding, false);
       throw error;
     } finally {
+      // Only a turn that ended cleanly while no stream was attached carries its
+      // last words into the next reply; a stopped or failed turn's leftovers
+      // must not surface later.
+      if (!turn || turn.abortRequested || turn.failed) binding.buffered = [];
       // Calls the agent abandoned must not keep a later stream waiting.
       cancelTools(binding, "The agent's turn ended before the tool finished.");
       completeTurn?.();
@@ -436,6 +443,8 @@ export class AcpHarnessRuntime {
     // sent mid-turn) are sent as a follow-up prompt once the agent finishes
     // the current one, so they are answered within this same turn.
     const boundary = Math.max(...results.map((result) => result.index)) + 1;
+    // Each continuation re-derives what is still unanswered.
+    turn.followUp = undefined;
     if (conversation.slice(boundary).some((message) => message.role === "user")) {
       turn.followUp = {
         context,
@@ -446,6 +455,8 @@ export class AcpHarnessRuntime {
     }
     this.attachWriter(binding, writer, host, conversation.slice(0, boundary));
     this.linkAbort(binding, turn, signal);
+    // Tools discovered mid-turn (tool_search) become callable right away.
+    binding.bridge?.setTools(host.bridgeableTools(getCurrentTools(context.messages)));
     try {
       await this.syncMode(binding, host, signal);
     } catch (error) {
@@ -902,6 +913,7 @@ export class AcpHarnessRuntime {
       if (binding.turn) this.sessions.remove(binding.chatId);
     }
     cancelTools(binding, "The agent session closed.");
+    binding.buffered = [];
     binding.turn?.controller.abort();
     await Promise.allSettled([binding.bridge?.close() ?? Promise.resolve(), binding.launched.dispose()]);
   }

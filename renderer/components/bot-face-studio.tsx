@@ -28,6 +28,7 @@ import {
   toast,
 } from "./ui";
 import { BotAvatar } from "./bot-avatar";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
 
 type AvatarEditorTab = "shape" | "color" | "eyes" | "detail" | "pi";
 
@@ -143,7 +144,11 @@ export function BotFaceStudio({
   }, []);
 
   const modelProviders = React.useMemo(
-    () => createChatModelProviders(configuredProviders, modelInfo.data),
+    () =>
+      createChatModelProviders(
+        configuredProviders.filter((provider) => !isAcpHarnessProvider(provider.id)),
+        modelInfo.data,
+      ),
     [configuredProviders, modelInfo.data],
   );
   const selection = resolveExplicitModelSelection(state.selection, modelProviders);
