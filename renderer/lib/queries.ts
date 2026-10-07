@@ -51,6 +51,7 @@ export const queryKeys = {
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
+  botSessionState: (id: string | undefined) => ["bot-session-state", id ?? "none"] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -290,14 +291,6 @@ export function useBot(botId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.bot(botId),
     queryFn: () => botsApi.get(botId!),
-    enabled: Boolean(botId),
-  });
-}
-
-export function useBotChats(botId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.botChats(botId),
-    queryFn: () => botsApi.listChats(botId!),
     enabled: Boolean(botId),
   });
 }

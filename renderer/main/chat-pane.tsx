@@ -347,7 +347,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : !bot.data
         ? "This bot is no longer available."
         : bot.data.archivedAt
-          ? "Restore this bot before continuing the conversation."
+          ? "This bot is no longer available."
           : undefined
     : undefined;
   const ready =

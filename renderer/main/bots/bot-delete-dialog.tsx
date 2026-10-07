@@ -21,7 +21,7 @@ export function BotDeleteDialog({
   open,
   onOpenChange,
 }: {
-  bot: Pick<BotDefinition, "id" | "name" | "revision">;
+  bot: Pick<BotDefinition, "id" | "name">;
   open: boolean;
   onOpenChange(open: boolean): void;
 }) {
@@ -31,7 +31,7 @@ export function BotDeleteDialog({
   const confirm = async () => {
     setBusy(true);
     try {
-      await botsApi.delete({ id: bot.id, expectedRevision: bot.revision });
+      await botsApi.delete(bot.id);
       qc.removeQueries({ queryKey: queryKeys.bot(bot.id) });
       qc.removeQueries({ queryKey: queryKeys.botChats(bot.id) });
       await qc.invalidateQueries({ queryKey: queryKeys.bots });

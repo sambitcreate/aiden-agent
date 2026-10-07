@@ -1,12 +1,6 @@
-/**
- * Mirrors `BotSessionState` from the durable Bot runtime
- * (`main/services/bot-runtime/bot-session-service.ts`, plan Task 1.3).
- * TEMPORARY local copy: replace this declaration with an import of the
- * runtime's exported type once it lands, and keep the shapes identical.
- */
-export type BotSessionState =
-  | { kind: "idle" } | { kind: "running"; submissionId: string }
-  | { kind: "interrupted"; submissionId: string } | { kind: "needs_model" } | { kind: "unavailable"; reason: "held_by_live_process" };
+import type { BotSessionState } from "../../../main/services/bot-runtime/bot-session-service";
+
+export type { BotSessionState };
 
 export const BOT_PAUSED_ROW_LABEL = "Paused — tap to resume";
 export const BOT_NEEDS_MODEL_LABEL = "Needs an AI model";

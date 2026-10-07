@@ -102,6 +102,7 @@ import type {
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
 } from "../shared/diagnostics";
+import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service";
 import type {
   BotCreateInput,
   BotDefinition,
@@ -1204,32 +1205,15 @@ export const botsApi = {
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
-  archive: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:archive", input),
-  restore: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:restore", input),
+  /** Permanently erases the Bot: chat, memory, routines, files, photo, Telegram link. */
+  delete: (botId: string) => invoke<void>("bots:delete", botId),
+  sessionState: (botId: string) => invoke<BotSessionState>("bots:sessionState", botId),
   /**
-   * Permanently delete a Bot. TEMPORARY: until the durable Bot runtime
-   * registers `bots:delete`, a missing handler falls back to Archive so the
-   * Bot still leaves the list. Remove the fallback once `bots:delete` lands.
+   * The Bot's one chat, created on first open. TEMPORARY bridge: the chat
+   * view renders Bots through ChatStore until it moves to the live projection.
    */
-  delete: async (input: { id: string; expectedRevision: string }): Promise<void> => {
-    try {
-      await invoke<unknown>("bots:delete", { id: input.id });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/No handler registered for 'bots:delete'/u.test(message)) throw error;
-      await invoke<BotDefinition>("bots:archive", input);
-    }
-  },
-  listChats: (id: string) => invoke<ChatMeta[]>("bots:listChats", id),
-  createChat: (input: {
-    botId: string;
-    /** Ignored by main: a Bot chat always lives in its managed home. */
-    workspaceId?: string;
-    providerId?: string;
-    model?: string;
-  }) => invokeChatMutation<Chat>("bots:createChat", input),
+  openChat: (botId: string) =>
+    invoke<{ chatId: string; updatedAt: number; title: string }>("bots:openChat", botId),
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>

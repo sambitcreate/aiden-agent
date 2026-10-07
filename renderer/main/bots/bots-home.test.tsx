@@ -22,10 +22,8 @@ const planner: BotDefinition = {
 test("tapping a Bot row opens its one chat directly", async () => {
   const calls = installBotTestIpc({
     "bots:list": () => [planner],
-    "bots:listChats": () => [
-      { id: "chat-1", botId: "bot-1", title: "Lisbon in May", createdAt: 1, updatedAt: Date.now() },
-    ],
-    "bots:createChat": () => ({ id: "chat-1", botId: "bot-1", title: "Lisbon in May", messages: [] }),
+    "bots:sessionState": () => ({ kind: "idle" }),
+    "bots:openChat": () => ({ chatId: "chat-1", title: "Lisbon in May", updatedAt: Date.now() }),
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   const row = await screen.findByRole("button", { name: /Planner/u });
@@ -35,13 +33,15 @@ test("tapping a Bot row opens its one chat directly", async () => {
   await waitFor(() =>
     assert.equal(router.state.location.pathname, "/bots/bot-1/chat/chat-1"),
   );
-  assert.deepEqual(calls.find((call) => call.channel === "bots:createChat")?.args, [
-    { botId: "bot-1" },
-  ]);
+  assert.deepEqual(calls.filter((call) => call.channel === "bots:send"), []);
 });
 
 test("the row context menu opens the Bot's profile", async () => {
-  installBotTestIpc({ "bots:list": () => [planner], "bots:listChats": () => [] });
+  installBotTestIpc({
+    "bots:list": () => [planner],
+    "bots:sessionState": () => ({ kind: "idle" }),
+    "bots:openChat": () => ({ chatId: "chat-1", title: "New chat", updatedAt: 1 }),
+  });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   fireEvent.contextMenu(await screen.findByRole("button", { name: /Planner/u }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Profile" }));

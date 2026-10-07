@@ -7,7 +7,7 @@ import { mountWithBotRouter } from "./test-providers";
 
 afterEach(cleanup);
 
-const bot = { id: "bot-1", name: "Chief", revision: "rev-7" };
+const bot = { id: "bot-1", name: "Chief" };
 
 async function openDialog() {
   const harness = await mountWithBotRouter(
@@ -36,18 +36,7 @@ test("confirming calls bots:delete and returns to the Bots list", async () => {
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots"));
   assert.deepEqual(
     calls.filter((call) => call.channel.startsWith("bots:") && call.channel !== "bots:getCanonicalPhoto")[0],
-    { channel: "bots:delete", args: [{ id: "bot-1" }] },
-  );
-});
-
-test("until the runtime registers bots:delete, the Bot is archived instead", async () => {
-  const calls = installBotTestIpc({ "bots:archive": () => ({}), "bots:list": () => [] });
-  const { dialog, router } = await openDialog();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Delete Bot" }));
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots"));
-  assert.deepEqual(
-    calls.find((call) => call.channel === "bots:archive")?.args,
-    [{ id: "bot-1", expectedRevision: "rev-7" }],
+    { channel: "bots:delete", args: ["bot-1"] },
   );
 });
 
