@@ -8,6 +8,7 @@ export function toFlowNodes(
   doc: WorkflowDocV1,
   dragging: ReadonlyMap<string, WorkflowPosition>,
   selected: ReadonlySet<string>,
+  measured: ReadonlyMap<string, { width: number; height: number }> = new Map(),
 ): WorkflowFlowNode[] {
   return doc.nodes.map((node) => ({
     id: node.id,
@@ -16,6 +17,8 @@ export function toFlowNodes(
     data: { node },
     selected: selected.has(node.id),
     ...(node.dimensions ? { width: node.dimensions.width, height: node.dimensions.height } : {}),
+    // React Flow reports rendered sizes as dimension changes; a controlled flow must hand them back.
+    ...(measured.get(node.id) ? { measured: measured.get(node.id) } : {}),
   }));
 }
 
@@ -33,10 +36,20 @@ export function toFlowEdges(doc: WorkflowDocV1, selected: ReadonlySet<string>): 
 /** Drags stay a transient overlay; only the drop becomes an undoable move. */
 export function interpretNodeChanges(
   changes: readonly NodeChange<WorkflowFlowNode>[],
-  state: { dragging: ReadonlyMap<string, WorkflowPosition>; selected: ReadonlySet<string> },
-): { ops: EditorOp[]; dragging: Map<string, WorkflowPosition>; selected: Set<string> } {
+  state: {
+    dragging: ReadonlyMap<string, WorkflowPosition>;
+    selected: ReadonlySet<string>;
+    measured?: ReadonlyMap<string, { width: number; height: number }>;
+  },
+): {
+  ops: EditorOp[];
+  dragging: Map<string, WorkflowPosition>;
+  selected: Set<string>;
+  measured: Map<string, { width: number; height: number }>;
+} {
   const dragging = new Map(state.dragging);
   const selected = new Set(state.selected);
+  const measured = new Map(state.measured ?? []);
   const moves: { id: string; position: WorkflowPosition }[] = [];
   const removed: string[] = [];
   for (const change of changes) {
@@ -48,6 +61,8 @@ export function interpretNodeChanges(
         dragging.delete(change.id);
         if (position) moves.push({ id: change.id, position });
       }
+    } else if (change.type === "dimensions") {
+      if (change.dimensions) measured.set(change.id, { width: change.dimensions.width, height: change.dimensions.height });
     } else if (change.type === "remove") {
       removed.push(change.id);
       selected.delete(change.id);
@@ -59,7 +74,7 @@ export function interpretNodeChanges(
   const ops: EditorOp[] = [];
   if (moves.length > 0) ops.push({ type: "move-nodes", positions: moves });
   if (removed.length > 0) ops.push({ type: "remove", nodeIds: removed, edgeIds: [] });
-  return { ops, dragging, selected };
+  return { ops, dragging, selected, measured };
 }
 
 export function interpretEdgeChanges(

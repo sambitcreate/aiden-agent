@@ -45,3 +45,14 @@ test("removals become one remove op and selection follows select changes", () =>
   assert.deepEqual(edges.ops, [{ type: "remove", nodeIds: [], edgeIds: ["e"] }]);
   assert.deepEqual([...edges.selected], ["x"]);
 });
+
+test("rendered sizes reported by React Flow are handed back so nodes stay visible", () => {
+  const measured = interpretNodeChanges(
+    [{ type: "dimensions", id: "p", dimensions: { width: 280, height: 92 } }],
+    { dragging: new Map(), selected: new Set() },
+  );
+  assert.deepEqual(measured.ops, []);
+  const nodes = toFlowNodes(doc, new Map(), new Set(), measured.measured);
+  assert.deepEqual(nodes.find((node) => node.id === "p")?.measured, { width: 280, height: 92 });
+  assert.equal(nodes.find((node) => node.id === "i")?.measured, undefined);
+});

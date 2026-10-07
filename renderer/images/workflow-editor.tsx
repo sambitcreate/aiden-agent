@@ -39,9 +39,10 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
   const [minimap, setMinimap] = React.useState(false);
   const [dragging, setDragging] = React.useState<Map<string, WorkflowPosition>>(new Map());
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const [measured, setMeasured] = React.useState<Map<string, { width: number; height: number }>>(new Map());
   const doc = controller.doc;
 
-  const flowNodes = React.useMemo(() => (doc ? toFlowNodes(doc, dragging, selected) : []), [doc, dragging, selected]);
+  const flowNodes = React.useMemo(() => (doc ? toFlowNodes(doc, dragging, selected, measured) : []), [doc, dragging, selected, measured]);
   const flowEdges = React.useMemo(() => (doc ? toFlowEdges(doc, selected) : []), [doc, selected]);
   const attempts = React.useMemo(
     () => new Map((run.snapshot?.attempts ?? []).map((attempt) => [attempt.nodeId, attempt])),
@@ -113,9 +114,10 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
               defaultViewport={doc.viewport ?? { x: 0, y: 0, zoom: 1 }}
               onMoveEnd={(_event, viewport) => controller.setViewport(viewport)}
               onNodesChange={(changes) => {
-                const result = interpretNodeChanges(changes, { dragging, selected });
+                const result = interpretNodeChanges(changes, { dragging, selected, measured });
                 setDragging(result.dragging);
                 setSelected(result.selected);
+                setMeasured(result.measured);
                 for (const op of result.ops) controller.apply(op);
               }}
               onEdgesChange={(changes) => {

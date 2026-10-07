@@ -59,8 +59,9 @@ export function ImagesHome() {
   };
   const mutate = async (request: MutateWorkflowRequest, failure: string): Promise<MutateWorkflowResponse> => {
     const result = await createImagesIpc.mutate(request).catch((): MutateWorkflowResponse => ({ ok: false }));
-    if (!result.ok) setError(result.reason ? REFUSED[result.reason] : failure);
+    // Refresh first: a successful reload clears the error, so the refusal must land after it.
     await refresh();
+    if (!result.ok) setError(result.reason ? REFUSED[result.reason] : failure);
     return result;
   };
 
