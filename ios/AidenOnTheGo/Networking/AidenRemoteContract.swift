@@ -2185,46 +2185,9 @@ struct AidenRemoteDeviceCapabilitiesUpdateResponse: Decodable, Equatable, Sendab
     private enum CodingKeys: String, CodingKey { case capabilities }
 }
 
-private func aidenBotSelectionsSemanticallyEqual(
-    _ left: AidenBotCustomSelection,
-    _ right: AidenBotCustomSelection
-) -> Bool {
-    left.providerId == right.providerId
-        && left.modelId == right.modelId
-        && left.shellEnabled == right.shellEnabled
-        && Set(left.fileScopeIds) == Set(right.fileScopeIds)
-        && Set(left.connectionIds) == Set(right.connectionIds)
-        && Set(left.skillIds) == Set(right.skillIds)
-        && Set(left.otherCapabilityIds) == Set(right.otherCapabilityIds)
-}
-
-private func aidenBotSelectionsSemanticallyEqual(
-    _ left: AidenBotCustomSelection?,
-    _ right: AidenBotCustomSelection?
-) -> Bool {
-    switch (left, right) {
-    case (nil, nil):
-        return true
-    case let (left?, right?):
-        return aidenBotSelectionsSemanticallyEqual(left, right)
-    default:
-        return false
-    }
-}
-
-private func aidenBotAccessViewsSemanticallyEqual(
-    _ left: AidenBotAccessView,
-    _ right: AidenBotAccessView
-) -> Bool {
-    left.botId == right.botId
-        && left.accessMode == right.accessMode
-        && left.revision == right.revision
-        && left.policyEpoch == right.policyEpoch
-        && left.summary == right.summary
-        && aidenBotSelectionsSemanticallyEqual(left.custom, right.custom)
-}
-
-struct AidenRemoteContractFixture: Decodable {
+/// The pairing wire types production decodes. The full shared contract
+/// fixture decoder lives in the test target (`AidenRemoteContractFixture`).
+enum AidenRemotePairing {
     struct Health: Decodable {
         let ok: Bool
         let protocolVersion: Int
@@ -2602,579 +2565,6 @@ struct AidenRemoteContractFixture: Decodable {
         }
     }
 
-    struct BotCreateFixture: Decodable {
-        let request: AidenBotCreateRequest
-        let response: AidenBotDetail
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            request = try values.decode(AidenBotCreateRequest.self, forKey: .request)
-            response = try values.decode(AidenBotDetail.self, forKey: .response)
-            guard response.name == request.name,
-                  response.purpose == request.purpose,
-                  response.openingGreeting == request.openingGreeting,
-                  response.instructions == request.instructions,
-                  response.avatar.semantic == request.avatar else {
-                throw AidenBotContractError.invalidCombination("bot create fixture")
-            }
-            switch request.access {
-            case .full:
-                guard response.access.accessMode == .full else {
-                    throw AidenBotContractError.invalidCombination("bot create access fixture")
-                }
-            case let .custom(_, selection, _):
-                guard response.access.accessMode == .custom,
-                      let responseSelection = response.access.custom,
-                      aidenBotSelectionsSemanticallyEqual(selection, responseSelection) else {
-                    throw AidenBotContractError.invalidCombination("bot create access fixture")
-                }
-            }
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case request, response
-        }
-    }
-
-    struct BotPolicyUpdateFixture: Decodable {
-        let request: AidenBotAccessUpdate
-        let response: AidenBotAccessView
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            request = try values.decode(AidenBotAccessUpdate.self, forKey: .request)
-            response = try values.decode(AidenBotAccessView.self, forKey: .response)
-            switch request {
-            case .full:
-                guard response.accessMode == .full else {
-                    throw AidenBotContractError.invalidCombination("bot policy fixture")
-                }
-            case let .custom(_, selection, _):
-                guard response.accessMode == .custom,
-                      let responseSelection = response.custom,
-                      aidenBotSelectionsSemanticallyEqual(selection, responseSelection) else {
-                    throw AidenBotContractError.invalidCombination("bot policy fixture")
-                }
-            }
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case request, response
-        }
-    }
-
-    struct BotChatSubsetUpdateFixture: Decodable {
-        let request: AidenBotChatAccessUpdate
-        let response: AidenBotChatAccessView
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            request = try values.decode(AidenBotChatAccessUpdate.self, forKey: .request)
-            response = try values.decode(AidenBotChatAccessView.self, forKey: .response)
-            guard request.expectedBotPolicyRevision == response.botPolicyRevision else {
-                throw AidenBotContractError.invalidCombination("chat policy revision fixture")
-            }
-            switch request {
-            case .inherit:
-                guard response.mode == .inherit else {
-                    throw AidenBotContractError.invalidCombination("chat policy fixture")
-                }
-            case let .custom(_, _, selection):
-                guard response.mode == .custom,
-                      let responseSelection = response.custom,
-                      aidenBotSelectionsSemanticallyEqual(selection, responseSelection) else {
-                    throw AidenBotContractError.invalidCombination("chat policy fixture")
-                }
-            }
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case request, response
-        }
-    }
-
-    /// The public Bot DTOs expose Foundation `Date` values for application use,
-    /// but the shared cross-platform fixture must compare timestamp projections
-    /// exactly as they appeared on the wire. Foundation intentionally cannot
-    /// retain arbitrary RFC 3339 fractional-second precision.
-    private struct BotTimestampProjection: Decodable {
-        let id: String
-        let revision: String
-        let createdAt: String
-        let updatedAt: String
-        let archivedAt: String?
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            id = try values.decode(String.self, forKey: .id)
-            revision = try values.decode(String.self, forKey: .revision)
-            createdAt = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt).rawValue
-            updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt).rawValue
-            if values.contains(.archivedAt) {
-                archivedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .archivedAt).rawValue
-            } else {
-                archivedAt = nil
-            }
-        }
-
-        func hasSameLifecycleTimestamps(as other: Self) -> Bool {
-            createdAt == other.createdAt
-                && updatedAt == other.updatedAt
-                && archivedAt == other.archivedAt
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case id, revision, createdAt, updatedAt, archivedAt
-        }
-    }
-
-    private struct BotListTimestampProjection: Decodable {
-        let bots: [BotTimestampProjection]
-    }
-
-    private struct BotResponseTimestampProjection: Decodable {
-        let response: BotTimestampProjection
-    }
-
-    private struct ConversationTimestampProjection: Decodable {
-        let chatId: String
-        let botId: String
-        let revision: String
-        let createdAt: String
-        let updatedAt: String
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            chatId = try values.decode(String.self, forKey: .chatId)
-            botId = try values.decode(String.self, forKey: .botId)
-            revision = try values.decode(String.self, forKey: .revision)
-            createdAt = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt).rawValue
-            updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt).rawValue
-        }
-
-        func hasSameIdentityAndTimestamps(as other: Self) -> Bool {
-            chatId == other.chatId
-                && botId == other.botId
-                && revision == other.revision
-                && createdAt == other.createdAt
-                && updatedAt == other.updatedAt
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case chatId, botId, revision, createdAt, updatedAt
-        }
-    }
-
-    private struct ConversationPageTimestampProjection: Decodable {
-        let conversations: [ConversationTimestampProjection]
-    }
-
-    struct DeviceCapabilitiesUpdateFixture: Decodable {
-        let request: AidenRemoteDeviceCapabilitiesUpdateRequest
-        let response: AidenRemoteDeviceCapabilitiesUpdateResponse
-
-        init(from decoder: Decoder) throws {
-            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
-            try assertKnownKeys(dynamic, allowed: ["request", "response"])
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            request = try values.decode(AidenRemoteDeviceCapabilitiesUpdateRequest.self, forKey: .request)
-            response = try values.decode(AidenRemoteDeviceCapabilitiesUpdateResponse.self, forKey: .response)
-        }
-
-        private enum CodingKeys: String, CodingKey { case request, response }
-    }
-
-    /// Revision 16: one child stop and the refreshed current-turn roster.
-    struct AgentInterruptFixture: Decodable {
-        let agentId: String
-        let response: AidenRemoteChatAgentRoster
-
-        init(from decoder: Decoder) throws {
-            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
-            try assertKnownKeys(dynamic, allowed: ["agentId", "response"])
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            agentId = try values.decode(String.self, forKey: .agentId)
-            response = try values.decode(AidenRemoteChatAgentRoster.self, forKey: .response)
-        }
-
-        private enum CodingKeys: String, CodingKey { case agentId, response }
-    }
-
-    struct StreamInputFixture: Decodable {
-        let request: AidenStreamInputRequest
-        let response: AidenStreamInputResult
-
-        init(from decoder: Decoder) throws {
-            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
-            try assertKnownKeys(dynamic, allowed: ["request", "response"])
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            request = try values.decode(AidenStreamInputRequest.self, forKey: .request)
-            response = try values.decode(AidenStreamInputResult.self, forKey: .response)
-        }
-
-        private enum CodingKeys: String, CodingKey { case request, response }
-    }
-
-    struct QuestionFixture: Decodable {
-        let pending: AidenStreamPendingQuestion
-        let respondRequest: AidenQuestionRespondRequest
-        let respondResponse: AidenQuestionRespondResponse
-
-        init(from decoder: Decoder) throws {
-            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
-            try assertKnownKeys(dynamic, allowed: ["pending", "respondRequest", "respondResponse"])
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            pending = try values.decode(AidenStreamPendingQuestion.self, forKey: .pending)
-            respondRequest = try values.decode(AidenQuestionRespondRequest.self, forKey: .respondRequest)
-            respondResponse = try values.decode(
-                AidenQuestionRespondResponse.self,
-                forKey: .respondResponse
-            )
-        }
-
-        private enum CodingKeys: String, CodingKey { case pending, respondRequest, respondResponse }
-    }
-
-    let contractRevision: Int
-    let protocolVersion: Int
-    let capabilities: [AidenRemoteCapability]
-    let health: Health
-    let pairingBootstrap: PairingBootstrap
-    let pairingExchange: PairingExchange
-    let server: AidenServer
-    let chat: AidenChat
-    let chatSummaries: AidenChatSummaryPage
-    let botSummary: AidenBotSummary
-    let botList: AidenBotList
-    let botDetail: AidenBotDetail
-    let botAvatar: AidenBotAvatarView
-    let botCreate: BotCreateFixture
-    let botIdentity: AidenBotIdentityContractFixture
-    let botArchive: AidenBotArchiveResponse
-    let botRestore: AidenBotRestoreResponse
-    let botConversation: AidenBotConversationItem
-    let botConversations: AidenBotConversationPage
-    let botConversationQuery: AidenBotConversationQuery
-    let botChatCreate: AidenBotChatCreateContractFixture
-    let botCapabilityCatalog: AidenBotCapabilityCatalog
-    let botPolicy: AidenBotAccessView
-    let botPolicyUpdate: BotPolicyUpdateFixture
-    let botChatSubset: AidenBotChatAccessView
-    let botChatSubsetUpdate: BotChatSubsetUpdateFixture
-    let botFavorites: AidenBotFavorites
-    let botFavoritesUpdate: AidenBotFavoritesUpdateContractFixture
-    let botNotice: AidenBotNoticeStatus
-    let botNoticeAcknowledgement: AidenBotNoticeAcknowledgementContractFixture
-    let botAvatarUpload: AidenBotAvatarUploadContractFixture
-    let botAvatarMetadata: AidenBotAvatarAsset
-    let legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture
-    let taskProgress: AidenRemoteChatTaskProgress?
-    let agentRoster: AidenRemoteChatAgentRoster?
-    let agentInterrupt: AgentInterruptFixture?
-    let deviceCapabilitiesUpdate: DeviceCapabilitiesUpdateFixture?
-    let chatProgressEvents: [AidenRemoteStreamEvent]
-    let streamStatus: AidenStreamStatus
-    let streamApproval: AidenStreamApprovalSnapshot
-    let streamInput: StreamInputFixture?
-    let question: QuestionFixture?
-    let chatSkills: AidenRemoteSkillCatalog?
-    let events: [AidenRemoteStreamEvent]
-    let speechStatus: AidenSpeechStatus
-    let speechTranscription: AidenSpeechTranscription
-    let scheduleRunNotification: AidenScheduledRunNotification
-    let error: AidenRemoteErrorEnvelope
-    /// Revision 19: a run-control loser's error. Since revision 24 a phone that
-    /// negotiated `phone-run-control-v1` may receive it too.
-    let runControlError: AidenRemoteErrorEnvelope?
-    /// Revision 24: a foreign run as a phone holding the phone-scoped run subset sees it.
-    let phoneRunEvents: [AidenRemoteRunEvent]
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        contractRevision = try values.decode(Int.self, forKey: .contractRevision)
-        guard contractRevision >= 9 else {
-            throw AidenBotContractError.invalidCombination("contract revision")
-        }
-        protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)
-        capabilities = try values.decode([AidenRemoteCapability].self, forKey: .capabilities)
-        health = try values.decode(Health.self, forKey: .health)
-        pairingBootstrap = try values.decode(PairingBootstrap.self, forKey: .pairingBootstrap)
-        pairingExchange = try values.decode(PairingExchange.self, forKey: .pairingExchange)
-        _ = try pairingExchange.validated(against: pairingBootstrap)
-        server = try values.decode(AidenServer.self, forKey: .server)
-        chat = try values.decode(AidenChat.self, forKey: .chat)
-        chatSummaries = try values.decode(AidenChatSummaryPage.self, forKey: .chatSummaries)
-        botSummary = try values.decode(AidenBotSummary.self, forKey: .botSummary)
-        botList = try values.decode(AidenBotList.self, forKey: .botList)
-        botDetail = try values.decode(AidenBotDetail.self, forKey: .botDetail)
-        botAvatar = try values.decode(AidenBotAvatarView.self, forKey: .botAvatar)
-        botCreate = try values.decode(BotCreateFixture.self, forKey: .botCreate)
-        botIdentity = try values.decode(AidenBotIdentityContractFixture.self, forKey: .botIdentity)
-        botArchive = try values.decode(AidenBotArchiveResponse.self, forKey: .botArchive)
-        botRestore = try values.decode(AidenBotRestoreResponse.self, forKey: .botRestore)
-        botConversation = try values.decode(AidenBotConversationItem.self, forKey: .botConversation)
-        botConversations = try values.decode(AidenBotConversationPage.self, forKey: .botConversations)
-        botConversationQuery = try values.decode(AidenBotConversationQuery.self, forKey: .botConversationQuery)
-        botChatCreate = try values.decode(AidenBotChatCreateContractFixture.self, forKey: .botChatCreate)
-        botCapabilityCatalog = try values.decode(AidenBotCapabilityCatalog.self, forKey: .botCapabilityCatalog)
-        botPolicy = try values.decode(AidenBotAccessView.self, forKey: .botPolicy)
-        botPolicyUpdate = try values.decode(BotPolicyUpdateFixture.self, forKey: .botPolicyUpdate)
-        botChatSubset = try values.decode(AidenBotChatAccessView.self, forKey: .botChatSubset)
-        botChatSubsetUpdate = try values.decode(
-            BotChatSubsetUpdateFixture.self,
-            forKey: .botChatSubsetUpdate
-        )
-        botFavorites = try values.decode(AidenBotFavorites.self, forKey: .botFavorites)
-        botFavoritesUpdate = try values.decode(
-            AidenBotFavoritesUpdateContractFixture.self,
-            forKey: .botFavoritesUpdate
-        )
-        botNotice = try values.decode(AidenBotNoticeStatus.self, forKey: .botNotice)
-        botNoticeAcknowledgement = try values.decode(
-            AidenBotNoticeAcknowledgementContractFixture.self,
-            forKey: .botNoticeAcknowledgement
-        )
-        botAvatarUpload = try values.decode(
-            AidenBotAvatarUploadContractFixture.self,
-            forKey: .botAvatarUpload
-        )
-        botAvatarMetadata = try values.decode(AidenBotAvatarAsset.self, forKey: .botAvatarMetadata)
-        legacyNonNegotiating = try values.decode(
-            AidenBotLegacyNonNegotiatingFixture.self,
-            forKey: .legacyNonNegotiating
-        )
-        taskProgress = try values.decodeIfPresent(AidenRemoteChatTaskProgress.self, forKey: .taskProgress)
-        agentRoster = try values.decodeIfPresent(AidenRemoteChatAgentRoster.self, forKey: .agentRoster)
-        agentInterrupt = try values.decodeIfPresent(AgentInterruptFixture.self, forKey: .agentInterrupt)
-        deviceCapabilitiesUpdate = try values.decodeIfPresent(
-            DeviceCapabilitiesUpdateFixture.self,
-            forKey: .deviceCapabilitiesUpdate
-        )
-        chatProgressEvents = try values.decodeIfPresent(
-            [AidenRemoteStreamEvent].self,
-            forKey: .chatProgressEvents
-        ) ?? []
-        streamStatus = try values.decode(AidenStreamStatus.self, forKey: .streamStatus)
-        streamApproval = try values.decode(AidenStreamApprovalSnapshot.self, forKey: .streamApproval)
-        streamInput = try values.decodeIfPresent(StreamInputFixture.self, forKey: .streamInput)
-        question = try values.decodeIfPresent(QuestionFixture.self, forKey: .question)
-        chatSkills = try values.decodeIfPresent(AidenRemoteSkillCatalog.self, forKey: .chatSkills)
-        events = try values.decode([AidenRemoteStreamEvent].self, forKey: .events)
-        speechStatus = try values.decode(AidenSpeechStatus.self, forKey: .speechStatus)
-        speechTranscription = try values.decode(AidenSpeechTranscription.self, forKey: .speechTranscription)
-        scheduleRunNotification = try values.decode(
-            AidenScheduledRunNotification.self,
-            forKey: .scheduleRunNotification
-        )
-        error = try values.decode(AidenRemoteErrorEnvelope.self, forKey: .error)
-        runControlError = try values.decodeIfPresent(AidenRemoteErrorEnvelope.self, forKey: .runControlError)
-        phoneRunEvents = try values.decodeIfPresent([AidenRemoteRunEvent].self, forKey: .phoneRunEvents) ?? []
-
-        let botSummaryTimestamps = try values.decode(
-            BotTimestampProjection.self,
-            forKey: .botSummary
-        )
-        let botListTimestamps = try values.decode(
-            BotListTimestampProjection.self,
-            forKey: .botList
-        )
-        let botDetailTimestamps = try values.decode(
-            BotTimestampProjection.self,
-            forKey: .botDetail
-        )
-        let botIdentityTimestamps = try values.decode(
-            BotResponseTimestampProjection.self,
-            forKey: .botIdentity
-        ).response
-        let botArchiveTimestamps = try values.decode(
-            BotTimestampProjection.self,
-            forKey: .botArchive
-        )
-        let botRestoreTimestamps = try values.decode(
-            BotTimestampProjection.self,
-            forKey: .botRestore
-        )
-        let botConversationTimestamps = try values.decode(
-            ConversationTimestampProjection.self,
-            forKey: .botConversation
-        )
-        let botConversationPageTimestamps = try values.decode(
-            ConversationPageTimestampProjection.self,
-            forKey: .botConversations
-        )
-
-        let botID = botDetail.id
-        let sameRevisionSummaryMatchesDetail = botSummary.revision != botDetail.revision || (
-            botSummary.id == botDetail.id
-                && botSummary.name == botDetail.name
-                && botSummary.purpose == botDetail.purpose
-                && botSummary.avatar == botDetail.avatar
-                && botSummary.health == botDetail.health
-                && botSummary.revision == botDetail.revision
-                && botSummaryTimestamps.hasSameLifecycleTimestamps(as: botDetailTimestamps)
-        )
-        let botIdentityFieldsEqual: (AidenBotDetail, AidenBotDetail) -> Bool = { left, right in
-            left.id == right.id
-                && left.name == right.name
-                && left.purpose == right.purpose
-                && left.openingGreeting == right.openingGreeting
-                && left.instructions == right.instructions
-                && left.avatar == right.avatar
-        }
-        let archiveRestorePreserveIdentity = botIdentityFieldsEqual(
-            botIdentity.response,
-            botArchive.bot
-        ) && botIdentityFieldsEqual(botArchive.bot, botRestore.bot)
-            && botIdentityTimestamps.createdAt == botArchiveTimestamps.createdAt
-            && botArchiveTimestamps.createdAt == botRestoreTimestamps.createdAt
-        let botListContainsExactSummaryTimestamps = botListTimestamps.bots.contains { candidate in
-            candidate.id == botSummaryTimestamps.id
-                && candidate.revision == botSummaryTimestamps.revision
-                && candidate.hasSameLifecycleTimestamps(as: botSummaryTimestamps)
-        }
-        let conversationPageContainsExactProjection = botConversationPageTimestamps.conversations.contains {
-            $0.hasSameIdentityAndTimestamps(as: botConversationTimestamps)
-        }
-        let sameRevisionPolicyProjectionMatches =
-            botPolicy.botId != botDetail.access.botId
-                || botPolicy.revision != botDetail.access.revision
-                || aidenBotAccessViewsSemanticallyEqual(botPolicy, botDetail.access)
-        let botCapabilities = Set(capabilities)
-        let grantedCapabilities = Set(server.capabilities)
-        let supportedCapabilities = Set(server.serverCapabilities ?? [])
-        let pairingCapabilities = Set(pairingExchange.capabilities)
-        let listedBotIDs = Set(botList.bots.map(\.id))
-        let responseSelections: [AidenBotCustomSelection?] = [
-            botDetail.access.custom,
-            botCreate.response.access.custom,
-            botIdentity.response.access.custom,
-            botArchive.bot.access.custom,
-            botRestore.bot.access.custom,
-            botPolicy.custom,
-            botPolicyUpdate.response.custom,
-            botChatSubset.custom,
-            botChatSubsetUpdate.response.custom,
-        ]
-        let mutationSelections: [AidenBotCustomSelection?] = [
-            botCreate.request.access.customSelection,
-            botPolicyUpdate.request.customSelection,
-            botChatSubsetUpdate.request.customSelection,
-        ]
-        guard protocolVersion == AidenRemoteProtocol.version,
-              server.protocolVersion == AidenRemoteProtocol.version,
-              server.supportsChatSummaries,
-              !chatSummaries.summaries.isEmpty,
-              server.instanceId == pairingBootstrap.instanceId,
-              pairingExchange.capabilities == server.capabilities,
-              legacyNonNegotiating.pairingExchange.instanceId == pairingBootstrap.instanceId,
-              legacyNonNegotiating.server.instanceId == pairingBootstrap.instanceId,
-              botCapabilities.contains(.botRead),
-              botCapabilities.contains(.botWrite),
-              grantedCapabilities.contains(.botRead),
-              grantedCapabilities.contains(.botWrite),
-              supportedCapabilities.contains(.botRead),
-              supportedCapabilities.contains(.botWrite),
-              grantedCapabilities.isSubset(of: supportedCapabilities),
-              pairingCapabilities.contains(.botRead),
-              pairingCapabilities.contains(.botWrite),
-              botList.bots.contains(botSummary),
-              botListContainsExactSummaryTimestamps,
-              botSummary.id == botID,
-              sameRevisionSummaryMatchesDetail,
-              archiveRestorePreserveIdentity,
-              botAvatar == botDetail.avatar,
-              botCreate.response.id == botID,
-              botIdentity.response.id == botID,
-              botArchive.bot.id == botID,
-              botRestore.bot.id == botID,
-              botConversation.botId == botID,
-              botConversations.conversations.contains(botConversation),
-              conversationPageContainsExactProjection,
-              botConversations.conversations.allSatisfy({ listedBotIDs.contains($0.botId) }),
-              botConversationQuery.botId.map({ $0 == botID }) ?? true,
-              botChatCreate.response.chat.botId == botID,
-              chat.botId == botID,
-              {
-                  switch (chat.providerId, chat.modelId) {
-                  case (nil, nil):
-                      return true
-                  case let (providerId?, modelId?):
-                      return botCapabilityCatalog.containsAvailable(
-                          providerId: providerId,
-                          modelId: modelId
-                      )
-                  default:
-                      return false
-                  }
-              }(),
-              botPolicy.botId == botID,
-              botDetail.access.botId == botID,
-              sameRevisionPolicyProjectionMatches,
-              botPolicyUpdate.response.botId == botID,
-              botChatSubset.botId == botID,
-              botChatSubset.chatId == botConversation.chatId,
-              botChatSubset.botPolicyRevision == botPolicy.revision,
-              botChatSubsetUpdate.response.botId == botID,
-              botChatSubsetUpdate.response.chatId == botConversation.chatId,
-              botChatSubsetUpdate.response.botPolicyRevision == botPolicyUpdate.response.revision,
-              botCreate.request.access.catalogRevision == botCapabilityCatalog.revision,
-              botPolicyUpdate.request.catalogRevision == botCapabilityCatalog.revision,
-              botChatSubsetUpdate.request.catalogRevision == botCapabilityCatalog.revision,
-              botChatSubsetUpdate.request.expectedBotPolicyRevision == botPolicyUpdate.response.revision,
-              responseSelections.compactMap({ $0 }).allSatisfy(botCapabilityCatalog.contains),
-              mutationSelections.compactMap({ $0 }).allSatisfy(botCapabilityCatalog.containsAvailable),
-              {
-                  switch (botChatCreate.request.providerId, botChatCreate.request.modelId) {
-                  case (nil, nil):
-                      return true
-                  case let (providerId?, modelId?):
-                      return botCapabilityCatalog.containsAvailable(
-                          providerId: providerId,
-                          modelId: modelId
-                      )
-                  default:
-                      return false
-                  }
-              }(),
-              {
-                  switch (botChatCreate.response.chat.providerId, botChatCreate.response.chat.modelId) {
-                  case (nil, nil):
-                      return true
-                  case let (providerId?, modelId?):
-                      return botCapabilityCatalog.containsAvailable(
-                          providerId: providerId,
-                          modelId: modelId
-                      )
-                  default:
-                      return false
-                  }
-              }(),
-              botChatSubset.custom.map(botPolicy.permits) ?? true,
-              botChatSubsetUpdate.request.customSelection.map(botPolicyUpdate.response.permits) ?? true,
-              botChatSubsetUpdate.response.custom.map(botPolicyUpdate.response.permits) ?? true,
-              botFavorites == botList.favorites,
-              botFavoritesUpdate.response == botFavorites,
-              botCapabilityCatalog.notice == botNotice,
-              botNoticeAcknowledgement.request.version == botNotice.version,
-              botAvatarUpload.response == botAvatarMetadata,
-              botAvatarMetadata == botDetail.avatar.asset else {
-            throw AidenBotContractError.invalidCombination("shared Bot fixture")
-        }
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case contractRevision, protocolVersion, capabilities, health
-        case pairingBootstrap, pairingExchange, server, chat, chatSummaries
-        case botSummary, botList, botDetail, botAvatar, botCreate, botIdentity
-        case botArchive, botRestore, botConversation, botConversations, botConversationQuery
-        case botChatCreate, botCapabilityCatalog, botPolicy, botPolicyUpdate
-        case botChatSubset, botChatSubsetUpdate, botFavorites, botFavoritesUpdate
-        case botNotice, botNoticeAcknowledgement, botAvatarUpload, botAvatarMetadata
-        case legacyNonNegotiating
-        case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
-        case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
-        case scheduleRunNotification, error, runControlError, phoneRunEvents
-    }
 }
 
 extension String {
@@ -3199,7 +2589,7 @@ extension String {
     }
 }
 
-private enum AidenBotPrivateResponseScope {
+enum AidenBotPrivateResponseScope {
     case root(String)
     case botClassifiedChat
     case chatList
@@ -3207,7 +2597,7 @@ private enum AidenBotPrivateResponseScope {
     case sharedFixture
 }
 
-private protocol AidenBotPrivateResponseScoped {
+protocol AidenBotPrivateResponseScoped {
     static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { get }
 }
 
@@ -3256,11 +2646,12 @@ private enum AidenBotPrivateResponseValidator {
 
     private static let fixtureBotRoots: Set<String> = [
         "chat", "chatSummaries", "botSummary", "botList", "botDetail", "botAvatar", "botCreate",
-        "botIdentity", "botArchive", "botRestore", "botConversation", "botConversations",
+        "botIdentity", "botConversation", "botConversations",
         "botConversationQuery", "botChatCreate", "botCapabilityCatalog", "botPolicy",
-        "botPolicyUpdate", "botChatSubset", "botChatSubsetUpdate", "botFavorites",
-        "botFavoritesUpdate", "botNotice", "botNoticeAcknowledgement", "botAvatarUpload",
-        "botAvatarMetadata",
+        "botPolicyUpdate", "botAvatarUpload", "botAvatarMetadata",
+        "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
+        "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
+        "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -3388,7 +2779,7 @@ private enum AidenBotPrivateResponseValidator {
             return true
         }
         guard key == "instructions" || key == "openingGreeting" else { return false }
-        if ["botDetail", "botArchive", "botRestore"].contains(root) {
+        if root == "botDetail" {
             return parentPath.isEmpty
         }
         if ["botCreate", "botIdentity"].contains(root) {
@@ -3400,7 +2791,7 @@ private enum AidenBotPrivateResponseValidator {
 }
 
 extension AidenChat: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope {
         .botClassifiedChat
     }
 }
@@ -3569,153 +2960,121 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
 }
 
 extension AidenChatMessagesWindow: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .messagesWindow }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .messagesWindow }
 }
 
 extension AidenChatListResponse: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .chatList }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .chatList }
 }
 
 extension AidenChatSummaryPage: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope {
         .root("chatSummaries")
     }
 }
 
 extension AidenBotAvatarRecipe: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatar") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatar") }
 }
 
 extension AidenBotSemanticAvatar: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatar") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatar") }
 }
 
 extension AidenBotAvatarAsset: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatarMetadata") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatarMetadata") }
 }
 
 extension AidenBotAvatarView: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatar") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatar") }
 }
 
 extension AidenBotSummary: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botSummary") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botSummary") }
 }
 
 extension AidenBotList: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botList") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botList") }
 }
 
 extension AidenBotDetail: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botDetail") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botDetail") }
 }
 
 extension AidenBotConversationItem: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botConversation") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botConversation") }
 }
 
 extension AidenBotConversationPage: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botConversations") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botConversations") }
 }
 
 extension AidenBotChatCreateResponse: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botChatCreate") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botChatCreate") }
 }
 
 extension AidenBotCapabilityOption: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
 }
 
 extension AidenBotFileScopeOption: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
 }
 
 extension AidenBotModelOption: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
 }
 
 extension AidenBotProviderOption: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
 }
 
 extension AidenBotCapabilityCatalog: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCapabilityCatalog") }
 }
 
 extension AidenBotCustomSelection: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPolicy") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPolicy") }
 }
 
 extension AidenBotAccessView: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPolicy") }
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPolicy") }
 }
 
-extension AidenBotChatAccessView: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botChatSubset") }
+extension AidenBotSession: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botSession") }
 }
 
-extension AidenBotFavorites: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botFavorites") }
+extension AidenBotSessionEvent: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botSessionEvents") }
 }
 
-extension AidenBotNoticeStatus: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botNotice") }
+extension AidenBotMessageReceipt: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botSessionSend") }
 }
 
-extension AidenBotArchiveResponse: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botArchive") }
+extension AidenBotSessionStateView: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botSessionResume") }
 }
 
-extension AidenBotRestoreResponse: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botRestore") }
+extension AidenBotRoutine: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botRoutines") }
 }
 
-extension AidenRemoteContractFixture.BotCreateFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCreate") }
+extension AidenBotRoutineList: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botRoutines") }
 }
 
-extension AidenBotCreateContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCreate") }
+extension AidenBotConnectionRequestReceipt: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botConnectionRequest") }
 }
 
-extension AidenBotIdentityContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botIdentity") }
+extension AidenBotPresetList: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPresets") }
 }
 
-extension AidenBotChatCreateContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botChatCreate") }
-}
-
-extension AidenRemoteContractFixture.BotPolicyUpdateFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPolicyUpdate") }
-}
-
-extension AidenBotPolicyUpdateContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPolicyUpdate") }
-}
-
-extension AidenRemoteContractFixture.BotChatSubsetUpdateFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botChatSubsetUpdate") }
-}
-
-extension AidenBotChatSubsetUpdateContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botChatSubsetUpdate") }
-}
-
-extension AidenBotFavoritesUpdateContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botFavoritesUpdate") }
-}
-
-extension AidenBotNoticeAcknowledgementContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botNoticeAcknowledgement") }
-}
-
-extension AidenBotAvatarUploadContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botAvatarUpload") }
-}
-
-extension AidenRemoteContractFixture: AidenBotPrivateResponseScoped {
-    fileprivate static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .sharedFixture }
+extension AidenBotPresetCreateResult: AidenBotPrivateResponseScoped {
+    static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botPresetCreate") }
 }
 
 enum AidenRemoteJSONDecoder {
@@ -3733,24 +3092,24 @@ enum AidenRemoteJSONDecoder {
 
     static func decodePairingBootstrap(
         from data: Data
-    ) throws -> AidenRemoteContractFixture.PairingBootstrap {
-        try decode(AidenRemoteContractFixture.PairingBootstrap.self, from: data)
+    ) throws -> AidenRemotePairing.PairingBootstrap {
+        try decode(AidenRemotePairing.PairingBootstrap.self, from: data)
     }
 
     static func decodePairingPayload(
         from data: Data
-    ) throws -> AidenRemoteContractFixture.PairingPayload {
+    ) throws -> AidenRemotePairing.PairingPayload {
         guard data.count <= AidenRemoteProtocol.maxPairingPayloadBytes else {
             throw AidenRemoteContractError.payloadTooLarge
         }
-        return try decode(AidenRemoteContractFixture.PairingPayload.self, from: data)
+        return try decode(AidenRemotePairing.PairingPayload.self, from: data)
     }
 
     static func decodeManualPairingBootstrap(
         from data: Data
-    ) throws -> AidenRemoteContractFixture.ManualPairingBootstrap {
+    ) throws -> AidenRemotePairing.ManualPairingBootstrap {
         try decode(
-            AidenRemoteContractFixture.ManualPairingBootstrap.self,
+            AidenRemotePairing.ManualPairingBootstrap.self,
             from: data,
             maximumBytes: AidenRemoteProtocol.maxPairingPayloadBytes * 2
         )

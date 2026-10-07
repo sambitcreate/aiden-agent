@@ -247,7 +247,6 @@ interface AidenRemoteChatSummaryCursor {
 
 export interface AidenRemoteChatClassification {
   botId?: string;
-  botArchived?: true;
 }
 
 export interface AidenRemoteRetainedBotChatAuthorizationRequest {
@@ -1446,7 +1445,6 @@ export class AidenRemoteChatService {
     }
     return {
       botId: metadata.botId,
-      ...(bot.archivedAt !== undefined ? { botArchived: true as const } : {}),
     };
   }
 
@@ -1494,13 +1492,6 @@ export class AidenRemoteChatService {
         }))
       ) {
         throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
-      }
-      if (current.botArchived) {
-        throw new AidenRemoteServiceError(
-          "bot_archived",
-          "Restore this bot before making changes.",
-          409,
-        );
       }
       return action();
     };

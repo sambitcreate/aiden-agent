@@ -18,7 +18,7 @@ export function botStarter(): BotStarter {
       const botId = await creationKeys.get(key);
       if (botId === null) return null;
       const bot = await botStore.get(botId);
-      if (bot && bot.archivedAt === undefined) return bot;
+      if (bot) return bot;
       await creationKeys.forget(key);
       return null;
     },

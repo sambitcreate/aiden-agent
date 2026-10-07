@@ -383,6 +383,10 @@ fun AidenBotProfileScreen(
                     }
                 }
 
+                if (serverInfo?.supportsBotRoutines == true) {
+                    AidenBotRoutinesSection(botId = current.id, client = client)
+                }
+
                 actionError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
             }
         }

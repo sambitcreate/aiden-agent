@@ -23,9 +23,7 @@ export interface BotEditorAccessDraft {
 function sameAvatar(left: BotAvatarAppearance, right: BotAvatarAppearance): boolean {
   return left.version === right.version
     && left.shape === right.shape
-    && left.color === right.color
-    && left.eyes === right.eyes
-    && left.detail === right.detail;
+    && left.color === right.color;
 }
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {

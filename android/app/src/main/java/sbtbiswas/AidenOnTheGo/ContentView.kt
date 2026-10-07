@@ -42,6 +42,7 @@ fun ContentView(
     botsViewModel: AidenBotsViewModel,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
+    onNavigateToBotChat: (String) -> Unit = {},
     onNavigateToBotEditor: (String?) -> Unit,
     onNavigateToWorkspaceFiles: (String) -> Unit,
     onNavigateToWorkspaceGit: (String) -> Unit
@@ -92,6 +93,7 @@ fun ContentView(
                         botsViewModel = botsViewModel,
                         onNavigateToChat = onNavigateToChat,
                         onNavigateToBotProfile = onNavigateToBotProfile,
+                        onNavigateToBotChat = onNavigateToBotChat,
                         onNavigateToBotEditor = onNavigateToBotEditor,
                         onNavigateToWorkspaceFiles = onNavigateToWorkspaceFiles,
                         onNavigateToWorkspaceGit = onNavigateToWorkspaceGit

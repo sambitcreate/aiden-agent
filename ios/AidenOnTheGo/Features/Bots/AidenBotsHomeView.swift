@@ -155,14 +155,21 @@ struct AidenBotHomeRow: Equatable, Identifiable {
 
     var id: String { bot.id }
 
-    /// The last message, or the Bot's subtitle before its first chat.
+    /// The durable session state comes first: a paused turn or a missing
+    /// model says so; otherwise the last message, or a greeting prompt.
     var preview: String {
+        switch bot.sessionState {
+        case .interrupted: return AidenBotSessionCopy.pausedSubtitle
+        case .needsModel: return AidenBotSessionCopy.needsModel
+        default: break
+        }
         let text = (conversation?.preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "Say hello" : text
     }
 
     /// Shows the small activity dot on the avatar while the Bot is working.
     var isWorking: Bool {
+        if let state = bot.sessionState { return state == .running }
         guard let conversation else { return false }
         return conversation.activityState != .idle
     }
@@ -170,7 +177,7 @@ struct AidenBotHomeRow: Equatable, Identifiable {
     var lastActivity: Date { conversation?.updatedAt ?? bot.updatedAt }
 }
 
-/// Builds the Bots home list: archived Bots are hidden, the most recent
+/// Builds the Bots home list: the most recent
 /// conversation comes first, and search matches names, subtitles, previews,
 /// and server-side message matches.
 func aidenBotHomeRows(
@@ -183,7 +190,6 @@ func aidenBotHomeRows(
     let conversationByBotID = Dictionary(canonical.map { ($0.botId, $0) }, uniquingKeysWith: { first, _ in first })
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
     return bots
-        .filter { $0.health != .archived }
         .map { AidenBotHomeRow(bot: $0, conversation: conversationByBotID[$0.id]) }
         .filter { row in
             guard !needle.isEmpty else { return true }
@@ -244,6 +250,8 @@ struct AidenBotsHomeView: View {
     let onSelectArea: (AidenProductArea) -> Void
     let onOpenConversation: (AidenBotConversationItem) async -> Void
     let onCreateConversation: (AidenBotSummary) async -> Void
+    /// Opens a Bot's durable session (`bot-durable-session-v1`).
+    var onOpenBotSession: (AidenBotSummary) -> Void = { _ in }
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -260,6 +268,9 @@ struct AidenBotsHomeView: View {
     @State private var deleteError: String?
     @State private var loadError: String?
     @State private var loadGeneration: UInt = 0
+    @State private var presets: [AidenBotPreset] = []
+    @State private var presetAttempt: (presetID: String, key: UUID)?
+    @State private var isStartingPreset = false
     @FocusState private var searchIsFocused: Bool
 
     private var loadID: AidenBotsHomeLoadID {
@@ -500,6 +511,14 @@ struct AidenBotsHomeView: View {
         switch contentState {
         case .loading:
             AidenBotHomeSkeletonView(reduceMotion: reduceMotion)
+        case .empty where coordinator.connectionState == .connected && !presets.isEmpty:
+            AidenBotMeetFirstBotView(
+                presets: presets,
+                isBusy: isStartingPreset,
+                canCreate: canCreateBot,
+                onStartChat: { preset in Task { await startChat(with: preset) } },
+                onCreateOwn: { presentedSheet = .create }
+            )
         case .empty:
             ContentUnavailableView {
                 Label(
@@ -629,6 +648,10 @@ struct AidenBotsHomeView: View {
     @MainActor
     private func openChat(for bot: AidenBotSummary) {
         guard !isCreatingConversation else { return }
+        if case .durableSession = AidenBotChatRoute.resolve(botID: bot.id, hostFeatures: coordinator.server?.features) {
+            onOpenBotSession(bot)
+            return
+        }
         if let conversation = allConversations.first(where: { $0.botId == bot.id }) {
             isCreatingConversation = true
             Task {
@@ -655,6 +678,39 @@ struct AidenBotsHomeView: View {
         } else {
             presentedSheet = .profile(bot)
         }
+    }
+
+    /// `POST /bots/from-preset`, then the new Bot's chat. A retry of the same
+    /// preset reuses its Idempotency-Key.
+    @MainActor
+    private func startChat(with preset: AidenBotPreset) async {
+        guard !isStartingPreset, let request = try? AidenBotPresetCreateRequest(presetId: preset.id) else { return }
+        let key = presetAttempt?.presetID == preset.id ? presetAttempt!.key : UUID()
+        presetAttempt = (preset.id, key)
+        isStartingPreset = true
+        defer { isStartingPreset = false }
+        do {
+            let context = try coordinator.requestContext()
+            let result = try await coordinator.remoteClient(for: context).createBotFromPreset(request, idempotencyKey: key)
+            guard coordinator.isCurrent(context) else { return }
+            presetAttempt = nil
+            await load()
+            openChat(for: result.bot)
+        } catch is CancellationError {
+            return
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { presetAttempt = nil }
+            loadError = "\(preset.name) couldn’t be created. Please try again."
+        }
+    }
+
+    @MainActor
+    private func loadPresets(client: AidenRemoteClient) async {
+        guard AidenBotHostFeature.isAdvertised(AidenBotHostFeature.presets, coordinator: coordinator) else {
+            presets = []
+            return
+        }
+        if let loaded = try? await client.botPresets() { presets = loaded }
     }
 
     @MainActor
@@ -756,6 +812,9 @@ struct AidenBotsHomeView: View {
                 try await client.botConversations()
             }
             let (listResult, conversationResult) = await (listRequest, conversationRequest)
+            if case let .success(list) = listResult, list?.bots.isEmpty == true {
+                await loadPresets(client: client)
+            }
             guard coordinator.isCurrent(context), loadGeneration == generation,
                   loadID == expectedLoadID, !Task.isCancelled else { return }
             var failures: [Error] = []

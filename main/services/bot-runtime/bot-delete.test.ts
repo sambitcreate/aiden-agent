@@ -155,7 +155,7 @@ async function sessionFor(
 async function createBotWithData(opened: Profile, name: string) {
   const bot = await opened.app.createBot({
     audienceId: AUDIENCE,
-    bot: { name, instructions: `Help as ${name}.`, avatar: "spark", openingGreeting: "Hi!" },
+    bot: { name, instructions: `Help as ${name}.`, avatar: { version: 1, shape: "orb", color: "sky" }, openingGreeting: "Hi!" },
   });
   const chat = await opened.app.createChat({ audienceId: AUDIENCE, botId: bot.id });
   await opened.avatars.put({

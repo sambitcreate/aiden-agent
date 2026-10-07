@@ -84,7 +84,7 @@ function bot(id: string, overrides: Partial<BotDefinition> = {}): BotDefinition 
     description: "Keeps projects moving",
     instructions: "Help plan projects.",
     openingGreeting: "What should we plan?",
-    avatar: "spark",
+    avatar: { version: 1, shape: "wisp", color: "lilac" },
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -116,7 +116,7 @@ function fixture(options: {
   const chats = new Map<string, Chat>();
   const policies = new Map<string, BotAccessView>();
   const authorityStatuses = new Map<string, "active" | "archived">(
-    bots.map((entry) => [entry.id, entry.archivedAt === undefined ? "active" : "archived"]),
+    bots.map((entry) => [entry.id, (entry as { archivedAt?: number }).archivedAt === undefined ? "active" : "archived"]),
   );
   const chatPolicies = new Map<string, BotChatAccessView>();
   const botBindings = new Map<string, unknown>();
@@ -222,16 +222,16 @@ function fixture(options: {
   const deps = {
     botStore: {
       async list() {
-        return bots.filter((entry) => entry.archivedAt === undefined);
+        return bots.filter((entry) => (entry as { archivedAt?: number }).archivedAt === undefined);
       },
       async get(id: string) {
-        return bots.find((entry) => entry.id === id && entry.archivedAt === undefined) ?? null;
+        return bots.find((entry) => entry.id === id && (entry as { archivedAt?: number }).archivedAt === undefined) ?? null;
       },
       async storedIds() {
         return bots.map(({ id }) => id);
       },
       async legacyArchivedIds() {
-        return bots.filter((entry) => entry.archivedAt !== undefined).map(({ id }) => id);
+        return bots.filter((entry) => (entry as { archivedAt?: number }).archivedAt !== undefined).map(({ id }) => id);
       },
       async delete(id: string) {
         const index = bots.findIndex((entry) => entry.id === id);
@@ -709,7 +709,7 @@ test("initialization migrates legacy Bots to explicit Full and gives each exactl
 
 test("identity updates require a live Bot, exact revision, managed home, and policy", async () => {
   const active = bot("bot:update");
-  const archived = bot("bot:archived-update", { archivedAt: 2 });
+  const archived = bot("bot:archived-update", { archivedAt: 2 } as never);
   const app = fixture({ bots: [active, archived] });
   await app.service.initialize();
   app.events.length = 0;
@@ -721,7 +721,7 @@ test("identity updates require a live Bot, exact revision, managed home, and pol
     description: "Keeps the current plan moving",
     instructions: "Keep the plan current.",
     openingGreeting: "What changed?",
-    avatar: "orbit",
+    avatar: { version: 1, shape: "orb", color: "sky" },
   };
   const updated = await app.service.updateBot(input);
   assert.equal(updated.name, input.name);
@@ -1251,7 +1251,7 @@ test("startup rolls a pending Bot delete forward", async () => {
 });
 
 test("archived Bots left by an older release are erased at startup", async () => {
-  const archived = bot("bot:archived-legacy", { archivedAt: 2 });
+  const archived = bot("bot:archived-legacy", { archivedAt: 2 } as never);
   const live = bot("bot:live");
   const app = fixture({ bots: [archived, live] });
   app.policies.set(archived.id, {
@@ -1362,7 +1362,7 @@ test("Bot creation commits home then policy then visible identity", async () => 
       name: "Planner",
       instructions: "Plan carefully.",
       openingGreeting: "What should we plan?",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
     },
   });
   assert.equal(created.id, "bot:new");
@@ -1381,7 +1381,7 @@ test("a post-identity journal failure is recovered live without duplicating the 
 
   const created = await app.service.createBot({
     audienceId: "device:a",
-    bot: { name: "One Bot", instructions: "Stay singular.", avatar: "spark" },
+    bot: { name: "One Bot", instructions: "Stay singular.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
   });
 
   assert.equal(created.id, "bot:new");
@@ -1597,7 +1597,7 @@ test("failed identity creation rolls back only uncommitted policy and empty home
   await assert.rejects(
     app.service.createBot({
       audienceId: "device:a",
-      bot: { name: "Planner", instructions: "Plan.", avatar: "spark" },
+      bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
     }),
     /identity failed/u,
   );
@@ -1719,7 +1719,7 @@ test("Custom access is privately bound before it is committed", async () => {
   app.events.length = 0;
   await app.service.createBot({
     audienceId: "device:a",
-    bot: { name: "Planner", instructions: "Plan.", avatar: "spark" },
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
     access: {
       accessMode: "custom",
       catalogRevision: CATALOG_REVISION,
@@ -1746,7 +1746,7 @@ test("Bot creation re-bases a stale client catalog revision onto the current sna
   await app.service.initialize();
   await app.service.createBot({
     audienceId: "device:a",
-    bot: { name: "Planner", instructions: "Plan.", avatar: "spark" },
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
     access: {
       accessMode: "custom",
       catalogRevision: CATALOG_REVISION,
@@ -1810,7 +1810,7 @@ test("Bot and chat access catalogs are scoped to their owning Bot while create i
   }]);
   await app.service.createBot({
     audienceId: "device:a",
-    bot: { name: "New", instructions: "Help.", avatar: "spark" },
+    bot: { name: "New", instructions: "Help.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
   });
   assert.deepEqual(app.catalogTargets, [owner.id, owner.id, undefined]);
 });

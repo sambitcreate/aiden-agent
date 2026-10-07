@@ -8,20 +8,7 @@ struct AidenBotAvatarPresentation: Equatable {
 }
 
 func aidenBotAvatarPresentation(_ avatar: AidenBotSemanticAvatar) -> AidenBotAvatarPresentation {
-    switch avatar {
-    case let .recipe(recipe):
-        return .init(shape: recipe.shape, color: recipe.color)
-    case let .legacy(legacy):
-        // Matches the desktop's legacy table in renderer/shared/bots.ts.
-        switch legacy {
-        case .spark: return .init(shape: .wisp, color: .lilac)
-        case .orbit: return .init(shape: .orb, color: .sky)
-        case .leaf: return .init(shape: .drop, color: .mint)
-        case .prism: return .init(shape: .hex, color: .sun)
-        case .wave: return .init(shape: .cloud, color: .periwinkle)
-        case .ember: return .init(shape: .peak, color: .coral)
-        }
-    }
+    .init(shape: avatar.recipe.shape, color: avatar.recipe.color)
 }
 
 extension AidenBotAvatarColor {
@@ -36,6 +23,10 @@ extension AidenBotAvatarColor {
         case .coral: .pink
         case .peach: .orange
         case .aqua: .cyan
+        case .rose: Color(red: 0.93, green: 0.36, blue: 0.52)
+        case .lime: Color(red: 0.55, green: 0.78, blue: 0.20)
+        case .plum: Color(red: 0.55, green: 0.27, blue: 0.62)
+        case .graphite: .gray
         }
     }
 
@@ -49,6 +40,10 @@ extension AidenBotAvatarColor {
         case .coral: "Coral"
         case .peach: "Peach"
         case .aqua: "Aqua"
+        case .rose: "Rose"
+        case .lime: "Lime"
+        case .plum: "Plum"
+        case .graphite: "Graphite"
         }
     }
 }

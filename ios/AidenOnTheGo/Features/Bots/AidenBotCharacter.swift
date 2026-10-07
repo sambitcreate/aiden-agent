@@ -4,32 +4,15 @@ import SwiftUI
 
 enum AidenBotCharacter {
     /// Matches the desktop's `DEFAULT_BOT_AVATAR` in renderer/shared/bots.ts.
-    static let defaultRecipe = AidenBotAvatarRecipe(
-        shape: .wisp,
-        color: .lilac,
-        eyes: .dots,
-        detail: .sparkles
-    )
+    static let defaultRecipe = AidenBotAvatarRecipe(shape: .wisp, color: .lilac)
 }
 
-/// Local edits to a Bot's colour and shape. The wire recipe still carries the
-/// legacy eye and detail fields; they stay at their defaults and are not shown.
+/// Local edits to a Bot's colour and shape.
 struct AidenBotCharacterDraft: Equatable {
     private(set) var recipe: AidenBotAvatarRecipe
 
     init(avatar: AidenBotSemanticAvatar) {
-        switch avatar {
-        case let .recipe(recipe):
-            self.recipe = recipe
-        case .legacy:
-            let presentation = aidenBotAvatarPresentation(avatar)
-            recipe = AidenBotAvatarRecipe(
-                shape: presentation.shape,
-                color: presentation.color,
-                eyes: AidenBotCharacter.defaultRecipe.eyes,
-                detail: AidenBotCharacter.defaultRecipe.detail
-            )
-        }
+        recipe = avatar.recipe
     }
 
     var color: AidenBotAvatarColor { recipe.color }
@@ -42,11 +25,11 @@ struct AidenBotCharacterDraft: Equatable {
     }
 
     mutating func select(color: AidenBotAvatarColor) {
-        recipe = AidenBotAvatarRecipe(shape: recipe.shape, color: color, eyes: recipe.eyes, detail: recipe.detail)
+        recipe = AidenBotAvatarRecipe(shape: recipe.shape, color: color)
     }
 
     mutating func select(shape: AidenBotAvatarShape) {
-        recipe = AidenBotAvatarRecipe(shape: shape, color: recipe.color, eyes: recipe.eyes, detail: recipe.detail)
+        recipe = AidenBotAvatarRecipe(shape: shape, color: recipe.color)
     }
 
     mutating func reset() {
@@ -167,9 +150,8 @@ enum AidenBotDeletion {
         )
     }
 
-    /// Deletes the Bot on the paired Mac and forgets its photo on this phone.
-    /// Until the host's delete revision lands (Task 5.2), the route is the
-    /// existing `DELETE /bots/{id}`; Delete stays hidden unless advertised.
+    /// Permanently erases the Bot on the paired Mac (`DELETE /bots/{id}`,
+    /// 204; a 404 means it is already gone) and forgets it on this phone.
     @MainActor
     static func delete(
         botID: String,
@@ -177,17 +159,16 @@ enum AidenBotDeletion {
         coordinator: AidenRemoteCoordinator
     ) async throws {
         let context = try coordinator.requestContext()
-        let result: AidenBotDetail
         do {
-            result = try await coordinator.remoteClient(for: context).archiveBot(id: botID, revision: revision)
+            try await coordinator.remoteClient(for: context).deleteBot(id: botID, revision: revision)
         } catch {
             _ = await coordinator.handleCredentialRevocation(error, context: context)
             throw error
         }
         guard coordinator.isCurrent(context) else { return }
         _ = await coordinator.withRetainedInstallationData(for: context) {
-            _ = try? await AidenBotCache.shared.upsertDetailAndStore(
-                result,
+            _ = try? await AidenBotCache.shared.removeBotAndStore(
+                botId: botID,
                 instanceId: context.instanceId,
                 deviceId: context.deviceId
             )

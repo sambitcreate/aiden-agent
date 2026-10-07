@@ -12,16 +12,22 @@ import java.util.Locale
 class AidenBotHomeBehaviorTest {
     private val t0 = Instant.parse("2026-10-07T12:00:00Z")
 
-    private fun bot(id: String, name: String, purpose: String = "", updated: Instant = t0, archived: Boolean = false) = AidenBotSummary(
+    private fun bot(
+        id: String,
+        name: String,
+        purpose: String = "",
+        updated: Instant = t0,
+        sessionState: AidenBotSessionState? = null
+    ) = AidenBotSummary(
         id = id,
         name = name,
         purpose = purpose,
         avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.DEFAULT)),
-        health = if (archived) AidenBotHealth.ARCHIVED else AidenBotHealth.READY,
+        health = AidenBotHealth.READY,
+        sessionState = sessionState,
         createdAt = t0.minusSeconds(86_400),
         updatedAt = updated,
-        revision = "r1",
-        archivedAt = if (archived) updated else null
+        revision = "r1"
     )
 
     private fun chat(
@@ -44,18 +50,35 @@ class AidenBotHomeBehaviorTest {
     )
 
     @Test
-    fun rowsAreNewestFirstAndArchivedBotsAreGone() {
+    fun rowsAreNewestFirst() {
         val rows = aidenBotHomeRows(
             bots = listOf(
                 bot("a", "Alpha", updated = t0.minusSeconds(600)),
-                bot("b", "Beta", updated = t0.minusSeconds(900)),
-                bot("old", "Old", updated = t0, archived = true)
+                bot("b", "Beta", updated = t0.minusSeconds(900))
             ),
             conversations = listOf(chat("chat-b", "b", "hi", updated = t0)),
             query = ""
         )
         // Beta's chat moved most recently, so it leads even though Alpha was edited later.
         assertEquals(listOf("b", "a"), rows.map { it.bot.id })
+    }
+
+    @Test
+    fun durableSessionStateLeadsTheRowSubtitle() {
+        val rows = aidenBotHomeRows(
+            bots = listOf(
+                bot("paused", "Paused", sessionState = AidenBotSessionState.INTERRUPTED),
+                bot("new", "New", sessionState = AidenBotSessionState.NEEDS_MODEL, updated = t0.minusSeconds(10)),
+                bot("busy", "Busy", sessionState = AidenBotSessionState.RUNNING, updated = t0.minusSeconds(20))
+            ),
+            conversations = listOf(chat("chat-p", "paused", "Last words", updated = t0.minusSeconds(30))),
+            query = ""
+        ).associateBy { it.bot.id }
+        assertEquals("Paused — tap to resume", rows.getValue("paused").preview)
+        assertEquals("Needs an AI model", rows.getValue("new").preview)
+        assertEquals("Say hi to Busy", rows.getValue("busy").preview)
+        assertTrue(rows.getValue("busy").isWorking)
+        assertFalse(rows.getValue("new").isWorking)
     }
 
     @Test

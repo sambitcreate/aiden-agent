@@ -5,10 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { createBotStore } from "./bot-store-core.js";
 import {
-  BOT_AVATARS,
   BOT_AVATAR_SHAPES,
   resolveBotAvatar,
 } from "../../renderer/shared/bots.js";
+
+/** Avatar ids older stores wrote; the store keeps reading them. */
+const STORED_LEGACY_AVATARS = ["spark", "orbit", "leaf", "prism", "wave", "ember"];
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "aiden-bots-"));
@@ -24,7 +26,7 @@ test("bot store persists create and edit, and delete erases the record and its a
       description: "Checks changes",
       instructions: "Review carefully.",
       openingGreeting: "  What should we review?  ",
-      avatar: "prism",
+      avatar: { version: 1, shape: "hex", color: "sun" },
     });
     assert.equal(created.name, "Reviewer");
     assert.equal(created.openingGreeting, "What should we review?");
@@ -39,9 +41,9 @@ test("bot store persists create and edit, and delete erases the record and its a
       description: "Finds regressions",
       instructions: "Review carefully and cite evidence.",
       openingGreeting: "Start with the changed files.",
-      avatar: "orbit",
+      avatar: { version: 1, shape: "orb", color: "sky" },
     });
-    assert.equal(updated.avatar, "orbit");
+    assert.deepEqual(updated.avatar, { version: 1, shape: "orb", color: "sky" });
     assert.equal(updated.openingGreeting, "Start with the changed files.");
     assert.equal(updated.createdAt, created.createdAt);
     const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
@@ -54,14 +56,14 @@ test("bot store persists create and edit, and delete erases the record and its a
     const shaped = await store.create({
       name: "Shaped",
       instructions: "Keep a full appearance.",
-      avatar: { version: 1, shape: "orb", color: "aqua", eyes: "focus", detail: "orbit" },
+      avatar: { version: 1, shape: "orb", color: "aqua" },
     });
     assert.equal(await store.delete(shaped.id), true);
     assert.equal(await store.get(shaped.id), null);
     const appearances = JSON.parse(
       await readFile(join(root, "bot-avatar-appearances.json"), "utf8"),
     ) as { appearances: Array<{ botId: string }> };
-    assert.deepEqual(appearances.appearances.map(({ botId }) => botId), []);
+    assert.equal(appearances.appearances.some(({ botId }) => botId === shaped.id), false);
     // Idempotent: a second delete finds nothing and changes nothing.
     assert.equal(await store.delete(shaped.id), false);
     assert.deepEqual((await store.list()).map(({ id }) => id), [created.id]);
@@ -77,7 +79,7 @@ test("bot store persists create and edit, and delete erases the record and its a
 test("legacy archived records are hidden and reported for erase until deleted", async () => {
   const { root, store } = await fixture();
   try {
-    const live = await store.create({ name: "Live", instructions: "Stay.", avatar: "spark" });
+    const live = await store.create({ name: "Live", instructions: "Stay.", avatar: { version: 1, shape: "orb", color: "sky" } });
     const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
       version: number;
       bots: Array<Record<string, unknown>>;
@@ -96,7 +98,7 @@ test("legacy archived records are hidden and reported for erase until deleted", 
 
     assert.deepEqual((await reopened.list()).map(({ id }) => id), [live.id]);
     assert.equal(await reopened.get("bot:archived-legacy"), null);
-    assert.equal((await reopened.list())[0]?.archivedAt, undefined);
+    assert.equal("archivedAt" in ((await reopened.list())[0] ?? {}), false);
     assert.deepEqual(await reopened.legacyArchivedIds(), ["bot:archived-legacy"]);
     assert.deepEqual((await reopened.storedIds()).sort(), [live.id, "bot:archived-legacy"].sort());
 
@@ -115,7 +117,7 @@ test("bot identity revisions cannot repeat when the wall clock is unchanged", as
     const created = await store.create({
       name: "ABA guard",
       instructions: "Never reuse an identity revision.",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
     });
     const edited = await store.update({
       id: created.id,
@@ -154,7 +156,7 @@ test("main-owned creation can commit one pre-minted bounded identity exactly onc
     const input = {
       name: "Managed helper",
       instructions: "Use the main-owned lifecycle.",
-      avatar: "spark" as const,
+      avatar: { version: 1 as const, shape: "wisp" as const, color: "lilac" as const },
     };
     const created = await store.createWithId("bot:managed-1", input);
     assert.equal(created.id, "bot:managed-1");
@@ -178,14 +180,14 @@ test("bot identity text uses Unicode-scalar bounds and rejects unpaired UTF-16",
     const created = await store.createWithId("bot:unicode", {
       name: `${"n".repeat(79)}😀`,
       instructions: "Remain well formed.",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
     });
     assert.equal(Array.from(created.name).length, 80);
     await assert.rejects(
       store.createWithId("bot:too-long", {
         name: `${"n".repeat(80)}😀`,
         instructions: "Remain bounded.",
-        avatar: "spark",
+        avatar: { version: 1, shape: "wisp", color: "lilac" },
       }),
       /name/u,
     );
@@ -193,7 +195,7 @@ test("bot identity text uses Unicode-scalar bounds and rejects unpaired UTF-16",
       store.createWithId("bot:surrogate", {
         name: "private-\ud800-tail",
         instructions: "Remain well formed.",
-        avatar: "spark",
+        avatar: { version: 1, shape: "wisp", color: "lilac" },
       }),
       /name/u,
     );
@@ -208,9 +210,7 @@ test("bot store persists versioned custom appearances while retaining legacy ids
     const avatar = {
       version: 1,
       shape: "squircle",
-      color: "peach",
-      eyes: "happy",
-      detail: "halo",
+      color: "graphite",
     } as const;
     const created = await store.create({
       name: "Designer",
@@ -238,9 +238,9 @@ test("bot store persists versioned custom appearances while retaining legacy ids
     const legacy = await store.create({
       name: "Legacy",
       instructions: "Keep working.",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
     });
-    assert.equal((await store.get(legacy.id))?.avatar, "spark");
+    assert.deepEqual((await store.get(legacy.id))?.avatar, { version: 1, shape: "wisp", color: "lilac" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -255,8 +255,6 @@ test("custom faces survive a real previous-release projection and mutation", asy
         version: 1 as const,
         shape,
         color: "aqua" as const,
-        eyes: "focus" as const,
-        detail: "orbit" as const,
       };
       const created = await store.create({
         name: `Bot ${shape}`,
@@ -268,7 +266,7 @@ test("custom faces survive a real previous-release projection and mutation", asy
     const legacy = await store.create({
       name: "Legacy edit",
       instructions: "Keep the identity.",
-      avatar: "orbit",
+      avatar: { version: 1, shape: "orb", color: "sky" },
     });
     const legacyAppearance = resolveBotAvatar(legacy.avatar);
     await store.update({
@@ -285,7 +283,7 @@ test("custom faces survive a real previous-release projection and mutation", asy
     };
     const previousReleaseProjection = disk.bots
       .filter(
-        (bot) => typeof bot.avatar === "string" && BOT_AVATARS.includes(bot.avatar as never),
+        (bot) => typeof bot.avatar === "string" && STORED_LEGACY_AVATARS.includes(bot.avatar),
       )
       .map((bot) => ({
         id: bot.id,
@@ -318,7 +316,10 @@ test("custom faces survive a real previous-release projection and mutation", asy
       restoredBots.find((bot) => bot.id === previousReleaseProjection[0]?.id)?.name,
       "Edited while downgraded",
     );
-    assert.equal(restoredBots.find((bot) => bot.id === downgradedAvatarId)?.avatar, "orbit");
+    assert.deepEqual(
+      restoredBots.find((bot) => bot.id === downgradedAvatarId)?.avatar,
+      { version: 1, shape: "orb", color: "sky" },
+    );
     for (const [botId, avatar] of expected) {
       assert.deepEqual(restoredBots.find((bot) => bot.id === botId)?.avatar, avatar);
     }
@@ -352,8 +353,6 @@ test("readers never observe a companion appearance before the primary update com
       version: 1 as const,
       shape: "squircle" as const,
       color: "peach" as const,
-      eyes: "happy" as const,
-      detail: "halo" as const,
     };
     const created = await store.create({
       name: "Atomic",
@@ -394,15 +393,11 @@ test("restart ignores an uncommitted companion face with the same legacy project
       version: 1 as const,
       shape: "squircle" as const,
       color: "peach" as const,
-      eyes: "happy" as const,
-      detail: "halo" as const,
     };
     const uncommitted = {
       version: 1 as const,
       shape: "capsule" as const,
       color: "aqua" as const,
-      eyes: "focus" as const,
-      detail: "bolts" as const,
     };
     const created = await store.create({
       name: "Crash-safe",
@@ -481,8 +476,6 @@ test("an older-release primary rewrite cannot publish a newer uncommitted compan
       version: 1 as const,
       shape: "squircle" as const,
       color: "peach" as const,
-      eyes: "happy" as const,
-      detail: "halo" as const,
     };
     const uncommitted = {
       ...committed,
@@ -513,7 +506,7 @@ test("an older-release primary rewrite cannot publish a newer uncommitted compan
 
     const restarted = createBotStore({ root: () => root });
     const restored = await restarted.get(created.id);
-    assert.equal(restored?.avatar, "spark");
+    assert.deepEqual(restored?.avatar, { version: 1, shape: "wisp", color: "lilac" });
     assert.notDeepEqual(restored?.avatar, uncommitted);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -527,8 +520,6 @@ test("restart prunes orphan companions before enforcing appearance capacity", as
       version: 1 as const,
       shape: "orb" as const,
       color: "lilac" as const,
-      eyes: "dots" as const,
-      detail: "none" as const,
     };
     await writeFile(
       join(root, "bot-avatar-appearances.json"),
@@ -578,9 +569,9 @@ test("bot store rejects unsupported document versions and enforces bounded requi
     const cleanRoot = await mkdtemp(join(tmpdir(), "aiden-bots-validation-"));
     t.after(() => rm(cleanRoot, { recursive: true, force: true }));
     const cleanStore = createBotStore({ root: () => cleanRoot });
-    await assert.rejects(cleanStore.create({ name: "", instructions: "x", avatar: "spark" }), /name/u);
+    await assert.rejects(cleanStore.create({ name: "", instructions: "x", avatar: { version: 1, shape: "wisp", color: "lilac" } }), /name/u);
     await assert.rejects(
-      cleanStore.create({ name: "x", instructions: "x".repeat(32_001), avatar: "spark" }),
+      cleanStore.create({ name: "x", instructions: "x".repeat(32_001), avatar: { version: 1, shape: "wisp", color: "lilac" } }),
       /instructions/u,
     );
     await assert.rejects(

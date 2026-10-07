@@ -36,8 +36,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarColor
-import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarDetail
-import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarEyes
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarRecipe
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarShape
 import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
@@ -47,17 +45,14 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 
 /**
- * A Bot's Character: one colour and one shape. The wire recipe still carries eye and
- * accessory fields; they always hold the default values because every Bot shares one
- * fixed eye mark.
+ * A Bot's Character: one of twelve colours and one of eight shapes. Every Bot shares one
+ * fixed eye mark, so the recipe carries no eye or accessory choice.
  */
 object AidenBotCharacter {
     /** Matches the desktop's `DEFAULT_BOT_AVATAR`. */
     val DEFAULT = AidenBotAvatarRecipe(
         shape = AidenBotAvatarShape.WISP,
-        color = AidenBotAvatarColor.LILAC,
-        eyes = AidenBotAvatarEyes.DOTS,
-        detail = AidenBotAvatarDetail.SPARKLES
+        color = AidenBotAvatarColor.LILAC
     )
 
     /** Picker order, roundest to most playful. */

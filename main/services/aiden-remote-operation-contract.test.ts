@@ -897,22 +897,16 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 24);
+  assert.equal(fixture.contractRevision, 26);
   assert.equal(fixture.botList.maxBots, 256);
-  assert.deepEqual(fixture.botList.favorites, fixture.botFavorites);
   assert.equal(fixture.botSummary.health, "ready");
   assert.equal(fixture.botDetail.access.botId, fixture.botDetail.id);
   assert.equal(fixture.botPolicy.accessMode, "full");
   assert.equal(Object.prototype.hasOwnProperty.call(fixture.botPolicy, "custom"), false);
   assert.equal(fixture.botIdentity.request.openingGreeting, "");
-  assert.equal(fixture.botCreate.request.access.accessMode, "full");
-  assert.equal(
-    fixture.botCreate.request.access.catalogRevision,
-    fixture.botCapabilityCatalog.revision,
-  );
+  // Omitted access is Full on revision 26.
+  assert.equal(fixture.botCreate.request.access, undefined);
   assert.equal(fixture.botChatCreate.response.botId, fixture.botSummary.id);
-  assert.equal(fixture.botChatSubset.chatId, fixture.botConversation.chatId);
-  assert.equal(fixture.botChatSubset.botId, fixture.botConversation.botId);
   assert.equal(fixture.botConversation.activityState, "waiting_for_approval");
   assert.equal(fixture.botConversation.canRespondToApproval, true);
   assert.equal(fixture.botAvatarMetadata.mimeType, "image/png");
@@ -927,18 +921,6 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
   if (fixture.botPolicyUpdate.request.accessMode === "custom") {
     assert.equal(fixture.botPolicyUpdate.request.custom.providerId, "provider_fixture");
     assert.equal(fixture.botPolicyUpdate.request.custom.modelId, "model_fixture");
-  }
-  assert.equal(
-    fixture.botChatSubsetUpdate.request.expectedBotPolicyRevision,
-    fixture.botChatSubsetUpdate.response.botPolicyRevision,
-  );
-  assert.equal(fixture.botNotice.requiresAcknowledgement, true);
-  assert.equal(fixture.botNoticeAcknowledgement.response.requiresAcknowledgement, false);
-  if (!fixture.botNoticeAcknowledgement.response.requiresAcknowledgement) {
-    assert.equal(
-      fixture.botNoticeAcknowledgement.response.acceptedDecision,
-      "continue_full",
-    );
   }
   assert.equal(fixture.chatSkills.skills.length, 3);
   assert.equal(fixture.chatSkills.skills[0]!.name, "review-code");
@@ -978,16 +960,6 @@ test("Bot fixture parsing tolerates response additions and rejects authority-sha
   const additiveParsed = parseAidenRemoteContractFixture(additiveResponse);
   assert.equal(
     Object.prototype.hasOwnProperty.call(additiveParsed.botDetail, "futureDisplayHint"),
-    false,
-  );
-  const additiveNotice = structuredClone(source);
-  fixtureRecord(additiveNotice.botNotice, "botNotice").futurePresentationHint = true;
-  const additiveNoticeParsed = parseAidenRemoteContractFixture(additiveNotice);
-  assert.equal(
-    Object.prototype.hasOwnProperty.call(
-      additiveNoticeParsed.botNotice,
-      "futurePresentationHint",
-    ),
     false,
   );
   for (const privateKey of [
@@ -1111,21 +1083,6 @@ test("Bot fixture parsing tolerates response additions and rejects authority-sha
   assertBotFixtureMutationFails(
     source,
     (fixture) => {
-      fixtureRecord(fixture.botNotice, "botNotice").acceptedAt =
-        "2026-08-18T19:03:00.000Z";
-    },
-    /pending Bot access notice/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
-      fixtureRecord(fixture.botArchive, "botArchive").health = "ready";
-    },
-    /archived health and archivedAt must agree/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
       fixtureRecord(fixture.botAvatarMetadata, "botAvatarMetadata").mimeType = "image/jpeg";
     },
     /avatar MIME type/u,
@@ -1203,18 +1160,6 @@ test("Bot fixture parsing tolerates response additions and rejects authority-sha
   assertBotFixtureMutationFails(
     source,
     (fixture) => {
-      const list = fixtureRecord(fixture.botList, "botList");
-      const bots = list.bots;
-      assert.ok(Array.isArray(bots));
-      const summary = fixtureRecord(bots[0], "botList.bots[0]");
-      summary.health = "archived";
-      summary.archivedAt = "2026-08-18T18:45:00.000Z";
-    },
-    /Archived Bots cannot remain in favorites/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
       fixtureRecord(fixture.botSummary, "botSummary").updatedAt =
         "2026-08-18T16:59:59.000Z";
     },
@@ -1252,13 +1197,6 @@ test("Bot fixture parsing tolerates response additions and rejects authority-sha
       projection.updatedAt = "2026-08-18T19:00:00.1238Z";
     },
     /updatedAt must not precede createdAt/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
-      fixtureRecord(fixture.botNotice, "botNotice").version = "bot-full-access-v2";
-    },
-    /notice version is unsupported/u,
   );
 });
 
@@ -1313,46 +1251,22 @@ test("Bot capability catalogs allow the documented per-provider model bound", as
 test("Bot policy mutations bind catalog and Bot-policy revisions without hiding drift", async () => {
   const source = await readBotContractFixture();
 
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
-      const operation = fixtureRecord(fixture.botCreate, "botCreate");
-      delete fixtureRecord(operation.request, "botCreate.request").access;
-    },
-    /Bot access update request must be an object/u,
-  );
-  for (const operationName of ["botCreate", "botPolicyUpdate"] as const) {
+  // Omitted create access is Full on revision 26, so the fixture without it parses.
+  const omittedCreateAccess = structuredClone(source);
+  delete fixtureRecord(fixtureRecord(omittedCreateAccess.botCreate, "botCreate").request, "botCreate.request").access;
+  assert.doesNotThrow(() => parseAidenRemoteContractFixture(omittedCreateAccess));
+  // Create carries no access on revision 26 (omitted means Full), so only the policy update binds the catalog.
+  for (const operationName of ["botPolicyUpdate"] as const) {
     assertBotFixtureMutationFails(
       source,
       (fixture) => {
         const operation = fixtureRecord(fixture[operationName], operationName);
         const request = fixtureRecord(operation.request, `${operationName}.request`);
-        const access = operationName === "botCreate"
-          ? fixtureRecord(request.access, "botCreate.request.access")
-          : request;
-        access.catalogRevision = "stale_catalog_revision";
+        request.catalogRevision = "stale_catalog_revision";
       },
       /does not target the canonical catalog revision/u,
     );
   }
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
-      const operation = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
-      fixtureRecord(operation.request, "botChatSubsetUpdate.request").catalogRevision =
-        "stale_catalog_revision";
-    },
-    /does not target the canonical catalog revision/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
-      const operation = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
-      fixtureRecord(operation.request, "botChatSubsetUpdate.request").expectedBotPolicyRevision =
-        "stale_bot_policy_revision";
-    },
-    /Bot policy revisions do not agree/u,
-  );
 
   assertBotFixtureMutationFails(
     source,
@@ -1400,28 +1314,6 @@ test("Bot policy mutations bind catalog and Bot-policy revisions without hiding 
     ]);
   }
 
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
-      const catalog = fixtureRecord(fixture.botCapabilityCatalog, "botCapabilityCatalog");
-      const scopes = catalog.fileScopes;
-      assert.ok(Array.isArray(scopes));
-      scopes.push({
-        id: "scope.extra",
-        label: "Extra scope",
-        available: true,
-        kind: "approved_location",
-      });
-      const operation = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
-      for (const key of ["request", "response"] as const) {
-        const view = fixtureRecord(operation[key], `botChatSubsetUpdate.${key}`);
-        fixtureRecord(view.custom, `botChatSubsetUpdate.${key}.custom`).fileScopeIds = [
-          "scope.extra",
-        ];
-      }
-    },
-    /exceeds the authoritative Bot access ceiling/u,
-  );
 });
 
 test("canonical Bot operation fixtures preserve exact identities and applied mutations", async () => {
@@ -1451,14 +1343,6 @@ test("canonical Bot operation fixtures preserve exact identities and applied mut
   assertBotFixtureMutationFails(
     source,
     (fixture) => {
-      const archive = fixtureRecord(fixture.botArchive, "botArchive");
-      fixtureRecord(archive.avatar, "botArchive.avatar").semantic = "orbit";
-    },
-    /identity and avatar must survive archive and restore unchanged/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
       const create = fixtureRecord(fixture.botCreate, "botCreate");
       fixtureRecord(create.response, "botCreate.response").purpose = "Different purpose";
     },
@@ -1476,26 +1360,9 @@ test("canonical Bot operation fixtures preserve exact identities and applied mut
   assertBotFixtureMutationFails(
     source,
     (fixture) => {
-      const favorites = fixtureRecord(fixture.botFavoritesUpdate, "botFavoritesUpdate");
-      fixtureRecord(favorites.request, "botFavoritesUpdate.request").botIds = [];
-    },
-    /favorites fixtures do not agree/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
       const update = fixtureRecord(fixture.botPolicyUpdate, "botPolicyUpdate");
       const response = fixtureRecord(update.response, "botPolicyUpdate.response");
       fixtureRecord(response.custom, "botPolicyUpdate.response.custom").skillIds = [];
-    },
-    /request and response Custom selections do not agree/u,
-  );
-  assertBotFixtureMutationFails(
-    source,
-    (fixture) => {
-      const update = fixtureRecord(fixture.botChatSubsetUpdate, "botChatSubsetUpdate");
-      const response = fixtureRecord(update.response, "botChatSubsetUpdate.response");
-      fixtureRecord(response.custom, "botChatSubsetUpdate.response.custom").skillIds = [];
     },
     /request and response Custom selections do not agree/u,
   );

@@ -32,14 +32,6 @@ fun aidenBotAvatarPresentation(avatar: AidenBotSemanticAvatar): AidenBotAvatarPr
             shape = avatar.recipe.shape,
             color = avatar.recipe.color
         )
-        is AidenBotSemanticAvatar.Legacy -> when (avatar.legacy) {
-            AidenBotLegacyAvatar.SPARK -> AidenBotAvatarPresentation(AidenBotAvatarShape.WISP, AidenBotAvatarColor.SUN)
-            AidenBotLegacyAvatar.ORBIT -> AidenBotAvatarPresentation(AidenBotAvatarShape.ORB, AidenBotAvatarColor.LILAC)
-            AidenBotLegacyAvatar.LEAF -> AidenBotAvatarPresentation(AidenBotAvatarShape.DROP, AidenBotAvatarColor.MINT)
-            AidenBotLegacyAvatar.PRISM -> AidenBotAvatarPresentation(AidenBotAvatarShape.HEX, AidenBotAvatarColor.PERIWINKLE)
-            AidenBotLegacyAvatar.WAVE -> AidenBotAvatarPresentation(AidenBotAvatarShape.CLOUD, AidenBotAvatarColor.AQUA)
-            AidenBotLegacyAvatar.EMBER -> AidenBotAvatarPresentation(AidenBotAvatarShape.PEAK, AidenBotAvatarColor.CORAL)
-        }
     }
 }
 
@@ -53,6 +45,10 @@ object AidenBotAvatarColors {
         AidenBotAvatarColor.CORAL -> listOf(Color(0xFFE11D48), Color(0xFFBE123C))
         AidenBotAvatarColor.PEACH -> listOf(Color(0xFFEA580C), Color(0xFFC2410C))
         AidenBotAvatarColor.AQUA -> listOf(Color(0xFF0891B2), Color(0xFF0E7490))
+        AidenBotAvatarColor.ROSE -> listOf(Color(0xFFDB2777), Color(0xFFBE185D))
+        AidenBotAvatarColor.LIME -> listOf(Color(0xFF65A30D), Color(0xFF4D7C0F))
+        AidenBotAvatarColor.PLUM -> listOf(Color(0xFF9333EA), Color(0xFF7E22CE))
+        AidenBotAvatarColor.GRAPHITE -> listOf(Color(0xFF52525B), Color(0xFF3F3F46))
     }
 
     /** The flat swatch colour used by the Character card. */

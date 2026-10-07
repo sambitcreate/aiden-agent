@@ -143,8 +143,7 @@ test("Remote production wires Bot notice and retained-chat policy authority", ()
   );
   assert.match(remote, /retainedBotChatAuthorizer: authorizeRemoteRetainedBotChat/u);
   assert.match(remote, /botApplicationService\.authorizeRetainedChat\(\{/u);
-  assert.match(remote, /botNotice:\s*\{/u);
-  assert.match(remote, /botApplicationService\.acknowledgeNotice/u);
+  assert.match(remote, /botSessions,/u);
   assert.match(remote, /revokeNoticeAudience\(deviceId\)/u);
   assert.match(
     remote,

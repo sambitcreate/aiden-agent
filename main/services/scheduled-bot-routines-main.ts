@@ -16,7 +16,7 @@ export const botRoutineService = createBotRoutineService({
   service: scheduleService,
   botExists: async (botId) => {
     const bot = await botApplicationService.get(botId);
-    return bot !== null && bot.id === botId && bot.archivedAt === undefined;
+    return bot !== null && bot.id === botId;
   },
   defaultTimezone: systemTimezone,
   // Routine changes ride the existing Bot invalidation channel so Bot views refresh.

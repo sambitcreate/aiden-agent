@@ -179,14 +179,8 @@ struct AidenBotEditorDraft: Equatable {
         openingGreeting = ""
         instructions = Self.defaultInstructions
         avatar = Self.defaultAvatar
-        switch defaultAccess {
-        case .custom:
-            usesFullAccess = false
-        case .full:
-            usesFullAccess = Self.fullAccessAccepted(in: catalog)
-        case .recommended:
-            usesFullAccess = Self.fullAccessAccepted(in: catalog)
-        }
+        // Full Access is the default; there is no notice to accept.
+        usesFullAccess = defaultAccess != .custom
         self.customAccess = customAccess
         let vision = Self.suggestedVisionSelection(catalog: catalog, primary: customAccess)
         visionProviderID = vision?.providerId
@@ -224,17 +218,6 @@ struct AidenBotEditorDraft: Equatable {
     static func seededInstructions(helpWith answer: String) -> String {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? defaultInstructions : trimmed
-    }
-
-    /// Full Access is the default whenever the desktop allows it. Phones no
-    /// longer show a notice wall, so a desktop that still requires its notice,
-    /// or that recorded "Customize first", keeps new Bots on Custom.
-    static func fullAccessAccepted(in catalog: AidenBotCapabilityCatalog) -> Bool {
-        switch catalog.notice.acceptedDecision {
-        case .continueFull: true
-        case .customizeFirst: false
-        case nil: !catalog.notice.requiresAcknowledgement
-        }
     }
 
     private static func suggestedVisionSelection(
@@ -300,9 +283,6 @@ struct AidenBotEditorDraft: Equatable {
             throw AidenBotContractError.invalidCombination("unavailable Bot model")
         }
         if usesFullAccess {
-            guard Self.fullAccessAccepted(in: catalog) else {
-                throw AidenBotContractError.invalidCombination("full access notice")
-            }
             return .full(
                 catalogRevision: catalog.revision,
                 selection: modelSelection,

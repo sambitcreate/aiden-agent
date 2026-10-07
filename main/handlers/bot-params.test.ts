@@ -17,7 +17,7 @@ test("bot mutation and conversation envelopes are exact and bounded", () => {
     description: "Checks work",
     instructions: "Be precise.",
     openingGreeting: "What should I check?",
-    avatar: "prism" as const,
+    avatar: { version: 1 as const, shape: "hex" as const, color: "sun" as const },
   };
   assert.deepEqual(parseBotCreate(fields), fields);
   const fullAccess = {
