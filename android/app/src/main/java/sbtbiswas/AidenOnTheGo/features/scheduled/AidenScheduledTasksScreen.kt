@@ -53,6 +53,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -342,7 +343,7 @@ fun AidenScheduledTasksScreen(
                     }
                 },
                 onDelete = { showDeleteConfirmation = true },
-                modifier = Modifier.padding(padding)
+                modifier = Modifier.padding(padding).aidenReadableWidth()
             )
         } else {
             AidenScheduledTaskList(
@@ -360,7 +361,7 @@ fun AidenScheduledTasksScreen(
                 onSelectTask = { selectedTaskId = it.id },
                 onToggleEnabled = ::toggle,
                 onRetry = { scope.launch { refresh(showSpinner = tasks.isEmpty()) } },
-                modifier = Modifier.padding(padding)
+                modifier = Modifier.padding(padding).aidenReadableWidth()
             )
         }
     }

@@ -32,6 +32,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -181,6 +182,7 @@ fun AidenGitScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .aidenReadableWidth()
             ) {
                 if (lastError != null) {
                     Surface(

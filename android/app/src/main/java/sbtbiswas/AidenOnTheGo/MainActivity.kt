@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     AidenNavigationHost(
                         navigator = navigator,
-                        reduceMotion = appearanceConfig.reduceMotion
+                        reduceMotion = sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion()
                     ) { screen ->
                         when (screen) {
                             is AidenScreen.ProductShell -> {

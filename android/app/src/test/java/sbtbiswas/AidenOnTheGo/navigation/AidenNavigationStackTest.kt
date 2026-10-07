@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.navigation
 
+import androidx.activity.BackEventCompat
 import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
@@ -123,5 +124,30 @@ class AidenNavigationStackTest {
     @Test
     fun predictiveBackHoldsTheScreenStillWhenMotionIsReduced() {
         assertEquals(AidenPredictiveBackDepth(1f, 0.dp, 0.dp), predictiveBackDepth(0.7f, reduceMotion = true))
+    }
+
+    @Test
+    fun predictiveBackPullsTheScreenAwayFromTheEdgeTheGestureStartedOn() {
+        val width = 1080f
+        val margin = 21f
+        val fromLeft = predictiveBackShift(1f, width, margin, BackEventCompat.EDGE_LEFT, reduceMotion = false)
+        val fromRight = predictiveBackShift(1f, width, margin, BackEventCompat.EDGE_RIGHT, reduceMotion = false)
+
+        assertTrue("a left-edge swipe moves the screen right", fromLeft > 0f)
+        assertEquals(-fromLeft, fromRight, 0.001f)
+        // Fully pulled, the shrunk screen still keeps the margin from the edge it moves toward.
+        val scaledWidth = width * predictiveBackDepth(1f, reduceMotion = false).scale
+        assertTrue((width - scaledWidth) / 2f - fromLeft >= margin - 0.001f)
+        assertEquals(fromLeft / 2f, predictiveBackShift(0.5f, width, margin, BackEventCompat.EDGE_LEFT, false), 0.001f)
+        assertEquals(0f, predictiveBackShift(1f, width, margin, BackEventCompat.EDGE_NONE, false), 0f)
+        assertEquals(0f, predictiveBackShift(1f, width, margin, BackEventCompat.EDGE_LEFT, reduceMotion = true), 0f)
+    }
+
+    @Test
+    fun predictiveBackScrubsOnlyTheStartOfThePopSoReleaseHasSomethingToFinish() {
+        assertEquals(0f, predictiveBackSeekFraction(0f), 0f)
+        assertTrue(predictiveBackSeekFraction(1f) < 1f)
+        assertEquals(predictiveBackSeekFraction(1f), predictiveBackSeekFraction(3f), 0f)
+        assertTrue(predictiveBackSeekFraction(0.25f) < predictiveBackSeekFraction(0.75f))
     }
 }

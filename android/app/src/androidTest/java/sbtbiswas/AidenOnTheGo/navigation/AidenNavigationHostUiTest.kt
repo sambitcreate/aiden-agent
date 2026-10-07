@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.navigation
 
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
@@ -33,10 +34,10 @@ class AidenNavigationHostUiTest {
     private lateinit var navigator: AidenNavigator
 
     @Composable
-    private fun Host() {
+    private fun Host(reduceMotion: Boolean = true) {
         navigator = rememberAidenNavigator()
         AidenTheme {
-            AidenNavigationHost(navigator = navigator, reduceMotion = true) { screen ->
+            AidenNavigationHost(navigator = navigator, reduceMotion = reduceMotion) { screen ->
                 when (screen) {
                     AidenScreen.ProductShell -> Column {
                         var taps by rememberSaveable { mutableIntStateOf(0) }
@@ -66,6 +67,16 @@ class AidenNavigationHostUiTest {
      */
     private fun pressSystemBack() {
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+    }
+
+    /** A predictive back gesture from the left edge, held at [progress] without releasing. */
+    private fun dragBack(progress: Float) {
+        compose.runOnUiThread {
+            val dispatcher = compose.activity.onBackPressedDispatcher
+            dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 400f, 0f, BackEventCompat.EDGE_LEFT))
+            dispatcher.dispatchOnBackProgressed(BackEventCompat(120f, 400f, progress, BackEventCompat.EDGE_LEFT))
+        }
         compose.waitForIdle()
     }
 
@@ -119,5 +130,55 @@ class AidenNavigationHostUiTest {
         }
         pressSystemBack()
         compose.onNodeWithText("bot b1").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPredictiveBackGestureRevealsThePreviousScreenAndCancellingKeepsTheCurrentOne() {
+        compose.setContent { Host(reduceMotion = false) }
+        compose.onNodeWithText("open bot").performClick()
+        compose.onNodeWithText("open chat").performClick()
+        compose.onNodeWithText("bot b1").assertDoesNotExist()
+
+        dragBack(progress = 0.6f)
+
+        // Mid-gesture, the screen underneath is already composed while the chat is still current.
+        compose.onNodeWithText("bot b1").assertExists()
+        compose.onNodeWithText("chat c1").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(AidenScreen.ChatDetail("c1"), navigator.stack.current) }
+
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.dispatchOnBackCancelled() }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("chat c1").assertIsDisplayed()
+        compose.onNodeWithText("bot b1").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(3, navigator.stack.depth) }
+    }
+
+    @Test
+    fun releasingAPredictiveBackGesturePopsToTheRevealedScreenWithItsState() {
+        compose.setContent { Host(reduceMotion = false) }
+        compose.onNodeWithText("tap").performClick()
+        compose.onNodeWithText("open bot").performClick()
+
+        dragBack(progress = 0.8f)
+        compose.onNodeWithText("shell taps 1").assertExists()
+
+        pressSystemBack()
+
+        compose.onNodeWithText("shell taps 1").assertIsDisplayed()
+        compose.onNodeWithText("bot b1").assertDoesNotExist()
+        compose.runOnIdle { assertFalse(navigator.stack.canPop) }
+    }
+
+    @Test
+    fun reducedMotionSkipsThePreviewAndPopsOnRelease() {
+        compose.setContent { Host(reduceMotion = true) }
+        compose.onNodeWithText("open bot").performClick()
+
+        dragBack(progress = 0.6f)
+        compose.onNodeWithText("shell taps 0").assertDoesNotExist()
+
+        pressSystemBack()
+        compose.onNodeWithText("shell taps 0").assertIsDisplayed()
     }
 }

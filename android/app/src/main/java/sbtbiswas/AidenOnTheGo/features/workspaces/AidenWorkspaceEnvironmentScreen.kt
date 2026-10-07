@@ -47,6 +47,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -398,6 +399,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .aidenReadableWidth()
         ) {
             // Offline or Truncated Banner
             if (if (selectedFile != null) isOfflineDocument else isOfflineIndex) {
