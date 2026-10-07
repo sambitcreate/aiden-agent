@@ -23,7 +23,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
@@ -1724,7 +1724,8 @@ async function acpScratchDir(chatId: string): Promise<string> {
     // Never fail a generation over its working directory; this one grants no
     // file access either way.
     logger.warn("acp", "Could not prepare the agent scratch directory.", error);
-    return tmpdir();
+    // A private directory, never the shared temp folder itself.
+    return mkdtemp(join(tmpdir(), "aiden-acp-scratch-")).catch(() => join(tmpdir(), "aiden-acp-scratch-unavailable"));
   }
 }
 

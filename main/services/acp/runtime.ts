@@ -44,6 +44,7 @@ import { answerPermission } from "./permissions.js";
 import { PiEventWriter } from "./pi-events.js";
 import type { AcpProcess } from "./process.js";
 import {
+  buildFollowUpPrompt,
   buildPrompt,
   conversationMessages,
   hostInstructionsFor,
@@ -258,7 +259,7 @@ export class AcpHarnessRuntime {
     if (!host) {
       throw new AcpHarnessError(
         "unavailable",
-        `${this.definition.label} works only in chats you have open on this Mac. Choose another model for this conversation.`,
+        `${this.definition.label} works only in ordinary desktop chats, not here. Choose another model for this conversation.`,
       );
     }
     const signal = options.signal;
@@ -351,18 +352,14 @@ export class AcpHarnessRuntime {
       while (turn.followUp && !turn.abortRequested && response.stopReason === "end_turn") {
         const follow: NonNullable<Turn["followUp"]> = turn.followUp;
         turn.followUp = undefined;
-        const next = buildPrompt({
-          context: follow.context,
-          fresh: false,
-          unseenStart: follow.boundary,
-          capabilities: {
-            image: capabilities?.image === true,
-            embeddedContext: capabilities?.embeddedContext === true,
-          },
+        const next = buildFollowUpPrompt(follow.context, follow.boundary, {
+          image: capabilities?.image === true,
+          embeddedContext: capabilities?.embeddedContext === true,
         });
+        if (next.length === 0) continue;
         binding.pendingContextCount = follow.count;
         binding.pendingContextFingerprint = follow.fingerprint;
-        const followed = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: next.prompt });
+        const followed = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: next });
         response = { ...followed, usage: addUsage(response.usage, followed.usage) };
       }
       // With no stream attached (the last one ended with toolUse), the reply
@@ -443,17 +440,21 @@ export class AcpHarnessRuntime {
     // sent mid-turn) are sent as a follow-up prompt once the agent finishes
     // the current one, so they are answered within this same turn.
     const boundary = Math.max(...results.map((result) => result.index)) + 1;
-    // Each continuation re-derives what is still unanswered.
-    turn.followUp = undefined;
-    if (conversation.slice(boundary).some((message) => message.role === "user")) {
+    // A message sent mid-turn stays owed until the follow-up prompt sends it,
+    // even if the agent makes further tool calls first. Keep the earliest
+    // unanswered position and refresh everything else to the latest view.
+    const owedFrom = turn.followUp?.boundary ??
+      (conversation.slice(boundary).some((message) => message.role === "user") ? boundary : undefined);
+    if (owedFrom !== undefined) {
       turn.followUp = {
         context,
-        boundary,
+        boundary: owedFrom,
         count: conversation.length,
         fingerprint: messagesFingerprint(conversation),
       };
     }
-    this.attachWriter(binding, writer, host, conversation.slice(0, boundary));
+    // While a message is owed, nothing from it onward counts as seen.
+    this.attachWriter(binding, writer, host, conversation.slice(0, turn.followUp?.boundary ?? boundary));
     this.linkAbort(binding, turn, signal);
     // Tools discovered mid-turn (tool_search) become callable right away.
     binding.bridge?.setTools(host.bridgeableTools(getCurrentTools(context.messages)));

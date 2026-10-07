@@ -29,7 +29,7 @@ import {
   scheduledGenerationSurface,
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
-import { acpHarnessUnavailableReason } from "../../renderer/shared/acp-harness.js";
+import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -234,6 +234,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
     if (workspace) await assertManagedWorktreeAdmission(workspace);
     const settings = await configStore.getSettings();
+    if (!task.providerId && isAcpHarnessProvider(settings.lastProviderId ?? "")) {
+      throw new Error(
+        "This task follows your last-used model, which can't run scheduled tasks. Pin a model in the task's settings.",
+      );
+    }
     const providerId = task.providerId ?? settings.lastProviderId;
     if (!providerId) throw new Error("Choose a provider before running this scheduled task.");
     const provider =

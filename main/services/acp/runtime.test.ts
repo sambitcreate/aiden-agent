@@ -61,7 +61,7 @@ test("a turn without a registered host is refused instead of running an unsuperv
   const h = harness();
   const result = await turn(h, [userMessage("echo:hi")]);
   assert.equal(result.stopReason, "error");
-  assert.match(result.errorMessage ?? "", /only in chats you have open/u);
+  assert.match(result.errorMessage ?? "", /only in ordinary desktop chats/u);
   assert.equal(h.launcher.launches.length, 0);
   await h.runtime.close();
 });
@@ -414,5 +414,33 @@ test("writes the user did not approve are refused in Ask, and every write is ref
   host.currentPermission = "full";
   const full = await turn(h, [userMessage(`write:${file}`), asked, userMessage(`write:${file}`), readOnly, userMessage(`write:${file}`)]);
   assert.equal(text(full), "wrote");
+  await h.runtime.close();
+});
+
+test("a message sent mid-turn stays owed across further tool calls and is answered", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const messages: Message[] = [userMessage("bridge-late:aiden_lookup")];
+  const first = await turn(h, messages, { tools: lookupTools });
+  messages.push(first, toolResultFor(first, "one"), userMessage("echo:STEER"));
+  const second = await turn(h, messages, { tools: lookupTools });
+  assert.equal(second.stopReason, "toolUse", "the agent's second call still arrives");
+  messages.push(second, toolResultFor(second, "two"));
+  const third = await turn(h, messages, { tools: lookupTools });
+  assert.match(text(third), /STEER$/u);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "prompt").length, 2);
+  await h.runtime.close();
+});
+
+test("text the agent streams after Stop never appears in the next reply", async () => {
+  const h = harness();
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const controller = new AbortController();
+  const pending = turn(h, [userMessage("slow")], { signal: controller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  controller.abort();
+  const stopped = await pending;
+  const next = await turn(h, [userMessage("slow"), stopped, userMessage("echo:fresh")]);
+  assert.equal(text(next), "fresh");
   await h.runtime.close();
 });

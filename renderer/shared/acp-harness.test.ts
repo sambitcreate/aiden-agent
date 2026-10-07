@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { projectRuntime } from "../../main/services/acp/status.js";
-import { formatHarnessBytes, harnessRuntimeSummary, parseAcpHarnessStatus } from "./acp-harness.js";
+import {
+  acpHarnessUnavailableReason,
+  formatHarnessBytes,
+  harnessRuntimeSummary,
+  parseAcpHarnessStatus,
+  unattendedFallbackProviderId,
+} from "./acp-harness.js";
 
 test("main's projection of every install state survives the renderer parser", () => {
   const states = [
@@ -43,4 +49,12 @@ test("summaries describe sizes and progress in plain terms", () => {
   );
   assert.equal(harnessRuntimeSummary({ status: "installing", phase: "validating" }), "Starting it once to confirm it works…");
   assert.equal(harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962 }), "Not installed. 111 MB download from Google.");
+});
+
+test("unattended surfaces never inherit an agent-backed last-used provider", () => {
+  assert.equal(unattendedFallbackProviderId("antigravity"), undefined);
+  assert.equal(unattendedFallbackProviderId("openai"), "openai");
+  assert.equal(unattendedFallbackProviderId(undefined), undefined);
+  assert.match(acpHarnessUnavailableReason("antigravity") ?? "", /^Google Antigravity runs only in chats/u);
+  assert.equal(acpHarnessUnavailableReason("openai"), undefined);
 });

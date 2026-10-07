@@ -80,7 +80,7 @@ import {
 import { createTelegramBotBindingValidator } from "./telegram-bot-binding-validation.js";
 import { telegramProfileMutationFence } from "./telegram-profile-mutation-fence.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
-import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+import { isAcpHarnessProvider, unattendedFallbackProviderId } from "../../../renderer/shared/acp-harness.js";
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
 let profileSettingsMutation = Promise.resolve();
@@ -146,7 +146,8 @@ async function resolveProvider(
   if ((requestedProviderId === undefined) !== (requestedModel === undefined)) {
     return null;
   }
-  const providerId = requestedProviderId ?? settings.telegramProviderId ?? settings.lastProviderId;
+  const providerId =
+    requestedProviderId ?? settings.telegramProviderId ?? unattendedFallbackProviderId(settings.lastProviderId);
   if (!providerId) return null;
   const provider =
     (await providerRegistry.selectionProvider(providerId)) ??

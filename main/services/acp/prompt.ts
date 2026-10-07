@@ -178,6 +178,33 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
   return { prompt, messageCount: messages.length, reconstructed };
 }
 
+/**
+ * The prompt for messages the user sent while the agent was mid-turn. The
+ * agent already saw its own tool calls and their results through the bridge,
+ * so only the user's messages are sent.
+ */
+export function buildFollowUpPrompt(
+  context: TranscriptContext,
+  from: number,
+  capabilities: PromptCapabilities,
+): ContentBlock[] {
+  const prompt: ContentBlock[] = [];
+  for (const message of conversationMessages(context).slice(from)) {
+    if (message.role !== "user") continue;
+    if (typeof message.content === "string") {
+      if (message.content) prompt.push({ type: "text", text: message.content });
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type === "text") prompt.push({ type: "text", text: block.text });
+      else if (block.type === "image" && capabilities.image) {
+        prompt.push({ type: "image", data: block.data, mimeType: block.mimeType });
+      }
+    }
+  }
+  return prompt;
+}
+
 /** Instructions carried by the transcript's current system message. */
 export function hostInstructionsFor(context: TranscriptContext): string {
   return getCurrentSystemPrompt(context.messages);

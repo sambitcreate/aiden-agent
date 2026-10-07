@@ -91,6 +91,7 @@ export function advisorCandidatesFromProviders(providers: readonly Provider[]): 
   const seen = new Set<string>();
   for (const provider of providers) {
     if (provider.needsKey && !provider.hasKey) continue;
+    if (isAcpHarnessProvider(provider.id)) continue;
     const models = [...provider.models].sort((left, right) => {
       if (left === provider.defaultModel) return -1;
       if (right === provider.defaultModel) return 1;

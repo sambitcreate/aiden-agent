@@ -352,6 +352,8 @@ const connection = new AgentSideConnection(
             session.wake = resolve;
             if (session.cancelled) resolve();
           });
+          // Real agents often stream a little more before honouring cancel.
+          await say(" late chunk after cancel");
           return { stopReason: "cancelled" };
         case "crash":
           await say("about to crash");

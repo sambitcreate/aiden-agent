@@ -144,3 +144,12 @@ export function acpHarnessUnavailableReason(providerId: string | undefined | nul
   const label = HARNESS_LABELS[providerId] ?? "This provider";
   return `${label} runs only in chats you have open on this computer. Choose another model here.`;
 }
+
+/**
+ * The app's last-used selection, unless it is agent-backed. Unattended
+ * surfaces (schedules, Telegram, dictation cleanup) fall back to it and must
+ * never inherit a provider that cannot run without someone watching.
+ */
+export function unattendedFallbackProviderId(lastProviderId: string | undefined | null): string | undefined {
+  return lastProviderId && !isAcpHarnessProvider(lastProviderId) ? lastProviderId : undefined;
+}
