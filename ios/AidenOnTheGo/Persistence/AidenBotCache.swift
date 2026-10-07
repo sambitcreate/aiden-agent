@@ -19,7 +19,7 @@ struct AidenBotCacheSnapshot: Codable, Equatable, Sendable {
         conversations: AidenBotConversationPage? = nil,
         catalog: AidenBotCapabilityCatalog? = nil,
         catalogsByBotID: [String: AidenBotCapabilityCatalog]? = nil,
-        savedAt: Date = Date()
+        savedAt: Date = aidenBotCacheNow()
     ) {
         self.list = list
         self.details = details
@@ -192,7 +192,7 @@ actor AidenBotCache {
     /// or the combination would violate the cache's bounded projection rules.
     func mergeAndStore(
         _ segments: AidenBotCacheSegments,
-        savedAt: Date = Date(),
+        savedAt: Date = aidenBotCacheNow(),
         activation: Activation
     ) throws -> AidenBotCacheSnapshot? {
         guard isCurrent(activation) else { return nil }
@@ -239,7 +239,7 @@ actor AidenBotCache {
                 retainingBotIDs: Set(page.conversations.map(\.botId)).subtracting([botId])
             )
         }
-        snapshot.savedAt = Date()
+        snapshot.savedAt = aidenBotCacheNow()
         return try mergeAndStore(
             AidenBotCacheSegments(
                 list: snapshot.list,
@@ -257,7 +257,7 @@ actor AidenBotCache {
     /// entry point so removal or re-pair cannot race the write.
     func mergeAndStore(
         _ segments: AidenBotCacheSegments,
-        savedAt: Date = Date(),
+        savedAt: Date = aidenBotCacheNow(),
         instanceId: String,
         deviceId: String
     ) throws -> AidenBotCacheSnapshot? {
@@ -518,4 +518,10 @@ actor AidenBotCache {
             try? fileManager.removeItem(at: file)
         }
     }
+}
+
+/// The cache writes timestamps at millisecond precision, the wire's precision,
+/// so an in-memory snapshot and its reloaded copy compare equal.
+func aidenBotCacheNow() -> Date {
+    Date(timeIntervalSince1970: (Date().timeIntervalSince1970 * 1000).rounded(.down) / 1000)
 }

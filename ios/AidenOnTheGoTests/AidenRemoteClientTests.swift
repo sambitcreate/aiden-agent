@@ -465,6 +465,11 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenServer.chatSkillsFeature,
             AidenServer.chatAgentInterruptFeature,
             AidenServer.chatReadStateFeature,
+            AidenBotDeletion.hostFeature,
+            AidenBotHostFeature.durableSession,
+            AidenBotHostFeature.routines,
+            AidenBotHostFeature.connectionRequests,
+            AidenBotHostFeature.presets,
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
         XCTAssertTrue(server.supportsChatReadState)
@@ -1008,7 +1013,7 @@ final class AidenRemoteClientTests: XCTestCase {
     func testDurableBotRoutesUseCanonicalRoutesPreconditionsAndKeys() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"
-        let routineID = "task_fixture_routine_02"
+        let routineID = "task_fixture_routine_01"
         let createBot: AidenBotCreateRequest = try botFixtureValue(at: ["botCreate", "request"])
         let query: AidenBotConversationQuery = try botFixtureValue(at: ["botConversationQuery"])
         let createChat: AidenBotChatCreateRequest = try botFixtureValue(at: ["botChatCreate", "request"])
@@ -1617,7 +1622,6 @@ final class AidenRemoteClientTests: XCTestCase {
         _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Bot Mac")
         let session = makeSession()
         let botID = "bot_fixture_01"
-        let archived = try botFixtureData(at: ["botArchive"])
         var features = "[]"
         var deletes: [String?] = []
 
@@ -1636,7 +1640,7 @@ final class AidenRemoteClientTests: XCTestCase {
                 return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
             case ("DELETE", "/api/aiden/v1/bots/\(botID)"):
                 deletes.append(request.value(forHTTPHeaderField: "If-Match"))
-                return Self.response(for: request, status: 200, data: archived)
+                return Self.response(for: request, status: 204, data: Data())
             default:
                 XCTFail("Unexpected Bot delete request: \(request.httpMethod ?? "nil") \(path)")
                 return Self.response(for: request, status: 500, json: "{}")

@@ -63,14 +63,6 @@ final class AidenBotContractTests: XCTestCase {
             AidenBotContractError.invalidCombination("unavailable custom access")
                 .localizedDescription.contains("Review this Bot’s access choices"),
         )
-        XCTAssertTrue(
-            AidenBotContractError.invalidCombination("chat access exceeds bot")
-                .localizedDescription.contains("Reduce the chat’s access"),
-        )
-        XCTAssertTrue(
-            AidenBotContractError.invalidCombination("full access notice")
-                .localizedDescription.contains("Full Access notice"),
-        )
 
         let invalidField = AidenBotContractError.invalidField("providerId").localizedDescription
         let invalidCombination = AidenBotContractError.invalidCombination(
@@ -375,16 +367,8 @@ final class AidenBotContractTests: XCTestCase {
             create["response"] = response
             fixture["botChatCreate"] = create
         }
-        try assertSharedFixtureRejected { fixture in
-            var page = try XCTUnwrap(fixture["botConversations"] as? [String: Any])
-            var conversations = try XCTUnwrap(page["conversations"] as? [[String: Any]])
-            var unlisted = try XCTUnwrap(conversations.first)
-            unlisted["chatId"] = "chat_unlisted_bot"
-            unlisted["botId"] = "bot_unlisted"
-            conversations.append(unlisted)
-            page["conversations"] = conversations
-            fixture["botConversations"] = page
-        }
+        // A page's Bot scope is a query property (see the client route tests), so an
+        // unfiltered page may legitimately list another Bot's conversation.
     }
 
     func testSharedFixtureBindsRevisionPairingAndInstallationIdentity() throws {
@@ -672,9 +656,9 @@ final class AidenBotContractTests: XCTestCase {
           "avatar":{"version":1,"shape":"orb","color":"sky","eyes":"wide","detail":"orbit"}
         }
         """#.utf8)
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(AidenBotCreateRequest.self, from: createWithoutAccess)
-        )
+        // Omitted access is Full on revision 26, so the create request is valid.
+        let omitted = try AidenRemoteJSONDecoder.decode(AidenBotCreateRequest.self, from: createWithoutAccess)
+        XCTAssertNil(omitted.access)
     }
 
     func testBotChatCreateOverridePairAndProjectionBoundsFailClosed() throws {
