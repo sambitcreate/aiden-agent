@@ -1208,12 +1208,48 @@ export const botsApi = {
   /** Permanently erases the Bot: chat, memory, routines, files, photo, Telegram link. */
   delete: (botId: string) => invoke<void>("bots:delete", botId),
   sessionState: (botId: string) => invoke<BotSessionState>("bots:sessionState", botId),
-  /**
-   * The Bot's one chat, created on first open. TEMPORARY bridge: the chat
-   * view renders Bots through ChatStore until it moves to the live projection.
-   */
-  openChat: (botId: string) =>
-    invoke<{ chatId: string; updatedAt: number; title: string }>("bots:openChat", botId),
+  /** Send to the Bot's one conversation. `requestId` is a fresh UUID per send, so a retry never doubles it. */
+  send: (input: {
+    botId: string;
+    text: string;
+    requestId: string;
+    whenBusy?: "steer" | "followUp";
+    attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
+  }) => invoke<{ submissionId: string; deduped: boolean }>("bots:send", input),
+  resume: (botId: string, requestId: string) =>
+    invoke<BotSessionState>("bots:resume", { botId, requestId }),
+  dismiss: (botId: string, requestId: string) =>
+    invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
+  /** Stop the reply that is running now. */
+  stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  liveSubscribe: (botId: string) =>
+    invoke<import("../shared/bot-live").BotLiveSnapshot>("bots:live:subscribe", botId),
+  liveUnsubscribe: (botId: string) => invoke<void>("bots:live:unsubscribe", botId),
+  liveSummary: (botId: string) =>
+    invoke<import("../shared/bot-live").BotLiveSummary>("bots:live:summary", botId),
+  onLiveEvent: (handler: (event: import("../shared/bot-live").BotLiveEvent) => void) =>
+    onNotification<import("../shared/bot-live").BotLiveEvent>("bots:live:event", handler),
+  /** Start Chat on a starter Bot: the same Bot every time; only the first call reports `created`. */
+  createFromPreset: (input: { presetId: string; access?: BotAccessUpdate }) =>
+    invoke<{ bot: BotDefinition; created: boolean }>("bots:createFromPreset", input),
+  /** The one-time self-intro of a Bot made with the create flow. */
+  introduce: (botId: string) => invoke<boolean>("bots:introduce", botId),
+  /** Not now on a connect card: this Bot won't suggest that connection again. */
+  dismissConnection: (botId: string, pluginId: string) =>
+    invoke<void>("bots:connections:dismiss", botId, pluginId),
+  setPhoto: (botId: string, photo: { mimeType: "image/png" | "image/jpeg"; data: string }) =>
+    invoke<void>("bots:photo:set", botId, photo),
+  removePhoto: (botId: string) => invoke<void>("bots:photo:remove", botId),
+  routines: {
+    list: (botId: string) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine[]>("bots:routines:list", botId),
+    create: (input: import("../../main/services/scheduled-bot-routines").BotRoutineCreateInput) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:create", input),
+    update: (input: import("../../main/services/scheduled-bot-routines").BotRoutineUpdateInput) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
+    delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
+      invoke<void>("bots:routines:delete", input),
+  },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>

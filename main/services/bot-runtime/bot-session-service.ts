@@ -53,7 +53,9 @@ export type BotNotice =
   /** Precedes a routine's input: the turn is labelled with the routine name. */
   | { notice: "routine"; label: string; requestId: string }
   /** The answer to this submission was `[SILENT]`: kept, but no bubble, preview or unread. */
-  | { notice: "silent"; submissionId: string };
+  | { notice: "silent"; submissionId: string }
+  /** Precedes an input the person never typed (the self-intro prompt): the input is not shown. */
+  | { notice: "hidden_input"; requestId: string };
 
 export type BotReplyOutcome =
   | { kind: "completed"; text: string }
@@ -80,6 +82,8 @@ export interface BotSendInput {
   ifNotInterrupted?: boolean;
   /** Label shown on the turn, such as the routine name. */
   label?: string;
+  /** An Aiden-written prompt (the self-intro): its reply shows, the prompt does not. */
+  hidden?: boolean;
 }
 
 export type BotSessionErrorReason =
@@ -117,6 +121,12 @@ export interface BotSessionService {
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
+  /**
+   * Stop the reply that is running now (the composer's Stop). What was already
+   * written stays in the transcript and queued follow-ups are withdrawn. A
+   * paused (interrupted) turn is left for Resume or Dismiss.
+   */
+  stop(botId: string): Promise<BotSessionState>;
   state(botId: string): Promise<BotSessionState>;
   deleteBot(botId: string): Promise<void>;
   /**
@@ -339,6 +349,9 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (input.label !== undefined) {
           await writeNotice(conversation, { notice: "routine", label: input.label, requestId: input.requestId });
         }
+        if (input.hidden === true) {
+          await writeNotice(conversation, { notice: "hidden_input", requestId: input.requestId });
+        }
         const submission = await conversation.submit(
           {
             type: "input",
@@ -391,6 +404,16 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         await dismissPaused(conversation, before.submissionId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));
+      });
+    },
+
+    stop(botId) {
+      return serialize(botId, async () => {
+        const before = await currentState(botId);
+        if (before.kind !== "running") return before;
+        const { conversation } = await openBot(botId);
+        await conversation.abort(ctx);
+        return publish(botId, await currentState(botId));
       });
     },
 

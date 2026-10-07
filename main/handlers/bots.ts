@@ -23,7 +23,17 @@ import { botMutationGate } from "../services/bot-mutation-gate.js";
 import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-store-main.js";
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
-import { botSessionRuntime } from "../services/bot-runtime/bot-session-main.js";
+import {
+  botLiveProjection,
+  botSessionRuntime,
+  dismissBotConnection,
+} from "../services/bot-runtime/bot-session-main.js";
+import { botStarter } from "../services/bot-runtime/bot-starter-main.js";
+import {
+  parseAidenRemoteBotAvatarUploadRequest,
+  type AidenRemoteBotAvatarUploadRequest,
+} from "../services/aiden-remote-protocol.js";
+import { registerBotLiveHandlers } from "./bot-live.js";
 import {
   telegramBotBindingAuthority,
   telegramBotBindings,
@@ -36,12 +46,53 @@ import {
 import { telegramProfileMutationFence } from "../services/telegram/telegram-profile-mutation-fence.js";
 import {
   parseBotAccessUpdateInput,
+  parseBotCreateFromPreset,
   parseBotCreateWithAccess,
+  parseConnectionPluginId,
   parseBotId,
   parseBotSend,
   parseBotSessionAction,
   parseBotUpdate,
 } from "./bot-params.js";
+
+async function desktopAvatarAdapter() {
+  const instanceId = (await (await getAidenRemoteRuntime()).state.snapshot()).instanceId;
+  return createMainBotAvatarApplicationAdapter(instanceId);
+}
+
+/** Choose photo: replaces the Bot's one canonical photo (the same store the phones use). */
+async function setBotPhoto(botId: string, upload: AidenRemoteBotAvatarUploadRequest): Promise<void> {
+  const avatar = await desktopAvatarAdapter();
+  await botApplicationService.withBotMutation(botId, async () => {
+    const bot = await botApplicationService.get(botId);
+    if (!bot) throw new Error("This Bot no longer exists.");
+    const current = await avatar.view(botId, bot.avatar);
+    await avatar.put(
+      {
+        botId,
+        expectedAssetRevision: current.asset?.assetRevision ?? null,
+        operationId: `avatarop_desktop_${crypto.randomUUID().split("-").join("")}`,
+      },
+      upload,
+    );
+  });
+}
+
+/** Remove photo: back to the Bot's character. */
+async function removeBotPhoto(botId: string): Promise<void> {
+  const avatar = await desktopAvatarAdapter();
+  await botApplicationService.withBotMutation(botId, async () => {
+    const bot = await botApplicationService.get(botId);
+    if (!bot) throw new Error("This Bot no longer exists.");
+    const current = await avatar.view(botId, bot.avatar);
+    if (!current.asset) return;
+    await avatar.delete({
+      botId,
+      expectedAssetRevision: current.asset.assetRevision,
+      operationId: `avatarop_desktop_${crypto.randomUUID().split("-").join("")}`,
+    });
+  });
+}
 
 export function registerBotHandlers(): void {
   const desktopAudienceId = BOT_DESKTOP_AUDIENCE_ID;
@@ -157,15 +208,47 @@ export function registerBotHandlers(): void {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
   });
-  // The desktop chat view still renders a Bot through its one ChatStore chat.
-  // Returns that chat's id, creating it on first open, until the renderer
-  // moves to the live projection (plan Task 1.4/2.3).
-  ipcMain.handle("bots:openChat", async (_event, id: unknown) => {
-    const botId = parseBotId(id);
-    const chat =
-      (await botApplicationService.getCanonicalChat(botId)) ??
-      (await botApplicationService.createChat({ audienceId: desktopAudienceId, botId }));
-    return { chatId: chat.id, updatedAt: chat.updatedAt, title: chat.title };
+  ipcMain.handle("bots:stop", async (_event, id: unknown) =>
+    (await botSessionRuntime()).stop(parseBotId(id)),
+  );
+  ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
+    const { presetId, access } = parseBotCreateFromPreset(input);
+    const { bot, created } = await botStarter().startFromPreset(presetId, access);
+    return { bot, created };
+  });
+  ipcMain.handle("bots:introduce", async (_event, id: unknown) => {
+    // The create flow's one-time self-intro; deduped per Bot by the runtime.
+    return botStarter().introduce(parseBotId(id));
+  });
+  ipcMain.handle("bots:connections:dismiss", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
+    const botId = parseBotId(rawBotId);
+    const pluginId = parseConnectionPluginId(rawPluginId);
+    await dismissBotConnection(botId, pluginId);
+  });
+  ipcMain.handle("bots:photo:set", async (_event, rawBotId: unknown, rawUpload: unknown) => {
+    const botId = parseBotId(rawBotId);
+    const upload = parseAidenRemoteBotAvatarUploadRequest(rawUpload);
+    await setBotPhoto(botId, upload);
+    ipcMain.broadcast("bots:changed", { botId });
+  });
+  ipcMain.handle("bots:photo:remove", async (_event, rawBotId: unknown) => {
+    const botId = parseBotId(rawBotId);
+    await removeBotPhoto(botId);
+    ipcMain.broadcast("bots:changed", { botId });
+  });
+  registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => {
+      const owner = rendererDocumentOwner(event, () => new Error("Bot chats require the active application document."));
+      return {
+        key: `${owner.id}:${owner.documentId}`,
+        isDestroyed: owner.isDestroyed,
+        onInvalidated: owner.onInvalidated,
+        send: (channel, payload) => owner.send(channel, payload),
+      };
+    },
+    projection: botLiveProjection,
+    parseBotId,
   });
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));

@@ -79,6 +79,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:todo",
   "chat:tool",
   "bots:changed",
+  "bots:live:event",
   "browser:event",
   "devices:state",
   "devices:reveal",
