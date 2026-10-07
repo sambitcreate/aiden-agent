@@ -45,6 +45,12 @@ import {
 } from "../../renderer/shared/assistant.js";
 import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task-presentation.js";
 import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.js";
+import {
+  parseBotRoutineCreate,
+  parseBotRoutineDelete,
+  parseBotRoutineUpdate,
+  type BotRoutineService,
+} from "./scheduled-bot-routines.js";
 
 export const SCHEDULE_TOOL_NAME = ASSISTANT_AUTOMATION_TOOL_NAME;
 export const EDIT_AUTOMATION_TOOL_NAME = ASSISTANT_AUTOMATION_EDIT_TOOL_NAME;
@@ -315,7 +321,22 @@ export interface ScheduleToolDependencies {
   selectionProvider(providerId: string): Promise<StoredProvider | undefined>;
 }
 
-const defaultDependencies: ScheduleToolDependencies = {
+/**
+ * Bot routines belong to their Bot; the generic automation tools must never
+ * list, edit, pause, run, or delete them.
+ */
+function withoutBotRoutines(dependencies: ScheduleToolDependencies): ScheduleToolDependencies {
+  return {
+    ...dependencies,
+    list: async () => (await dependencies.list()).filter((task) => task.botId === undefined),
+    get: async (id) => {
+      const task = await dependencies.get(id);
+      return task?.botId === undefined ? task : undefined;
+    },
+  };
+}
+
+const defaultDependencies: ScheduleToolDependencies = withoutBotRoutines({
   list: async () => (await import("./schedule-store.js")).scheduleStore.list(),
   get: async (id) => (await import("./schedule-store.js")).scheduleStore.get(id),
   save: async (input, expectedUpdatedAt, signal) =>
@@ -355,7 +376,7 @@ const defaultDependencies: ScheduleToolDependencies = {
   selectionProvider: async (providerId) =>
     (await import("./provider-registry.js")).providerRegistry.selectionProvider(providerId) ??
     (await import("./config-store.js")).configStore.getProvider(providerId),
-};
+});
 
 function result(value: unknown): AgentToolResult<null> {
   return {
@@ -1324,8 +1345,9 @@ async function standardScheduleApprovalForExecution(
 }
 
 export function createAssistantScheduleListTool(
-  dependencies: ScheduleToolDependencies = defaultDependencies,
+  allDependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
+  const dependencies = withoutBotRoutines(allDependencies);
   return declarePiRuntimeReplay(
     {
       name: LIST_SCHEDULED_TASKS_TOOL_NAME,
@@ -1354,8 +1376,9 @@ export function createAssistantScheduleListTool(
 
 export function createAssistantEditAutomationTool(
   modelSelection: AssistantScheduleModelSelection,
-  dependencies: ScheduleToolDependencies = defaultDependencies,
+  allDependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
+  const dependencies = withoutBotRoutines(allDependencies);
   const approvedModel = validateAssistantScheduleModelSelection(modelSelection);
   return {
     name: EDIT_AUTOMATION_TOOL_NAME,
@@ -1465,8 +1488,9 @@ export function createAssistantEditAutomationTool(
 
 export function createScheduleTaskTool(
   access: ScheduleToolAccess = { kind: "standard" },
-  dependencies: ScheduleToolDependencies = defaultDependencies,
+  allDependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
+  const dependencies = withoutBotRoutines(allDependencies);
   if (access.kind === "assistant-attended") {
     const approvedModel = validateAssistantScheduleModelSelection(access.modelSelection);
     return {
@@ -1725,13 +1749,145 @@ export function createScheduleTaskTool(
   };
 }
 
+export type BotRoutineToolDependencies = Pick<
+  BotRoutineService,
+  "list" | "create" | "update" | "delete"
+>;
+
+const defaultBotRoutineDependencies: BotRoutineToolDependencies = {
+  list: async (botId) =>
+    (await import("./scheduled-bot-routines-main.js")).botRoutineService.list(botId),
+  create: async (input) =>
+    (await import("./scheduled-bot-routines-main.js")).botRoutineService.create(input),
+  update: async (input) =>
+    (await import("./scheduled-bot-routines-main.js")).botRoutineService.update(input),
+  delete: async (input) =>
+    (await import("./scheduled-bot-routines-main.js")).botRoutineService.delete(input),
+};
+
+const BOT_ROUTINE_TIME = Type.String({
+  pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+  description: 'Local 24-hour time, for example "08:41".',
+});
+
+const BOT_ROUTINE_SCHEDULE = Type.Union(
+  [
+    Type.Object(
+      { kind: Type.Literal("once"), date: Type.String({ description: "YYYY-MM-DD" }), time: BOT_ROUTINE_TIME },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { kind: Type.Literal("daily"), time: BOT_ROUTINE_TIME },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { kind: Type.Literal("weekdays"), time: BOT_ROUTINE_TIME },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        kind: Type.Literal("weekly"),
+        days: Type.Array(Type.Integer({ minimum: 0, maximum: 6 }), {
+          minItems: 1,
+          maxItems: 7,
+          description: "Days of the week, 0 = Sunday … 6 = Saturday.",
+        }),
+        time: BOT_ROUTINE_TIME,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        kind: Type.Literal("monthly"),
+        day: Type.Integer({ minimum: 1, maximum: 31 }),
+        time: BOT_ROUTINE_TIME,
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  { description: "When the routine runs, in the person's local timezone." },
+);
+
+/**
+ * The schedule tool as a Bot sees it: routines that send the Bot a message on
+ * a schedule. Every action is bound to the current Bot; the model can neither
+ * name another Bot nor pass raw cron, workspaces, scripts, or MCP servers.
+ */
+export function createBotRoutineTool(
+  botId: string,
+  routines: BotRoutineToolDependencies = defaultBotRoutineDependencies,
+): AgentTool {
+  return {
+    name: SCHEDULE_TOOL_NAME,
+    label: "Routines",
+    description:
+      "Manage this Bot's routines: messages you receive on a schedule, like a weekly plan or a morning check-in. Actions: create, list, update, remove. Create needs name, schedule, and prompt. List immediately before update or remove and pass the routine's exact id and updatedAt as expectedUpdatedAt. Routines always run as you, in this chat.",
+    parameters: Type.Object(
+      {
+        action: Type.Union([
+          Type.Literal("create"),
+          Type.Literal("list"),
+          Type.Literal("update"),
+          Type.Literal("remove"),
+        ]),
+        id: Type.Optional(Type.String({ description: "Exact routine id from list." })),
+        expectedUpdatedAt: Type.Optional(
+          Type.Number({ description: "Exact updatedAt from the same list result." }),
+        ),
+        name: Type.Optional(Type.String({ description: "Short routine name, for example \"Weekly meal prep\"." })),
+        schedule: Type.Optional(BOT_ROUTINE_SCHEDULE),
+        prompt: Type.Optional(
+          Type.String({ description: "What you should do each time the routine runs." }),
+        ),
+        enabled: Type.Optional(Type.Boolean({ description: "Turn the routine on or off." })),
+      },
+      { additionalProperties: false },
+    ),
+    execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
+      throwIfScheduleToolAborted(signal);
+      if (!rawParams || typeof rawParams !== "object" || Array.isArray(rawParams)) {
+        throw new Error("Invalid routine request.");
+      }
+      const { action, ...fields } = rawParams as Record<string, unknown>;
+      if (action === "list") {
+        if (Object.keys(fields).length > 0) throw new Error("Invalid routine request.");
+        return result({ routines: await routines.list(botId) });
+      }
+      // The bound Bot is authoritative; a model-supplied botId is rejected by
+      // the strict parsers below rather than silently overridden.
+      if ("botId" in fields) throw new Error("Invalid routine request.");
+      if (action === "create") {
+        return result({ routine: await routines.create(parseBotRoutineCreate({ ...fields, botId })) });
+      }
+      if (action === "update") {
+        return result({ routine: await routines.update(parseBotRoutineUpdate({ ...fields, botId })) });
+      }
+      if (action === "remove") {
+        const input = parseBotRoutineDelete({ ...fields, botId });
+        await routines.delete(input);
+        return result({ removed: input.id });
+      }
+      throw new Error("Invalid routine request.");
+    },
+  };
+}
+
 export function scheduleTaskToolsForContext(context: {
   workspaceId?: string;
   allowScheduling?: boolean;
   mode?: "standard" | "assistant-attended";
   assistantModelSelection?: AssistantScheduleModelSelection;
+  /**
+   * Set for a Bot turn. Routines are bound to this Bot; `routineRun` marks a
+   * turn submitted by a routine, which may not create or change routines.
+   */
+  bot?: { botId: string; routineRun?: boolean; routines?: BotRoutineToolDependencies };
 }): AgentTool[] {
   if (context.allowScheduling === false) return [];
+  if (context.bot) {
+    if (context.bot.routineRun) return [];
+    return [createBotRoutineTool(context.bot.botId, context.bot.routines)];
+  }
   if (context.mode === "assistant-attended") {
     if (!context.assistantModelSelection) {
       throw new Error("Assistant scheduling requires an exact provider and model selection.");
