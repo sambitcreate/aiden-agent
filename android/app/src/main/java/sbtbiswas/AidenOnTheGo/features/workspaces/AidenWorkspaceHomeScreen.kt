@@ -140,6 +140,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
 import androidx.annotation.StringRes
+import androidx.compose.ui.res.pluralStringResource
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
 private const val AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT = 20
@@ -1288,7 +1289,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
                             .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
                     ) {
                         Text(
-                            stringResource(R.string.workspace_home_show_more, remainingChatCount),
+                            pluralStringResource(R.plurals.workspace_home_show_more, remainingChatCount, remainingChatCount),
                             style = MaterialTheme.typography.bodyMedium,
                             color = palette.secondary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)

@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
+import androidx.compose.ui.res.pluralStringResource
 
 private val AidenFileTreeStep = 14.dp
 
@@ -448,7 +449,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             Icon(Icons.Default.Info, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = stringResource(R.string.files_truncated_banner, idx.maxEntries),
+                                text = pluralStringResource(R.plurals.files_truncated_banner, idx.maxEntries, idx.maxEntries),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = palette.foreground
                             )

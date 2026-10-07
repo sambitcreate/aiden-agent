@@ -308,7 +308,7 @@ fun AidenGitScreen(
                                     shape = MaterialTheme.shapes.small
                                 ) {
                                     Text(
-                                        text = if (review.uncommitted > 0) stringResource(R.string.git_uncommitted_count, review.uncommitted) else stringResource(R.string.git_clean),
+                                        text = if (review.uncommitted > 0) pluralStringResource(R.plurals.git_uncommitted_count, review.uncommitted, review.uncommitted) else stringResource(R.string.git_clean),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = if (review.uncommitted > 0) palette.warning else palette.success,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),

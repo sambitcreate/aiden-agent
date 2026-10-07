@@ -614,7 +614,7 @@ fun AidenWorkspaceDirectoryScreen(
                                         if (uncommitted > 0) {
                                             Text(" • ", color = palette.secondary)
                                             Text(
-                                                text = stringResource(R.string.workspace_uncommitted_count, uncommitted),
+                                                text = pluralStringResource(R.plurals.workspace_uncommitted_count, uncommitted, uncommitted),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = palette.warning
                                             )

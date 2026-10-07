@@ -368,7 +368,7 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
         Text(stringResource(R.string.chat_progress_task_title), style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = stringResource(R.string.chat_progress_steps_complete, tasks.count { it.status == AidenChatTaskStatus.COMPLETED }, tasks.size),
+            text = pluralStringResource(R.plurals.chat_progress_steps_complete, tasks.size, tasks.count { it.status == AidenChatTaskStatus.COMPLETED }, tasks.size),
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )
@@ -781,7 +781,7 @@ private fun AidenAgentDetailContent(
             Text(it, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        Text(stringResource(R.string.chat_agent_stats, agent.turns, agent.tools, agent.tokens), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        Text(aidenAgentStats(agent), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         Spacer(modifier = Modifier.height(6.dp))
         Text(stringResource(R.string.chat_agent_updated, agent.updatedAt.toString()), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         if (agent.notices?.contains(sbtbiswas.AidenOnTheGo.models.AidenChatAgentNotice.DISPLAY_FILTERED) == true) {
@@ -841,6 +841,17 @@ private fun AidenAgentDetailContent(
         )
     }
 }
+
+/** "3 turns · 5 tools · 1,200 tokens" for an agent's detail header. */
+@Composable
+private fun aidenAgentStats(agent: AidenChatAgent): String = listOf(
+    pluralStringResource(R.plurals.chat_agent_turns, agent.turns.toPluralQuantity(), agent.turns),
+    pluralStringResource(R.plurals.chat_agent_tools, agent.tools.toPluralQuantity(), agent.tools),
+    pluralStringResource(R.plurals.chat_agent_tokens, agent.tokens.toPluralQuantity(), agent.tokens)
+).joinToString(" · ")
+
+/** Plural quantities are Ints; any count past Int range selects the same "other" form. */
+private fun Long.toPluralQuantity(): Int = coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
 
 @Composable
 private fun roleLabel(role: AidenChatAgentRole): String = stringResource(

@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Aiden On The Go</string>
 
     <!-- BEGIN model picker strings (features/shared/AidenModelPicker.kt) -->
@@ -216,12 +216,12 @@
     <string name="workspace_settings">Workspace Settings</string>
     <string name="workspace_back_to_home">Back to Workspace home</string>
     <string name="workspace_directory_title">Workspaces</string>
-    <string name="workspace_search_placeholder">Search workspaces...</string>
+    <string name="workspace_search_placeholder" tools:ignore="TypographyEllipsis">Search workspaces...</string>
     <string name="workspace_creating">Creating workspace</string>
     <string name="workspace_add">Add Workspace</string>
     <string name="workspace_menu_new">New Workspace</string>
     <string name="workspace_menu_new_scratch">New Managed Scratch</string>
-    <string name="workspace_menu_add_folder">Add Desktop Folder...</string>
+    <string name="workspace_menu_add_folder" tools:ignore="TypographyEllipsis">Add Desktop Folder...</string>
     <string name="workspace_tab_active">Active (%1$d)</string>
     <string name="workspace_tab_archived">Archived (%1$d)</string>
     <string name="workspace_empty_active_title">No active workspaces</string>
@@ -231,7 +231,10 @@
     <string name="workspace_worktree_badge">Worktree</string>
     <string name="workspace_deleting">Deleting…</string>
     <string name="workspace_removing">Removing…</string>
-    <string name="workspace_uncommitted_count">+%1$d uncommitted</string>
+    <plurals name="workspace_uncommitted_count">
+        <item quantity="one">+%1$d uncommitted</item>
+        <item quantity="other">+%1$d uncommitted</item>
+    </plurals>
     <string name="workspace_menu_archive">Archive on this device</string>
     <string name="workspace_menu_unarchive">Unarchive</string>
     <string name="workspace_menu_delete_worktree">Delete Managed Worktree</string>
@@ -319,7 +322,10 @@
     <string name="workspace_home_organize_recent">Recent only</string>
     <string name="workspace_home_organize_cd">Organize sidebar</string>
     <string name="workspace_home_new_chat">New chat</string>
-    <string name="workspace_home_show_more">Show %1$d more</string>
+    <plurals name="workspace_home_show_more">
+        <item quantity="one">Show %1$d more</item>
+        <item quantity="other">Show %1$d more</item>
+    </plurals>
     <string name="workspace_home_forked_chat_cd">Forked chat</string>
 
     <!-- Workspaces: Git review -->
@@ -330,7 +336,10 @@
     <string name="git_changes_connect">Connect to your paired desktop to review this Workspace.</string>
     <string name="git_changes_read_failed">Aiden couldn\'t read this Workspace\'s changes.</string>
     <string name="git_branch_label">Branch: %1$s</string>
-    <string name="git_uncommitted_count">%1$d uncommitted</string>
+    <plurals name="git_uncommitted_count">
+        <item quantity="one">%1$d uncommitted</item>
+        <item quantity="other">%1$d uncommitted</item>
+    </plurals>
     <string name="git_clean">Clean</string>
     <string name="git_checking_changes">Checking for changes…</string>
     <string name="git_clean_title">Working tree is clean</string>
@@ -341,7 +350,7 @@
     </plurals>
     <string name="git_commit_changes">Commit Changes</string>
     <string name="git_commit_message">Commit message</string>
-    <string name="git_commit_message_placeholder">Describe your changes...</string>
+    <string name="git_commit_message_placeholder" tools:ignore="TypographyEllipsis">Describe your changes...</string>
     <string name="git_stage_reviewed_only">Stage only reviewed changes</string>
     <string name="git_review_and_commit">Review &amp; Commit</string>
     <string name="git_confirm_commit">Confirm Commit</string>
@@ -423,7 +432,10 @@
     <string name="files_open_failed">This workspace file could not be opened. Browse Files to locate it.</string>
     <string name="files_title">Workspace Files</string>
     <string name="files_offline_banner">Showing offline snapshot. Editing is disabled.</string>
-    <string name="files_truncated_banner">File list is truncated at %1$d entries.</string>
+    <plurals name="files_truncated_banner">
+        <item quantity="one">File list is truncated at %1$d entry.</item>
+        <item quantity="other">File list is truncated at %1$d entries.</item>
+    </plurals>
     <string name="files_search_placeholder">Search loaded files…</string>
     <string name="files_loading">Loading files</string>
     <string name="files_no_matches">No matching files found</string>
@@ -512,7 +524,7 @@
     <string name="bot_editor_purpose_placeholder">Briefly describe what this bot does</string>
     <string name="bot_editor_greeting">Opening Greeting (Optional)</string>
     <string name="bot_editor_greeting_placeholder">First message sent when starting a chat</string>
-    <string name="bot_editor_instructions_placeholder">System instructions and behavior rules...</string>
+    <string name="bot_editor_instructions_placeholder" tools:ignore="TypographyEllipsis">System instructions and behavior rules...</string>
     <string name="bot_editor_avatar_studio">Avatar Studio</string>
     <string name="bot_editor_avatar_shape">Shape</string>
     <string name="bot_editor_avatar_color">Color</string>
@@ -556,13 +568,13 @@
     <string name="bot_image_generation">Image Generation</string>
     <string name="bot_image_generation_body">Bot photos generated on a supported Apple device can be synchronized to Android. You can also customize your Bot with the built-in Semantic Avatar studio.</string>
     <string name="bot_image_description">Avatar Description</string>
-    <string name="bot_image_description_placeholder">Describe the appearance of your bot...</string>
+    <string name="bot_image_description_placeholder" tools:ignore="TypographyEllipsis">Describe the appearance of your bot...</string>
     <string name="bot_avatar_saving">Saving avatar…</string>
     <string name="bot_avatar_restoring">Restoring avatar…</string>
 
     <!-- Chat: task and agent progress -->
     <string name="chat_progress_step">Step %1$d / %2$d</string>
-    <string name="chat_progress_steps_done">%1$d / %2$d steps</string>
+    <string name="chat_progress_steps_done" tools:ignore="PluralsCandidate">%1$d / %2$d steps</string>
     <string name="chat_progress_open_tasks_cd">Open task progress</string>
     <plurals name="chat_progress_agent_count">
         <item quantity="one">%1$d agent</item>
@@ -575,7 +587,10 @@
     <string name="chat_progress_chip_cd">%1$s: %2$s</string>
     <string name="chat_progress_chip_supporting_cd">%1$s: %2$s, %3$s</string>
     <string name="chat_progress_task_title">Task progress</string>
-    <string name="chat_progress_steps_complete">%1$d of %2$d steps complete</string>
+    <plurals name="chat_progress_steps_complete">
+        <item quantity="one">%1$d of %2$d step complete</item>
+        <item quantity="other">%1$d of %2$d steps complete</item>
+    </plurals>
     <string name="chat_task_completed">Completed</string>
     <string name="chat_task_in_progress">In progress</string>
     <string name="chat_task_pending">Pending</string>
@@ -596,7 +611,18 @@
     <string name="chat_agent_row_cd">%1$s, %2$s</string>
     <string name="chat_agent_open_parent_cd">Open parent agent %1$s</string>
     <string name="chat_agent_started_by">Started by %1$s</string>
-    <string name="chat_agent_stats">%1$d turns · %2$d tools · %3$d tokens</string>
+    <plurals name="chat_agent_turns">
+        <item quantity="one">%1$d turn</item>
+        <item quantity="other">%1$d turns</item>
+    </plurals>
+    <plurals name="chat_agent_tools">
+        <item quantity="one">%1$d tool</item>
+        <item quantity="other">%1$d tools</item>
+    </plurals>
+    <plurals name="chat_agent_tokens">
+        <item quantity="one">%1$d token</item>
+        <item quantity="other">%1$d tokens</item>
+    </plurals>
     <string name="chat_agent_updated">Updated %1$s</string>
     <string name="chat_agent_privacy_hidden">Some details are hidden for privacy.</string>
     <string name="chat_agent_sub_agents">Sub-agents</string>
@@ -650,7 +676,7 @@
     <string name="chat_progress_hide">Hide progress</string>
     <string name="chat_progress_show">Show progress</string>
     <string name="chat_artifact_unsupported">Can\'t view on this device. View in Aiden Agent.</string>
-    <string name="chat_working">Aiden is working...</string>
+    <string name="chat_working" tools:ignore="TypographyEllipsis">Aiden is working...</string>
     <string name="chat_waiting_network_cd">Aiden is waiting for the network to return</string>
     <string name="chat_waiting_network">Waiting for network</string>
     <string name="chat_reasoning_thinking">Thinking</string>
@@ -747,7 +773,7 @@
     <string name="chat_approval_more_options">More allow options</string>
     <string name="chat_load_earlier_loading">Loading earlier messages</string>
     <string name="chat_load_earlier">Load earlier messages</string>
-    <string name="chat_voice_listening">Listening...</string>
+    <string name="chat_voice_listening" tools:ignore="TypographyEllipsis">Listening...</string>
     <string name="chat_code_label">CODE</string>
     <string name="chat_code_copied">Copied</string>
     <string name="chat_code_copy_cd">Copy code</string>
