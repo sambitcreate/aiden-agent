@@ -339,6 +339,8 @@
         "main/services/bot-runtime-authority.test.ts",
         "main/services/bot-runtime-inventory-lease.test.ts",
         "main/services/bot-runtime-inventory-publication.test.ts",
+        "main/services/bot-runtime/harness-host.test.ts",
+        "main/services/bot-runtime/profile-lock.test.ts",
         "main/services/bot-share-image-tool.test.ts",
         "main/services/bot-skill-content-watcher.test.ts",
         "main/services/bot-skill-inventory.test.ts",
