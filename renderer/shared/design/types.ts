@@ -186,6 +186,8 @@ export interface DesignDeletePreview {
   bytes: number;
   /** Studio-asset references; DS-3 adds them. */
   references: number;
+  /** The manifest could not be read, so the counts above are unknown (zero) and the delete needs confirmation. */
+  unreadable?: true;
 }
 
 export interface DesignPreviewTheme {

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { DesignProjectManifestV1, DesignRunRequest } from "../../../renderer/shared/design/types.js";
-import { MAX_DESIGN_PROJECT_BYTES } from "../../../renderer/shared/design/limits.js";
+import type { DesignProjectManifestV1, DesignProjectOp, DesignRunRequest } from "../../../renderer/shared/design/types.js";
 import { designDirectionTitleKey, designResumeOffer } from "../../../renderer/shared/design/resume.js";
-import { createDesignProjectManifest, parseDesignProjectManifestV1 } from "./manifest-core.js";
+import { createDesignProjectManifest } from "./manifest-core.js";
+import { applyDesignProjectOp } from "./ops-core.js";
 import {
   DesignStoreError,
   acceptDesignArtifact,
@@ -22,6 +22,7 @@ import {
   type DesignArtifactAcceptance,
   type DesignStorageTotals,
 } from "./store-core.js";
+import { check } from "./test-support.js";
 
 const KIB = 1024;
 const MODEL = { providerId: "openrouter", model: "model-a" };
@@ -33,29 +34,6 @@ const explore = (count: 2 | 3 | 4, extra: Partial<Extract<DesignRunRequest, { op
   op: "explore", count, creativeRange: "balanced", aspects: ["layout"], ...extra,
 });
 const refine = (screenId: string, baseRevisionId: string): DesignRunRequest => ({ op: "refine", screenId, baseRevisionId });
-
-/**
- * Every manifest a transition produces must be one the DS-1a.2 parser accepts
- * unchanged, and must satisfy the invariants the parser leaves to the store.
- */
-function check(manifest: DesignProjectManifestV1): DesignProjectManifestV1 {
-  assert.deepEqual(parseDesignProjectManifestV1(JSON.parse(JSON.stringify(manifest))), manifest, "re-parses unchanged");
-  let declared = 0;
-  for (const revision of Object.values(manifest.revisions)) declared += revision.bytes;
-  assert.ok(declared <= MAX_DESIGN_PROJECT_BYTES, "project bytes within the quota");
-  for (const set of Object.values(manifest.directionSets)) {
-    assert.ok(set.screenIds.length <= set.requestedCount, "a set never exceeds its requested count");
-    const filling = Object.values(manifest.runs).some((run) => run.directionSetId === set.id && run.status === "running");
-    assert.ok(set.screenIds.length > 0 || filling, "an empty set exists only while its run is running");
-  }
-  for (const run of Object.values(manifest.runs)) {
-    if (run.status === "partial") {
-      assert.ok(run.revisionIds.length >= 1 && run.endReason !== undefined, "a partial run has a design and a reason");
-    }
-    if (run.status === "complete") assert.ok(run.revisionIds.length >= 1, "a complete run has a design");
-  }
-  return manifest;
-}
 
 function ids() {
   sequence += 1;
@@ -764,6 +742,9 @@ test("random legal operation sequences always leave a parseable manifest that ke
   let resumes = 0;
   let busyDeletes = 0;
   let emptyEnds = 0;
+  let emptyResumeEnds = 0;
+  let appliedOps = 0;
+  let discards = 0;
   for (let seed = 1; seed <= 50; seed += 1) {
     const random = mulberry32(seed);
     const pick = <T>(items: readonly T[]): T | undefined => items[Math.floor(random() * items.length)];
@@ -810,7 +791,10 @@ test("random legal operation sequences always leave a parseable manifest that ke
         if (result) manifest = result.manifest;
       } else if (running && roll < 0.55) {
         const outcome = pick(["completed", "cancelled", "failed"] as const)!;
-        if (running.revisionIds.length === 0) emptyEnds += 1;
+        if (running.revisionIds.length === 0) {
+          emptyEnds += 1;
+          if (running.request.op === "explore" && running.request.resumeRunId !== undefined) emptyResumeEnds += 1;
+        }
         manifest = finishDesignRun(manifest, running.id, outcome, now)!;
       } else if (!running && roll < 0.5) {
         counter += 1;
@@ -821,7 +805,6 @@ test("random legal operation sequences always leave a parseable manifest that ke
           const resumable = pick(Object.values(manifest.runs).filter((run) => run.request.op === "explore"));
           if (resumable && resumable.request.op === "explore") {
             request = { ...resumable.request, resumeRunId: resumable.id };
-            resumes += 1;
           }
         } else if (kind < 0.65) {
           const base = pick(Object.values(manifest.revisions));
@@ -842,7 +825,11 @@ test("random legal operation sequences always leave a parseable manifest that ke
             now,
           });
         });
-        if (started) manifest = started;
+        if (started) {
+          manifest = started;
+          // Count Resumes that actually began, not attempts the store refused.
+          if (request.op === "explore" && request.resumeRunId !== undefined) resumes += 1;
+        }
       } else if (roll < 0.7) {
         const target = pick(Object.keys(manifest.screens));
         if (target !== undefined) {
@@ -869,15 +856,32 @@ test("random legal operation sequences always leave a parseable manifest that ke
         manifest = reconcile(manifest, files, now).manifest;
       } else {
         const set = pick(Object.values(manifest.directionSets));
-        if (set) {
-          const clone = structuredClone(manifest);
-          clone.directionSets[set.id]!.archived = !set.archived;
-          manifest = touchDesignManifest(clone, now);
+        const screen = pick(Object.values(manifest.screens));
+        const node = pick(manifest.canvas.nodes);
+        const operation = pick<DesignProjectOp>([
+          ...(set ? [{ op: "archiveDirectionSet" as const, directionSetId: set.id, archived: !set.archived }] : []),
+          ...(set ? [{ op: "chooseDirection" as const, directionSetId: set.id, screenId: pick(set.screenIds) ?? "screen-404" }] : []),
+          ...(screen ? [{ op: "deleteScreen" as const, screenId: screen.id }] : []),
+          ...(screen ? [{ op: "setScreenFrame" as const, screenId: screen.id, frame: { preset: "phone" as const, width: 390, height: 844 } }] : []),
+          ...(screen && random() < 0.5 ? [{ op: "setActiveRevision" as const, screenId: screen.id, revisionId: pick(screen.revisionIds)! }] : []),
+          ...(node ? [{ op: "setLayout" as const, viewport: { x: 1, y: 2, zoom: 1 }, nodes: [{ id: node.id, x: step, y: step }] }] : []),
+          { op: "rename" as const, title: `Walk ${step}` },
+          { op: "settleRun" as const, runId: pick(Object.keys(manifest.runs)) ?? "run-404", decision: "discard" as const },
+        ])!;
+        const before = structuredClone(manifest);
+        const result = attempt(() => applyDesignProjectOp(manifest, operation, now));
+        assert.deepEqual(manifest, before, "an operation never mutates its input");
+        if (result) {
+          manifest = result.manifest;
+          appliedOps += 1;
+          if (operation.op === "settleRun") discards += 1;
+          for (const id of result.deletedRevisionIds) assert.equal(manifest.revisions[id], undefined, "deleted revisions are gone");
         }
       }
       check(manifest);
     }
   }
   // The walks must actually reach the interesting transitions, or they prove nothing.
-  assert.ok(refusals > 0 && resumes > 0 && busyDeletes > 0 && emptyEnds > 0, `${refusals} ${resumes} ${busyDeletes} ${emptyEnds}`);
+  const reached = { refusals, resumes, busyDeletes, emptyEnds, emptyResumeEnds, appliedOps, discards };
+  for (const [name, count] of Object.entries(reached)) assert.ok(count > 0, `the walks never reached ${name}: ${JSON.stringify(reached)}`);
 });

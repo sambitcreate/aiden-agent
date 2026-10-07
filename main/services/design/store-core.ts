@@ -434,7 +434,7 @@ export function removeDesignScreen(manifest: DesignProjectManifestV1, screenId: 
         run.revisionIds.some((id) => screen.revisionIds.includes(id))),
   );
   if (rendering) {
-    throw new DesignStoreError("busy", `"${screen.title}" is being rendered. Stop the design run first.`);
+    throw new DesignStoreError("busy", `"${screen.title}" is being rendered. Wait for the design run to finish, or stop it first.`);
   }
   const deleted = [...screen.revisionIds];
   const deletedIds = new Set(deleted);

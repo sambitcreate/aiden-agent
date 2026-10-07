@@ -67,6 +67,7 @@
         "main/services/data-store.resilience.test.ts",
         "main/services/data-store.test.ts",
         "main/services/design/manifest-core.test.ts",
+        "main/services/design/ops-core.test.ts",
         "main/services/design/ops-parse.test.ts",
         "main/services/design/store-core.test.ts",
         "main/services/dev-log.test.ts",
