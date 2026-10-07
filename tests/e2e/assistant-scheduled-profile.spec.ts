@@ -180,9 +180,13 @@ test.describe("conversational scheduling", () => {
     const submit = page.getByRole("button", { name: "Submit", exact: true });
     await expect(submit).toBeInViewport();
     const shell = page.getByRole("region", { name: "How detailed should the report be?" });
-    const bounds = await shell.boundingBox();
-    const sidebar = await page.locator("[data-sidebar]").boundingBox();
-    expect(bounds!.x).toBeGreaterThanOrEqual(sidebar!.x + sidebar!.width);
+    // Keyboard focus must not scroll an outer container under the sidebar.
+    // Observe settled layout, including the normal composer entry transition.
+    await expect.poll(async () => {
+      const bounds = await shell.boundingBox();
+      const sidebar = await page.locator("[data-sidebar]").boundingBox();
+      return bounds && sidebar ? bounds.x - sidebar.x - sidebar.width : -Infinity;
+    }).toBeGreaterThanOrEqual(0);
     await page.screenshot({ path: testInfo.outputPath("question-composer.png") });
     await page.getByRole("button", { name: "Submit", exact: true }).click();
     await expect(page.getByText("I received your custom schedule.", { exact: true }).first()).toBeVisible();

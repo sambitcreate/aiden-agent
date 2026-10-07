@@ -276,7 +276,7 @@ export function AskUserQuestionComposer({
                 disabled={submitting}
                 onClick={() => {
                   setCustomOpen(true);
-                  requestAnimationFrame(() => customRef.current?.focus());
+                  requestAnimationFrame(() => customRef.current?.focus({ preventScroll: true }));
                 }}
               >
                 <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45">

@@ -1170,6 +1170,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var suppressesDraftPersistence = false
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
+    @ObservationIgnored private var didConsumeVoiceLaunch = false
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -2999,6 +3000,15 @@ final class AidenChatViewModel {
               installation.deviceCapabilities.contains(.chatWrite) else { return false }
         return chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
             && installation.hasNegotiatedAccess(to: .botWrite))
+    }
+
+    /// A launch intent belongs to the chat lifetime, not a removable composer.
+    /// Consume before awaiting capture so remounts cannot replay it.
+    func startVoiceForLaunch(if requested: Bool, start: () async -> Void) async {
+        guard requested, !didConsumeVoiceLaunch else { return }
+        didConsumeVoiceLaunch = true
+        guard !isReadOnlyPresentation, !isRemoved, !isStreaming, pendingQuestion == nil else { return }
+        await start()
     }
 
     @discardableResult
@@ -5026,6 +5036,7 @@ struct AidenChatDetailView: View {
             )
             if let question = model.pendingQuestion {
                 AidenQuestionCard(
+                    model: model,
                     prompt: question,
                     onSubmit: { request in
                         Task {
@@ -7207,14 +7218,17 @@ private struct AidenApprovalCard: View {
 /// plus a custom-answer field; a non-empty custom draft wins over selections.
 /// Submit requires at least one addressed question; skipping the card resolves
 /// the whole prompt as cancelled.
-private struct AidenQuestionCard: View {
+struct AidenQuestionCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
 
+    @Bindable var model: AidenChatViewModel
     let prompt: AidenPendingQuestion
     let onSubmit: (AidenQuestionRespondRequest) -> Void
 
     @State private var draft = AidenQuestionComposerDraft()
+
+    var stopButton: AidenChatStopButton { AidenChatStopButton(model: model) }
 
     private var answers: [AidenQuestionAnswer] { draft.answers(for: prompt.questions) }
 
@@ -7248,6 +7262,8 @@ private struct AidenQuestionCard: View {
                             .foregroundStyle(palette.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    Spacer(minLength: 0)
+                    stopButton
                 }
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -7648,6 +7664,32 @@ private struct AidenToolActivityCard: View {
     }
 }
 
+/// Shared by the message and question composers so cancellation remains reachable.
+struct AidenChatStopButton: View {
+    @Environment(\.aidenPalette) private var palette
+    @Bindable var model: AidenChatViewModel
+
+    var canStop: Bool { model.canControlCurrentRun && !model.isStopping }
+
+    @discardableResult
+    func stop() async -> Bool { await model.stop() }
+
+    var body: some View {
+        if model.isStreaming {
+            Button { Task { await stop() } } label: {
+                Image(systemName: "stop.fill")
+                    .frame(width: 30, height: 30)
+                    .background(palette.foreground, in: Circle())
+                    .foregroundStyle(palette.canvas)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canStop)
+            .accessibilityLabel(model.isStopping ? "Stopping response" : "Stop response")
+        }
+    }
+}
+
 private struct AidenComposerView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.aidenPalette) private var palette
@@ -7661,7 +7703,6 @@ private struct AidenComposerView: View {
     let canToggleAttachments: Bool
     let onToggleAttachmentPicker: () -> Void
     @State private var voiceInput = ComposerVoiceInputController()
-    @State private var didAutoStartVoice = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -7912,16 +7953,7 @@ private struct AidenComposerView: View {
                     if model.showsRunInputOptions {
                         runInputPill
                     }
-                    Button { Task { await model.stop() } } label: {
-                        Image(systemName: "stop.fill")
-                            .frame(width: 30, height: 30)
-                            .background(palette.foreground, in: Circle())
-                            .foregroundStyle(palette.canvas)
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!model.canControlCurrentRun || model.isStopping)
-                    .accessibilityLabel(model.isStopping ? "Stopping response" : "Stop response")
+                    AidenChatStopButton(model: model)
                 } else {
                     Button {
                         voiceInput.stopBeforeSubmittingDraft()
@@ -7968,14 +8000,14 @@ private struct AidenComposerView: View {
             value: visiblePendingAttachments.map(\.id) + attachmentPicker.committingAssets.map(\.localIdentifier)
         )
         .task {
-            guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
-            didAutoStartVoice = true
-            model.readAloud.stop()
-            await voiceInput.toggle(
-                currentDraft: model.draft,
-                updateDraft: { model.draft = $0 },
-                macTranscriber: model.transcribeMacSpeech
-            )
+            await model.startVoiceForLaunch(if: autoStartVoice) {
+                model.readAloud.stop()
+                await voiceInput.toggle(
+                    currentDraft: model.draft,
+                    updateDraft: { model.draft = $0 },
+                    macTranscriber: model.transcribeMacSpeech
+                )
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
             voiceInput.cancelDiscardingRecording()
