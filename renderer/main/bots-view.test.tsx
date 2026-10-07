@@ -18,21 +18,6 @@ function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
-test("bots have dedicated roster, detail, and Pi chat routes", () => {
-  const router = source("./router.tsx");
-  const guard = source("./bot-chat-route.tsx");
-  assert.match(router, /path: "\/bots"[\s\S]*component: BotsRoute/u);
-  assert.match(router, /path: "\/bots\/\$botId"[\s\S]*component: BotsRoute/u);
-  assert.match(router, /capabilities\.bots \? children : <Navigate to="\/" replace \/>/u);
-  assert.match(
-    router,
-    /path: "\/bots\/\$botId\/chat\/\$chatId"[\s\S]*<BotChatRouteView botId=\{botId\} chatId=\{chatId\}/u,
-  );
-  assert.match(guard, /<ChatPane chatId=\{chatId\}/u);
-  assert.match(guard, /actualBotId === botId/u);
-  assert.match(guard, /Opening the correct conversation/u);
-});
-
 test("Bot editor retries preserve only deliberate identity and access edits", () => {
   const baselineIdentity: BotEditorIdentityDraft = {
     name: "Planner",
@@ -245,17 +230,3 @@ test("Bots is a stable sidebar destination and bot rosters do not open the termi
   const layout = source("./chat-layout.tsx");
   assert.match(layout, /pathname\.startsWith\("\/bots"\) && !params\.chatId/u);
 });
-
-test("Remote Bot and chat notifications invalidate every dependent Bot cache", () => {
-  const root = source("./root-view.tsx");
-  assert.match(
-    root,
-    /onNotification\("chats:changed"[\s\S]*queryKey: queryKeys\.chats[\s\S]*queryKey: \["bot-chats"\]/u,
-  );
-  assert.match(
-    root,
-    /onNotification\("bots:changed"[\s\S]*queryKey: queryKeys\.bots[\s\S]*\["bot"\][\s\S]*\["bot-chats"\][\s\S]*\["bot-telegram-binding"\][\s\S]*queryKeys\.botTelegramTargets/u,
-  );
-});
-
-

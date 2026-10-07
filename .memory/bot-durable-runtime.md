@@ -27,10 +27,20 @@ Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Spec: `docs/superpower
 - **Hook errors are swallowed:** an exception from `beforeRequest`/`beforeTool` is reported via `onReport` and ignored (for `beforeTool` it becomes a block). To fail closed on readmission, the extension calls `harness.abortTask(taskId)` and waits for its own signal; the run ends `unanswered`, no provider call.
 - Tool replay: an interrupted `unsafe` tool becomes an `interrupted` error result; a `safe` one reruns once. Approval waits happen in `beforeTool` (before intent), so a restart re-runs the hook and the memo returns the same `waitId`.
 
+## Desktop Bot UI on the live projection (Tasks 1.4, 2.3)
+- `main/services/bot-runtime/live-projection.ts`: one `conv.watch` feed per Bot, `(epoch, seq)` events, >100 pending collapses to a snapshot, `[SILENT]` turns hidden, connect cards re-resolved on every subscribe. IPC: `bots:live:subscribe|unsubscribe|summary` (`main/handlers/bot-live.ts`), push `bots:live:event`.
+- `renderer/lib/use-bot-live.ts` applies events and re-subscribes on a gap or epoch change.
+- Chat route is `/bots/$botId/chat` (no chat id). Tool approvals show as a card in the chat (`bots:pendingApprovals`, `bots:approval`, `bots:approval-settled`, answered with `bots:approve`). `renderer/main/bots/bot-chat-pane.tsx` renders the transcript, the interrupted card (Resume/Dismiss, access-changed copy) and the composer (`Composer` with a `placeholder` override). Sends use `bots:send` with a UUID per message; Steer/Queue map to `whenBusy`; Stop maps to `bots:stop`. `bots:openChat` is gone. A legacy `/chat/<botChatId>` redirects to the Bot route, but `chat-pane.tsx` still carries its Bot-mode branches (follow-up to delete).
+- List previews and state come from `bots:live:summary`, invalidated on `bots:changed`.
+- Create flow: two steps (name and help, then `ConnectionChips`; Skip creates). The self-intro (`bots:introduce`) runs only for a Bot made here with a model.
+- First run: `renderer/main/bots/bot-starter-carousel.tsx` is the empty state of the Bots list (`bots:createFromPreset`). The onboarding step is NOT added yet (onboarding progress is a persisted main-side enum).
+- Profile: `bot-routines.tsx` and `bot-routine-editor.tsx` (`bots:routines:*`, labels from the host), photo menu (`bots:photo:set|remove`).
+- Connections: `use-connection-setup.tsx` opens `PresetSetupDialog`; `main/services/bot-connection-setup.ts` `openConnectionSetup(pluginId)` broadcasts `bots:connections:setup` (for Remote "Finish on your Mac" once that route calls it). `bots:connections:dismiss` persists Not now.
+- Tests: `bot-chat-pane.test.tsx`, `bot-routines.test.tsx`, `bots-home.test.tsx`, `bot-create-flow.test.tsx`; the test harness mounts the chat route through `test-providers.tsx` (and `installBotTestIpc` can push notifications with `emitBotTestNotification`).
+
 ## Not ported yet (open)
 - Subagents on durable Bots are read-only children (no V2 persistence/projection, no write/shell/web/MCP/delegation lanes, thinking level off) owned by `bot:<botId>:<callId>` in the Bot's canonical chat and folder. Form Fill is not offered. Routines (`schedule_task` for Bots) need no approval and are withheld on Telegram turns and without the `schedules` capability.
-- The renderer and Remote do not yet show Bot approval prompts (`bots:approval`) or `model_error`; wave-2 renderer and Task 5.2 own that.
-- Desktop chat still sends Bot messages through `chat:start`; `bots:send` exists for the wave-2 renderer.
+- Onboarding "Meet Your First Bot" step (see above), and the Playwright preset-to-quick-reply e2e.
 
 ## Hard delete and Bot data (Task 1.6)
 - Archive/restore are gone from main. `BotSessionService.deleteBot`: abort + `host.destroy` (refuses when another process holds the profile) → routines, dismissals, Telegram binding, favorites → `BotApplicationService.deleteBot`, which runs a `delete_bot` lifecycle-journal operation: photo (`BotAvatarStore.deleteBot`, all owners and receipts) → managed home (`deleteHome`: move the home into `<bot-service>/removed`, drop receipt, drop binding, purge) → access (`BotCapabilityStore.deleteBotAuthority`: policy + chat reductions) → chat rows (via chat-application remove) → `BotStore.delete` (record + companion appearance) last. Every step is idempotent; a crash leaves the Bot listed and the pending operation rolls the delete forward on the next start.

@@ -366,9 +366,9 @@ const featureBentos: FeatureBento[] = [
   {
     id: "bots",
     group: "control",
-    title: "Reusable Bots",
+    title: "Meet your Bots",
     description:
-      "Create reusable teammates with durable instructions, one persistent chat, explicit image understanding, access controls, and Telegram control.",
+      "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers its instructions, and can run on a schedule.",
     icon: Bot,
     imageUrl: FEATURE_ILLUSTRATIONS.bots,
     size: "standard",

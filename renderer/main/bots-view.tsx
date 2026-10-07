@@ -2,104 +2,67 @@ import * as React from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { EmptyState, Text, toast } from "../components/ui";
-import { botsApi } from "../lib/ipc";
-import { userFacingErrorMessage } from "../lib/ipc-error";
-import { queryKeys, useBot, useBots } from "../lib/queries";
+import { botsApi, onNotification } from "../lib/ipc";
+import { useBot, useBots } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
 import { BotAdvanced } from "./bots/bot-advanced";
 import { BotCreateFlow } from "./bots/bot-create-flow";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
 import { BotList, type BotListRow } from "./bots/bot-list";
-import { BotNeedsModel } from "./bots/bot-needs-model";
 import { BotProfile } from "./bots/bot-profile";
-import type { BotSessionState } from "./bots/bot-session-state";
+import { BotStarterCarousel } from "./bots/bot-starter-carousel";
+import { useConnectionSetup } from "./bots/use-connection-setup";
 import { RemoteBots } from "./remote-bots";
 
-type BotChatSummary = Awaited<ReturnType<typeof botsApi.openChat>>;
-
-/**
- * Opens a Bot's one chat. A Bot without an AI model shows "Needs an AI model"
- * instead, and nothing is sent.
- */
-function useOpenBotChat(onNeedsModel: (bot: BotDefinition) => void) {
-  const navigate = useNavigate();
-  const qc = useQueryClient();
-  const opening = React.useRef(false);
-  return async (bot: BotDefinition) => {
-    if (opening.current) return;
-    opening.current = true;
-    try {
-      const state = await botsApi.sessionState(bot.id);
-      qc.setQueryData(queryKeys.botSessionState(bot.id), state);
-      if (state.kind === "needs_model") {
-        onNeedsModel(bot);
-        return;
-      }
-      const chat = await botsApi.openChat(bot.id);
-      qc.setQueryData(queryKeys.botChats(bot.id), chat);
-      await navigate({
-        to: "/bots/$botId/chat/$chatId",
-        params: { botId: bot.id, chatId: chat.chatId },
-      });
-    } catch (error) {
-      toast.error(userFacingErrorMessage(error, `Aiden couldn’t open ${bot.name}.`));
-    } finally {
-      opening.current = false;
-    }
-  };
+/** The Bot's one conversation, addressed by Bot id only. */
+export function botChatPath(botId: string): { to: "/bots/$botId/chat"; params: { botId: string } } {
+  return { to: "/bots/$botId/chat", params: { botId } };
 }
 
 function BotsHome() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const bots = useBots();
-  const active = React.useMemo(
-    () => (bots.data ?? []).filter((bot) => bot.archivedAt === undefined),
-    [bots.data],
-  );
-  const states = useQueries({
+  const active = bots.data ?? [];
+  // Preview, time and state come from the same live projection the chat reads.
+  const summaries = useQueries({
     queries: active.map((bot) => ({
-      queryKey: queryKeys.botSessionState(bot.id),
-      queryFn: () => botsApi.sessionState(bot.id),
-      retry: false,
-    })),
-  });
-  // TEMPORARY: the chat's title and time stand in for the live projection's
-  // preview until the renderer moves to it (plan Task 1.4/2.3).
-  const chats = useQueries({
-    queries: active.map((bot, index) => ({
-      queryKey: queryKeys.botChats(bot.id),
-      queryFn: (): Promise<BotChatSummary> => botsApi.openChat(bot.id),
-      enabled: states[index]?.data !== undefined && states[index]?.data?.kind !== "needs_model",
+      queryKey: ["bot-live-summary", bot.id] as const,
+      queryFn: () => botsApi.liveSummary(bot.id),
       retry: false,
     })),
   });
   const rows: BotListRow[] = active
     .map((bot, index): BotListRow => {
-      const chat = chats[index]?.data;
-      const state = states[index]?.data as BotSessionState | undefined;
+      const summary = summaries[index]?.data;
       return {
         bot,
-        ...(state ? { state } : {}),
-        ...(chat ? { preview: chat.title, updatedAt: chat.updatedAt } : {}),
+        ...(summary ? { state: summary.state } : {}),
+        ...(summary?.preview ? { preview: summary.preview } : {}),
+        ...(summary?.updatedAt ? { updatedAt: summary.updatedAt } : {}),
       };
     })
     .sort((left, right) => (right.updatedAt ?? right.bot.updatedAt) - (left.updatedAt ?? left.bot.updatedAt));
   const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<BotDefinition | null>(null);
-  const [needsModel, setNeedsModel] = React.useState<BotDefinition | null>(null);
-  const openChat = useOpenBotChat(setNeedsModel);
+  const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
+  const connectionSetup = useConnectionSetup(() => {
+    void qc.invalidateQueries({ queryKey: ["bot-live-summary"] });
+  });
+  const openSetup = connectionSetup.open;
 
-  if (needsModel) {
-    return (
-      <BotNeedsModel
-        bot={needsModel}
-        onBack={() => setNeedsModel(null)}
-        onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: needsModel.id } })}
-        onSetUp={() => void navigate({ to: "/settings", search: { section: "providers" } })}
-      />
-    );
-  }
+  // A Bot connection requested elsewhere (a paired phone, a connect card) opens its setup here.
+  React.useEffect(
+    () =>
+      onNotification("bots:connections:setup", (payload: { pluginId: string }) => {
+        if (!openSetup(payload.pluginId)) {
+          toast.error("This connection can't be set up from here.");
+        }
+      }),
+    [openSetup],
+  );
+
   return (
     <>
       <BotList
@@ -107,19 +70,20 @@ function BotsHome() {
         loading={bots.isLoading}
         error={bots.isError}
         onRetry={() => void bots.refetch()}
-        onOpen={(bot) => void openChat(bot)}
+        onOpen={openChat}
         onOpenProfile={(bot) => void navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
         onDelete={setDeleting}
         onCreate={() => setCreating(true)}
+        emptyState={
+          <BotStarterCarousel onCreateOwn={() => setCreating(true)} onOpenChat={openChat} />
+        }
       >
         <RemoteBots />
       </BotList>
       <BotCreateFlow
         open={creating}
         onOpenChange={setCreating}
-        onCreated={(bot, { needsModel: missingModel }) =>
-          missingModel ? setNeedsModel(bot) : openChat(bot)
-        }
+        onCreated={(bot) => openChat(bot)}
       />
       {deleting ? (
         <BotDeleteDialog
@@ -130,11 +94,12 @@ function BotsHome() {
           }}
         />
       ) : null}
+      {connectionSetup.dialog}
     </>
   );
 }
 
-type ProfilePage = "profile" | "instructions" | "advanced" | "needs-model";
+type ProfilePage = "profile" | "instructions" | "advanced";
 
 function BotPage({ botId }: { botId: string }) {
   const navigate = useNavigate();
@@ -142,10 +107,9 @@ function BotPage({ botId }: { botId: string }) {
   const [page, setPage] = React.useState<ProfilePage>("profile");
   const [deleting, setDeleting] = React.useState(false);
   React.useEffect(() => setPage("profile"), [botId]);
-  const openChat = useOpenBotChat(() => setPage("needs-model"));
 
   if (bot.isLoading) return <Text color="secondary">Loading…</Text>;
-  if (!bot.data || bot.data.archivedAt !== undefined) {
+  if (!bot.data) {
     return <EmptyState title="Bot not found" description="This Bot may have been deleted." />;
   }
   const current = bot.data;
@@ -156,18 +120,11 @@ function BotPage({ botId }: { botId: string }) {
         <BotInstructionsEditor bot={current} onClose={back} />
       ) : page === "advanced" ? (
         <BotAdvanced bot={current} onClose={back} />
-      ) : page === "needs-model" ? (
-        <BotNeedsModel
-          bot={current}
-          onBack={back}
-          onOpenProfile={back}
-          onSetUp={() => void navigate({ to: "/settings", search: { section: "providers" } })}
-        />
       ) : (
         <BotProfile
           bot={current}
           onBack={() => void navigate({ to: "/bots" })}
-          onOpenChat={() => void openChat(current)}
+          onOpenChat={() => void navigate(botChatPath(current.id))}
           onOpenInstructions={() => setPage("instructions")}
           onOpenAdvanced={() => setPage("advanced")}
           onDelete={() => setDeleting(true)}
@@ -178,13 +135,16 @@ function BotPage({ botId }: { botId: string }) {
   );
 }
 
-/** Routes `/bots` to the Bots list and `/bots/$botId` to that Bot's Profile. */
+/** Routes `/bots` to the Bots list, `/bots/$botId` to a Bot's Profile and `/bots/$botId/chat` to its chat. */
 export function BotsView() {
   const params = useParams({ strict: false }) as { botId?: string };
+  if (params.botId) {
+    return <BotPage botId={params.botId} />;
+  }
   return (
     <div className="h-full overflow-y-auto">
       <main className="mx-auto w-full max-w-3xl px-8 pb-16 pt-16 max-[640px]:px-5">
-        {params.botId ? <BotPage botId={params.botId} /> : <BotsHome />}
+        <BotsHome />
       </main>
     </div>
   );

@@ -41,9 +41,12 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { createBotToolSources } from "./bot-tool-sources-main.js";
+import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
 
-export const BOT_CONNECT_CARD_ENTRY_KIND = "aiden.connect-card";
+import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
+import { isBotIntroRequest } from "./bot-intro.js";
+
+export { BOT_CONNECT_CARD_ENTRY_KIND };
 const MODEL_CACHE_MS = 30_000;
 
 const profileDir = () => app.getPath("userData");
@@ -153,7 +156,9 @@ const extension: BotExtensionDeps = {
       ];
     });
   },
-  currentTools: (bot, turn) => tools.currentTools(bot.id, turn),
+  currentTools: (bot, turn) =>
+    // The one-time self-intro answers from its instructions alone.
+    isBotIntroRequest(turn.requestId) ? Promise.resolve([]) : tools.currentTools(bot.id, turn),
   checkPolicy: (botId, toolName, call) => tools.checkPolicy(botId, toolName, call),
   requestApproval: (request) => botApprovals.request(request),
   async readmit(botId) {
@@ -215,6 +220,33 @@ function broadcastState(botId: string, state: BotSessionState): void {
   ipcMain.broadcast("bots:changed", { botId, session: state });
 }
 
+/** Connect cards show what is true now: connected, or answered with Not now. */
+async function connectCardStatus(botId: string, card: ConnectCardEntry) {
+  if (await isConnected(card.pluginId)) return "connected" as const;
+  if (await dismissals.isDismissed(botId, card.pluginId)) return "dismissed" as const;
+  return card.status;
+}
+
+let liveProjection: BotLiveProjection | undefined;
+
+/** The process-wide live projection that renderer windows subscribe to. */
+export function botLiveProjection(): BotLiveProjection {
+  liveProjection ??= createBotLiveProjection({
+    conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
+    state: async (botId) => (await botSessionRuntime()).state(botId),
+    connectCardStatus,
+    onRunSettled: broadcastState,
+    onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
+  });
+  return liveProjection;
+}
+
+/** Remember a Not now for this Bot and update its open chats. */
+export async function dismissBotConnection(botId: string, pluginId: string): Promise<void> {
+  await dismissals.dismiss(botId, pluginId);
+  await botLiveProjection().refresh(botId);
+}
+
 /** The process-wide Bot runtime. Created on first use; `initializeBotSessionRuntime` also scans. */
 export function botSessionRuntime(): Promise<BotSessionRuntime> {
   runtime ??= createBotSessionService({
@@ -231,7 +263,10 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       removeArchivedBotFavorite,
       eraseBotData,
     ],
-    onStateChange: broadcastState,
+    onStateChange: (botId, state) => {
+      broadcastState(botId, state);
+      botLiveProjection().notifyState(botId, state);
+    },
     onReport: (botId, error) => logger.warn("bots", `Bot ${botId} runtime report.`, error),
   }).catch((error) => {
     runtime = undefined;
@@ -262,6 +297,7 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   const service = await runtime.catch(() => undefined);
   runtime = undefined;
   initialized = undefined;
+  await liveProjection?.close();
   await service?.shutdown();
   await toolSources.shutdown();
 }

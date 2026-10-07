@@ -2,48 +2,98 @@ import { installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { DEFAULT_BOT_AVATAR, type BotDefinition } from "../../shared/bots";
 import { BotsView } from "../bots-view";
 import { mountWithBotRouter } from "./test-providers";
+import { botFixture } from "./test-fixtures";
 
 afterEach(cleanup);
 
-const planner: BotDefinition = {
-  id: "bot-1",
-  revision: "rev-1",
-  name: "Planner",
-  description: "Plans trips",
-  instructions: "Plan trips.",
-  avatar: { ...DEFAULT_BOT_AVATAR },
-  createdAt: 1,
-  updatedAt: 1,
-};
+const idle = { botId: "bot-1", preview: null, updatedAt: null, state: { kind: "idle" } };
 
 test("tapping a Bot row opens its one chat directly", async () => {
   const calls = installBotTestIpc({
-    "bots:list": () => [planner],
-    "bots:sessionState": () => ({ kind: "idle" }),
-    "bots:openChat": () => ({ chatId: "chat-1", title: "Lisbon in May", updatedAt: Date.now() }),
+    "bots:list": () => [botFixture()],
+    "bots:live:summary": () => ({ ...idle, preview: "Lisbon in May", updatedAt: Date.now() }),
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   const row = await screen.findByRole("button", { name: /Planner/u });
   await waitFor(() => assert.ok(within(row).getByText("Lisbon in May")));
 
   fireEvent.click(row);
-  await waitFor(() =>
-    assert.equal(router.state.location.pathname, "/bots/bot-1/chat/chat-1"),
-  );
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1/chat"));
   assert.deepEqual(calls.filter((call) => call.channel === "bots:send"), []);
 });
 
 test("the row context menu opens the Bot's profile", async () => {
   installBotTestIpc({
-    "bots:list": () => [planner],
-    "bots:sessionState": () => ({ kind: "idle" }),
-    "bots:openChat": () => ({ chatId: "chat-1", title: "New chat", updatedAt: 1 }),
+    "bots:list": () => [botFixture()],
+    "bots:live:summary": () => idle,
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   fireEvent.contextMenu(await screen.findByRole("button", { name: /Planner/u }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Profile" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
+});
+
+test("a Bot that needs a model says so in its row", async () => {
+  installBotTestIpc({
+    "bots:list": () => [botFixture()],
+    "bots:live:summary": () => ({ ...idle, state: { kind: "needs_model" } }),
+  });
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  const row = await screen.findByRole("button", { name: /Planner/u });
+  await waitFor(() => assert.ok(within(row).getByText("Needs an AI model")));
+});
+
+test("an interrupted Bot's row reads Paused", async () => {
+  installBotTestIpc({
+    "bots:list": () => [botFixture()],
+    "bots:live:summary": () => ({ ...idle, state: { kind: "interrupted", submissionId: "s-1" } }),
+  });
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  const row = await screen.findByRole("button", { name: /Planner/u });
+  await waitFor(() => assert.ok(within(row).getByText("Paused — tap to resume")));
+});
+
+test("Start Chat on a starter Bot sends one create request and opens its chat", async () => {
+  let created = false;
+  const calls = installBotTestIpc({
+    "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief of Staff" })] : []),
+    "bots:live:summary": () => idle,
+    "bots:createFromPreset": () => {
+      const firstTime = !created;
+      created = true;
+      return { bot: botFixture({ id: "bot-chief", name: "Chief of Staff" }), created: firstTime };
+    },
+    "bots:live:subscribe": () => ({
+      botId: "bot-chief",
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      state: { kind: "idle" },
+    }),
+  });
+  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  const heading = await screen.findByRole("heading", { name: "Meet Your First Bot" });
+  assert.ok(heading);
+  const starters = screen.getByRole("list", { name: "Starter Bots" });
+  const startChat = within(starters).getAllByRole("button", { name: "Start Chat" })[0]!;
+
+  // A second tap while the first is still answering is ignored; the same Bot opens.
+  fireEvent.click(startChat);
+  fireEvent.click(startChat);
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-chief/chat"));
+  const presetCalls = calls.filter((call) => call.channel === "bots:createFromPreset");
+  assert.equal(presetCalls.length, 1);
+  assert.deepEqual(presetCalls[0]!.args[0], { presetId: "chief-of-staff" });
+});
+
+test("Create My Own from the first run opens the create flow", async () => {
+  installBotTestIpc({
+    "bots:list": () => [],
+  });
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  fireEvent.click(await screen.findByRole("button", { name: "Create My Own" }));
+  assert.ok(await screen.findByRole("dialog", { name: "New Bot" }));
 });
