@@ -1,110 +1,85 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.Role
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.HideImage
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
+import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
-import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.UUID
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
-sealed class AidenBotProfileLifecycleAction {
-    object Archive : AidenBotProfileLifecycleAction()
-    data class Restore(val idempotencyKey: UUID = UUID.randomUUID()) : AidenBotProfileLifecycleAction()
-}
-
-data class AidenBotProfileLifecycleResult(
-    val detail: AidenBotDetail,
-    val favorites: AidenBotFavorites
-)
-
-suspend fun aidenBotProfileLifecycleUpdate(
-    client: sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient,
-    botId: String,
-    revision: String,
-    action: AidenBotProfileLifecycleAction
-): AidenBotProfileLifecycleResult {
-    val detail: AidenBotDetail = when (action) {
-        is AidenBotProfileLifecycleAction.Archive -> client.archiveBot(botId, revision)
-        is AidenBotProfileLifecycleAction.Restore -> client.restoreBot(botId, revision, action.idempotencyKey)
-    }
-    val favorites = client.botFavorites()
-    return AidenBotProfileLifecycleResult(detail = detail, favorites = favorites)
-}
-
-fun aidenBotConversationCanDelete(
-    conversation: AidenBotConversationItem,
-    botHealth: AidenBotHealth,
-    canWrite: Boolean
-): Boolean {
-    return canWrite && botHealth != AidenBotHealth.ARCHIVED && conversation.activityState == AidenBotConversationActivityState.IDLE
-}
-
-data class AidenBotConversationSelectionAccessibility(
-    val value: String,
-    val isSelected: Boolean,
-    val hint: String
-)
-
-fun aidenBotConversationSelectionAccessibility(
-    isSelecting: Boolean,
-    isSelected: Boolean,
-    canDelete: Boolean,
-    botHealth: AidenBotHealth,
-    canWrite: Boolean,
-    activityState: AidenBotConversationActivityState
-): AidenBotConversationSelectionAccessibility {
-    if (!isSelecting) {
-        return AidenBotConversationSelectionAccessibility(value = "", isSelected = false, hint = "Opens this chat.")
-    }
-    val hint = when {
-        botHealth == AidenBotHealth.ARCHIVED -> "Archived Bot chats are read-only."
-        !canWrite -> "Reconnect or refresh before selecting chats."
-        activityState != AidenBotConversationActivityState.IDLE -> "Active chats cannot be deleted."
-        canDelete -> "Selects this chat for deletion."
-        else -> "This chat cannot be deleted."
-    }
-    return AidenBotConversationSelectionAccessibility(
-        value = if (isSelected) "Selected" else "Not selected",
-        isSelected = isSelected,
-        hint = hint
+/**
+ * The patch that saves an inline name or subtitle edit, or null when nothing changed or
+ * the name was cleared (a Bot always keeps a name).
+ */
+fun aidenBotIdentityTextPatch(bot: AidenBotDetail, name: String, subtitle: String): AidenBotIdentityPatch? {
+    val nextName = name.trim().take(AidenBotWire.MAX_NAME_LENGTH)
+    val nextSubtitle = aidenBotSubtitle(subtitle)
+    val nameChanged = nextName.isNotEmpty() && nextName != bot.name
+    val subtitleChanged = nextSubtitle != bot.purpose
+    if (!nameChanged && !subtitleChanged) return null
+    return AidenBotIdentityPatch(
+        name = if (nameChanged) nextName else null,
+        purpose = if (subtitleChanged) nextSubtitle else null
     )
+}
+
+/** Reads a picked Gallery photo, refusing anything larger than the normalizer accepts. */
+private suspend fun aidenReadPickedPhoto(context: Context, uri: Uri): ByteArray = withContext(Dispatchers.IO) {
+    val limit = AidenBotGeneratedAvatarNormalizer.MAX_SOURCE_BYTES
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        val output = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            output.write(buffer, 0, read)
+            if (output.size() > limit) throw AidenBotGeneratedAvatarError.SourceTooLarge
+        }
+        output.toByteArray()
+    } ?: throw AidenBotGeneratedAvatarError.InvalidImage
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,508 +90,388 @@ fun AidenBotProfileScreen(
     onNavigateBack: () -> Unit,
     onNavigateToChat: (String) -> Unit,
     onNavigateToEditBot: (String) -> Unit,
-    onNavigateToCustomAccess: ((String) -> Unit)? = null,
-    onBotMutated: () -> Unit = {}
+    onBotMutated: () -> Unit = {},
+    botDeleter: AidenBotDeleter? = null,
+    onBotDeleted: () -> Unit = onNavigateBack
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val client by coordinator.client.collectAsStateWithLifecycle()
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
+    val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
 
-    var botDetail by remember { mutableStateOf<AidenBotDetail?>(null) }
-    var favorites by remember { mutableStateOf<AidenBotFavorites?>(null) }
-    var conversations by remember { mutableStateOf<List<AidenBotConversationItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var isConfirmingArchive by remember { mutableStateOf(false) }
+    var bot by remember(botId) { mutableStateOf(coordinator.botCache.getBotDetail(botId)) }
+    var isLoading by remember(botId) { mutableStateOf(bot == null) }
+    var loadFailed by remember(botId) { mutableStateOf(false) }
+    var nameText by remember(botId) { mutableStateOf(bot?.name.orEmpty()) }
+    var subtitleText by remember(botId) { mutableStateOf(bot?.purpose.orEmpty()) }
     var showMenu by remember { mutableStateOf(false) }
+    var showPhotoMenu by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    var isDeleting by remember { mutableStateOf(false) }
+    var isSavingCharacter by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    val avatarModel = remember(botId) { AidenBotGeneratedAvatarModel(coordinator, botId, coordinator.botCache) }
+    val photoPhase by avatarModel.phase.collectAsStateWithLifecycle()
+    val photoError by avatarModel.errorMessage.collectAsStateWithLifecycle()
+    val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
 
-    fun refresh() {
-        val cl = client ?: return
-        scope.launch {
-            isLoading = true
-            try {
-                val b = cl.bot(botId)
-                botDetail = b
-                val fav = cl.botFavorites()
-                favorites = fav
-                val page = cl.botConversations(botId = botId)
-                conversations = aidenCanonicalBotConversations(page.conversations)
-            } catch (_: Exception) {} finally {
-                isLoading = false
-            }
-        }
+    fun accept(detail: AidenBotDetail) {
+        bot = detail
+        nameText = detail.name
+        subtitleText = detail.purpose
+        coordinator.botCache.putBotDetail(detail)
+        onBotMutated()
     }
 
     LaunchedEffect(client, botId, connectionState) {
-        if (client != null) {
-            refresh()
+        val cl = client ?: run {
+            isLoading = false
+            return@LaunchedEffect
+        }
+        try {
+            val fresh = cl.bot(botId)
+            bot = fresh
+            nameText = fresh.name
+            subtitleText = fresh.purpose
+            coordinator.botCache.putBotDetail(fresh)
+            loadFailed = false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            loadFailed = bot == null
+        } finally {
+            isLoading = false
         }
     }
 
-    val bot = botDetail
-    val isFavorite = favorites?.botIds?.contains(botId) == true
-    val favoriteList = favorites?.botIds ?: emptyList()
-    val favoriteIndex = favoriteList.indexOf(botId)
-    val isArchived = bot?.health == AidenBotHealth.ARCHIVED
+    fun saveText() {
+        val current = bot ?: return
+        val patch = aidenBotIdentityTextPatch(current, nameText, subtitleText)
+        if (patch == null) {
+            if (nameText.isBlank()) nameText = current.name
+            return
+        }
+        val cl = client ?: run {
+            actionError = "Connect to your Mac to save changes."
+            return
+        }
+        scope.launch {
+            try {
+                accept(cl.updateBotIdentity(current.id, current.revision, patch))
+                actionError = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                actionError = "Aiden couldn’t save. Try again."
+            }
+        }
+    }
+
+    fun saveCharacter(recipe: AidenBotAvatarRecipe) {
+        val current = bot ?: return
+        val patch = aidenBotCharacterPatch(current, recipe) ?: return
+        val cl = client ?: run {
+            actionError = "Connect to your Mac to save changes."
+            return
+        }
+        // Show the new look right away; roll back if the Mac says no.
+        bot = current.copy(avatar = current.avatar.copy(semantic = AidenBotSemanticAvatar.Recipe(recipe)))
+        scope.launch {
+            isSavingCharacter = true
+            try {
+                accept(cl.updateBotIdentity(current.id, current.revision, patch))
+                actionError = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                bot = current
+                actionError = "Aiden couldn’t save the new look. Try again."
+            } finally {
+                isSavingCharacter = false
+            }
+        }
+    }
+
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val current = bot ?: return@rememberLauncherForActivityResult
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            try {
+                avatarModel.setCandidate(aidenReadPickedPhoto(context, uri))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AidenBotGeneratedAvatarError) {
+                actionError = e.messageText
+                return@launch
+            } catch (_: Exception) {
+                actionError = AidenBotGeneratedAvatarError.InvalidImage.messageText
+                return@launch
+            }
+            if (avatarModel.hasCandidate) {
+                avatarModel.uploadAvatar(current.id, aidenBotAvatarExpectedRevision(current)) { updated ->
+                    scope.launch { accept(updated) }
+                }
+            }
+        }
+    }
 
     Scaffold(
+        containerColor = palette.canvas,
         topBar = {
             TopAppBar(
-                title = { Text("Bot Profile", fontWeight = FontWeight.Bold) },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = palette.foreground)
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false },
-                        modifier = Modifier.background(palette.raised)
-                    ) {
-                        if (!isArchived) {
+                    Box {
+                        IconButton(onClick = { showMenu = true }, enabled = bot != null) {
+                            Icon(Icons.Default.MoreHoriz, contentDescription = "More options", tint = palette.foreground)
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = palette.raised) {
                             DropdownMenuItem(
-                                text = { Text("Archive Bot", color = palette.danger) },
+                                text = { Text("Advanced") },
+                                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
                                 onClick = {
                                     showMenu = false
-                                    isConfirmingArchive = true
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Archive, contentDescription = null, tint = palette.danger)
+                                    showAdvanced = true
                                 }
                             )
-                        } else {
-                            DropdownMenuItem(
-                                text = { Text("Restore Bot", color = palette.accent) },
-                                onClick = {
-                                    showMenu = false
-                                    val cl = client ?: return@DropdownMenuItem
-                                    val b = bot ?: return@DropdownMenuItem
-                                    scope.launch {
-                                        try {
-                                            val res = aidenBotProfileLifecycleUpdate(
-                                                client = cl,
-                                                botId = botId,
-                                                revision = b.revision,
-                                                action = AidenBotProfileLifecycleAction.Restore()
-                                            )
-                                            botDetail = res.detail
-                                            favorites = res.favorites
-                                            coordinator.botCache.putBotDetail(res.detail)
-                                            onBotMutated()
-                                        } catch (e: Exception) {
-                                            actionError = e.message
-                                        }
+                            if (canDelete) {
+                                DropdownMenuItem(
+                                    text = { Text("Delete Bot", color = palette.danger) },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
+                                    onClick = {
+                                        showMenu = false
+                                        confirmingDelete = true
                                     }
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Unarchive, contentDescription = null, tint = palette.accent)
-                                }
-                            )
+                                )
+                            }
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = palette.canvas,
-                    titleContentColor = palette.foreground
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.canvas)
             )
-        },
-        containerColor = palette.canvas
+        }
     ) { padding ->
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val current = bot
+        when {
+            current == null && isLoading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = palette.accent)
             }
-        } else if (bot != null) {
-            Column(
+            current == null -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text(
+                    if (loadFailed) "Aiden couldn’t load this Bot." else "Connect to your Mac to see this Bot.",
+                    color = palette.secondary
+                )
+            }
+            else -> Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .imePadding()
                     .verticalScroll(rememberScrollState())
-                    .padding(20.dp),
+                    .padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                // Header: Large Avatar, Name, Purpose
-                AidenBotCanonicalAvatarView(
-                    coordinator = coordinator,
-                    botId = bot.id,
-                    avatar = bot.avatar,
-                    name = bot.name,
-                    size = 112.dp
-                )
-
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = bot.name,
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.foreground
-                    )
-                    if (bot.purpose.isNotEmpty()) {
-                        Text(
-                            text = bot.purpose,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = palette.secondary
+                Box {
+                    Box(
+                        Modifier
+                            .clip(CircleShape)
+                            .clickable(onClickLabel = "Change photo") { showPhotoMenu = true }
+                    ) {
+                        AidenBotCanonicalAvatarView(
+                            coordinator = coordinator,
+                            botId = current.id,
+                            avatar = current.avatar,
+                            name = current.name,
+                            size = 120.dp
                         )
                     }
-                }
-
-                if (isArchived) {
                     Surface(
-                        color = palette.warning.copy(alpha = 0.15f),
-                        shape = AidenShape.Button,
-                        modifier = Modifier.fillMaxWidth()
+                        onClick = { showPhotoMenu = true },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(36.dp)
+                            .semantics { contentDescription = "Photo options" }
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(12.dp)
-                        ) {
-                            Icon(Icons.Default.Archive, contentDescription = null, tint = palette.warning, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Archived — chats are read-only", style = MaterialTheme.typography.bodySmall, color = palette.warning)
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
                         }
                     }
-                }
-
-                AidenBotProfileActionBar(
-                    actions = listOf(
-                        AidenBotProfileAction(
-                            label = "Chat",
-                            icon = Icons.Default.Chat,
-                            enabled = bot.health == AidenBotHealth.READY,
-                            emphasized = true,
+                    DropdownMenu(expanded = showPhotoMenu, onDismissRequest = { showPhotoMenu = false }, containerColor = palette.raised) {
+                        DropdownMenuItem(
+                            text = { Text("Choose from Gallery") },
+                            leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
                             onClick = {
-                                scope.launch {
-                                    val existing = conversations.firstOrNull { it.botId == bot.id }
-                                    if (existing != null) {
-                                        onNavigateToChat(existing.chatId)
-                                    } else {
-                                        val cl = client ?: return@launch
-                                        try {
-                                            val created = cl.createBotChat(bot.id)
-                                            onNavigateToChat(created.id)
-                                        } catch (_: Exception) {}
-                                    }
-                                }
-                            }
-                        ),
-                        AidenBotProfileAction(
-                            label = "Edit",
-                            icon = Icons.Default.Edit,
-                            onClick = { onNavigateToEditBot(botId) }
-                        ),
-                        AidenBotProfileAction(
-                            label = "Access",
-                            icon = Icons.Default.Shield,
-                            onClick = {
-                                if (onNavigateToCustomAccess != null) {
-                                    onNavigateToCustomAccess(botId)
-                                } else {
-                                    onNavigateToEditBot(botId)
-                                }
-                            }
-                        ),
-                        AidenBotProfileAction(
-                            label = if (isFavorite) "Unpin" else "Pin",
-                            icon = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                            iconTint = if (isFavorite) palette.accent else null,
-                            onClick = onClick@{
-                                val cl = client ?: return@onClick
-                                val favs = favorites ?: return@onClick
-                                scope.launch {
-                                    val next = if (isFavorite) {
-                                        favoriteList.filter { it != botId }
-                                    } else {
-                                        (favoriteList + botId).take(AidenBotWire.MAX_FAVORITES)
-                                    }
-                                    try {
-                                        val updated = cl.updateFavorites(next, favs.revision)
-                                        favorites = updated
-                                        onBotMutated()
-                                    } catch (e: Exception) {
-                                        actionError = e.message
-                                    }
-                                }
+                                showPhotoMenu = false
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                             }
                         )
-                    )
-                )
-
-                // Favorite Order Card (if favorite)
-                if (isFavorite && favoriteIndex >= 0) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Favorite Order",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = palette.foreground,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = "${favoriteIndex + 1} of ${favoriteList.size}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = palette.secondary
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                OutlinedButton(
-                                    border = null,
-                                    onClick = {
-                                        val cl = client ?: return@OutlinedButton
-                                        val favs = favorites ?: return@OutlinedButton
-                                        val next = aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.EARLIER)
-                                        scope.launch {
-                                            try {
-                                                val updated = cl.updateFavorites(next, favs.revision)
-                                                favorites = updated
-                                                onBotMutated()
-                                            } catch (_: Exception) {}
-                                        }
-                                    },
-                                    enabled = favoriteIndex > 0,
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Move Earlier")
-                                }
-
-                                OutlinedButton(
-                                    border = null,
-                                    onClick = {
-                                        val cl = client ?: return@OutlinedButton
-                                        val favs = favorites ?: return@OutlinedButton
-                                        val next = aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.LATER)
-                                        scope.launch {
-                                            try {
-                                                val updated = cl.updateFavorites(next, favs.revision)
-                                                favorites = updated
-                                                onBotMutated()
-                                            } catch (_: Exception) {}
-                                        }
-                                    },
-                                    enabled = favoriteIndex < favoriteList.size - 1,
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text("Move Later")
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Recent Chats",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.secondary,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-
-                    AidenConnectedColumn {
-                        if (conversations.isEmpty()) {
-                            AidenGroupCard(index = 0, count = 1, role = null) {
-                                Text(
-                                    text = "No conversation history yet.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.secondary
-                                )
-                            }
-                        } else {
-                            conversations.forEachIndexed { index, conv ->
-                                AidenGroupCard(
-                                    index = index,
-                                    count = conversations.size,
-                                    onClick = { onNavigateToChat(conv.chatId) },
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Icon(Icons.Default.ChatBubbleOutline, contentDescription = null, tint = palette.accent, modifier = Modifier.size(20.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = conv.title.ifEmpty { "Chat" },
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = palette.foreground,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        conv.preview?.let {
-                                            Text(
-                                                text = it,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = palette.secondary,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
+                        if (current.avatar.asset != null) {
+                            DropdownMenuItem(
+                                text = { Text("Remove photo") },
+                                leadingIcon = { Icon(Icons.Default.HideImage, contentDescription = null) },
+                                onClick = {
+                                    showPhotoMenu = false
+                                    scope.launch {
+                                        avatarModel.deleteAvatar(current.id, aidenBotAvatarExpectedRevision(current)) { updated ->
+                                            scope.launch { accept(updated) }
                                         }
                                     }
-                                    val time = DateTimeFormatter.ofPattern("MMM d")
-                                        .withZone(ZoneId.systemDefault())
-                                        .format(conv.updatedAt)
-                                    Text(text = time, style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                                 }
-                            }
+                            )
                         }
                     }
                 }
+                if (photoPhase == AidenBotGeneratedAvatarPhase.UPLOADING || photoPhase == AidenBotGeneratedAvatarPhase.REVERTING) {
+                    LinearProgressIndicator(color = palette.accent, modifier = Modifier.width(120.dp))
+                }
+                photoError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
 
-                // Greeting & Instructions Cards
-                bot.openingGreeting?.let { greeting ->
-                    if (greeting.isNotEmpty()) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("Greeting", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
-                                Text(greeting, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                            }
-                        }
+                Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        AidenBotInlineField(
+                            value = nameText,
+                            onValueChange = { nameText = it.take(AidenBotWire.MAX_NAME_LENGTH) },
+                            placeholder = "Name",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold, color = palette.foreground),
+                            onCommit = { saveText() },
+                            onDone = { focusManager.clearFocus() }
+                        )
+                        HorizontalDivider(color = palette.canvas, modifier = Modifier.padding(horizontal = 16.dp))
+                        AidenBotInlineField(
+                            value = subtitleText,
+                            onValueChange = { subtitleText = it.take(AidenBotWire.MAX_PURPOSE_LENGTH) },
+                            placeholder = "What it helps with",
+                            style = MaterialTheme.typography.bodyLarge.copy(color = palette.secondary),
+                            onCommit = { saveText() },
+                            onDone = { focusManager.clearFocus() }
+                        )
                     }
                 }
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(14.dp)
+                AidenBotCharacterCard(
+                    recipe = AidenBotCharacter.recipe(current.avatar.semantic),
+                    onChange = ::saveCharacter,
+                    enabled = !isSavingCharacter
+                )
+
+                Surface(
+                    onClick = { onNavigateToEditBot(current.id) },
+                    color = palette.raised,
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Instructions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
-                        Text(bot.instructions, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)
+                    ) {
+                        Icon(Icons.Default.Description, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Instructions", style = MaterialTheme.typography.bodyLarge, color = palette.foreground, modifier = Modifier.weight(1f))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
                     }
                 }
 
-                actionError?.let { err ->
-                    Text(err, color = palette.danger, style = MaterialTheme.typography.bodySmall)
-                }
+                actionError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
             }
         }
     }
 
-    if (isConfirmingArchive) {
-        AlertDialog(
-            onDismissRequest = { isConfirmingArchive = false },
-            title = { Text("Archive ${bot?.name ?: "Bot"}?") },
-            text = { Text("Its chats stay available to read. Restore the Bot later to edit it or start new work.") },
-            confirmButton = {
-                AidenDialogConfirmButton(
-                    text = "Archive Bot",
-                    destructive = true,
-                    onClick = onClick@{
-                        isConfirmingArchive = false
-                        val cl = client ?: return@onClick
-                        val b = bot ?: return@onClick
-                        scope.launch {
-                            try {
-                                val res = aidenBotProfileLifecycleUpdate(
-                                    client = cl,
-                                    botId = botId,
-                                    revision = b.revision,
-                                    action = AidenBotProfileLifecycleAction.Archive
-                                )
-                                botDetail = res.detail
-                                favorites = res.favorites
-                                coordinator.botCache.putBotDetail(res.detail)
-                                onBotMutated()
-                            } catch (e: Exception) {
-                                actionError = e.message
-                            }
-                        }
+    val current = bot
+    if (showAdvanced && current != null) {
+        AidenBotAdvancedSheet(
+            bot = current,
+            client = client,
+            onDismiss = { showAdvanced = false },
+            onSaved = {
+                accept(it)
+                showAdvanced = false
+            }
+        )
+    }
+
+    if (confirmingDelete && current != null) {
+        AidenBotDeleteDialog(
+            name = current.name,
+            isDeleting = isDeleting,
+            onDismiss = { confirmingDelete = false },
+            onConfirm = {
+                val cl = client
+                val deleter = botDeleter
+                if (cl == null || deleter == null) {
+                    confirmingDelete = false
+                    actionError = "Connect to your Mac to delete this Bot."
+                    return@AidenBotDeleteDialog
+                }
+                scope.launch {
+                    isDeleting = true
+                    try {
+                        deleter.delete(cl, current.id)
+                        confirmingDelete = false
+                        onBotMutated()
+                        onBotDeleted()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        confirmingDelete = false
+                        actionError = "Aiden couldn’t delete this Bot. Try again."
+                    } finally {
+                        isDeleting = false
                     }
-                )
-            },
-            dismissButton = {
-                AidenDialogDismissButton(onClick = { isConfirmingArchive = false })
-            },
-            shape = AidenShape.Dialog,
-            containerColor = palette.raised
+                }
+            }
         )
     }
 }
 
-data class AidenBotProfileAction(
-    val label: String,
-    val icon: ImageVector,
-    val onClick: () -> Unit,
-    val enabled: Boolean = true,
-    val emphasized: Boolean = false,
-    val iconTint: Color? = null
-)
-
-/**
- * Connected horizontal group of filled tonal squircles. The emphasized action takes the
- * accent tonal fill; the others sit on the high tonal tier.
- */
+/** A borderless centred field that saves when it loses focus or the keyboard's Done is pressed. */
 @Composable
-fun AidenBotProfileActionBar(
-    actions: List<AidenBotProfileAction>,
-    modifier: Modifier = Modifier
+private fun AidenBotInlineField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    style: TextStyle,
+    onCommit: () -> Unit,
+    onDone: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    Row(
-        modifier = modifier
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        Modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Min),
-        horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        contentAlignment = Alignment.Center
     ) {
-        actions.forEachIndexed { index, action ->
-            val interaction = remember { MutableInteractionSource() }
-            val ink = if (action.emphasized) palette.accent else palette.foreground
-            Surface(
-                onClick = action.onClick,
-                enabled = action.enabled,
-                shape = aidenGroupItemShape(index, actions.size, orientation = AidenGroupOrientation.HORIZONTAL),
-                color = if (action.emphasized) palette.accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh,
-                interactionSource = interaction,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .tactilePress(interaction)
-                    .alpha(if (action.enabled) 1f else 0.38f)
-                    .semantics { role = Role.Button }
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp)
-                ) {
-                    Icon(action.icon, contentDescription = null, tint = action.iconTint ?: ink, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = action.label,
-                        color = ink,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
+        if (value.isEmpty()) {
+            Text(placeholder, style = style.copy(color = palette.secondary), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = style.copy(textAlign = TextAlign.Center),
+            cursorBrush = SolidColor(palette.accent),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onDone() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = placeholder }
+                .onFocusChanged { state ->
+                    if (focused && !state.isFocused) onCommit()
+                    focused = state.isFocused
+                }
+        )
     }
 }

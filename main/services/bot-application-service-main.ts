@@ -1,3 +1,4 @@
+import { logger } from "../platform.js";
 import { createBotApplicationService } from "./bot-application-service.js";
 import {
   botCapabilityCatalog,
@@ -61,6 +62,12 @@ export function initializeBotApplicationService(): Promise<void> {
         getChat: (chatId) => chatStore.get(chatId),
         getChatAccess: (chatId) => botApplicationService.getChatAccess(chatId),
       });
+      // The durable Bot runtime starts once Bot identity is restored: it sweeps
+      // orphaned sessions and records interrupted turns, and never resumes one.
+      // A failure leaves Bots unavailable without blocking the rest of Aiden.
+      void import("./bot-runtime/bot-session-main.js")
+        .then(({ initializeBotSessionRuntime }) => initializeBotSessionRuntime())
+        .catch((error: unknown) => logger.error("bots", "The Bot runtime could not start.", error));
     })
     .catch((error) => {
       initialization = undefined;

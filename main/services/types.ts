@@ -1,4 +1,5 @@
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
@@ -455,7 +456,9 @@ export interface Chat extends ChatMeta {
 export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
-export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
+export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
+/** Why a run was recorded without doing work. Only Bot routines skip today. */
+export type ScheduledRunSkipReason = "bot_paused" | "duplicate";
 
 export interface ScheduledMcpServerBinding {
   id: string;
@@ -492,6 +495,14 @@ export interface ScheduledTask {
   /** Explicit Web Search authority. Missing legacy values are always treated as false. */
   webSearchEnabled?: boolean;
   chatId?: string;
+  /**
+   * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
+   * conversation instead of a workspace chat and is hidden from the generic
+   * scheduled-task surfaces. Immutable once set.
+   */
+  botId?: string;
+  /** Frequency-first schedule a Bot routine was created from; `cron` is derived from it. */
+  routineSchedule?: BotRoutineSchedule;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -505,6 +516,8 @@ export interface ScheduledRun {
   startedAt: number;
   finishedAt: number;
   result: ScheduledRunResult;
+  /** Present only when `result` is "skipped". */
+  reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
   chatId?: string;
@@ -533,6 +546,10 @@ export interface ScheduledTaskInput {
   executionProfile?: ScheduledTaskExecutionProfile;
   /** Explicit Web Search authority. New tasks default to false. */
   webSearchEnabled?: boolean;
+  /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
+  botId?: string;
+  /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
+  routineSchedule?: BotRoutineSchedule;
   notify?: boolean;
 }
 
