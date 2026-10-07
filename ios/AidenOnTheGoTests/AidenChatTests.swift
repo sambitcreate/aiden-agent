@@ -2734,43 +2734,39 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testHeldBotPermissionCannotOutliveWriteOrNoticePolicy() async {
-        for downgradeNotice in [false, true] {
-            let owner = AidenBotPresentationOwner()
-            let attempt = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", fullAccessAllowed: true)
-            var canWrite = true
-            var fullAccess = true
-            let gate = AidenChatWriteTestGate()
-            await gate.arm()
-            let resolving = Task {
-                await gate.waitIfArmed()
-                return owner.ownsPermission(attempt, canWrite: canWrite, fullAccessAllowed: fullAccess)
-            }
-            await waitForChatWrite(gate)
-            if downgradeNotice { fullAccess = false }
-            else { canWrite = false }
-            await gate.release()
-            let allowed = await resolving.value
-            XCTAssertFalse(allowed)
-            let refreshed = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", fullAccessAllowed: fullAccess)
-            XCTAssertEqual(owner.ownsPermission(refreshed, canWrite: canWrite, fullAccessAllowed: fullAccess), canWrite)
+    func testHeldBotPermissionCannotOutliveWritePolicy() async {
+        let owner = AidenBotPresentationOwner()
+        let attempt = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true)
+        var canWrite = true
+        let gate = AidenChatWriteTestGate()
+        await gate.arm()
+        let resolving = Task {
+            await gate.waitIfArmed()
+            return owner.ownsPermission(attempt, canWrite: canWrite)
         }
+        await waitForChatWrite(gate)
+        canWrite = false
+        await gate.release()
+        let allowed = await resolving.value
+        XCTAssertFalse(allowed)
+        let refreshed = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: canWrite)
+        XCTAssertFalse(owner.ownsPermission(refreshed, canWrite: canWrite))
+        XCTAssertFalse(owner.ownsPermission(attempt, canWrite: true), "a superseded attempt never grants")
     }
 
     @MainActor
     func testRestorationAdoptsOnlyInFlightOpenUnderSamePolicy() {
         let owner = AidenBotPresentationOwner()
-        func adopts(chat: String = "chat", device: String = "device", canWrite: Bool = true, fullAccess: Bool = false) -> Bool {
-            owner.adoptsRestoration(instanceID: "one", deviceID: device, chatID: chat, canWrite: canWrite, fullAccessAllowed: fullAccess)
+        func adopts(chat: String = "chat", device: String = "device", canWrite: Bool = true) -> Bool {
+            owner.adoptsRestoration(instanceID: "one", deviceID: device, chatID: chat, canWrite: canWrite)
         }
         // The open's own path change re-runs restoration mid-load.
-        let open = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true, fullAccessAllowed: false, adoptable: true)
+        let open = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true, adoptable: true)
         XCTAssertTrue(adopts())
         XCTAssertTrue(owner.owns(open))
         XCTAssertFalse(adopts(chat: "other"))
         XCTAssertFalse(adopts(device: "new-device"))
         XCTAssertFalse(adopts(canWrite: false))
-        XCTAssertFalse(adopts(fullAccess: true))
         // A settled open keeps ownership but later restoration inputs reload.
         owner.finish(open)
         XCTAssertTrue(owner.owns(open))
@@ -2787,25 +2783,21 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testRestorationRevalidationKeepsOnlySamePolicyLiveGrant() {
+    func testRestorationRevalidationKeepsOnlyALiveGrantWhileWritable() {
         typealias Presentation = AidenBotPresentationOwner.Presentation
         let chat = sampleChat()
-        for fullAccess in [false, true] {
-            let granted = Presentation.resolved(chat, allowsMutations: true, fullAccessAllowed: fullAccess)
-            let kept = granted.revalidating(canWrite: true, fullAccessAllowed: fullAccess)
-            XCTAssertTrue(kept.allowsMutations)
-            XCTAssertEqual(kept.revalidating(canWrite: true, fullAccessAllowed: fullAccess).allowsMutations, true)
-            XCTAssertFalse(granted.revalidating(canWrite: false, fullAccessAllowed: fullAccess).allowsMutations)
-            let noticeChanged = granted.revalidating(canWrite: true, fullAccessAllowed: !fullAccess)
-            XCTAssertFalse(noticeChanged.allowsMutations)
-            XCTAssertFalse(noticeChanged.revalidating(canWrite: true, fullAccessAllowed: fullAccess).allowsMutations,
-                           "a revoked grant cannot come back without a fresh live check")
-        }
-        XCTAssertFalse(Presentation.resolved(chat, allowsMutations: false, fullAccessAllowed: false)
-            .revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
-        XCTAssertFalse(Presentation.awaitingPermission(chat).revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
+        let granted = Presentation.resolved(chat, allowsMutations: true)
+        let kept = granted.revalidating(canWrite: true)
+        XCTAssertTrue(kept.allowsMutations)
+        XCTAssertTrue(kept.revalidating(canWrite: true).allowsMutations)
+        let revoked = granted.revalidating(canWrite: false)
+        XCTAssertFalse(revoked.allowsMutations)
+        XCTAssertFalse(revoked.revalidating(canWrite: true).allowsMutations,
+                       "a revoked grant cannot come back without a fresh live check")
+        XCTAssertFalse(Presentation.resolved(chat, allowsMutations: false).revalidating(canWrite: true).allowsMutations)
+        XCTAssertFalse(Presentation.awaitingPermission(chat).revalidating(canWrite: true).allowsMutations)
         // Grants that did not come from a live check (deep links) fail closed.
-        XCTAssertFalse(Presentation(chat: chat, allowsMutations: true).revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
+        XCTAssertFalse(Presentation(chat: chat, allowsMutations: true).revalidating(canWrite: true).allowsMutations)
     }
 
     @MainActor

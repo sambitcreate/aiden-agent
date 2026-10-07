@@ -6,8 +6,17 @@ import type {
   ScheduledTaskInput,
 } from "./types.js";
 
+/**
+ * What started a run. An automatic run carries the exact scheduled fire time it
+ * claimed, so downstream submissions can derive a stable idempotency key
+ * (`routine:<taskId>:<fireTime>`); a manual run carries its own unique key.
+ */
+export type ScheduledRunTrigger =
+  | { kind: "automatic"; fireTime: number }
+  | { kind: "manual"; key: string };
+
 interface ScheduleExecutionLike {
-  run(task: ScheduledTask, runId?: string): Promise<ScheduledRun>;
+  run(task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger): Promise<ScheduledRun>;
   cancel(taskId: string): boolean;
   cancelAll(): void;
 }
@@ -151,6 +160,7 @@ export function createScheduleServiceCore(
   let started = false;
   let globallyEnabled = true;
   let startupRevision = 0;
+  let manualRunSequence = 0;
   const catchUp = createCatchUpQueue(dependencies.catchUp);
 
   const throwIfAborted = (signal: AbortSignal | undefined, action: string) => {
@@ -187,6 +197,11 @@ export function createScheduleServiceCore(
     task: ScheduledTask,
     isCurrent: () => boolean,
   ): Promise<ScheduledTask> {
+    // A one-off routine is spent by the claim itself, so cron (which has no
+    // year field) can never repeat it on the same date next year.
+    if (task.routineSchedule?.kind === "once") {
+      return store.updateRuntime(task.id, { enabled: false, nextRunAt: undefined }, isCurrent);
+    }
     return store.updateRuntime(task.id, {
       nextRunAt: task.enabled
         ? nextScheduledRun(task.cron, task.timezone, new Date(Date.now() + 1))
@@ -284,8 +299,15 @@ export function createScheduleServiceCore(
         const claimed = options.automatic ? await advanceBeforeRun(task, isCurrent) : task;
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
+        if (options.automatic && !claimed.enabled) {
+          stopJob(task.id);
+          dependencies.broadcast({ taskId: task.id });
+        }
         state.executionStarted = true;
-        return execution.run(claimed, options.runId);
+        const trigger: ScheduledRunTrigger = options.automatic
+          ? { kind: "automatic", fireTime: task.nextRunAt ?? Date.now() }
+          : { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
+        return execution.run(claimed, options.runId, trigger);
       } finally {
         if (!workspaceResolved) {
           workspaceResolved = true;

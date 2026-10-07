@@ -122,3 +122,30 @@ test("concurrent desktop and remote lifecycle edits admit only one revision", as
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);
 });
+
+test("Bot routines stay out of the generic automation surfaces", async () => {
+  const value = fixture();
+  const ordinary = await value.service.save({
+    name: "Ordinary", mode: "llm", cron: "* * * * *", timezone: "UTC",
+    permission: "read-only", prompt: "hello",
+  });
+  value.tasks.set("routine-1", {
+    ...ordinary,
+    id: "routine-1",
+    name: "Weekly meal prep",
+    botId: "bot-chef",
+    routineSchedule: { kind: "weekly", days: [0], time: "08:41" },
+  });
+
+  assert.deepEqual((await value.service.list()).map((task) => task.id), [ordinary.id]);
+  await assert.rejects(value.service.get("routine-1"), /not found/u);
+  await assert.rejects(value.service.runs("routine-1"), /not found/u);
+  await assert.rejects(value.service.pause("routine-1"), /not found/u);
+  await assert.rejects(value.service.remove("routine-1"), /not found/u);
+  await assert.rejects(value.service.runNow("routine-1"), /not found/u);
+  await assert.rejects(
+    value.service.save({ id: "routine-1", name: "Hijack", mode: "llm", cron: "* * * * *", prompt: "x" }),
+    /not found/u,
+  );
+  assert.equal(value.tasks.get("routine-1")?.name, "Weekly meal prep");
+});

@@ -2,7 +2,7 @@ package sbtbiswas.AidenOnTheGo
 
 import org.junit.Assert.*
 import org.junit.Test
-import sbtbiswas.AidenOnTheGo.features.bots.AidenBotAvatarColors
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotAvatarExpectedRevision
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotGeneratedAvatarNormalizer
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotAvatarPresentation
 import sbtbiswas.AidenOnTheGo.models.*
@@ -12,30 +12,19 @@ import java.util.Base64
 
 class AidenBotGeneratedAvatarTest {
     @Test
-    fun testAllAvatarRecipePermutations() {
+    fun testEveryRecipeLooksTheSameWhateverItsLegacyEyesAndAccessory() {
         for (shape in AidenBotAvatarShape.values()) {
             for (color in AidenBotAvatarColor.values()) {
-                for (eyes in AidenBotAvatarEyes.values()) {
-                    for (detail in AidenBotAvatarDetail.values()) {
-                        val recipe = AidenBotAvatarRecipe(
-                            shape = shape,
-                            color = color,
-                            eyes = eyes,
-                            detail = detail
+                val looks = AidenBotAvatarEyes.values().flatMap { eyes ->
+                    AidenBotAvatarDetail.values().map { detail ->
+                        aidenBotAvatarPresentation(
+                            AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = shape, color = color, eyes = eyes, detail = detail))
                         )
-                        val presentation = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Recipe(recipe))
-                        assertEquals(shape, presentation.shape)
-                        assertEquals(color, presentation.color)
-                        assertEquals(eyes, presentation.eyes)
-                        assertEquals(detail, presentation.detail)
-
-                        val gradient = AidenBotAvatarColors.getGradient(color)
-                        assertEquals(2, gradient.size)
-
-                        val glyph = AidenBotAvatarColors.getEyeGlyph(eyes)
-                        assertTrue(glyph.isNotEmpty())
                     }
-                }
+                }.toSet()
+                assertEquals(1, looks.size)
+                assertEquals(shape, looks.single().shape)
+                assertEquals(color, looks.single().color)
             }
         }
     }
@@ -45,8 +34,6 @@ class AidenBotGeneratedAvatarTest {
         val orbitPres = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT))
         assertEquals(AidenBotAvatarShape.ORB, orbitPres.shape)
         assertEquals(AidenBotAvatarColor.LILAC, orbitPres.color)
-        assertEquals(AidenBotAvatarEyes.FOCUS, orbitPres.eyes)
-        assertEquals(AidenBotAvatarDetail.ORBIT, orbitPres.detail)
 
         val sparkPres = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.SPARK))
         assertEquals(AidenBotAvatarShape.WISP, sparkPres.shape)
@@ -107,10 +94,6 @@ class AidenBotGeneratedAvatarTest {
 
     @Test
     fun testExpectedRevisionUsesBotRevisionFirstThenAssetRevision() {
-        fun aidenBotAvatarExpectedRevision(botSummary: AidenBotSummary): String {
-            return botSummary.avatar.asset?.assetRevision ?: botSummary.revision
-        }
-
         val summaryWithoutAsset = AidenBotSummary(
             id = "bot-1",
             name = "Bot",

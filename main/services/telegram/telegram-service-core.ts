@@ -19,6 +19,7 @@ import type {
 import { TelegramApiError } from "./telegram-bot-api.js";
 import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps, TelegramTurnResult } from "./telegram-turn.js";
+import type { TelegramBotIngress, TelegramBotMessage } from "./bot-reply-outbox.js";
 import { sendTelegramTurn, ensureTelegramChat, telegramChatId } from "./telegram-turn.js";
 import {
   createTelegramQueue,
@@ -96,6 +97,12 @@ export interface TelegramServiceDeps {
   profile?: string;
   /** Resolve an exact private-chat/topic route after owner authorization. */
   resolveBotBinding?(input: TelegramBotBindingLookup): Promise<TelegramBotBindingSnapshot | null | undefined>;
+  /**
+   * Durable Bot ingress. When present, a Bot-bound message is admitted to the
+   * Bot's durable session (and its reply delivered through the outbox) before
+   * the update offset advances, instead of entering the in-memory queue.
+   */
+  botIngress?: Pick<TelegramBotIngress, "admit">;
   /** Alias accepted by profile managers that name the resolver explicitly. */
   resolveTelegramBotBinding?(input: TelegramBotBindingLookup): Promise<TelegramBotBindingSnapshot | null | undefined>;
   /** Validate that a resolved binding still points to a live, non-archived bot. */
@@ -739,7 +746,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return;
     }
 
-    await enqueuePrompt({
+    const prompt: QueuedTelegramTurn = {
       lane: classifyMessage(inbound.text),
       text: inbound.text || "Please review the attached file.",
       attachments: inbound.attachments,
@@ -751,7 +758,41 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       fromUsername: from.username,
       hasVoiceInput: inbound.hasVoiceInput,
       binding,
-    }, selectedWorkspaceId, true);
+    };
+    if (binding && deps.botIngress) {
+      // Throwing leaves the offset where it is, so Telegram redelivers.
+      await admitBotTurn(prompt);
+      return;
+    }
+    await enqueuePrompt(prompt, selectedWorkspaceId, true);
+  }
+
+  /** Hand a Bot-bound message to the Bot's durable session. */
+  async function admitBotTurn(turn: QueuedTelegramTurn): Promise<void> {
+    const binding = turn.binding!;
+    const validation = await deps.validateBotBinding?.(binding);
+    if (validation === false) throw new Error("This Telegram bot is unavailable or archived.");
+    if (typeof validation === "string") throw new Error(validation);
+    if (validation && typeof validation === "object" && !validation.valid) {
+      throw new Error(validation.reason ?? "This Telegram bot is unavailable or archived.");
+    }
+    const textFiles = (turn.attachments ?? [])
+      .filter((attachment) => attachment.kind === "text" && attachment.text !== undefined)
+      .map((attachment) => `<file name="${attachment.name}">\n${attachment.text}\n</file>`);
+    const images = (turn.attachments ?? [])
+      .filter((attachment) => attachment.kind === "image" && attachment.data !== undefined)
+      .map((attachment) => ({ type: "image" as const, mimeType: attachment.mimeType, data: attachment.data! }));
+    const message: TelegramBotMessage = {
+      botId: binding.botId,
+      chatId: turn.chatId,
+      ...(turn.threadId === undefined ? {} : { threadId: turn.threadId }),
+      messageId: turn.sourceMessageId ?? 0,
+      ownerUserId: turn.ownerUserId,
+      text: [turn.text, ...textFiles].join("\n\n"),
+      ...(images.length > 0 ? { attachments: images } : {}),
+    };
+    await deps.botIngress!.admit(message);
+    void deps.api.sendChatAction(turn.chatId, "typing", turn.threadId).catch(() => undefined);
   }
 
   function scheduleMediaGroup(key: string): ReturnType<typeof setTimeout> {
@@ -759,6 +800,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       const pending = mediaGroups.get(key);
       if (!pending) return;
       mediaGroups.delete(key);
+      if (pending.turn.binding && deps.botIngress) {
+        void admitBotTurn(pending.turn).catch((cause) => {
+          deps.error("Telegram could not hand an album to its Bot.", cause);
+          void deps.api.sendMessage({ chatId: pending.turn.chatId, threadId: pending.turn.threadId, text: `⚠️ Error: ${cause instanceof Error ? cause.message : String(cause)}` }).catch(() => undefined);
+        });
+        return;
+      }
       try {
         queue.enqueue(pending.turn);
         tryDispatch();

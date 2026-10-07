@@ -30,6 +30,8 @@ import {
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
 import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { createBotRoutineExecutor, type BotRoutineExecutor } from "./scheduled-bot-routines.js";
+import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -117,9 +119,31 @@ function notify(task: ScheduledTask, body: string, chatId: string | undefined): 
   });
 }
 
+function notifyBotRoutine(task: ScheduledTask, body: string): void {
+  showScheduledNotification(task, body, task.botId, {
+    isSupported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    openChat: async (botId) => {
+      await requestAppPath(`/bots/${encodeURIComponent(botId)}`);
+    },
+    onError: (stage) => {
+      logger.warn("schedule", `Routine notification ${stage} failed.`);
+    },
+  });
+}
+
 export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeStreams = new Map<string, string>();
   const activeControllers = new Map<string, AbortController>();
+  // Bot routines submit to their Bot's conversation, never a workspace chat.
+  let botRoutines: BotRoutineExecutor | undefined;
+  const botRoutineExecutor = () =>
+    (botRoutines ??= createBotRoutineExecutor({
+      store,
+      ports: async () => (await import("./scheduled-bot-routines-main.js")).botRoutinePorts(),
+      notify: notifyBotRoutine,
+      broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
+    }));
 
   async function ensureChat(task: ScheduledTask): Promise<string> {
     const create = (claimedChatId: string) =>
@@ -353,12 +377,27 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   return {
-    async run(task: ScheduledTask, runId?: string): Promise<ScheduledRun> {
+    async run(
+      task: ScheduledTask,
+      runId?: string,
+      trigger?: ScheduledRunTrigger,
+    ): Promise<ScheduledRun> {
       if (activeControllers.has(task.id)) {
         throw new Error("This scheduled task is already running.");
       }
       const controller = new AbortController();
       activeControllers.set(task.id, controller);
+      if (task.botId !== undefined) {
+        try {
+          return await botRoutineExecutor().run(task, {
+            runId,
+            trigger,
+            signal: controller.signal,
+          });
+        } finally {
+          activeControllers.delete(task.id);
+        }
+      }
       const startedAt = Date.now();
       let chatId: string | undefined;
       let result: ScheduledRun["result"] = "error";

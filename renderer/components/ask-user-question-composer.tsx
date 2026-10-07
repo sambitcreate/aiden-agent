@@ -110,7 +110,7 @@ export function AskUserQuestionComposer({
 
   const handleCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (submitting || customOpen || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (/^[1-4]$/u.test(event.key)) {
+    if (/^[1-5]$/u.test(event.key)) {
       const option = question.options[Number(event.key) - 1];
       if (!option) return;
       event.preventDefault();
