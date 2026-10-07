@@ -6,7 +6,7 @@ Status: Proposed. Needs owner approval (Phase 0 gate).
 Date: 2026-10-07
 Baseline: `main` @ `bd232b85` (Pi 1.0.3)
 Parent plan: [design-studio-create-images-rebuild-plan.md](design-studio-create-images-rebuild-plan.md), §6 ADR-CI and §9 Track CI
-Depends on: [studio-foundation-adr.md](studio-foundation-adr.md). That ADR owns the `createImages` flag, the lazy `/images` route, the sidebar row, the `renderer/canvas/` kit, the `main/services/studio-assets/` store, the `aiden-asset:` protocol with document-bound grants, the reconcile-chain slot and the `create-images` test lane. This ADR uses those and does not redefine them.
+Depends on: [studio-foundation-adr.md](studio-foundation-adr.md). That ADR owns the `createImages` flag, the lazy `/images` route, the sidebar row, the `renderer/canvas/` kit, the `main/services/studio-assets/` store, the `aiden-asset:` protocol with document-bound grants, the reconcile-chain slot and the test-lane filing rule (F-D9: npm suites filed into the existing CI lanes through `scripts/ci-test-registry.json`; no new lane). This ADR uses those and does not redefine them.
 Port source (read-only): `.claude/worktrees/ref-create-images` @ `1e3b3909`
 
 ## 1. Facts verified on current main
