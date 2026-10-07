@@ -108,13 +108,24 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     if (state.kind === "unavailable") {
       throw new Error("Bots are open in another Aiden window.");
     }
-    const submission = await abortable(
-      ports.send(task.botId, {
-        text: botRoutineMessage(prompt),
-        requestId: botRoutineRequestId(task.id, trigger),
-      }),
-      signal,
-    );
+    let submission: { submissionId: string; deduped: boolean };
+    try {
+      submission = await abortable(
+        ports.send(task.botId, {
+          text: botRoutineMessage(prompt),
+          requestId: botRoutineRequestId(task.id, trigger),
+          ifNotInterrupted: true,
+          ...(task.name?.trim() ? { label: task.name.trim() } : {}),
+        }),
+        signal,
+      );
+    } catch (error) {
+      // The Bot was interrupted between the state check and the send.
+      if ((error as { reason?: unknown } | null)?.reason === "bot_paused") {
+        return { result: "skipped", reason: "bot_paused", output: "", surface: false };
+      }
+      throw error;
+    }
     if (submission.deduped) {
       return { result: "skipped", reason: "duplicate", output: "", surface: false };
     }
