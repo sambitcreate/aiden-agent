@@ -221,6 +221,7 @@ class MainActivity : ComponentActivity() {
                                     networkAvailability = networkAvailability,
                                     startVoiceOnOpen = screen.startsVoice,
                                     onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
+                                    onNavigateToBotProfile = { botId -> push(AidenScreen.BotProfile(botId)) },
                                     onNavigateBack = navigator::back
                                 )
                             }
