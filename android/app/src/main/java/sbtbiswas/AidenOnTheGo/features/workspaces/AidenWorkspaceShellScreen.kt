@@ -960,6 +960,11 @@ fun AidenFolderBrowserSheet(
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
             ) {
+                if (roots.isEmpty() && isLoading) {
+                    item(key = "roots-skeleton") {
+                        AidenSkeletonList(count = 3, supporting = false, loadingDescription = "Loading folders")
+                    }
+                }
                 itemsIndexed(roots, key = { _, root -> root.id }) { index, root ->
                     AidenGroupCard(
                         index = index,

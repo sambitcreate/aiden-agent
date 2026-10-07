@@ -131,6 +131,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
@@ -266,6 +268,8 @@ private fun AidenWorkspaceHome(
         viewModel.hydrate(workspaces)
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.load()
     }
+    // Coming back to the app rereads stale data underneath what is already shown.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.revalidate() }
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
             if (

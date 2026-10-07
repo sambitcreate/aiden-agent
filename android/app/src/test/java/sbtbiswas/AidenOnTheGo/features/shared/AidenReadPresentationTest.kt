@@ -118,4 +118,14 @@ class AidenReadPresentationTest {
         )
         assertEquals(AidenReadPresentation.EMPTY, searching)
     }
+
+    @Test
+    fun foregroundRevalidationWaitsForStaleDataAndNeverStacksOnAReadInFlight() {
+        val loadedAt = 1_000_000L
+        assertEquals(false, AidenRevalidation.isDue(loadedAt, loadedAt + 5_000, inFlight = false))
+        assertEquals(true, AidenRevalidation.isDue(loadedAt, loadedAt + AidenRevalidation.STALE_AFTER_MILLIS, inFlight = false))
+        assertEquals(false, AidenRevalidation.isDue(loadedAt, loadedAt + 10 * AidenRevalidation.STALE_AFTER_MILLIS, inFlight = true))
+        // No successful read yet (or it failed): returning to the app retries at once.
+        assertEquals(true, AidenRevalidation.isDue(null, loadedAt, inFlight = false))
+    }
 }

@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.role
 import androidx.compose.animation.core.*
@@ -340,6 +342,8 @@ fun AidenBotsHomeScreen(
             viewModel.loadBots()
         }
     }
+    // Coming back to the app rereads stale Bots underneath what is already shown.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.revalidate() }
 
     val allBots = botList?.bots ?: emptyList()
     val activeBots = allBots.filter { it.health != AidenBotHealth.ARCHIVED }

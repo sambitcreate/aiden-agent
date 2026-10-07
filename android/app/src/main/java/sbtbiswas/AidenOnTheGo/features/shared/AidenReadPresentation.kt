@@ -1,6 +1,18 @@
 package sbtbiswas.AidenOnTheGo.features.shared
 
 /**
+ * When a screen brought back to the foreground quietly rereads data it already shows.
+ * The saved data stays on screen meanwhile, so this only bounds network chatter.
+ */
+object AidenRevalidation {
+    const val STALE_AFTER_MILLIS = 60_000L
+
+    /** [lastSuccessAtMillis] is null when no read has succeeded yet for the current owner. */
+    fun isDue(lastSuccessAtMillis: Long?, nowMillis: Long, inFlight: Boolean): Boolean =
+        !inFlight && (lastSuccessAtMillis == null || nowMillis - lastSuccessAtMillis >= STALE_AFTER_MILLIS)
+}
+
+/**
  * What a region backed by a read from the paired desktop shows. Aiden renders
  * cached or last-known data at once and revalidates in the background, so this
  * is decided the same way on every screen.
