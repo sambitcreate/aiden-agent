@@ -9186,6 +9186,26 @@ extension AidenChatTests {
         )
     }
 
+    func testQuestionTabsRetainCustomAndMultiSelectAnswersWhenRevisited() {
+        let questions = [questionFixture(), questionFixture(multiSelect: true)]
+        var draft = AidenQuestionComposerDraft()
+        draft.customOpen.insert(0)
+        draft.customAnswers[0] = "  Make it 2 mm  "
+        draft.move(to: 1, questions: questions)
+        draft.toggle("0.5 mm", questions: questions)
+        draft.toggle("1.0 mm", questions: questions)
+        draft.move(to: 0, questions: questions)
+        XCTAssertEqual(draft.activeIndex, 0)
+        XCTAssertTrue(draft.customOpen.contains(0))
+        XCTAssertEqual(draft.customAnswers[0], "  Make it 2 mm  ")
+        draft.move(to: 7, questions: questions)
+        XCTAssertEqual(draft.activeIndex, 0)
+        XCTAssertEqual(draft.answers(for: questions), [
+            .custom(questionIndex: 0, answer: "Make it 2 mm"),
+            .multi(questionIndex: 1, selected: ["0.5 mm", "1.0 mm"]),
+        ])
+    }
+
     func testQuestionAnswerDraftBuildsWireAnswersInOrder() {
         let questions = [questionFixture(), questionFixture(multiSelect: true)]
         let answers = AidenQuestionAnswerDraft.answers(

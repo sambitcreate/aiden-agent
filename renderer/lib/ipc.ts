@@ -640,6 +640,10 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
   pendingApproval: (chatId: string) =>
     invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
+  pendingQuestion: (chatId: string) =>
+    invoke<(AskUserQuestionPromptV1 & { source: "remote" }) | null>("remote:getPendingQuestion", chatId),
+  respondQuestion: (chatId: string, promptId: string, response: AskUserQuestionResponseV1) =>
+    invoke<{ status: "answered" | "elsewhere" }>("remote:respondQuestionFromHost", chatId, promptId, response),
   respondApproval: (
     chatId: string,
     approvalId: string,

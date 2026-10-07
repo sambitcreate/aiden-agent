@@ -154,7 +154,7 @@ import {
 import { hostRunRegistry } from "./host-runs-main.js";
 import { gitCachedRepositoryIdentity } from "./git.js";
 import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
-import { aidenRemoteHostPlatform } from "./aiden-remote-protocol.js";
+import { aidenRemoteHostPlatform, type AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
 import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
@@ -277,6 +277,8 @@ export interface AidenRemoteRuntime {
   approvedRoots: AidenRemoteApprovedRootService;
   revokeDevice(deviceId: string): Promise<boolean>;
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
+  pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null;
+  respondQuestionFromHost(chatId: string, promptId: string, response: unknown): boolean;
   respondApprovalFromHost(
     chatId: string,
     approvalId: string,
@@ -1045,6 +1047,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       return revoked;
     },
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
+    pendingQuestionForChat: (chatId) => activeStreams?.pendingQuestionForChat(chatId) ?? null,
+    respondQuestionFromHost: (chatId, promptId, response) =>
+      activeStreams?.respondQuestionFromHost(chatId, promptId, response) ?? false,
     respondApprovalFromHost: (chatId, approvalId, decision, scope) =>
       activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ?? false,
   };

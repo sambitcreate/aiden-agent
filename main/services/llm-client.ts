@@ -2989,7 +2989,8 @@ export const llmClient = {
                   : await repairAssistantScheduleMcpTarget(context.args);
                 if (createScheduleApproval) {
                   const canonicalArgs = context.args as Record<string, unknown>;
-                  canonicalArgs.workspaceId = proposal.input.workspaceId;
+                  if (proposal.input.workspaceId) canonicalArgs.workspaceId = proposal.input.workspaceId;
+                  else delete canonicalArgs.workspaceId;
                   canonicalArgs.permission = proposal.input.permission;
                   canonicalArgs.mcpServerIds = proposal.input.mcpServerIds;
                 }

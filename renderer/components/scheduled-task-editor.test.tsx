@@ -1,6 +1,43 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement, createRef } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ChatApprovalCard } from "./chat-approval-card";
+import type { ScheduledTaskApprovalDetails } from "../shared/assistant";
+
+const approval: ScheduledTaskApprovalDetails = {
+  kind: "scheduled-task", action: "create", taskId: null, expectedUpdatedAt: null,
+  enabled: true, name: "Inbox brief", prompt: "Summarize unread messages without sending replies.",
+  script: null, cron: "0 9 * * *", timezone: "America/New_York", nextRunAt: 1_900_000_000_000,
+  notify: true, mode: "llm", permission: "full", workspaceId: null, workspaceName: null,
+  mcpServerIds: ["mail-1"], mcpServerNames: ["Email"], providerId: "local",
+  providerName: "Local provider", model: "brief-model", modelName: "Brief model",
+  legacyGlobalMcp: false, schedulerEnabled: false,
+};
+
+function renderApproval(details: unknown) {
+  return renderToStaticMarkup(createElement(ChatApprovalCard, {
+    pending: { approvalId: "approval-1", toolCallId: "call-1", toolName: "schedule_task", summary: "Create daily brief", details: details as ScheduledTaskApprovalDetails },
+    deciding: false, onDecide: () => undefined,
+    cardRef: createRef<HTMLElement>(), denyRef: createRef<HTMLButtonElement>(),
+  }));
+}
+
+test("task approval discloses instructions, runtime, exact connectors and paused scheduling", () => {
+  const markup = renderApproval(approval);
+  for (const text of ["Summarize unread messages without sending replies.", "Local provider", "Brief model", "Email (mail-1)", "America/New_York", "will not run automatically"]) {
+    assert.ok(markup.includes(text), `Missing approval disclosure: ${text}`);
+  }
+  assert.ok(markup.includes("Allow once"));
+  assert.ok(!markup.includes("Remember this exact action"));
+});
+
+test("malformed schedule approval withholds Allow instead of presenting incomplete consent", () => {
+  const markup = renderApproval({ ...approval, providerName: undefined });
+  assert.ok(markup.includes("Invalid privileged approval blocked"));
+  assert.ok(!markup.includes("Allow once"));
+});
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");

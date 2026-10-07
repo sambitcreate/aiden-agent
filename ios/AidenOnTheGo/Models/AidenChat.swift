@@ -2284,6 +2284,31 @@ enum AidenPendingQuestionResolution {
     }
 }
 
+/// Owns all question drafts while the composer displays one page at a time.
+struct AidenQuestionComposerDraft {
+    private(set) var activeIndex = 0
+    var selections: [Int: Set<String>] = [:]
+    var customAnswers: [Int: String] = [:]
+    var customOpen: Set<Int> = []
+
+    mutating func move(to index: Int, questions: [AidenRemoteQuestion]) {
+        guard questions.indices.contains(index) else { return }
+        activeIndex = index
+    }
+
+    mutating func toggle(_ label: String, questions: [AidenRemoteQuestion]) {
+        guard questions.indices.contains(activeIndex) else { return }
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: activeIndex, label: label,
+            multiSelect: questions[activeIndex].multiSelect
+        )
+    }
+
+    func answers(for questions: [AidenRemoteQuestion]) -> [AidenQuestionAnswer] {
+        AidenQuestionAnswerDraft.answers(for: questions, selections: selections, customAnswers: customAnswers)
+    }
+}
+
 /// Builds the wire answers from the card's selection state. A non-empty custom
 /// draft wins over option selections for that question; questions left
 /// unaddressed are omitted so the host records them as skipped.

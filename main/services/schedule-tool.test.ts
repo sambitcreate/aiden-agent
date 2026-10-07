@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { runToolCall, type AgentToolResult } from "@earendil-works/pi-agent-core";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { digestPiRuntimeEffectArguments } from "./pi-runtime-effect-core.js";
 import type {
   McpServer,
   ScheduledMcpServerBinding,
@@ -193,6 +195,36 @@ function jsonResult(value: AgentToolResult<null>): Record<string, unknown> {
   assert.equal(block?.type, "text");
   if (!block || block.type !== "text") throw new Error("Expected a text tool result.");
   return JSON.parse(block.text) as Record<string, unknown>;
+}
+
+for (const attended of [false, true]) {
+  test(`approved ${attended ? "Assistant" : "standard"} task reaches execution through the durable tool boundary`, async () => {
+    const fake = fakeDependencies();
+    const tool = createScheduleTaskTool(
+      attended ? ATTENDED_ACCESS : { kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION },
+      fake.dependencies,
+    );
+    const outcome = await runToolCall({
+      type: "toolCall", id: "create-approved", name: tool.name,
+      arguments: { action: "create", name: "Inbox brief", cron: "0 9 * * *", prompt: "Summarize unread email.", permission: "full", mcpServerIds: ["gmail"] },
+    }, {
+      assistantMessage: fauxAssistantMessage("I’ll prepare your daily brief."),
+      tools: [tool],
+      context: { messages: [], tools: [tool] },
+      beforeToolCall: async ({ args }) => {
+        if (attended) attachAssistantScheduleMcpApproval(args, [GMAIL_BINDING]);
+        else await prepareStandardScheduleApproval(args, ASSISTANT_MODEL_SELECTION, fake.dependencies);
+        // The managed runtime hashes arguments after approval and before dispatch.
+        digestPiRuntimeEffectArguments(args);
+        return undefined;
+      },
+    });
+    assert.equal(outcome.isError, false, JSON.stringify(outcome.result));
+    assert.equal(fake.tasks.length, 1);
+    assert.equal(fake.tasks[0]?.providerId, "local-provider");
+    assert.equal(fake.tasks[0]?.model, "local-model");
+    assert.deepEqual(fake.tasks[0]?.mcpServerBindings, [GMAIL_BINDING]);
+  });
 }
 
 test("schedule_task supports the full create/update/list/pause/resume/run/remove lifecycle", async () => {

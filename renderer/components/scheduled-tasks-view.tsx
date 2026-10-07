@@ -133,7 +133,6 @@ function newTask(
   mcpServers: McpServer[],
   providers: Provider[] | undefined,
   hiddenModelsByProvider: HiddenModelsByProvider | undefined,
-  template?: (typeof TEMPLATES)[number],
 ): ScheduledTaskInput {
   const mode = settings?.defaultMode ?? "llm";
   const permission = mode === "script" ? "full" : (settings?.defaultPermission ?? "read-only");
@@ -142,15 +141,15 @@ function newTask(
       ? scheduledTaskProviderPin(providers, readModelSelection(), hiddenModelsByProvider)
       : undefined;
   return {
-    name: template?.name ?? "",
+    name: "",
     enabled: true,
     mode,
-    cron: template?.cron ?? "0 9 * * 1-5",
+    cron: "0 9 * * 1-5",
     timezone:
       settings?.defaultTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
     workspaceId,
     ...(pinned ?? {}),
-    prompt: template?.prompt ?? "",
+    prompt: "",
     script: "",
     permission,
     mcpServerIds:
@@ -757,18 +756,9 @@ export function ScheduledTasksView() {
                           {index > 0 ? <Separator /> : null}
                           <button
                             type="button"
-                            disabled={manualCreationUnavailable}
                             onClick={() => {
-                              setEditingUpdatedAt(undefined);
-                              setEditing(
-                                newTask(
-                                  settings.data,
-                                  activeId,
-                                  mcpServers.data ?? [],
-                                  providers.data,
-                                  appSettings.data?.hiddenModelsByProvider,
-                                  template,
-                                ),
+                              requestAssistantAutomationComposer(
+                                `Create an automation named "${template.name}". ${template.prompt} Schedule: ${formatSchedule(template.cron, settings.data?.defaultTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC")}.`,
                               );
                             }}
                             className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 [--keyboard-focus-offset:-2px] focus-visible:outline-focus-ring disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none"

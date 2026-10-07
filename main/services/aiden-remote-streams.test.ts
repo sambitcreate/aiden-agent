@@ -1678,6 +1678,35 @@ test("remote question prompts bind to their stream and resolve once", async () =
   );
 });
 
+test("desktop can recover and answer a phone question without crossing chats or settling twice", async () => {
+  let answers = 0;
+  let now = 1_000;
+  const service = new AidenRemoteStreamService({
+    now: () => now, cancel: () => true, approve: () => true,
+    respondQuestion: () => { answers += 1; return true; },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
+  assert.equal(service.pendingQuestionForChat("unrelated"), null);
+  assert.equal(service.pendingQuestionForChat("chat-1")?.questions[0]?.question, QUESTION_PROMPT.questions[0]?.question);
+  const answer = { version: 1, promptId: "q-prompt-1", cancelled: false, answers: [{ questionIndex: 0, kind: "custom", answer: "Use 1 mm" }] };
+  assert.equal(service.respondQuestionFromHost("unrelated", "q-prompt-1", answer), false);
+  assert.equal(service.respondQuestionFromHost("chat-1", "q-prompt-1", { ...answer, answers: [{ questionIndex: 0, kind: "option", answer: "Invented option" }] }), false);
+  assert.equal(answers, 0);
+  assert.ok(service.pendingQuestionForChat("chat-1"));
+  assert.equal(service.respondQuestionFromHost("chat-1", "q-prompt-1", answer), true);
+  assert.equal(service.pendingQuestionForChat("chat-1"), null);
+  assert.equal(service.pendingQuestion("device-1", "stream-1"), null);
+  assert.equal(service.status("device-1", "stream-1").state, "running");
+  assert.equal(service.respondQuestionFromHost("chat-1", "q-prompt-1", answer), false);
+  assert.equal(answers, 1);
+
+  owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-expired" });
+  now += 300_001;
+  assert.equal(service.pendingQuestionForChat("chat-1"), null);
+  assert.equal(service.respondQuestionFromHost("chat-1", "q-expired", { ...answer, promptId: "q-expired" }), false);
+});
+
 test("remote question responses are semantically validated against the stored prompt", async () => {
   const service = new AidenRemoteStreamService({
     now: () => 1_000,

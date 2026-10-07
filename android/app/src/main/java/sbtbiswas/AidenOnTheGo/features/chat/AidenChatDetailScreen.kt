@@ -645,8 +645,8 @@ fun AidenChatDetailScreen(
                     )
                 }
 
-                // 1:1 Parity iOS Glass Composer
-                AidenComposerView(
+                // A pending question occupies the composer without discarding its draft.
+                if (pendingQuestion == null) AidenComposerView(
                     draft = draft,
                     onDraftChange = { viewModel.updateDraft(it) },
                     onSend = {

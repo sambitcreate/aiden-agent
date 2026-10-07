@@ -523,7 +523,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
-  const [questionnaire, setQuestionnaire] = React.useState<AskUserQuestionPromptV1 | null>(null);
+  const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
   // The prompt whose agent deadline passed while its card was still open.
   const [expiredQuestionnaireId, setExpiredQuestionnaireId] = React.useState<string | null>(null);
@@ -612,7 +612,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const refresh = async () => {
       const requestId = ++remoteApprovalRefreshRef.current;
       try {
-        const remote = await aidenRemoteApi.pendingApproval(chatId);
+        const [remote, remoteQuestion] = await Promise.all([
+          aidenRemoteApi.pendingApproval(chatId),
+          aidenRemoteApi.pendingQuestion(chatId),
+        ]);
         if (
           !active ||
           chatIdRef.current !== chatId ||
@@ -620,6 +623,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         )
           return;
         setApprovals((current) => mergeRemoteApproval(current, remote));
+        setQuestionnaire((current) => current && current.source !== "remote" ? current : remoteQuestion);
       } catch {
         // Remote chat infrastructure is lazy; absence before first pairing is expected.
       }
@@ -1933,9 +1937,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         const status =
           expiredQuestionnaireId === prompt.promptId
             ? "expired"
-            : (await chatControl.answerQuestion({ promptId: prompt.promptId, response }))?.status;
+            : (await chatControl.answerQuestion({ promptId: prompt.promptId, response, source: prompt.source }))?.status;
         if (chatIdRef.current !== chatId) return;
-        setQuestionnaire(null);
+        setQuestionnaire((current) => current?.promptId === prompt.promptId ? null : current);
         if (status === "expired") {
           setLateQuestionnaireAnswer(
             response.cancelled

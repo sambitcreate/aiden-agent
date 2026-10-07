@@ -536,7 +536,6 @@ body {
   width: 2rem;
   height: 2rem;
   place-items: center;
-  border-radius: 999px;
 }
 
 .ask-user-question-icon svg {
@@ -558,42 +557,10 @@ body {
   background: var(--surface-control);
 }
 
-.ask-user-question-option:focus-visible,
-.ask-user-question-custom:focus-visible,
-.ask-user-question-icon:focus-visible,
-.ask-user-question-pill:focus-visible {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 72%, transparent);
-}
-
-.ask-user-question-option-arrow {
-  opacity: 0;
-}
-
-.ask-user-question-option:hover .ask-user-question-option-arrow,
-.ask-user-question-option:focus-visible .ask-user-question-option-arrow,
-.ask-user-question-option.is-selected .ask-user-question-option-arrow {
-  opacity: 1;
-}
-
 .ask-user-question-pill {
   min-height: 2.25rem;
   flex-shrink: 0;
-  border: 1px solid var(--border-field);
-  border-radius: 999px;
   padding-inline: 0.9rem;
-  background: var(--surface-popover);
-  color: var(--text-primary);
-  box-shadow: var(--elevation-control);
-}
-
-.ask-user-question-pill:hover:not(:disabled) {
-  background: var(--surface-control-hover);
-  box-shadow: var(--elevation-control-hover);
-}
-
-.ask-user-question-pill:active:not(:disabled) {
-  background: var(--surface-control-active);
-  box-shadow: var(--elevation-control-pressed);
 }
 
 .ask-user-question-shell :disabled {

@@ -1,5 +1,6 @@
 import * as React from "react";
-import { ArrowRight, Check, ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
+import { Check, Pencil, X } from "lucide-react";
+import { Button } from "./ui";
 import { cn } from "../lib/ui-utils";
 import {
   ASK_USER_QUESTION_VERSION,
@@ -40,10 +41,10 @@ export function AskUserQuestionComposer({
 
   React.useEffect(() => {
     const frame = requestAnimationFrame(() => {
-      (customOpen ? customRef.current : firstOptionRef.current)?.focus({ preventScroll: true });
+      firstOptionRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeIndex, customOpen]);
+  }, [prompt.promptId]);
 
   const response = React.useCallback(
     (cancelled: boolean, resolvedAnswers = answers) =>
@@ -63,10 +64,10 @@ export function AskUserQuestionComposer({
   const moveTo = React.useCallback(
     (index: number) => {
       if (submitting || index < 0 || index >= prompt.questions.length) return;
-      setCustomOpen(false);
+      setCustomOpen(customDrafts.has(index));
       setActiveIndex(index);
     },
-    [prompt.questions.length, submitting],
+    [customDrafts, prompt.questions.length, submitting],
   );
 
   const commit = React.useCallback(
@@ -75,14 +76,14 @@ export function AskUserQuestionComposer({
       if (nextAnswer) next.set(activeIndex, nextAnswer);
       else next.delete(activeIndex);
       setAnswers(next);
-      setCustomOpen(false);
       if (activeIndex < prompt.questions.length - 1) {
+        setCustomOpen(customDrafts.has(activeIndex + 1));
         setActiveIndex(activeIndex + 1);
       } else {
         void onRespond(response(false, next));
       }
     },
-    [activeIndex, answers, onRespond, prompt.questions.length, response],
+    [activeIndex, answers, customDrafts, onRespond, prompt.questions.length, response],
   );
 
   const commitCustom = React.useCallback(() => {
@@ -106,6 +107,18 @@ export function AskUserQuestionComposer({
       next.delete(activeIndex);
     }
     setAnswers(next);
+    const drafts = new Map(customDrafts);
+    drafts.delete(activeIndex);
+    setCustomDrafts(drafts);
+    setCustomOpen(false);
+  };
+
+  const selectOption = (label: string) => {
+    setAnswers(new Map(answers).set(activeIndex, { questionIndex: activeIndex, kind: "option", answer: label }));
+    const drafts = new Map(customDrafts);
+    drafts.delete(activeIndex);
+    setCustomDrafts(drafts);
+    setCustomOpen(false);
   };
 
   const handleCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
@@ -115,61 +128,58 @@ export function AskUserQuestionComposer({
       if (!option) return;
       event.preventDefault();
       if (question.multiSelect) toggleMulti(option.label);
-      else commit({ questionIndex: activeIndex, kind: "option", answer: option.label });
+      else selectOption(option.label);
     }
   };
 
   return (
-    <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column">
+    <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column min-w-0">
       <section
-        className="ask-user-question-shell min-h-76 overflow-hidden rounded-sheet bg-popover px-5 py-4 shadow-composer outline outline-1 outline-field/80 sm:px-6 sm:py-5"
+        className="composer-shell ask-user-question-shell relative z-10 -mt-1 flex max-h-[min(60dvh,36rem)] min-w-0 flex-col overflow-hidden bg-popover p-2.5 shadow-composer"
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
         aria-busy={submitting}
         onKeyDown={handleCardKeyDown}
       >
-        <div className="flex min-w-0 items-center gap-3">
-          <h2
-            id={`ask-user-question-title-${prompt.promptId}`}
-            className="min-w-0 flex-1 text-heading1 font-semibold text-primary"
-          >
+        <div className="flex shrink-0 items-center gap-2 px-1.5">
+          <div role="tablist" aria-label="Questions" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+            {prompt.questions.map((item, index) => (
+              <Button variant="transparent"
+                // Question indexes are stable wire identities within this immutable prompt.
+                key={index}
+                id={`question-tab-${prompt.promptId}-${index}`}
+                role="tab"
+                type="button"
+                aria-selected={index === activeIndex}
+                aria-controls={`question-panel-${prompt.promptId}`}
+                tabIndex={index === activeIndex ? 0 : -1}
+                disabled={submitting}
+                className={cn("ask-user-question-pill shrink-0", index === activeIndex && "bg-control text-primary")}
+                onClick={() => moveTo(index)}
+                onKeyDown={(event) => {
+                  const next = event.key === "ArrowRight" ? (index + 1) % prompt.questions.length
+                    : event.key === "ArrowLeft" ? (index + prompt.questions.length - 1) % prompt.questions.length
+                    : event.key === "Home" ? 0 : event.key === "End" ? prompt.questions.length - 1 : null;
+                  if (next === null) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  moveTo(next);
+                  document.getElementById(`question-tab-${prompt.promptId}-${next}`)?.focus({ preventScroll: true });
+                }}
+              >
+                {index + 1}. {item.header}
+                {answers.has(index) ? <Check className="ml-1 size-3" aria-label="Answered" /> : null}
+              </Button>
+            ))}
+          </div>
+          <Button variant="transparent" type="button" className="ask-user-question-icon" aria-label="Close questionnaire"
+            disabled={submitting} onClick={() => void onRespond(response(true))}><X /></Button>
+        </div>
+        <div role="tabpanel" id={`question-panel-${prompt.promptId}`}
+          aria-labelledby={`question-tab-${prompt.promptId}-${activeIndex}`} className="min-h-0 min-w-0 overflow-y-auto overscroll-contain px-1.5">
+          <h2 id={`ask-user-question-title-${prompt.promptId}`} className="mt-3 text-strong font-medium text-primary">
             {question.question}
           </h2>
-          <div
-            className="flex shrink-0 items-center gap-1 text-secondary"
-            aria-label="Question navigation"
-          >
-            <button
-              type="button"
-              className="ask-user-question-icon"
-              aria-label="Previous question"
-              disabled={submitting || activeIndex === 0}
-              onClick={() => moveTo(activeIndex - 1)}
-            >
-              <ChevronLeft />
-            </button>
-            <span className="min-w-16 text-center text-regular tabular-nums" aria-live="polite">
-              {activeIndex + 1} of {prompt.questions.length}
-            </span>
-            <button
-              type="button"
-              className="ask-user-question-icon"
-              aria-label="Next question"
-              disabled={submitting || activeIndex === prompt.questions.length - 1}
-              onClick={() => moveTo(activeIndex + 1)}
-            >
-              <ChevronRight />
-            </button>
-            <button
-              type="button"
-              className="ask-user-question-icon ml-1"
-              aria-label="Close questionnaire"
-              disabled={submitting}
-              onClick={() => void onRespond(response(true))}
-            >
-              <X />
-            </button>
-          </div>
-        </div>
+          <p className="mt-1 text-small text-secondary">{activeIndex + 1} of {prompt.questions.length}{question.multiSelect ? " · Select all that apply" : " · Choose an option or write an answer"}</p>
 
         <div
           className="mt-4 grid gap-1.5"
@@ -181,23 +191,21 @@ export function AskUserQuestionComposer({
               (answer?.kind === "option" && answer.answer === option.label) ||
               (answer?.kind === "multi" && answer.selected.includes(option.label));
             return (
-              <button
+              <Button variant="transparent"
                 key={option.label}
                 ref={optionIndex === 0 ? firstOptionRef : undefined}
                 type="button"
-                // Single-select options answer and advance on activation, so they
-                // are plain action buttons rather than radios that arrow keys
-                // would select. Multi-select options are real checkboxes.
+                aria-pressed={!question.multiSelect ? selected : undefined}
                 role={question.multiSelect ? "checkbox" : undefined}
                 aria-checked={question.multiSelect ? selected : undefined}
                 disabled={submitting}
                 className={cn(
-                  "ask-user-question-option group flex min-h-16 w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left",
+                  "ask-user-question-option group flex h-auto min-h-16 w-full items-center gap-3 whitespace-normal px-3 py-2.5 text-left",
                   selected && "is-selected",
                 )}
                 onClick={() => {
                   if (question.multiSelect) toggleMulti(option.label);
-                  else commit({ questionIndex: activeIndex, kind: "option", answer: option.label });
+                  else selectOption(option.label);
                 }}
               >
                 <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45 text-regular text-secondary">
@@ -212,16 +220,14 @@ export function AskUserQuestionComposer({
                     {option.description}
                   </span>
                 </span>
-                {!question.multiSelect ? (
-                  <ArrowRight className="ask-user-question-option-arrow size-5 shrink-0 text-secondary" />
-                ) : null}
-              </button>
+              </Button>
             );
           })}
         </div>
 
-        <div className="mt-3 flex min-h-12 items-end gap-3">
-          <div className="min-w-0 flex-1">
+        </div>
+        <div className="mt-3 flex min-h-12 shrink-0 flex-wrap items-end justify-end gap-2 px-1.5">
+          <div className="min-w-0 basis-full">
             {customOpen ? (
               <div className="text-entry-shell flex items-end gap-2 rounded-2xl bg-control/55 p-2.5">
                 <Pencil className="mb-2 size-4 shrink-0 text-secondary" />
@@ -238,6 +244,10 @@ export function AskUserQuestionComposer({
                     const next = new Map(customDrafts);
                     next.set(activeIndex, event.target.value);
                     setCustomDrafts(next);
+                    const resolved = new Map(answers);
+                    if (event.target.value.trim()) resolved.set(activeIndex, { questionIndex: activeIndex, kind: "custom", answer: event.target.value.trim() });
+                    else resolved.delete(activeIndex);
+                    setAnswers(resolved);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
@@ -250,47 +260,50 @@ export function AskUserQuestionComposer({
                     }
                   }}
                 />
-                <button
+                <Button variant="transparent"
                   type="button"
                   className="ask-user-question-pill"
                   disabled={submitting || !customDraft.trim()}
                   onClick={commitCustom}
                 >
                   {activeIndex === prompt.questions.length - 1 ? "Submit" : "Next"}
-                </button>
+                </Button>
               </div>
             ) : (
-              <button
+              <Button variant="transparent"
                 type="button"
-                className="ask-user-question-custom flex min-h-11 max-w-full items-center gap-3 rounded-2xl px-3 text-left text-secondary"
+                className="ask-user-question-custom flex h-auto min-h-11 max-w-full items-center gap-3 px-3 text-left text-secondary"
                 disabled={submitting}
-                onClick={() => setCustomOpen(true)}
+                onClick={() => {
+                  setCustomOpen(true);
+                  requestAnimationFrame(() => customRef.current?.focus());
+                }}
               >
                 <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45">
                   <Pencil className="size-4" />
                 </span>
                 <span className="truncate text-regular">Type your own answer</span>
-              </button>
+              </Button>
             )}
           </div>
-          {question.multiSelect && answer?.kind === "multi" && answer.selected.length > 0 ? (
-            <button
+          {!customOpen && answer ? (
+            <Button variant="transparent"
               type="button"
               className="ask-user-question-pill"
               disabled={submitting}
               onClick={() => commit(answer)}
             >
               {activeIndex === prompt.questions.length - 1 ? "Submit" : "Next"}
-            </button>
+            </Button>
           ) : null}
-          <button
+          <Button variant="transparent"
             type="button"
             className="ask-user-question-pill"
             disabled={submitting}
             onClick={() => commit()}
           >
             {submitting ? "Sending…" : "Skip"}
-          </button>
+          </Button>
         </div>
       </section>
     </div>

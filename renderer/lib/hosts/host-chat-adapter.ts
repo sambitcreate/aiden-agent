@@ -138,6 +138,7 @@ export type HostChatApprovalResult =
   | { resolution: "elsewhere"; decision?: "allow" | "deny" };
 
 export interface HostChatQuestionInput {
+  source?: "remote";
   runId?: string;
   promptId: string;
   response: AskUserQuestionResponseV1;

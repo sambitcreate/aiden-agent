@@ -1,4 +1,6 @@
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to explore", async ({
   aiden,
@@ -22,7 +24,7 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   await expect(liveSetupTrigger).toBeVisible();
 
   // Natural-language creation stays available even if manual task dependencies
-  // are unavailable. Templates only open an editor; Escape closes without saving.
+  // are unavailable. Suggestions open editable chat drafts without saving tasks.
   await page.getByRole("button", { name: "Scheduled", exact: true }).click();
   await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
   const taskSearch = page.getByRole("searchbox", { name: "Search scheduled tasks" });
@@ -54,14 +56,9 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   await page.getByRole("button", { name: "Scheduled", exact: true }).click();
   const dailyBrief = page.getByRole("button", { name: /Daily brief/u });
   await expect(dailyBrief).toBeVisible();
-  if (await dailyBrief.isEnabled()) {
-    await dailyBrief.click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-  } else {
-    await expect(dailyBrief).toBeDisabled();
-  }
+  await dailyBrief.click();
+  await expect(page.locator("textarea")).toHaveValue(/Create an automation named "Daily brief".*Summarize.*Schedule:/u);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Profile", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
@@ -110,4 +107,121 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   await expect(
     page.getByRole("button", { name: /^Selected model: .+\. Choose a model\.$/u }),
   ).toBeVisible();
+});
+
+test.describe("conversational scheduling", () => {
+  test.use({ workspaceSeed: true });
+
+  test("answers a visible question and saves the approved task with its chosen model", async ({ aiden }) => {
+    const { page, lmStudio } = aiden;
+    await finishLmStudioOnboarding(page);
+    const prompt = "Schedule audit: ask about timing, then prepare my workspace brief.";
+    const scenario = lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [
+        { name: "ask_user_question", arguments: { questions: [{
+          question: "When should the workspace brief run?", header: "Timing",
+          options: [{ label: "Weekdays", description: "Every weekday morning at nine." }, { label: "Weekly", description: "Every Friday morning at nine." }],
+        }] } },
+        { name: "schedule_task", arguments: {
+          action: "create", name: "Audit workspace brief", cron: "0 9 * * 1-5", timezone: "America/New_York", prompt: "Summarize important workspace changes without modifying files.",
+        } },
+      ],
+      finalText: "Your workspace brief has been saved.",
+    });
+    await page.locator("textarea").fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByRole("heading", { name: "When should the workspace brief run?" })).toBeVisible();
+    await page.getByRole("button", { name: /Weekdays Every weekday/u }).click();
+    await page.getByRole("button", { name: "Submit", exact: true }).click();
+    const approval = page.getByRole("region", { name: "schedule task needs approval" });
+    await expect(approval).toContainText("Summarize important workspace changes without modifying files.");
+    await approval.getByRole("button", { name: "Allow once" }).click();
+    await expect(page.getByText("Your workspace brief has been saved.", { exact: true }).first()).toBeVisible();
+    expect(scenario.error).toBeUndefined();
+    const tasks = JSON.parse(await readFile(join(aiden.userDataDir, "schedules.json"), "utf8")) as Array<{ name: string; providerId?: string; model?: string; cron: string; permission: string }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ name: "Audit workspace brief", cron: "0 9 * * 1-5", permission: "read-only" });
+    expect(tasks[0]?.providerId).toBeTruthy();
+    expect(tasks[0]?.model).toBeTruthy();
+    expect(JSON.stringify(scenario.results[0]?.content)).toContain("Weekdays");
+    expect(JSON.stringify(scenario.results[1]?.content)).toContain("Audit workspace brief");
+  });
+
+  test("question tabs preserve answers and replace the composer in a short desktop window", async ({ aiden }, testInfo) => {
+    const { page, lmStudio, app } = aiden;
+    await finishLmStudioOnboarding(page);
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((item) => item.isVisible())!;
+      window.setMinimumSize(640, 480);
+      window.setSize(740, 520);
+    });
+    const prompt = "Question audit: ask me to choose a detailed schedule.";
+    const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [{ name: "ask_user_question", arguments: { questions: [{
+      question: "Which schedule best fits your working day and the time you want to review the results?",
+      header: "Schedule", options: ["Morning", "Afternoon", "Evening", "Weekly"].map((label) => ({ label, description: `${label}: ${"Review changes and choose when you have time to act on the report. ".repeat(4)}` })),
+    }, {
+      question: "How detailed should the report be?", header: "Detail",
+      options: [{ label: "Brief", description: "Just the highlights." }, { label: "Full", description: "Include all changes." }],
+    }] } }], finalText: "I received your custom schedule." });
+    await page.locator("textarea").fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Type your own answer" }).click();
+    await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+    await page.getByRole("textbox", { name: /Custom answer for/u }).fill("Every Tuesday at noon");
+    await page.getByRole("tab", { name: "2. Detail" }).click();
+    await expect(page.getByRole("heading", { name: /Which schedule best/u })).toHaveCount(0);
+    await page.getByRole("button", { name: "Brief Just the highlights." }).click();
+    await page.getByRole("tab", { name: /1. Schedule/u }).click();
+    await expect(page.getByRole("textbox", { name: /Custom answer for/u })).toHaveValue("Every Tuesday at noon");
+    await page.getByRole("tab", { name: /1. Schedule/u }).press("ArrowRight");
+    await expect(page.getByRole("tab", { name: /2. Detail/u })).toBeFocused();
+    await expect(page.getByRole("button", { name: /Brief.*Just the highlights/u })).toHaveAttribute("aria-pressed", "true");
+    const submit = page.getByRole("button", { name: "Submit", exact: true });
+    await expect(submit).toBeInViewport();
+    const shell = page.getByRole("region", { name: "How detailed should the report be?" });
+    const bounds = await shell.boundingBox();
+    const sidebar = await page.locator("[data-sidebar]").boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(sidebar!.x + sidebar!.width);
+    await page.screenshot({ path: testInfo.outputPath("question-composer.png") });
+    await page.getByRole("button", { name: "Submit", exact: true }).click();
+    await expect(page.getByText("I received your custom schedule.", { exact: true }).first()).toBeVisible();
+    expect(JSON.stringify(scenario.results)).toContain("Every Tuesday at noon");
+    expect(JSON.stringify(scenario.results)).toContain("Brief");
+    await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  });
+
+  test("desktop displays a phone-owned question and sends the answer through host authority", async ({ aiden }) => {
+    const { page, app } = aiden;
+    await finishLmStudioOnboarding(page);
+    await page.locator("textarea").fill("Create a conversation for the phone question audit.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("Deterministic E2E response received.", { exact: true }).first()).toBeVisible();
+    await app.evaluate(({ ipcMain, BrowserWindow }) => {
+      let pending = true;
+      ipcMain.removeHandler("remote:getPendingQuestion");
+      ipcMain.handle("remote:getPendingQuestion", (_event, chatId) => pending ? ({
+        version: 1, source: "remote", promptId: "phone-question", chatId,
+        streamId: "phone-stream", toolCallId: "phone-call", expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        questions: [{ question: "Which cadence should I use from your phone?", header: "Cadence", multiSelect: false,
+          options: [{ label: "Daily", description: "Every day." }, { label: "Weekly", description: "Every Friday." }] }],
+      }) : null);
+      ipcMain.removeHandler("remote:respondQuestionFromHost");
+      ipcMain.handle("remote:respondQuestionFromHost", (_event, chatId, promptId, response) => {
+        if (!chatId || promptId !== "phone-question" || response.answers[0]?.answer !== "Weekly") throw new Error("Wrong question answer or chat");
+        pending = false;
+        BrowserWindow.getAllWindows()[0]?.webContents.send("remote:approval-changed", { chatId });
+        return { status: "answered" };
+      });
+      ipcMain.removeHandler("chat:answerQuestionnaire");
+      ipcMain.handle("chat:answerQuestionnaire", () => { throw new Error("Phone questions do not belong to this renderer"); });
+    });
+    await page.getByRole("button", { name: "Scheduled", exact: true }).click();
+    await page.locator("[data-sidebar]").getByRole("button", { name: /Deterministic E2E response received/u }).first().click();
+    await expect(page.getByRole("heading", { name: "Which cadence should I use from your phone?" })).toBeVisible();
+    await page.getByRole("button", { name: "Weekly Every Friday." }).click();
+    await page.getByRole("button", { name: "Submit", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Which cadence should I use from your phone?" })).toHaveCount(0);
+    await expect(page.locator("textarea")).toBeVisible();
+  });
 });

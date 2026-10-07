@@ -16,6 +16,8 @@ import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
 import type { ApprovalPrompt } from "../lib/ipc";
 import {
+  isAssistantAutomationApprovalDetails,
+  isScheduledTaskApprovalDetails,
   isFormFillBatchApprovalDetails,
   isSubagentMcpMutationApprovalDetails,
   isSubagentRunGrantApprovalDetails,
@@ -79,6 +81,7 @@ export function ChatApprovalCard({
   pendingCount?: number;
 }) {
   const details = pending.details as unknown;
+  const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
   const pendingWorkspaceWrite = isSubagentWorkspaceWriteApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingMcpMutation = isSubagentMcpMutationApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingShell = isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
@@ -86,6 +89,8 @@ export function ChatApprovalCard({
   const pendingFormFill = isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingClassifier = classifierApprovalState(pending.toolName, details);
   const invalidPendingPrivilegedApproval =
+    (claimsKind(details, "scheduled-task") && !schedule) ||
+    (claimsKind(details, "assistant-automation") && !schedule) ||
     pendingClassifier.invalid ||
     (claimsKind(details, "subagent-workspace-write") && pendingWorkspaceWrite === undefined) ||
     (claimsKind(details, "subagent-mcp-mutation") && pendingMcpMutation === undefined) ||
@@ -160,6 +165,20 @@ export function ChatApprovalCard({
             Aiden cannot safely authorize this action from this view. Deny it here or review the exact action on the
             device that owns this chat.
           </Text>
+        ) : schedule ? (
+          <div id={summaryId} tabIndex={0} className="mt-2.5 max-h-56 space-y-2 overflow-y-auto overscroll-contain rounded-control bg-well px-3 py-2 text-small text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+            <p className="font-semibold">{schedule.name}</p>
+            <p>{pending.summary}</p>
+            {schedule.mode === "llm" ? <p>Model: {schedule.providerName} / {schedule.modelName}</p> : null}
+            <p>Access: {schedule.permission === "full" ? "Full" : "Read-only"}{schedule.workspaceName ? ` · ${schedule.workspaceName} (${schedule.workspaceId})` : ""}{schedule.mcpServerIds.map((id, index) => ` · ${schedule.mcpServerNames[index]} (${id})`).join("")}</p>
+            <div>
+              <p className="font-medium">{schedule.mode === "script" ? "Script" : "Instructions"}</p>
+              <p className="select-text whitespace-pre-wrap break-words">{schedule.prompt ?? ("script" in schedule ? schedule.script : "")}</p>
+            </div>
+            <p>Timezone: {schedule.timezone} · Notifications {schedule.notify ? "on" : "off"}</p>
+            {!schedule.schedulerEnabled ? <p className="text-status-warning">Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.</p> : schedule.enabled === false ? <p>This task stays paused.</p> : null}
+            <p className="text-secondary">Scheduled work runs on your desktop while Aiden is open and the computer is awake.</p>
+          </div>
         ) : pendingClassifier.details ? (
           <ClassifierApproval details={pendingClassifier.details} descriptionId={summaryId} />
         ) : pendingWorkspaceWrite ? (
