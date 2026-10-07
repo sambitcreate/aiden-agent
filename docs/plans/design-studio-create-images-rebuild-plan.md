@@ -253,7 +253,7 @@ Rules:
 
 **Deliverables:** `docs/plans/design-studio-adr.md`, `docs/plans/create-images-adr.md`, `docs/plans/studio-foundation-adr.md`, each one page.
 
-- [ ] **ADR-F (foundation)**
+- [x] **ADR-F (foundation)**
   - **Flags:** `designStudio` and `createImages` capabilities, default off.
   - **Navigation:**
     - Design and Images rows in the sidebar primary nav (no group heading), alongside New Agent / Scheduled / Bots.
@@ -297,7 +297,7 @@ Rules:
     - decoder window and `sips`
     - stress routes and spike fixtures
 - [ ] Owner review and approval of the three ADRs (gate).
-- [ ] Write `docs/plans/studio-foundation-tasks.md` (TDD task plan for Track F).
+- [x] Write `docs/plans/studio-foundation-tasks.md` (TDD task plan for Track F).
 
 **Exit:** the ADRs are approved, the Track F task plan exists, and `docs/plans/README.md` lists this plan as Active with Designer Mode marked superseded.
 
@@ -315,6 +315,8 @@ Rules:
 | F-6 Test suites and docs | npm suites filed into existing lanes in `ci-test-registry.json`, `package.json` scripts, `.memory/studio-foundation.md`, plan index | registry, `package.json` | `test:ci-policy` / `validateRegistry` green |
 
 **Exit:** with both flags off, behavior matches `main` (sidebar, router and bundle-budget evidence). With them on, two empty canvases render. F-3 passes on desktop and native suites. CI is green at the exact head, and the PR merges.
+
+**Status (2026-10-07): implemented; PRs open.** Track F shipped as two PRs: PR A (F-3 chat visibility predicate, [#375](https://github.com/sambitcreate/aiden-agent/pull/375)) and PR B (F-1, F-2, F-4, F-5, F-6; this PR). Exit criteria met locally: with both flags off the sidebar, router and bundle budget match `main` (entry chunk 21526 B raw / 8249 B gzip before the canvas kit, 21594 B / 8284 B on the branch), and with both flags on two empty canvases render under the chat sidebar. The remaining exit item is CI green on the exact head of each PR before merge; this section moves to "landed" when both merge.
 
 ---
 
