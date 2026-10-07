@@ -80,6 +80,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:tool",
   "bots:changed",
   "bots:live:event",
+  "bots:connections:setup",
   "bots:approval",
   "bots:approval-settled",
   "browser:event",

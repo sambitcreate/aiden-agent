@@ -1,6 +1,7 @@
 import * as React from "react";
 import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotChatRoute } from "../bot-chat-route";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -8,6 +9,7 @@ import {
   createRouter,
   Outlet,
   RouterProvider,
+  useParams,
 } from "@tanstack/react-router";
 
 /** A query client that never schedules GC timers, so test processes exit. */
@@ -20,11 +22,16 @@ export function createBotTestQueryClient(): QueryClient {
   });
 }
 
+function BotChatFromParams() {
+  const { botId } = useParams({ strict: false }) as { botId: string };
+  return <BotChatRoute botId={botId} />;
+}
+
 export const BOT_TEST_PATHS = [
   "/",
   "/bots",
   "/bots/$botId",
-  "/bots/$botId/chat/$chatId",
+  "/bots/$botId/chat",
   "/settings",
 ] as const;
 
@@ -50,7 +57,12 @@ function createBotRouterHarness(
   const queryClient = options.queryClient ?? createBotTestQueryClient();
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const routes = BOT_TEST_PATHS.map((path) =>
-    createRoute({ getParentRoute: () => rootRoute, path, component: () => <>{children}</> }),
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path,
+      // A Bot's conversation mounts its own route component, as in the app.
+      component: path === "/bots/$botId/chat" ? BotChatFromParams : () => <>{children}</>,
+    }),
   );
   const router = createRouter({
     routeTree: rootRoute.addChildren(routes),

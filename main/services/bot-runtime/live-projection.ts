@@ -448,6 +448,15 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     }
   }
 
+  /** Re-read the transcript and resolve connect cards against their current status. */
+  function reproject(feed: Feed): Promise<void> {
+    return enqueueWork(feed, async () => {
+      const conversation = await deps.conversation(feed.botId);
+      const view = await conversation.context(BACKGROUND_CONTEXT);
+      applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(view.entries)));
+    });
+  }
+
   async function stopFeed(feed: Feed): Promise<void> {
     feed.ended = true;
     if (feeds.get(feed.botId) === feed) feeds.delete(feed.botId);
@@ -465,7 +474,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
       const feed = await openFeed(botId);
-      await feed.queue;
+      // A new subscriber gets current connect-card statuses, not the feed's last view.
+      await reproject(feed).catch((error) => report(botId, error));
       let set = subscribers.get(botId);
       if (!set) subscribers.set(botId, (set = new Set()));
       set.add(subscriber);
@@ -499,11 +509,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     async refresh(botId) {
       const feed = feeds.get(botId);
       if (!feed || feed.ended) return;
-      await enqueueWork(feed, async () => {
-        const conversation = await deps.conversation(botId);
-        const view = await conversation.context(BACKGROUND_CONTEXT);
-        applyEntries(feed, await resolveCards(botId, projectBotTranscript(view.entries)));
-      });
+      await reproject(feed);
     },
 
     async summary(botId) {

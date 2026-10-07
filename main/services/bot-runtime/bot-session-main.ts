@@ -41,7 +41,7 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { createBotToolSources } from "./bot-tool-sources-main.js";
+import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
 
 import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
 import { isBotIntroRequest } from "./bot-intro.js";

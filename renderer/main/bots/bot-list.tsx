@@ -150,6 +150,7 @@ export function BotList({
   onDelete,
   onCreate,
   now = Date.now(),
+  emptyState,
   children,
 }: {
   rows: readonly BotListRow[];
@@ -161,6 +162,8 @@ export function BotList({
   onDelete(bot: BotDefinition): void;
   onCreate(): void;
   now?: number;
+  /** Replaces the default "No Bots yet" state, such as the starter carousel. */
+  emptyState?: React.ReactNode;
   /** Extra sections rendered after the list, such as Bots on a paired Mac. */
   children?: React.ReactNode;
 }) {
@@ -223,6 +226,8 @@ export function BotList({
             ) : undefined
           }
         />
+      ) : rows.length === 0 && emptyState ? (
+        emptyState
       ) : rows.length === 0 ? (
         <EmptyState
           title="No Bots yet"

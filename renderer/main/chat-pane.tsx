@@ -224,6 +224,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
   const bot = useBot(chat.data?.botId);
+  // A Bot's conversation lives at its own route, rendered from the live projection.
+  const botChatId = chat.data?.botId;
+  React.useEffect(() => {
+    if (!botChatId) return;
+    void navigate({ to: "/bots/$botId/chat", params: { botId: botChatId }, replace: true });
+  }, [botChatId, navigate]);
   /** Bot chats are calm, message-style conversations with no workspace chrome. */
   const botMode = Boolean(chat.data?.botId);
   const [botDeleteOpen, setBotDeleteOpen] = React.useState(false);
@@ -346,9 +352,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ? "Loading bot…"
       : !bot.data
         ? "This bot is no longer available."
-        : bot.data.archivedAt
-          ? "This bot is no longer available."
-          : undefined
+        : undefined
     : undefined;
   const ready =
     modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;

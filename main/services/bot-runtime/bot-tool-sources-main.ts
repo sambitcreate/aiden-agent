@@ -83,7 +83,8 @@ export async function botFileLocations(admission: BotAdmission): Promise<BotFile
   return locations;
 }
 
-async function isConnected(pluginId: string): Promise<boolean> {
+/** Whether a suggested plugin's preset server is enabled (the connect card's "Connected" state). */
+export async function isConnected(pluginId: string): Promise<boolean> {
   const suggestion = connectionSuggestionFor(pluginId);
   if (!suggestion) return false;
   const serverId = presetServerId(suggestion.setupEntry.presetId);
