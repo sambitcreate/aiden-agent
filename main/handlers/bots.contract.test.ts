@@ -208,7 +208,7 @@ test("Bot startup migration precedes chat reconciliation projection and deletion
   );
   assert.ok(
     index.indexOf("await initializeBotApplicationService()") <
-      index.indexOf("const visibleChatIds = new Set"),
+      index.indexOf("await reconcileChatScopedStores("),
   );
   assert.match(
     botMain,

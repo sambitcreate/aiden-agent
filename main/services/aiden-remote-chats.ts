@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
@@ -460,8 +461,7 @@ function safeSummaryRows(metadata: readonly Readonly<ChatMeta>[]): SafeSummaryRo
 function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
   const workspaceId = persistedChatWorkspaceId(meta.workspaceId);
   if (
-    meta.botId !== undefined ||
-    workspaceId === ASSISTANT_WORKSPACE_ID ||
+    chatSurface(meta) !== "regular" ||
     !SAFE_ID.test(meta.id) ||
     !SAFE_ID.test(workspaceId) ||
     !Number.isFinite(meta.createdAt) ||
@@ -1417,7 +1417,7 @@ export class AidenRemoteChatService {
       summaries: await this.freezeSummaryPage(safeSummaryRows(metadata)),
       botChatIds: new Set(
         metadata
-          .filter((meta) => meta.botId !== undefined && SAFE_ID.test(meta.id))
+          .filter((meta) => chatSurface(meta) === "bot" && SAFE_ID.test(meta.id))
           .map((meta) => meta.id),
       ),
     };
@@ -1432,6 +1432,11 @@ export class AidenRemoteChatService {
     const id = safeId(chatId, "chat");
     const metadata = (await this.options.application.list()).find((entry) => entry.id === id);
     if (!metadata) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    const surface = chatSurface(metadata);
+    // Allow-list: a surface this route does not know is refused by default.
+    if (surface !== "regular" && surface !== "bot" && surface !== "assistant") {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (!metadata.botId) return {};
