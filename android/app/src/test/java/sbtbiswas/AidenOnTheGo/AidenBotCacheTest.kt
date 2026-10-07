@@ -29,8 +29,8 @@ class AidenBotCacheTest {
             purpose = "Automated test helper",
             avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(recipe)),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1"
         )
         val botList = AidenBotList(
@@ -60,8 +60,8 @@ class AidenBotCacheTest {
             instructions = "Be concise.",
             avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1",
             access = AidenBotAccessView(
                 botId = "bot_1",
@@ -82,7 +82,7 @@ class AidenBotCacheTest {
             avatar = detail.avatar,
             health = AidenBotHealth.READY,
             createdAt = detail.createdAt,
-            updatedAt = Instant.now(),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_2"
         )
         cache.putBotList(AidenBotList(bots = listOf(summary)))
@@ -100,8 +100,8 @@ class AidenBotCacheTest {
             instructions = "Be concise.",
             avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1",
             access = AidenBotAccessView(
                 botId = "assistant-1",
@@ -186,8 +186,8 @@ class AidenBotCacheTest {
             purpose = "Scoped helper",
             avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotAvatarRecipe(shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.LILAC))),
             health = AidenBotHealth.READY,
-            createdAt = Instant.now(),
-            updatedAt = Instant.now(),
+            createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+            updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
             revision = "rev_1"
         )
 

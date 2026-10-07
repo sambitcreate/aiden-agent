@@ -147,9 +147,9 @@ final class AidenBotContractTests: XCTestCase {
         )
         // Revision 26 durable sessions, routines and presets.
         XCTAssertEqual(fixture.botSession.state, .interrupted)
-        XCTAssertTrue(fixture.botSession.interrupted)
+        XCTAssertTrue(fixture.botSession.stateView.interrupted)
         XCTAssertEqual(fixture.botSessionNeedsModel.state, .needsModel)
-        XCTAssertFalse(fixture.botSessionNeedsModel.interrupted)
+        XCTAssertFalse(fixture.botSessionNeedsModel.stateView.interrupted)
         XCTAssertEqual(fixture.botPresetCreate.response.bot.sessionState, .needsModel)
         XCTAssertEqual(fixture.botRoutines.routines.first?.botId, fixture.botSummary.id)
         XCTAssertEqual(fixture.botConnectionRequest.response.status, "sent")

@@ -433,10 +433,14 @@ object AidenBotPrivateResponseValidator {
 }
 
 object InstantIso8601Serializer : KSerializer<Instant> {
+    internal val millisecondFormat: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC)
+
     override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("Instant", PrimitiveKind.STRING)
 
     override fun serialize(encoder: Encoder, value: Instant) {
-        encoder.encodeString(DateTimeFormatter.ISO_INSTANT.format(value))
+        // The host writes millisecond UTC timestamps; keep the fraction so a round trip is exact.
+        encoder.encodeString(InstantIso8601Serializer.millisecondFormat.format(value))
     }
 
     override fun deserialize(decoder: Decoder): Instant {
