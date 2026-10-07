@@ -24,6 +24,7 @@ import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-st
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import { botSessionRuntime } from "../services/bot-runtime/bot-session-main.js";
+import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
 import {
   telegramBotBindingAuthority,
   telegramBotBindings,
@@ -40,6 +41,7 @@ import {
   parseBotId,
   parseBotSend,
   parseBotSessionAction,
+  parseBotApprovalDecision,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -157,6 +159,12 @@ export function registerBotHandlers(): void {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
   });
+  // Bot tool approvals: any desktop window may answer; the first answer wins.
+  ipcMain.handle("bots:approve", async (_event, input: unknown) => {
+    const { waitId, decision } = parseBotApprovalDecision(input);
+    return { decided: botApprovals.decide(waitId, decision) };
+  });
+  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });

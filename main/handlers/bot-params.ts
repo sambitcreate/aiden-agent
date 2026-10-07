@@ -186,6 +186,22 @@ export function parseBotSessionAction(
   return { botId: parseBotId(fields.botId), requestId: fields.requestId };
 }
 
+const BOT_APPROVAL_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
+
+/** A Bot approval answer: the durable `waitId` and allow or deny. */
+export function parseBotApprovalDecision(input: unknown): { waitId: string; decision: "allow" | "deny" } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot approval fields.");
+  const fields = input as Record<string, unknown>;
+  if (!Object.keys(fields).every((key) => key === "waitId" || key === "decision")) {
+    throw new Error("Invalid bot approval fields.");
+  }
+  if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId)) {
+    throw new Error("Invalid bot approval id.");
+  }
+  if (fields.decision !== "allow" && fields.decision !== "deny") throw new Error("Invalid bot approval decision.");
+  return { waitId: fields.waitId, decision: fields.decision };
+}
+
 export function parseBotChatCreate(value: unknown) {
   const record = exact(value, CHAT_KEYS, "bot chat creation fields");
   // Legacy desktop renderers still send the visible workspace selection. Bot
