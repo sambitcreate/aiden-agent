@@ -146,7 +146,12 @@ class AidenBotSessionControllerTest {
     fun liveEventsApplyInOrderAndAnEpochChangeOrSeqGapRefetches() = runTest {
         val transport = FakeTransport(interruptedSession)
         val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope)
-        val (snapshot, partial, entry, state, closed, newEpoch) = fixtureEvents.let { Six(it) }
+        val snapshot = fixtureEvents[0]
+        val partial = fixtureEvents[1]
+        val entry = fixtureEvents[2]
+        val state = fixtureEvents[3]
+        val closed = fixtureEvents[4]
+        val newEpoch = fixtureEvents[5]
 
         assertTrue(controller.handle(snapshot))
         assertTrue(controller.handle(partial))
@@ -185,14 +190,5 @@ class AidenBotSessionControllerTest {
         assertEquals(AidenBotSessionEventOutcome.Refetch, at(session.epoch, session.seq + 3))
         assertEquals(AidenBotSessionEventOutcome.Refetch, at("another_epoch", session.seq + 1))
         assertEquals(AidenBotSessionEventOutcome.Refetch, aidenApplyBotSessionEvent(null, fixtureEvents[1]))
-    }
-
-    private data class Six<T>(val list: List<T>) {
-        operator fun component1() = list[0]
-        operator fun component2() = list[1]
-        operator fun component3() = list[2]
-        operator fun component4() = list[3]
-        operator fun component5() = list[4]
-        operator fun component6() = list[5]
     }
 }

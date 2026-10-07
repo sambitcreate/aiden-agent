@@ -482,11 +482,12 @@ struct AidenRemoteContractFixture: Decodable {
             botDetail.access.custom, botCreate.response.access.custom, botIdentity.response.access.custom,
             botPolicy.custom, botPolicyUpdate.response.custom,
         ]
+        let catalog = botCapabilityCatalog
         let modelAvailable: (String?, String?) -> Bool = { providerId, modelId in
             switch (providerId, modelId) {
             case (nil, nil): true
             case let (providerId?, modelId?):
-                self.botCapabilityCatalog.containsAvailable(providerId: providerId, modelId: modelId)
+                catalog.containsAvailable(providerId: providerId, modelId: modelId)
             default: false
             }
         }
