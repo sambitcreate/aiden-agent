@@ -2651,6 +2651,7 @@ final class AidenChatViewModel {
             var accepted = false
             let retained = await coordinator.withRetainedInstallationData(for: context) {
                 guard !isRemoved else { return }
+                await draftStore.settlePendingSend(key: attempt.key, session: session)
                 accepted = (try? await cache.saveChat(acceptedChat, instanceId: instanceId, writeToken: writeToken)) ?? true
                 while !accepted {
                     guard !isRemoved else { return }
@@ -2700,7 +2701,6 @@ final class AidenChatViewModel {
                 return
             }
             guard !isRemoved, coordinator.isCurrent(context) else { return }
-            await draftStore.settlePendingSend(key: attempt.key, session: session)
             pendingSend = nil
             turnAttempts.reset()
             chat = acceptedChat
@@ -3174,14 +3174,18 @@ final class AidenChatViewModel {
                 input: AidenStreamInputRequest(mode: mode, text: text),
                 idempotencyKey: key
             )
-            guard coordinator.isCurrent(context) else { return }
             // The response must bind to the stream that was displayed when the
             // submission left; a mismatched receipt is never trusted.
             guard result.streamId == streamID, result.chatId == chat.id, result.mode == mode else {
+                guard coordinator.isCurrent(context) else { return }
                 presentedError = String(localized: "The run input was not confirmed. Your draft is unchanged — check the chat before trying again.")
                 return
             }
-            await draftStore.settlePendingSend(key: key, session: session)
+            let retained = await coordinator.withRetainedInstallationData(for: context) {
+                guard !isRemoved else { return }
+                await draftStore.settlePendingSend(key: key, session: session)
+            }
+            guard retained, !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {

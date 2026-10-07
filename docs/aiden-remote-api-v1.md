@@ -626,6 +626,13 @@ characters); Tailscale routes use `.ts.net` and system certificate trust, with n
 private CA. A LAN route may include up to eight RFC1918 IPv4 `addresses` as lookup
 hints. These hints never replace the canonical TLS hostname.
 
+Advertisements are partial observations, not an authoritative removal list. LAN
+identity reads never wait for optional Tailscale discovery: cold, expired, or
+unavailable alternatives are omitted while one bounded refresh runs. Successful
+and failed alternate lookups are cached for 30 seconds. Clients retain previously
+validated omitted routes within their two-route bound; a new observation replaces
+trust for the same endpoint. Explicit removal/suppression remains authoritative.
+
 The existing authenticated, identity-verified channel delivers each alternate
 route's trust material. A client verifies CA/system trust, hostname and SPKI before
 sending credentials on that alternate route, then checks the authenticated

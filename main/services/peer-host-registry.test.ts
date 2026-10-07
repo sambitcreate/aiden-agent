@@ -610,7 +610,10 @@ test("authenticated routes bootstrap LAN trust, fail over, suppress removal and 
     assert.equal((await store.connect("host_a")).activeRouteKind, "lan");
     advertised = [tailnet];
     await store.connect("host_a");
-    assert.equal((await store.list())[0]!.routes?.length, 1, "withdrawn learned routes expire at identity verification");
+    assert.equal((await store.list())[0]!.routes?.length, 2, "an omitted optional observation cannot erase validated route trust");
+    assert.equal((await store.connect("host_a")).activeRouteKind, "lan", "the previously learned route remains usable after an incomplete advertisement");
+    await store.removeRoute("host_a", routeId);
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale", "explicit removal still suppresses the retained route");
     assert.equal(JSON.stringify(await store.list()).includes("192.168.1.50"), false);
     assert.equal(JSON.stringify(await store.list()).includes(fixture.caDerBase64), false);
   } finally { store.close(); await fixture.close(); }

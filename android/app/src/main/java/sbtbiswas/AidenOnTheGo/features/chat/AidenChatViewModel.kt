@@ -1317,14 +1317,13 @@ class AidenChatViewModel(
                     lastSequence = 0
                 )
 
-                turnAttempts.reset()
-                if (retryAttempt == null) _selectedSkill.value = null
                 val retainedInstallation = pairingCreatedAt?.let(::isPairingRetained) == true
                 if (!retainedInstallation) {
                     _chat.value = withContext(ioDispatcher) { chatCache.admittedChat(instanceId, chatId) }
                     _streamState.value = null
                     return@launch
                 }
+                withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) }
                 val candidate = updatedChat.copy(messages = updatedChat.messages.filter { it.id != optimisticId })
                 val accepted = withContext(ioDispatcher) {
                     chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
@@ -1339,8 +1338,9 @@ class AidenChatViewModel(
                     _streamState.value = null
                     return@launch
                 }
-                withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) }
                 _pendingSend.value = null
+                turnAttempts.reset()
+                if (retryAttempt == null) _selectedSkill.value = null
                 if (retryAttempt != null && (_draft.value == text || _draft.value.startsWith(text + "\n\n"))) consumeRunInputDraft(text)
                 _chat.value = accepted.chat
 
@@ -1938,6 +1938,7 @@ class AidenChatViewModel(
             )) lastRunInputAttempt!!.key else UUID.randomUUID()
         val attempt = AidenRunInputPresentation.Attempt(key, streamId, mode, text)
         lastRunInputAttempt = attempt
+        val pairingCreatedAt = pairingCreatedAt()
         _isSubmittingRunInput.value = true
         viewModelScope.launch {
             try {
@@ -1951,15 +1952,17 @@ class AidenChatViewModel(
                     input = AidenStreamInputRequest(mode = mode, text = text),
                     idempotencyKey = key
                 )
-                if (activeClient() !== client) return@launch
                 // The response must bind to the stream that was displayed when
                 // the submission left; a mismatched receipt is never trusted.
                 if (result.streamId != streamId || result.chatId != chatId || result.mode != mode) {
+                    if (activeClient() !== client) return@launch
                     _presentedError.value =
                         "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
                     return@launch
                 }
+                if (pairingCreatedAt?.let(::isPairingRetained) != true) return@launch
                 withContext(ioDispatcher) { draftStore.settlePendingSend(key.toString(), session) }
+                if (activeClient() !== client) return@launch
                 _pendingSend.value = null
                 if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
                 if (AidenRunInputPresentation.consumesDraft(result)) {

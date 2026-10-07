@@ -38,3 +38,11 @@ original key, rather than incidental encoded byte order. The corrected narrow te
 chat rerun. Physical phone
 Wi-Fi/Tailscale discovery, system local-network permission behavior, and visual
 VoiceOver/TalkBack acceptance remain separate from simulator/JVM checks.
+
+PR #370 review follow-up: matching confirmed receipts now settle the original
+retained pairing's durable record independently of active presentation, while UI
+and stream adoption stay generation-fenced. Held turn/input receipt tests cover
+installation switches and preservation of a newer pending key. Actual Android QR
+and setup-code exchanges send `android`; unsupported older hosts show update
+guidance without retrying under an Apple identity. Full Android 429 tests and lint
+pass; focused iOS lifecycle and original-stream recovery tests pass.

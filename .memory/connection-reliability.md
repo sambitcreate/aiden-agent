@@ -47,3 +47,15 @@ Hosted Android check initially found a stale revision-24 assertion in the Bot fi
 consumer after the shared contract moved to 25. The assertion is updated and the
 full Android unit suite passed all 427 cases in follow-up validation; this was a coverage
 omission in the focused local run, not a transient CI failure.
+
+CI also exposed an unrelated Git watcher flake: the unstaged-edit test received one
+generation-1 notification; its one focused local rerun passed all 6 cases. No timeout
+or assertion was weakened. Evidence: PR #370 core-git job 112626770363 in run
+37569980985. The PR records the symptom and link; this flake remains an open bug.
+
+PR review follow-up: optional Tailscale advertisement discovery no longer delays
+LAN identity or healthy-wake checks. Ads are partial observations and omission
+preserves previously validated routes within the bound. Native matching receipts
+settle the original retained pairing's exact pending request even after switching
+presentation; UI adoption stays fenced. Actual Android QR/setup-code requests now
+use the Android identity, with explicit older-desktop update guidance.

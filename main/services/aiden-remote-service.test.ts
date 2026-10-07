@@ -147,6 +147,8 @@ interface FixtureOptions {
   }) => Promise<void>;
   connectFailsWith?: string;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
+  beforeTailscaleInspection?: () => Promise<void>;
+  now?: () => number;
   /** Wire the persisted "Accept connection requests" setting (in memory). */
   pairingRequests?: { accept?: boolean };
 }
@@ -282,6 +284,7 @@ async function fixture(
     ...(options.tailscaleInspection
       ? { inspectRoute: async () => {
           tailscale.inspectionCalls += 1;
+          await options.beforeTailscaleInspection?.();
           return options.tailscaleInspection!;
         } }
       : {}),
@@ -293,6 +296,7 @@ async function fixture(
     state,
     appVersion: "0.30.0",
     hostname: "Aiden-Test",
+    ...(options.now ? { now: options.now } : {}),
     bonjour,
     tailscale,
     resolveTlsEndpointPin: options.resolveTlsEndpointPin
@@ -2206,3 +2210,88 @@ test("Tailscale connection requests seal the Serve identity and reuse a recent p
     await app.cleanup();
   }
 });
+
+
+for (const stalledStage of ["inspection", "pin"] as const) {
+  test(`identity reads and healthy LAN wake do not await optional Tailscale ${stalledStage}`, async () => {
+    const { PeerHostRegistry } = await import("./peer-host-registry.js");
+    const { PeerHostManager, PEER_WAKE_COALESCE_MS } = await import("./peer-host-manager.js");
+    const { PeerTransport } = await import("./peer-transport.js");
+    let release!: () => void;
+    let gate = new Promise<void>((resolve) => { release = resolve; });
+    let hold = true;
+    let now = Date.now();
+    let pinReads = 0;
+    const app = await fixture({
+      mode: "both", now: () => now,
+      tailscaleInspection: { connectionStatus: { installed: true, dnsName: "aiden.tailnet.ts.net", httpsAvailable: true }, assessment: { state: "owned" } },
+      beforeTailscaleInspection: async () => { if (hold && stalledStage === "inspection") await gate; },
+      resolveTlsEndpointPin: async () => { pinReads++; if (hold && stalledStage === "pin") await gate; return `sha256/${Buffer.alloc(32, 4).toString("base64")}`; },
+      initial: (state) => { state.tailscaleOwnership = { path: "/api/aiden/v1", target: `http://127.0.0.1:${state.lanPort + 1}/api/aiden/v1` }; },
+    });
+    let registry: InstanceType<typeof PeerHostRegistry> | undefined;
+    let manager: InstanceType<typeof PeerHostManager> | undefined;
+    const until = async (check: () => boolean) => within((async () => {
+      while (!check()) await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    })());
+    try {
+      await app.service.initialize();
+      await app.service.setEnabled(true);
+      const issued = await app.state.issueDevice({ name: "Viewer", type: "mac", clientVersion: "1" });
+      const headers = { authorization: `Bearer ${issued.credential}`, "aiden-protocol-version": "1" };
+      type Projection = { instanceId: string; peerRoutes: { endpoint: string }[] };
+      const readLan = () => insecureJson<Projection>(app.persisted().lanPort, "/api/aiden/v1/server", { headers });
+      const first = await within(readLan());
+      assert.equal(first.status, 200);
+      assert.equal(first.body.instanceId, app.persisted().instanceId);
+      assert.equal(first.body.peerRoutes.length, 1);
+      assert.match(first.body.peerRoutes[0]!.endpoint, /aiden-test\.local/u);
+      const throughTailnet = await within(plainJson<Projection>(app.persisted().lanPort + 1, "/api/aiden/v1/server", { headers }));
+      assert.equal(throughTailnet.status, 200, "the same identity handler stays responsive through the Serve listener");
+      assert.equal(throughTailnet.body.peerRoutes.length, 1);
+      assert.equal(app.tailscale.inspectionCalls, 1, "concurrent identity reads share one optional refresh");
+
+      const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory: path.join(app.directory, "identity"), hostnames: ["aiden-test", "aiden-test.local"] });
+      registry = new PeerHostRegistry({
+        storage: { load: async () => [{ id: app.persisted().instanceId, name: "Host", enabled: true, deviceId: issued.device.id, credential: issued.credential, capabilities: [...issued.device.capabilities], features: [], endpoint: `https://aiden-test.local:${app.persisted().lanPort}/api/aiden/v1`, serverSpkiSha256: identity.serverSpkiSha256, caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64") }], save: async () => {} },
+        localInstanceId: async () => "viewer", clientVersion: "1", deviceName: "Viewer", platform: "mac",
+        client: (trust) => new PeerTransport(trust, { lookup: (_hostname, options, callback) => { if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]); else callback(null, "127.0.0.1", 4); } }),
+      });
+      let wake: (() => void) | undefined;
+      manager = new PeerHostManager({ registry, broadcast: () => {}, timers: { set: (callback, ms) => { if (ms === PEER_WAKE_COALESCE_MS) wake = callback; return callback; }, clear: () => {} } });
+      await manager.whenReady();
+      await until(() => manager!.statuses()[0]?.state.kind === "connected");
+      const generation = manager.statuses()[0]!.generation;
+      const originalProbe = registry.probe.bind(registry);
+      let probed = false;
+      registry.probe = async (...args) => { await originalProbe(...args); probed = true; };
+      manager.wake();
+      wake!();
+      await until(() => probed);
+      assert.equal(manager.statuses()[0]!.state.kind, "connected");
+      assert.equal(manager.statuses()[0]!.generation, generation, "optional discovery cannot retire a healthy LAN connection");
+      assert.equal(app.tailscale.inspectionCalls, 1);
+
+      hold = false;
+      release();
+      await until(() => pinReads === 1);
+      let learned = await readLan();
+      await within((async () => { while (learned.body.peerRoutes.length !== 2) { await new Promise<void>((resolve) => setTimeout(resolve, 5)); learned = await readLan(); } })());
+      assert.match(learned.body.peerRoutes[1]!.endpoint, /aiden\.tailnet\.ts\.net/u);
+      if (stalledStage === "inspection") {
+        hold = true;
+        gate = new Promise<void>((resolve) => { release = resolve; });
+        now += 30_001;
+        const expired = await within(readLan());
+        assert.equal(expired.body.peerRoutes.length, 1, "expired alternates are omitted while revalidation is held");
+        assert.equal(app.tailscale.inspectionCalls, 2);
+      }
+    } finally {
+      hold = false;
+      release();
+      manager?.close();
+      registry?.close();
+      await app.cleanup();
+    }
+  });
+}

@@ -209,6 +209,9 @@ class AidenRemoteClient(
             if (!response.isSuccessful) {
                 val error = parseError(response.code, responseBytes)
                 if (response.code == 400 && error.code == AidenRemoteErrorCode.INVALID_REQUEST) {
+                    if (deviceType == AidenDeviceType.ANDROID_PHONE || deviceType == AidenDeviceType.ANDROID_TABLET) {
+                        throw AidenPairingBootstrapException.AndroidPairingUnsupported
+                    }
                     // Retry with legacy four-field shape
                     val legacyRequestObj = PairingExchangeRequest(
                         secret = bootstrap.secret,

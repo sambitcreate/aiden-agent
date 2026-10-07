@@ -590,7 +590,9 @@ export class AidenRemoteService {
           })
         : null;
       if (pairingRequests) await this.loadPairingRequestSetting();
-      let routeCache: { key: string; expires: number; routes: Array<import("./peer-transport.js").PeerTrust & { addresses?: string[] }> } | undefined;
+      let routeKey: string | undefined;
+      let tailnetRouteCache: { key: string; expires: number; route?: import("./peer-transport.js").PeerTrust } | undefined;
+      let tailnetRouteRefresh: Promise<void> | undefined;
       const routerDependencies: AidenRemoteRouterDependencies = {
         instanceId: state.instanceId,
         displayName: () => this.activeState?.displayName ?? state.displayName,
@@ -607,20 +609,37 @@ export class AidenRemoteService {
           const routes: Array<import("./peer-transport.js").PeerTrust & { addresses?: string[] }> = [];
           if (!current.enabled) return routes;
           const key = JSON.stringify([current.connectionMode, current.tailscaleOwnership, current.tailscalePendingOutcome, Boolean(this.lanServer), Boolean(this.tailscaleServer)]);
-          if (routeCache?.key === key && routeCache.expires > this.now()) return routeCache.routes;
-          for (const transport of ["lan", "tailscale"] as const) {
-            try {
-              const endpoint = await this.transportEndpoint(transport, current, tlsIdentity, { cachedTailscalePin: true });
-              const hostname = new URL(endpoint.endpoint).hostname;
-              if (transport === "lan" ? !hostname.endsWith(".local") : !hostname.endsWith(".ts.net")) continue;
-              const trust = this.transportTrust(transport, tlsIdentity);
+          routeKey = key;
+          // LAN identity is already local. Optional alternate-route discovery must
+          // never hold up an identity read or a healthy peer's wake probe.
+          try {
+            const endpoint = await this.transportEndpoint("lan", current, tlsIdentity);
+            if (new URL(endpoint.endpoint).hostname.endsWith(".local")) {
+              const trust = this.transportTrust("lan", tlsIdentity);
               routes.push({ ...endpoint,
                 ...(trust.mode === "private-ca" ? { caCertificateDerBase64: trust.caCertificateDerBase64 } : {}),
-                ...(transport === "lan" ? { addresses: peerLanInterfaceAddresses(os.networkInterfaces()) } : {}),
+                addresses: peerLanInterfaceAddresses(os.networkInterfaces()),
               });
-            } catch { /* An unavailable or unowned transport must not be advertised. */ }
+            }
+          } catch { /* Local access may be disabled on a Tailscale-only host. */ }
+          const fresh = tailnetRouteCache?.key === key && tailnetRouteCache.expires > this.now() ? tailnetRouteCache : undefined;
+          if (fresh) {
+            if (fresh.route) routes.push(fresh.route);
+          } else if (!tailnetRouteRefresh && current.tailscaleOwnership && !current.tailscalePendingOutcome
+            && this.tailscaleServer && (current.connectionMode === "tailscale" || current.connectionMode === "both")) {
+            // One on-demand refresh uses the existing bounded ownership/pin
+            // checks. Cold, expired and failed alternates are omitted meanwhile.
+            tailnetRouteRefresh = (async () => {
+              let route: import("./peer-transport.js").PeerTrust | undefined;
+              try {
+                const endpoint = await this.transportEndpoint("tailscale", current, tlsIdentity, { cachedTailscalePin: true });
+                if (new URL(endpoint.endpoint).hostname.endsWith(".ts.net")) route = endpoint;
+              } catch { /* Retry only after the negative cache expires. */ }
+              if (routeKey === key && this.tlsIdentity === tlsIdentity && this.activeState?.instanceId === current.instanceId) {
+                tailnetRouteCache = { key, expires: this.now() + 30_000, ...(route ? { route } : {}) };
+              }
+            })().finally(() => { tailnetRouteRefresh = undefined; });
           }
-          routeCache = { key, expires: this.now() + 30_000, routes };
           return routes;
         },
         now: this.now,

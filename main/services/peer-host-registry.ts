@@ -340,8 +340,15 @@ export class PeerHostRegistry {
       if (!current()) return;
       const hosts = await this.load();
       const host = hosts.find((entry) => entry.id === id);
-      if (!host || JSON.stringify(host.routes) === JSON.stringify(routes)) return;
-      const next = hosts.map((entry) => entry.id === id ? { ...entry, routes } : entry);
+      if (!host) return;
+      // Advertisements are currently available observations, not a complete
+      // inventory. An optional lookup can be cold or fail while this route is
+      // still useful. New observations replace trust for that endpoint; explicit
+      // user suppression remains authoritative and the stored slots stay bounded.
+      const observed = new Set(routes.map((route) => route.id));
+      const merged = [...routes, ...(host.routes ?? []).filter((route) => !observed.has(route.id))].slice(0, 2);
+      if (JSON.stringify(host.routes) === JSON.stringify(merged)) return;
+      const next = hosts.map((entry) => entry.id === id ? { ...entry, routes: merged } : entry);
       await this.options.storage.save(next, current);
       this.hosts = next;
       this.notify();

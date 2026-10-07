@@ -119,8 +119,10 @@ attempt. New draft edits remain separate from the saved request. Desktop saved
 requests are encrypted locally and bound to the original pairing; mobile records
 stay in the app's private storage and are scoped to that pairing.
 
-On Android, **Nearby** discovers desktops on the local network. Older desktops may
-require QR or manual-address pairing. Discovery only supplies an address hint;
+On Android, **Nearby** discovers desktops on the local network. New Android pairings
+require a desktop supporting the Android device identity (contract revision 25); an
+older desktop shows an update prompt. QR or manual-address pairing remains available
+when nearby discovery is unavailable. Discovery only supplies an address hint;
 setup-code verification and certificate validation still establish trust. Connection
 errors distinguish network reachability, secure-identity verification, and app-version
 problems. A secure-identity failure requires verification and pairing repair, rather

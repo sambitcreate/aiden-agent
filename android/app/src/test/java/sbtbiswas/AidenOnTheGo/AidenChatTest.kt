@@ -62,17 +62,26 @@ class AidenChatTest {
     }
 
     @Test
-    fun restoredRunInputRetryKeepsOriginalStreamAndLaterDraft() {
+    fun restoredRunInputRetryKeepsOriginalStreamAndLaterDraft() = assertSwitchedRunInputSettlement(false)
+
+    @Test
+    fun heldRunInputReceiptCannotClearAnotherRequestAfterSwitch() = assertSwitchedRunInputSettlement(true)
+
+    private fun assertSwitchedRunInputSettlement(replacement: Boolean) {
         val root = kotlin.io.path.createTempDirectory("aiden-input-retry").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val owners = ViewModelStore()
         val server = MockWebServer()
         val initial = sampleChat()
         val requests = java.util.concurrent.CopyOnWriteArrayList<RecordedRequest>()
+        val arrived = CountDownLatch(1)
+        val release = CountDownLatch(1)
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 if (request.method == "POST") {
                     requests.add(request)
+                    arrived.countDown()
+                    check(release.await(8, TimeUnit.SECONDS))
                     return MockResponse().setBody("""{"streamId":"stream-original","chatId":"${initial.id}","turnId":"turn-original","mode":"queue","status":"rejected","reason":"run_not_active","committed":false}""")
                 }
                 return if (request.path == "/api/aiden/v1/chats/${initial.id}") MockResponse().setBody(json.encodeToString(initial)) else MockResponse().setResponseCode(404)
@@ -100,6 +109,16 @@ class AidenChatTest {
                 assertFalse(model.canSend)
                 assertTrue(model.canRetrySend)
                 model.send(retry = true)
+                withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+                val replacementKey = UUID.randomUUID().toString()
+                if (replacement) {
+                    val newerSession = drafts.beginSession("runinput", initial.id)
+                    drafts.savePendingSend(null, newerSession)
+                    drafts.savePendingSend(AidenChatDraftStore.PendingSend("device-input", AidenTurnStart("Other request"), replacementKey, System.currentTimeMillis(), emptyList()), newerSession)
+                }
+                installations.setActiveInstallation(null)
+                coordinator.refreshClient()
+                release.countDown()
                 withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
                 assertEquals(1, requests.size)
                 assertEquals("/api/aiden/v1/streams/stream-original/inputs", requests.single().path)
@@ -108,7 +127,8 @@ class AidenChatTest {
                 assertEquals("Original guidance", payload["text"]!!.jsonPrimitive.content)
                 assertEquals("queue", payload["mode"]!!.jsonPrimitive.content)
                 assertEquals("Later draft", model.draft.value)
-                assertNull(model.pendingSend.value)
+                val reopened = AidenChatDraftStore(root)
+                assertEquals(if (replacement) replacementKey else null, reopened.loadPendingSend(reopened.beginSession("runinput", initial.id), "device-input")?.key)
             }
         } finally {
             runBlocking(dispatcher) { owners.clearAndJoin() }
@@ -826,6 +846,10 @@ class AidenChatTest {
                         }
                         release.countDown()
                         withTimeout(5_000) { sender.isStarting.first { !it } }
+                        if (mode == "switch") {
+                            val reopenedDrafts = AidenChatDraftStore(root)
+                            assertNull(reopenedDrafts.loadPendingSend(reopenedDrafts.beginSession("turn-instance", initial.id), "turn-device"))
+                        }
                         val reopened = AidenChatCache(root = File(root, "cache"))
                         if (mode == "ordered_posts") {
                             assertEquals(settled.messages + second, other.chat.value!!.messages)
