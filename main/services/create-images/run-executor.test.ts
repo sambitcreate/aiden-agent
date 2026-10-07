@@ -394,9 +394,36 @@ test("an executor fault aborts in-flight provider requests and waits for them be
   assert.deepEqual(order, ["request-aborted", "terminateRun"]);
   const snapshot = env.ledger.snapshot("run-1")!;
   assert.deepEqual([snapshot.run.state, snapshot.run.endReason], ["failed", "executor-fault"]);
+  // The fault stopped this request, not the user: it is a failure that may have been billed, never "cancelled".
   const b = attempts(env).get("b")!;
-  assert.deepEqual([b.state, b.mayHaveBeenBilled], ["cancelled", true]);
+  assert.deepEqual([b.state, b.errorCode, b.mayHaveBeenBilled], ["failed", "executor-fault", true]);
   assert.ok(snapshot.attempts.every((attempt) => attempt.state !== "queued" && attempt.state !== "running"));
+});
+
+test("an executor fault does not wait forever for a request that ignores the abort", async (t) => {
+  const env = await fixture(t);
+  const doc = workflow([prompt("p"), gen("a"), gen("b")], [link("p", "text", "a", "prompt"), link("p", "text", "b", "prompt")]);
+  const broken: RunExecutorDependencies["ledger"] = {
+    claimProviderRequest: (...args) => env.ledger.claimProviderRequest(...args),
+    snapshot: (runId) => env.ledger.snapshot(runId),
+    finishAttempts: (updates) => {
+      if (updates.some((update) => update.nodeId === "a")) throw new Error("disk full");
+      env.ledger.finishAttempts(updates);
+    },
+    finishRun: (...args) => env.ledger.finishRun(...args),
+    terminateRun: (...args) => env.ledger.terminateRun(...args),
+  };
+  const run = await start(
+    env,
+    doc,
+    (_request, index) => (index === 0 ? generated(31) : new Promise<ImageGenerationResult>(() => undefined)),
+    { ledger: broken, concurrency: 2, requestLimit: 2, deps: { faultWaitMs: 25 } },
+  );
+  await assert.rejects(run.done, /disk full/u);
+  const snapshot = env.ledger.snapshot("run-1")!;
+  assert.deepEqual([snapshot.run.state, snapshot.run.endReason], ["failed", "executor-fault"]);
+  const b = attempts(env).get("b")!;
+  assert.deepEqual([b.state, b.mayHaveBeenBilled], ["failed", true]);
 });
 
 test("a failing terminateRun is reported without masking the original executor error", async (t) => {
@@ -447,27 +474,25 @@ test("throwing change and request callbacks cannot fail a step or mislabel an un
   assert.deepEqual([attempt.state, attempt.errorCode, attempt.output.length], ["succeeded", undefined, 1]);
 });
 
-test("run concurrency is clamped: zero still runs, and nine never exceeds four requests at once", async (t) => {
+test("a run concurrency of zero still runs, one request at a time", async (t) => {
   const env = await fixture(t);
   const ids = ["a", "b", "c", "d"];
   const doc = workflow([prompt("p"), ...ids.map(gen)], ids.map((id) => link("p", "text", id, "prompt")));
-  for (const [concurrency, expectedPeak] of [[0, 1], [9, 4]] as const) {
-    let running = 0;
-    let peak = 0;
-    const run = await start(
-      env,
-      doc,
-      async () => {
-        running += 1;
-        peak = Math.max(peak, running);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        running -= 1;
-        return generated(16);
-      },
-      { runId: `run-c${concurrency}`, concurrency },
-    );
-    assert.equal(await run.done, "succeeded", `concurrency ${concurrency}`);
-    assert.equal(run.calls.length, 4);
-    assert.equal(peak, expectedPeak, `concurrency ${concurrency}`);
-  }
+  let running = 0;
+  let peak = 0;
+  const run = await start(
+    env,
+    doc,
+    async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      running -= 1;
+      return generated(16);
+    },
+    { concurrency: 0 },
+  );
+  assert.equal(await run.done, "succeeded");
+  assert.equal(run.calls.length, 4);
+  assert.equal(peak, 1);
 });

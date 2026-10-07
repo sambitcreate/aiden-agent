@@ -1,4 +1,3 @@
-// main/services/create-images/image-port.ts
 import type { AssistantImages, ImageContent, Models, Usage } from "@earendil-works/pi-ai";
 import type {
   GeneratedImage,
@@ -6,6 +5,7 @@ import type {
   ImageGenerationPort,
   ImageGenerationResult,
 } from "../../../renderer/shared/images/port.js";
+import { IMAGE_WORKFLOW_LIMITS } from "../../../renderer/shared/images/schema.js";
 import { parseGeneratedImages, type ParsedGeneratedImages } from "../pi-model-image-output.js";
 import { resolvePiModelImageInputs, type PiModelToolsHost } from "../pi-model-tools.js";
 import { isStudioAssetMediaType } from "../studio-assets/contract.js";
@@ -41,7 +41,7 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
       await options.beforeList?.();
       const available = await options.models.getAvailableOfType("image", undefined, { signal });
       return available
-        .filter((model) => model.type === "image" && !AUTO_ROUTER.test(model.id))
+        .filter((model) => !AUTO_ROUTER.test(model.id))
         .map((model) => ({
           provider: model.provider,
           providerLabel: options.providerLabel(model.provider),
@@ -60,6 +60,12 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
       }
       if (request.references.length > 0 && !model.input.includes("image")) {
         return failed("references-unsupported", "This image model does not accept reference images.");
+      }
+      if (request.references.length > IMAGE_WORKFLOW_LIMITS.maxReferences) {
+        return failed(
+          "references-unsupported",
+          `This image request has ${request.references.length} reference images. Aiden sends at most ${IMAGE_WORKFLOW_LIMITS.maxReferences}.`,
+        );
       }
       let references: ImageContent[];
       try {

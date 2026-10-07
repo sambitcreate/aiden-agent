@@ -41,3 +41,9 @@ test("truncate mode never fails a paid result over an unusable caption or stray 
   assert.deepEqual([parsed.images.length, parsed.description], [1, "A caption"]);
   assert.throws(() => parseGeneratedImages(output), /Invalid image description/u);
 });
+
+test("truncate mode flags a dropped malformed image even when fewer than four arrive", () => {
+  const parsed = parseGeneratedImages([image(1), { type: "image", mimeType: "image/png", data: "AAAA" }], { overflow: "truncate" });
+  assert.deepEqual([parsed.images.length, parsed.truncated], [1, true]);
+  assert.equal(parseGeneratedImages([image(1)], { overflow: "truncate" }).truncated, false);
+});

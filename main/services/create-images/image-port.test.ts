@@ -71,7 +71,10 @@ test("references reach the provider as image inputs, and text-only models refuse
   const refused = await fake.port.generate(request({ model: "flux", references: [reference] }));
   assert.deepEqual(refused.kind === "failed" ? refused.code : refused.kind, "references-unsupported");
   const oversized = await fake.port.generate(request({ references: Array.from({ length: 5 }, () => reference) }));
-  assert.deepEqual(oversized.kind === "failed" ? oversized.code : oversized.kind, "references-unsupported");
+  assert.deepEqual(
+    oversized.kind === "failed" ? [oversized.code, oversized.message] : oversized.kind,
+    ["references-unsupported", "This image request has 5 reference images. Aiden sends at most 4."],
+  );
   assert.equal(fake.calls.length, 1);
   assert.equal(fake.usage.length, 1);
 });

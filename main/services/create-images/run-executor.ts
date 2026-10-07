@@ -20,6 +20,8 @@ export interface RunExecutorDependencies {
   onRequestEnd?(): void;
   /** Receives a secondary failure that must not replace the error being thrown. */
   reportIssue?(error: unknown): void;
+  /** How long an executor fault waits for provider requests that ignore the abort. Defaults to 10 s. */
+  faultWaitMs?: number;
 }
 
 export interface RunExecution {
@@ -57,7 +59,21 @@ function observer(callback: (() => void) | undefined): () => void {
   };
 }
 
+const DEFAULT_FAULT_WAIT_MS = 10_000;
 const FAULT_MESSAGE = "Aiden hit an internal error while running this step.";
+
+/** Waits for the tasks, but not past `ms`: a provider that ignores the abort must not hold the run open. */
+async function settleOrGiveUp(tasks: Promise<unknown>[], ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  try {
+    await Promise.race([Promise.allSettled(tasks), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function executeRun(deps: RunExecutorDependencies, run: RunExecution): Promise<RunState> {
   const changed = observer(deps.onChange);
@@ -71,6 +87,11 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
   else run.signal.addEventListener("abort", relay, { once: true });
   const outstanding = new Set<Promise<unknown>>();
   const abortReason = () => (typeof run.signal.reason === "string" ? run.signal.reason : "user-cancel");
+  // An abort the user asked for is a cancel. The executor's own fault abort is a failure.
+  const stopped = (): { state: "cancelled" } | { state: "failed"; errorCode: string; errorMessage: string } =>
+    run.signal.aborted
+      ? { state: "cancelled" }
+      : { state: "failed", errorCode: "executor-fault", errorMessage: FAULT_MESSAGE };
   const finish = (step: PlannedStep, update: Omit<AttemptFinish, "runId" | "nodeId" | "variant">) =>
     guarded(() => deps.ledger.finishAttempts([{ runId: run.runId, nodeId: step.nodeId, variant: step.variant, ...update }]), undefined);
 
@@ -104,14 +125,16 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       return { ok: false, state: "failed" };
     }
     if (signal.aborted) {
-      finish(step, { state: "cancelled" });
-      return { ok: false, state: "cancelled" };
+      const update = stopped();
+      finish(step, update);
+      return { ok: false, state: update.state };
     }
     if (!guarded(() => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant), false)) {
       // The ledger also refuses a claim once a cancel was requested; that is a cancel, not a spent budget.
       if (signal.aborted) {
-        finish(step, { state: "cancelled" });
-        return { ok: false, state: "cancelled" };
+        const update = stopped();
+        finish(step, update);
+        return { ok: false, state: update.state };
       }
       finish(step, {
         state: "failed",
@@ -156,9 +179,14 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     }
     reportUsage(result.usage);
     if (result.kind === "failed") {
-      const state = result.code === "aborted" ? "cancelled" : "failed";
-      finish(step, { state, errorCode: result.code, errorMessage: result.message, ...cost(result.usage) });
-      return { ok: false, state };
+      if (result.code === "aborted") {
+        const update = stopped();
+        const detail = update.state === "cancelled" ? { errorCode: result.code, errorMessage: result.message } : update;
+        finish(step, { ...detail, state: update.state, ...cost(result.usage) });
+        return { ok: false, state: update.state };
+      }
+      finish(step, { state: "failed", errorCode: result.code, errorMessage: result.message, ...cost(result.usage) });
+      return { ok: false, state: "failed" };
     }
     const output: OutputRef[] = [];
     for (const image of result.images) {
@@ -213,7 +241,7 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     // The scheduler itself failed. Stop what is still in flight, let it record its own outcome
     // (a paid request keeps its cost), and only then end every live attempt.
     internal.abort("executor-fault");
-    await Promise.allSettled([...outstanding]);
+    await settleOrGiveUp([...outstanding], deps.faultWaitMs ?? DEFAULT_FAULT_WAIT_MS);
     try {
       guarded(() => deps.ledger.terminateRun(run.runId, "failed", "executor-fault"), undefined);
     } catch (secondary) {

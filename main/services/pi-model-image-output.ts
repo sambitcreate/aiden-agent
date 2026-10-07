@@ -77,6 +77,7 @@ export function parseGeneratedImages(
     } catch (error) {
       if (!truncate) throw error;
       // Truncate mode skips a malformed interim image instead of failing the paid result.
+      truncated = true;
     }
   }
   if (images.length === 0) throw new Error("The model returned no generated images.");
