@@ -274,7 +274,8 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
         <Button
           ref={installRef}
           size="small"
-          variant="filled"
+          // The one step forward in this dialog until the runtime exists.
+          variant="accent"
           className="justify-self-start"
           disabled={acting}
           onClick={() => void install()}
