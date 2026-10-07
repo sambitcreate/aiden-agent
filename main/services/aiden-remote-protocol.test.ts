@@ -110,7 +110,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 24);
+  assert.equal(fixture.contractRevision, 26);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);

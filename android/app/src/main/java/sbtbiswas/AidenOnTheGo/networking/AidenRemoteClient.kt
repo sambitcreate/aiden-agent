@@ -1330,7 +1330,7 @@ class AidenRemoteClient(
         streamEvents(streamId, lastEventId ?: 0)
 
     // --- Bots ---
-    /** Strict revision-25 codec for Bot DTOs: removed fields such as `favorites` are rejected. */
+    /** Strict revision-26 codec for Bot DTOs: removed fields such as `favorites` are rejected. */
     private val botJson = AidenBotWireJson.json
 
     suspend fun bots(): AidenBotList = executeRequest(
@@ -1380,7 +1380,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 25 (`bot-delete-v1`): permanently erases a Bot. `204 No Content` on success;
+     * Revision 26 (`bot-delete-v1`): permanently erases a Bot. `204 No Content` on success;
      * a `404` means the Bot is already gone, which is the outcome the caller wanted.
      */
     suspend fun deleteBot(id: String, revision: String) {
@@ -1394,7 +1394,7 @@ class AidenRemoteClient(
         ) { }
     }
 
-    // --- Revision 25: durable Bot session (`bot-durable-session-v1`) ---
+    // --- Revision 26: durable Bot session (`bot-durable-session-v1`) ---
 
     suspend fun botSession(botId: String): AidenBotSession {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -1457,7 +1457,7 @@ class AidenRemoteClient(
         }
     }
 
-    // --- Revision 25: routines (`bot-routines-v1`) ---
+    // --- Revision 26: routines (`bot-routines-v1`) ---
 
     suspend fun botRoutines(botId: String): AidenBotRoutineList {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -1525,7 +1525,7 @@ class AidenRemoteClient(
         ) { }
     }
 
-    // --- Revision 25: connection requests (`bot-connection-requests-v1`) ---
+    // --- Revision 26: connection requests (`bot-connection-requests-v1`) ---
 
     suspend fun requestBotConnection(
         botId: String,
@@ -1548,7 +1548,7 @@ class AidenRemoteClient(
         }
     }
 
-    // --- Revision 25: starter presets (`bot-presets-v1`) ---
+    // --- Revision 26: starter presets (`bot-presets-v1`) ---
 
     suspend fun botPresets(): AidenBotPresetList = executeRequest(
         "/bot-presets",

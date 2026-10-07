@@ -8,7 +8,7 @@ sealed class AidenScreen {
     data object ProductShell : AidenScreen()
     data class ChatDetail(val chatId: String, val startsVoice: Boolean = false) : AidenScreen()
     data class BotProfile(val botId: String) : AidenScreen()
-    /** A Bot's one chat, addressed by Bot id (revision 25); older Macs resolve a chat id. */
+    /** A Bot's one chat, addressed by Bot id (revision 26); older Macs resolve a chat id. */
     data class BotChat(val botId: String) : AidenScreen()
     data class BotEditor(val botId: String?) : AidenScreen()
     data class WorkspaceFiles(val workspaceId: String) : AidenScreen()

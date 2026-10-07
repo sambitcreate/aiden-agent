@@ -88,7 +88,6 @@ import { llmClient } from "./llm-client.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
 import { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
-import { createBotArchivedFileReadAuthority } from "./bot-archived-file-read-authority.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
 import { workspaceWorktreeApplicationService } from "./workspace-worktree-application-service-main.js";
@@ -111,6 +110,15 @@ import { usageStore } from "./usage-store.js";
 import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
+import { createBotPresetCreatorFor } from "./bot-preset-store.js";
+import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { raiseBotConnectionRequest } from "./bot-connection-requests-main.js";
+import { botRoutineService } from "./scheduled-bot-routines-main.js";
+import { systemTimezone } from "./schedule-store.js";
+import {
+  AidenRemoteBotSessionService,
+  projectBotSessionState,
+} from "./aiden-remote-bot-session.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
 import {
@@ -141,10 +149,6 @@ import {
 } from "./bot-inbox-projection.js";
 import { createMainBotAvatarApplicationAdapter } from "./bot-avatar-store-main.js";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
-import {
-  botFavoritesStore,
-  withBotFavoritesMutation,
-} from "./bot-favorites-main.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import {
@@ -426,10 +430,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         speech: AidenRemoteSpeechService;
         readAloud: AidenRemoteTtsService;
         bots?: AidenRemoteBotService;
-        botNotice?: {
-          status: typeof botApplicationService.noticeStatus;
-          acknowledge: typeof botApplicationService.acknowledgeNotice;
-        };
+        botSessions?: AidenRemoteBotSessionService;
       }>
     | undefined;
   let workspaceApiInstanceId: string | undefined;
@@ -741,11 +742,18 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }).list(input),
             },
-            favorites: {
-              load: () => botFavoritesStore.load(),
-              save: (snapshot) => botFavoritesStore.save(snapshot),
+            deleteBot: async (botId) => {
+              const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+              await (await botSessionRuntime()).deleteBot(botId);
             },
-            withFavoritesMutation: (action) => withBotFavoritesMutation(action),
+            sessionStates: async (botIds) => {
+              const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+              const runtime = await botSessionRuntime();
+              const rows = await mapWithConcurrency(botIds, 4, async (botId) =>
+                [botId, projectBotSessionState(await runtime.state(botId)).state] as const,
+              );
+              return new Map(rows);
+            },
             health: (botId) => projectBotHealth(botId),
             healthBatch: async (botIds) => {
               const snapshot = await botCapabilityCatalog.snapshot({
@@ -837,16 +845,33 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             ? new AidenRemoteBotFileService({
                 instanceId,
                 authority: botRuntimeAuthority,
-                archivedRead: createBotArchivedFileReadAuthority({
-                  bots: botStore,
-                  chats: chatStore,
-                  capabilities: botCapabilityStore,
-                  catalog: botCapabilityCatalog,
-                  managedWorkspace: botManagedWorkspace,
-                  mutationGate: botMutationGate,
-                  inventoryLeases: botRuntimeInventoryLeases,
-                }),
                 chats: chatStore,
+              })
+            : undefined;
+          const botPresetCreator = createBotPresetCreatorFor({
+            root: () => userData,
+            getBot: (botId) => botStore.get(botId),
+            createBot: (input) =>
+              botApplicationService.createBot({ audienceId: instanceId, bot: input }),
+          });
+          const botSessions = bots
+            ? new AidenRemoteBotSessionService({
+                bots,
+                runtime: async () => {
+                  const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+                  return botSessionRuntime();
+                },
+                routines: botRoutineService,
+                presets: {
+                  list: () => BOT_PRESETS,
+                  create: async (presetId) => {
+                    const result = await botPresetCreator(presetId);
+                    return { botId: result.bot.id, created: result.created };
+                  },
+                },
+                connectionRequested: raiseBotConnectionRequest,
+                defaultTimezone: systemTimezone,
+                notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
               })
             : undefined;
           const git = new AidenRemoteGitService({
@@ -904,7 +929,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
                   chats.hostFeedChats(),
                   workspaceApplicationService.list(),
-                  bots ? bots.list(false) : Promise.resolve(undefined),
+                  bots ? bots.list() : Promise.resolve(undefined),
                 ]);
                 return {
                   summaries,
@@ -977,20 +1002,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               ? {
                   botFiles,
                   bots,
-                  botNotice: {
-                    status: (deviceId: string) =>
-                      botApplicationService.noticeStatus(deviceId),
-                    acknowledge: (
-                      deviceId: string,
-                      acknowledgement: Parameters<
-                        typeof botApplicationService.acknowledgeNotice
-                      >[1],
-                    ) =>
-                      botApplicationService.acknowledgeNotice(
-                        deviceId,
-                        acknowledgement,
-                      ),
-                  },
+                  botSessions,
                 }
               : {}),
             hostFeed,

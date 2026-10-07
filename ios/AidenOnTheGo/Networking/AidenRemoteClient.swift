@@ -1537,7 +1537,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return response
     }
 
-    // MARK: Contract revision 25: durable Bot sessions
+    // MARK: Contract revision 26: durable Bot sessions
 
     func botSession(botId: String) async throws -> AidenBotSession {
         try validateBotIdentifier(botId)

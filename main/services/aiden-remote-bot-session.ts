@@ -1,4 +1,4 @@
-// Remote surface of the durable Bot runtime (contract revision 25).
+// Remote surface of the durable Bot runtime (contract revision 26).
 //
 // - `GET /bots/{id}/session` and its SSE stream project the Bot's one Pi Durable
 //   conversation: displayable entries, the in-flight partial and the paused

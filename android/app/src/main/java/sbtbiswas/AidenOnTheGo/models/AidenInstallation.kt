@@ -74,7 +74,7 @@ data class AidenServer(
     val supportsChatSummaries: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE)
 
-    /** Revision 25: each Bot has one durable session addressed by Bot id. */
+    /** Revision 26: each Bot has one durable session addressed by Bot id. */
     val supportsBotDurableSession: Boolean
         get() = features.contains(AidenRemoteProtocol.BOT_DURABLE_SESSION_FEATURE)
 

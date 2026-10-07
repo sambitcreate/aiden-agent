@@ -32,7 +32,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 25 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 26 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -50,7 +50,7 @@ export const AIDEN_REMOTE_CHAT_READ_STATE_FEATURE = "chat-read-state-v1" as cons
 export const AIDEN_REMOTE_MAX_SERVER_FEATURES = 32;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH = 64;
 /**
- * Bots rework feature tokens (contract revision 25). `bot-delete-v1` marks
+ * Bots rework feature tokens (contract revision 26). `bot-delete-v1` marks
  * `DELETE /bots/{botId}` as a permanent erase; the others gate the durable
  * Bot session, routines, connection requests and starter presets.
  */
@@ -647,7 +647,7 @@ export const AIDEN_REMOTE_BOT_HEALTH_STATES = [
 ] as const;
 
 /**
- * Durable Bot session state (contract revision 25, `bot-durable-session-v1`).
+ * Durable Bot session state (contract revision 26, `bot-durable-session-v1`).
  * `interrupted` is a paused turn waiting for Resume or Dismiss.
  */
 export const AIDEN_REMOTE_BOT_SESSION_STATES = [
@@ -673,7 +673,7 @@ export const AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES = [
 export type AidenRemoteBotHealth = (typeof AIDEN_REMOTE_BOT_HEALTH_STATES)[number];
 
 /**
- * Colour plus shape (contract revision 25). Clients may still send the retired
+ * Colour plus shape (contract revision 26). Clients may still send the retired
  * `eyes`/`detail` axes; the host accepts and ignores them and never emits them.
  */
 export interface AidenRemoteBotAvatarRecipe {
@@ -682,7 +682,7 @@ export interface AidenRemoteBotAvatarRecipe {
   color: (typeof AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES)[number];
 }
 
-/** Legacy string avatar ids were retired in contract revision 25. */
+/** Legacy string avatar ids were retired in contract revision 26. */
 export type AidenRemoteBotSemanticAvatar = AidenRemoteBotAvatarRecipe;
 
 export interface AidenRemoteBotAvatarAsset {
@@ -754,7 +754,7 @@ export interface AidenRemoteBotCreateRequest {
   purpose: string;
   instructions: string;
   avatar: AidenRemoteBotSemanticAvatar;
-  /** Omitted means Full access (contract revision 25 dropped the notice wall). */
+  /** Omitted means Full access (contract revision 26 dropped the notice wall). */
   access?: AidenRemoteBotAccessUpdateRequest;
   openingGreeting?: string;
 }
@@ -888,7 +888,7 @@ export interface AidenRemoteBotAvatarUploadFixture {
   response: AidenRemoteBotAvatarAsset;
 }
 
-// --- Contract revision 25: durable Bot sessions, routines, connections, presets.
+// --- Contract revision 26: durable Bot sessions, routines, connections, presets.
 
 export const AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES = 200;
 export const AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS = 100_000;
@@ -2034,7 +2034,7 @@ function parseBotSemanticAvatar(
 ): AidenRemoteBotSemanticAvatar {
   if (!isRecord(value)) throw new Error("Bot semantic avatar is invalid.");
   if (exactRequest) {
-    // `eyes` and `detail` are retired (contract revision 25): accepted from
+    // `eyes` and `detail` are retired (contract revision 26): accepted from
     // older senders and ignored.
     assertExactKeys(
       value,
@@ -4503,7 +4503,7 @@ export function assertOrderedAidenRemoteEvents(events: readonly AidenRemoteStrea
 }
 
 
-// --- Contract revision 25 parsers -------------------------------------------
+// --- Contract revision 26 parsers -------------------------------------------
 
 function parseBotSessionStateView(
   value: Record<string, unknown>,
@@ -5144,7 +5144,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botRoutineUpdate.request.enabled !== undefined &&
       botRoutineUpdate.response.enabled !== botRoutineUpdate.request.enabled
   ) {
-    throw new Error("Canonical Bot rev-25 fixtures do not agree.");
+    throw new Error("Canonical Bot rev-26 fixtures do not agree.");
   }
   const botAvatarUploadRecord = isRecord(value.botAvatarUpload)
     ? value.botAvatarUpload

@@ -219,7 +219,7 @@ struct AidenBotAvatarRecipe: Codable, Equatable, Sendable {
     }
 }
 
-/// A Bot's semantic avatar. Since revision 25 it is always a recipe; the
+/// A Bot's semantic avatar. Since revision 26 it is always a recipe; the
 /// legacy string ids are gone from the wire.
 enum AidenBotSemanticAvatar: Codable, Equatable, Sendable {
     case recipe(AidenBotAvatarRecipe)
@@ -366,7 +366,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// `GET /bots`: `{bots, maxBots}`. Revision 25 removed Favorites, so a
+/// `GET /bots`: `{bots, maxBots}`. Revision 26 removed Favorites, so a
 /// payload still carrying `favorites` is rejected.
 struct AidenBotList: Codable, Equatable, Sendable {
     let bots: [AidenBotSummary]
@@ -522,7 +522,7 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
     let openingGreeting: String?
     let instructions: String
     let avatar: AidenBotSemanticAvatar
-    /// Optional since revision 25: omitted means Full Access by default, and a
+    /// Optional since revision 26: omitted means Full Access by default, and a
     /// Bot created without an AI model reports `sessionState: needs_model`.
     let access: AidenBotAccessUpdate?
 

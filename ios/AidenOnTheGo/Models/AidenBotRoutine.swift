@@ -1,6 +1,6 @@
 import Foundation
 
-// Contract revision 25: per-Bot routines (`bot-routines-v1`), connection
+// Contract revision 26: per-Bot routines (`bot-routines-v1`), connection
 // requests (`bot-connection-requests-v1`), and starter presets
 // (`bot-presets-v1`).
 

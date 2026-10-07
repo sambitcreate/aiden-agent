@@ -14,7 +14,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
 /**
- * Feature token a paired Mac advertises once it serves Bot deletion (contract revision 25).
+ * Feature token a paired Mac advertises once it serves Bot deletion (contract revision 26).
  * Without it every Delete entry point stays hidden.
  */
 const val AIDEN_BOT_DELETE_FEATURE = AidenRemoteProtocol.BOT_DELETE_FEATURE

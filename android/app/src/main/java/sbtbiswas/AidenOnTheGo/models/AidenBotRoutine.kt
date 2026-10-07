@@ -12,7 +12,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 
-// Contract revision 25 (`bot-routines-v1`) and (`bot-presets-v1`).
+// Contract revision 26 (`bot-routines-v1`) and (`bot-presets-v1`).
 
 object AidenBotRoutineWire {
     const val MAX_ROUTINES = 64

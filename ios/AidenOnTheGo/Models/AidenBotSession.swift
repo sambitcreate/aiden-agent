@@ -1,6 +1,6 @@
 import Foundation
 
-// Contract revision 25 (`bot-durable-session-v1`): a Bot's one durable
+// Contract revision 26 (`bot-durable-session-v1`): a Bot's one durable
 // conversation, its live event stream, and the turn controls.
 
 enum AidenBotSessionWire {

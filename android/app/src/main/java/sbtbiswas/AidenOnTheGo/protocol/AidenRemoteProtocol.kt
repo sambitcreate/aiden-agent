@@ -54,7 +54,7 @@ object AidenRemoteProtocol {
     /** Contract revision 24: phones may observe and control runs started on
      * the Mac, in Telegram or by the scheduler. */
     const val PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1"
-    /** Contract revision 25: Bots rework. */
+    /** Contract revision 26: Bots rework. */
     const val BOT_DELETE_FEATURE = "bot-delete-v1"
     const val BOT_DURABLE_SESSION_FEATURE = "bot-durable-session-v1"
     const val BOT_ROUTINES_FEATURE = "bot-routines-v1"

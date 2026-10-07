@@ -105,7 +105,7 @@ enum class AidenBotAvatarColor {
 }
 
 /**
- * A Bot's character on the wire: `{version:1, shape, color}`. Contract revision 25 retired
+ * A Bot's character on the wire: `{version:1, shape, color}`. Contract revision 26 retired
  * the `eyes` and `detail` axes; a host may still echo them, so decoding accepts and drops
  * them, and encoding never sends them.
  */
@@ -160,7 +160,7 @@ object AidenBotAvatarRecipeSerializer : KSerializer<AidenBotAvatarRecipe> {
 }
 
 /**
- * A Bot's semantic avatar. Since contract revision 25 it is always the
+ * A Bot's semantic avatar. Since contract revision 26 it is always the
  * `{version:1, shape, color}` recipe; the retired legacy string ids are rejected.
  */
 @Serializable(with = AidenBotSemanticAvatarSerializer::class)
@@ -228,7 +228,7 @@ enum class AidenBotHealth {
     @SerialName("unavailable") UNAVAILABLE
 }
 
-/** Durable Bot session state (contract revision 25, `bot-durable-session-v1`). */
+/** Durable Bot session state (contract revision 26, `bot-durable-session-v1`). */
 @Serializable
 enum class AidenBotSessionState {
     @SerialName("idle") IDLE,
@@ -329,7 +329,7 @@ data class AidenBotCreateRequest(
     val openingGreeting: String? = null,
     val instructions: String,
     val avatar: AidenBotSemanticAvatar,
-    /** Optional since revision 25: omitted means Full access. */
+    /** Optional since revision 26: omitted means Full access. */
     val access: AidenBotAccessUpdate? = null
 ) {
     init {

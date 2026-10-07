@@ -155,7 +155,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(25, fixture.contractRevision)
+        assertEquals(26, fixture.contractRevision)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         val runControlError = requireNotNull(fixture.runControlError).error
@@ -188,7 +188,7 @@ class AidenBotContractTest {
         assertEquals(AidenBotAvatarAssetMimeType.PNG, fixture.botAvatarMetadata.mimeType)
         assertEquals(512, fixture.botAvatarMetadata.width)
         assertEquals(fixture.botCreate.request.avatar, fixture.botCreate.response.avatar.semantic)
-        // Revision 25: access is optional on create (omitted = Full) and a new Bot may need a model.
+        // Revision 26: access is optional on create (omitted = Full) and a new Bot may need a model.
         assertNull(fixture.botCreate.request.access)
         assertEquals(AidenBotSessionState.NEEDS_MODEL, fixture.botCreate.response.sessionState)
         assertNull(fixture.botIdentity.response.openingGreeting)

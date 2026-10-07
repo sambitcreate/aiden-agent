@@ -103,14 +103,6 @@ function parseRequest<Result>(
   }
 }
 
-function archiveRetiredError(): AidenRemoteServiceError {
-  return new AidenRemoteServiceError(
-    "invalid_request",
-    "Bots can no longer be archived or restored. Delete the Bot on your Mac instead.",
-    400,
-  );
-}
-
 function mapBotMutationError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotApplicationUnavailableError) {
@@ -213,7 +205,7 @@ export function projectAidenRemoteBotSummary(
 }
 
 type BotApplicationPort = {
-  list(includeArchived?: boolean): Promise<BotDefinition[]>;
+  list(): Promise<BotDefinition[]>;
   get(botId: string): Promise<BotDefinition | null>;
   createBot(input: {
     audienceId: string;
@@ -355,10 +347,10 @@ export class AidenRemoteBotService {
     return result!;
   }
 
-  /** A live Bot. A deleted Bot (a retired record) reads as missing. */
+  /** A live Bot. A deleted Bot reads as missing. */
   async bot(botId: string): Promise<BotDefinition> {
     const bot = await this.options.application.get(safeBotId(botId));
-    if (!bot || bot.archivedAt !== undefined) {
+    if (!bot) {
       throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
     }
     return bot;
@@ -485,9 +477,7 @@ export class AidenRemoteBotService {
   }
 
   async list(): Promise<AidenRemoteBotList> {
-    // Deleted Bots are retired records and never leave the host.
-    const bots = (await this.options.application.list(false))
-      .filter(({ archivedAt }) => archivedAt === undefined);
+    const bots = await this.options.application.list();
     if (bots.length > MAX_BOTS) {
       throw new AidenRemoteServiceError("internal_error", "Aiden has too many Bots to project safely.", 500);
     }
@@ -695,27 +685,29 @@ export class AidenRemoteBotService {
   }
 
   /**
-   * Archive and restore were removed: Bots are deleted, never archived. The
-   * routes stay until the Remote contract revision replaces them with
-   * `DELETE /bots/{id}`; until then they refuse without changing anything.
+   * `DELETE /bots/{id}`: permanently erases the Bot (chat, memory, routines,
+   * files, photo). `If-Match` guards against deleting a Bot that changed.
    */
-  async archive(botId: string, expectedRevision: string): Promise<AidenRemoteBotDetail> {
-    await this.bot(botId);
-    void expectedRevision;
-    throw archiveRetiredError();
-  }
-
-  async restore(
-    deviceId: string,
-    botId: string,
-    expectedRevision: string,
-    idempotencyKey: string,
-  ): Promise<AidenRemoteBotDetail> {
-    await this.bot(botId);
-    void deviceId;
-    void expectedRevision;
-    void idempotencyKey;
-    throw archiveRetiredError();
+  async delete(botId: string, expectedRevision: string): Promise<void> {
+    if (!this.options.deleteBot) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    const existing = await this.bot(botId);
+    if (existing.revision !== expectedRevision) {
+      throw new AidenRemoteServiceError(
+        "revision_conflict",
+        "This Bot changed. Refresh it before trying again.",
+        409,
+        false,
+        { currentRevision: existing.revision },
+      );
+    }
+    try {
+      await this.options.deleteBot(existing.id);
+    } catch (error) {
+      return mapBotMutationError(error);
+    }
+    this.options.notifyBotsChanged?.(existing.id);
   }
 
   async capabilityCatalog(

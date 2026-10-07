@@ -1,5 +1,5 @@
 {
-  "contractRevision": 25,
+  "contractRevision": 26,
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
@@ -1385,7 +1385,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 25,
+    "contractRevision": 26,
     "pairingRequests": true
   },
   "hostFeedEvents": [

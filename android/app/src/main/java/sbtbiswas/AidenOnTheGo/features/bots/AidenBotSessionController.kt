@@ -15,7 +15,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import java.util.UUID
 
-/** The routes a durable Bot chat uses. [AidenRemoteClient] provides them on a revision-25 Mac. */
+/** The routes a durable Bot chat uses. [AidenRemoteClient] provides them on a revision-26 Mac. */
 interface AidenBotSessionTransport {
     suspend fun session(botId: String): AidenBotSession
     fun events(botId: String): Flow<AidenBotSessionEvent>

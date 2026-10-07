@@ -74,7 +74,7 @@ data class AidenBotPolicyUpdateFixture(
     val response: AidenBotAccessView
 )
 
-/** Revision 25 request/response pairs. */
+/** Revision 26 request/response pairs. */
 @Serializable
 data class AidenBotSessionSendFixture(
     val request: AidenBotSessionSendRequest,

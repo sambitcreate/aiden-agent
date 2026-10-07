@@ -16,8 +16,8 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 
-/** Revision 25 Bot DTOs against the shared contract fixture, through the strict client codec. */
-class AidenBotRevision25ContractTest {
+/** Revision 26 Bot DTOs against the shared contract fixture, through the strict client codec. */
+class AidenBotRevision26ContractTest {
     private val json = AidenBotWireJson.json
 
     private val fixture: JsonObject by lazy {
@@ -38,8 +38,8 @@ class AidenBotRevision25ContractTest {
     private fun pair(key: String, part: String) = fixture.getValue(key).jsonObject.getValue(part)
 
     @Test
-    fun fixtureIsRevision25AndAdvertisesTheBotFeatures() {
-        assertEquals(25, (fixture.getValue("contractRevision") as JsonPrimitive).content.toInt())
+    fun fixtureIsRevision26AndAdvertisesTheBotFeatures() {
+        assertEquals(26, (fixture.getValue("contractRevision") as JsonPrimitive).content.toInt())
         val server = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
             .decodeFromJsonElement(AidenServer.serializer(), fixture.getValue("server"))
         assertTrue(server.supportsBotDurableSession)

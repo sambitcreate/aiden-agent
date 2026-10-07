@@ -168,7 +168,7 @@ enum AidenSSELineDecoder {
     }
 }
 
-/// Parses `GET /bots/{botId}/session/events` (contract revision 25). Order is
+/// Parses `GET /bots/{botId}/session/events` (contract revision 26). Order is
 /// carried by each frame's `(epoch, seq)`, so an SSE `id:` line is optional;
 /// when present it must equal `seq`, and an `event:` name must equal `type`.
 struct AidenBotSessionSSEParser: AidenSSEEventParsing {

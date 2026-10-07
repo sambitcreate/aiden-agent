@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Host feature tokens added in contract revision 25.
+/// Host feature tokens added in contract revision 26.
 enum AidenBotHostFeature {
     static let durableSession = "bot-durable-session-v1"
     static let routines = "bot-routines-v1"

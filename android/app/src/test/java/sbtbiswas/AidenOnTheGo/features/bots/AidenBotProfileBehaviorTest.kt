@@ -173,7 +173,7 @@ class AidenBotProfileBehaviorTest {
         assertEquals("Plan my meals", request.purpose)
         assertEquals("Plan my meals\nKeep it cheap", request.instructions)
         assertEquals(AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned("Meal Planner")), request.avatar)
-        // Revision 25: no access on the wire means Full; no model is required to create.
+        // Revision 26: no access on the wire means Full; no model is required to create.
         val wire = AidenBotWireJson.json.parseToJsonElement(
             AidenBotWireJson.json.encodeToString(AidenBotCreateRequest.serializer(), request)
         ) as kotlinx.serialization.json.JsonObject

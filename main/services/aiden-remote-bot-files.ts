@@ -18,11 +18,6 @@ import {
   type BotRuntimeAuthorityAdmission,
 } from "./bot-runtime-authority.js";
 import {
-  BotArchivedFileReadAuthorityError,
-  type BotArchivedFileReadAuthorityPort,
-  type BotArchivedFileReadContext,
-} from "./bot-archived-file-read-authority.js";
-import {
   listWorkspaceFiles,
   readWorkspaceFile,
   WorkspaceFileError,
@@ -44,17 +39,16 @@ type BotRuntimeAuthorityPort = {
   }): Promise<BotRuntimeAuthorityAdmission>;
 };
 
-type BotFileAuthorityContext = Pick<
-  BotArchivedFileReadContext,
-  | "botId"
-  | "chatId"
-  | "workspaceId"
-  | "workingDirectory"
-  | "botPolicy"
-  | "chatPolicy"
-  | "signal"
-  | "revalidateBeforeEffect"
->;
+type BotFileAuthorityContext = {
+  botId: string;
+  chatId: string;
+  workspaceId: string;
+  workingDirectory: string;
+  botPolicy: Readonly<{ revision: string; epoch: string }>;
+  chatPolicy: Readonly<{ revision: string; epoch: string }>;
+  signal: AbortSignal;
+  revalidateBeforeEffect(): Promise<void>;
+};
 
 function safeDisplayPath(value: string): string {
   if (
@@ -131,25 +125,6 @@ function mapAuthorityError(error: unknown): never {
   );
 }
 
-function mapArchivedAuthorityError(error: unknown): never {
-  if (!(error instanceof BotArchivedFileReadAuthorityError)) throw error;
-  if (error.classification === "capability_denied") {
-    throw new AidenRemoteServiceError(
-      "capability_denied",
-      "Files are not enabled for this Bot conversation.",
-      403,
-    );
-  }
-  throw new AidenRemoteServiceError(
-    error.classification === "changed" ? "operation_stale" : "not_found",
-    error.classification === "changed"
-      ? "This Bot's file access changed. Refresh the conversation and try again."
-      : "This Bot conversation is no longer available.",
-    error.classification === "changed" ? 409 : 404,
-    error.classification === "changed",
-  );
-}
-
 function parseWrite(value: unknown): { content: string; expectedVersion: string } {
   const record = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -223,7 +198,6 @@ export class AidenRemoteBotFileService {
     private readonly options: {
       instanceId: string;
       authority: BotRuntimeAuthorityPort;
-      archivedRead?: BotArchivedFileReadAuthorityPort;
       chats: Pick<ChatStore, "get">;
       handles?: AidenOpaqueHandleStore;
       now?: () => number;
@@ -252,7 +226,6 @@ export class AidenRemoteBotFileService {
     deviceId: string,
     botId: string,
     chatId: string,
-    access: "read" | "write",
     action: (authority: BotFileAuthorityContext) => Promise<Result>,
   ): Promise<Result> {
     let admission: BotRuntimeAuthorityAdmission | undefined;
@@ -261,27 +234,6 @@ export class AidenRemoteBotFileService {
       requireManagedHome(admission);
       return await action(this.activeContext(admission));
     } catch (error) {
-      if (
-        error instanceof BotRuntimeAuthorityError &&
-        error.classification === "bot_unavailable" &&
-        this.options.archivedRead
-      ) {
-        try {
-          return await this.options.archivedRead.run({ botId, chatId }, async (authority) => {
-            if (access === "write") {
-              throw new AidenRemoteServiceError(
-                "bot_archived",
-                "Restore this Bot before changing its files.",
-                409,
-              );
-            }
-            return action(authority);
-          });
-        } catch (archivedError) {
-          if (archivedError instanceof AidenRemoteServiceError) throw archivedError;
-          return mapArchivedAuthorityError(archivedError);
-        }
-      }
       if (error instanceof AidenRemoteServiceError) throw error;
       return mapAuthorityError(error);
     } finally {
@@ -327,7 +279,7 @@ export class AidenRemoteBotFileService {
 
   async list(deviceId: string, chatId: string): Promise<AidenRemoteFileIndex> {
     const botId = await this.botIdForChat(chatId);
-    return this.withAuthority(deviceId, botId, chatId, "read", async (authority) => {
+    return this.withAuthority(deviceId, botId, chatId, async (authority) => {
       try {
         await authority.revalidateBeforeEffect();
         const index = await listWorkspaceFiles(authority.workingDirectory, authority.signal);
@@ -345,7 +297,6 @@ export class AidenRemoteBotFileService {
               return { displayPath, claims };
             } catch (error) {
               if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
-              if (error instanceof BotArchivedFileReadAuthorityError) mapArchivedAuthorityError(error);
               return undefined;
             }
           }, authority.signal);
@@ -370,9 +321,6 @@ export class AidenRemoteBotFileService {
               mapHandleError(error);
             }
             if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
-            if (error instanceof BotArchivedFileReadAuthorityError) {
-              mapArchivedAuthorityError(error);
-            }
             omitted = true;
           }
         }
@@ -388,7 +336,6 @@ export class AidenRemoteBotFileService {
           ? authority.signal.reason : caught;
         if (error instanceof AidenRemoteServiceError) throw error;
         if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
-        if (error instanceof BotArchivedFileReadAuthorityError) mapArchivedAuthorityError(error);
         throw new AidenRemoteServiceError(
           "workspace_unavailable",
           "This Bot's files are not currently available on the Mac.",
@@ -402,7 +349,6 @@ export class AidenRemoteBotFileService {
     deviceId: string,
     chatId: string,
     fileId: string,
-    access: "read" | "write",
     operation: (input: {
       folderPath: string;
       displayPath: string;
@@ -417,7 +363,7 @@ export class AidenRemoteBotFileService {
       mapHandleError(error);
     }
     const botId = await this.botIdForChat(chatId);
-    return this.withAuthority(deviceId, botId, chatId, access, async (authority) => {
+    return this.withAuthority(deviceId, botId, chatId, async (authority) => {
       try {
         if (!stored.displayPath) throw new AidenOpaqueHandleError("handle_invalid");
         const displayPath = safeDisplayPath(stored.displayPath);
@@ -440,7 +386,6 @@ export class AidenRemoteBotFileService {
       } catch (error) {
         if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
         if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
-        if (error instanceof BotArchivedFileReadAuthorityError) mapArchivedAuthorityError(error);
         throw error;
       }
     });
@@ -451,7 +396,7 @@ export class AidenRemoteBotFileService {
     chatId: string,
     fileId: string,
   ): Promise<AidenRemoteFileDocument> {
-    return this.withResolvedFile(deviceId, chatId, fileId, "read", async (input) => {
+    return this.withResolvedFile(deviceId, chatId, fileId, async (input) => {
       try {
         return projectedDocument(
           fileId,
@@ -476,7 +421,7 @@ export class AidenRemoteBotFileService {
     value: unknown,
   ): Promise<AidenRemoteFileDocument> {
     const input = parseWrite(value);
-    return this.withResolvedFile(deviceId, chatId, fileId, "write", async (resolved) => {
+    return this.withResolvedFile(deviceId, chatId, fileId, async (resolved) => {
       try {
         const document = await writeWorkspaceFile(
           resolved.folderPath,

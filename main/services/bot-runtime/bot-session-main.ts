@@ -18,7 +18,6 @@ import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
-import { removeArchivedBotFavorite } from "../bot-favorites-main.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
@@ -228,7 +227,6 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       deleteRoutines,
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
-      removeArchivedBotFavorite,
       eraseBotData,
     ],
     onStateChange: broadcastState,
