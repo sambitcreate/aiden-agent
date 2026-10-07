@@ -62,6 +62,7 @@
         "main/services/config-store-core.test.ts",
         "main/services/context-lifecycle-surface-matrix.test.ts",
         "main/services/create-images/workflow-schema.test.ts",
+        "main/services/create-images/workflow-store.test.ts",
         "main/services/custom-model-options.test.ts",
         "main/services/custom-schemes-core.test.ts",
         "renderer/components/settings/custom-model-options.test.tsx",
