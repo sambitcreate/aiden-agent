@@ -589,6 +589,55 @@ test("a waiting child shows its pending question in chips, roster, detail, and l
   );
 });
 
+test("chips, roster, and detail show each child's recorded model and effort only when known", () => {
+  const chosen = v2Run({
+    runId: "chosen",
+    label: "Cheap scout",
+    providerId: "anthropic",
+    modelId: "claude-haiku",
+    thinkingLevel: "xhigh",
+    modelSelection: "requested",
+  });
+  const inherited = v2Run({
+    runId: "inherited",
+    label: "Parent-model scout",
+    providerId: "openai",
+    modelId: "gpt-main",
+    thinkingLevel: "high",
+    modelSelection: "inherited",
+  });
+  const legacy = v2Run({ runId: "legacy", label: "Older scout", modelId: "legacy-model" });
+
+  const chips = renderToStaticMarkup(
+    <SubagentChips runs={[chosen, inherited, legacy]} onOpen={() => undefined} />,
+  );
+  assert.match(
+    chips,
+    /aria-label="Open Cheap scout\. Status: Reading component boundaries\. Model anthropic\/claude-haiku, effort extra high\."/u,
+  );
+  assert.match(chips, /aria-label="Open Parent-model scout\. Status: Reading component boundaries\. Model openai\/gpt-main, effort high\."/u);
+  assert.match(chips, /aria-label="Open Older scout\. Status: Reading component boundaries\."/u);
+
+  const roster = renderToStaticMarkup(
+    <SubagentRoster
+      runs={[view(chosen), view(inherited), view(legacy)]}
+      selectedRunId="chosen"
+      onSelect={() => undefined}
+    />,
+  );
+  assert.match(roster, /aria-label="Cheap scout, scout, Working, Model anthropic\/claude-haiku, effort extra high"/u);
+  assert.match(roster, /data-subagent-model="chosen"[^>]*>anthropic\/claude-haiku · Extra high</u);
+  // Inherited and legacy rows keep their compact layout; only a child-specific choice adds a line.
+  assert.equal((roster.match(/data-subagent-model=/gu) ?? []).length, 1);
+  assert.match(roster, /aria-label="Older scout, scout, Working"/u);
+
+  const chosenDetail = renderToStaticMarkup(<SubagentDetail run={chosen} />);
+  assert.match(chosenDetail, /Model: anthropic\/claude-haiku · Effort Extra high · Chosen by the agent/u);
+  const legacyDetail = renderToStaticMarkup(<SubagentDetail run={legacy} />);
+  assert.match(legacyDetail, /Model: legacy-model</u);
+  assert.doesNotMatch(legacyDetail, /Effort/u);
+});
+
 test("V2 detail exposes context but gates controls on production callbacks", () => {
   const fresh = v2Run();
   const unavailable = renderToStaticMarkup(<SubagentDetail run={fresh} />);

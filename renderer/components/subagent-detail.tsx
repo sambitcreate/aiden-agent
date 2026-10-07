@@ -4,6 +4,7 @@ import { cn } from "../lib/ui-utils";
 import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
+  subagentModelDisplay,
 } from "../lib/subagent-panel-state";
 import type { SubagentRunPresentation } from "../lib/subagent-view-state";
 import {
@@ -127,6 +128,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
+    const modelDisplay = subagentModelDisplay(run);
     const pendingQuestion = subagentPendingQuestion(run);
     const resultText = run.terminalMarkdown ?? run.latestText;
     const projectionNotices = subagentProjectionNotices(run);
@@ -257,7 +259,13 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   color="tertiary"
                   className="mt-0.5 break-words [overflow-wrap:anywhere]"
                 >
-                  Model: {run.modelId}
+                  {[
+                    `Model: ${modelDisplay.model}`,
+                    modelDisplay.effort && `Effort ${modelDisplay.effort}`,
+                    modelDisplay.selection,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </Text>
                 {contextUsage ? (
                   <Text
