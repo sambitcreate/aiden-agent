@@ -204,7 +204,7 @@ class MainActivity : ComponentActivity() {
                                     installationStore = installationStore,
                                     chatCache = chatCache,
                                     botsViewModel = botsViewModel,
-                                    onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
+                                    onNavigateToChat = { chatId -> navigator.openFromShell(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateToBotProfile = { botId -> push(AidenScreen.BotProfile(botId)) },
                                     onNavigateToBotEditor = { botId -> push(AidenScreen.BotEditor(botId)) },
                                     onNavigateToWorkspaceFiles = { wsId -> push(AidenScreen.WorkspaceFiles(wsId)) },

@@ -3,17 +3,25 @@ package sbtbiswas.AidenOnTheGo.navigation
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -23,8 +31,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenWindowWidthClass
+import sbtbiswas.AidenOnTheGo.ui.theme.LocalAidenWindowClass
 
 @RunWith(AndroidJUnit4::class)
 class AidenNavigationHostUiTest {
@@ -33,31 +45,60 @@ class AidenNavigationHostUiTest {
 
     private lateinit var navigator: AidenNavigator
 
+    /** A phone-sized window, whatever device runs the test. */
     @Composable
     private fun Host(reduceMotion: Boolean = true) {
         navigator = rememberAidenNavigator()
         AidenTheme {
-            AidenNavigationHost(navigator = navigator, reduceMotion = reduceMotion) { screen ->
-                when (screen) {
-                    AidenScreen.ProductShell -> Column {
-                        var taps by rememberSaveable { mutableIntStateOf(0) }
-                        Text("shell taps $taps")
-                        Button(onClick = { taps += 1 }) { Text("tap") }
-                        Button(onClick = { navigator.push(AidenScreen.BotProfile("b1")) }) { Text("open bot") }
+            CompositionLocalProvider(LocalAidenWindowClass provides AidenWindowWidthClass.Compact) {
+                AidenNavigationHost(navigator = navigator, reduceMotion = reduceMotion) { Screen(it) }
+            }
+        }
+    }
+
+    /** A tablet-sized window laid out beyond the test device's own screen. */
+    @Composable
+    private fun WideHost() {
+        navigator = rememberAidenNavigator()
+        AidenTheme {
+            CompositionLocalProvider(LocalAidenWindowClass provides AidenWindowWidthClass.Expanded) {
+                Box(Modifier.wrapContentSize(align = Alignment.TopStart, unbounded = true)) {
+                    Box(Modifier.requiredSize(1200.dp, 800.dp)) {
+                        AidenNavigationHost(navigator = navigator, reduceMotion = false) { Screen(it) }
                     }
-                    is AidenScreen.BotProfile -> Column {
-                        var showingDetail by remember { mutableStateOf(false) }
-                        BackHandler(enabled = showingDetail) { showingDetail = false }
-                        Text(if (showingDetail) "bot detail" else "bot ${screen.botId}")
-                        Button(onClick = { showingDetail = true }) { Text("show detail") }
-                        Button(onClick = { navigator.push(AidenScreen.ChatDetail("c1")) }) { Text("open chat") }
-                    }
-                    is AidenScreen.ChatDetail -> Text("chat ${screen.chatId}")
-                    else -> Text("other")
                 }
             }
         }
     }
+
+    @Composable
+    private fun Screen(screen: AidenScreen) {
+        when (screen) {
+            AidenScreen.ProductShell -> Column {
+                var taps by rememberSaveable { mutableIntStateOf(0) }
+                Text("shell taps $taps")
+                Button(onClick = { taps += 1 }) { Text("tap") }
+                Button(onClick = { navigator.push(AidenScreen.BotProfile("b1")) }) { Text("open bot") }
+                Button(onClick = { navigator.openFromShell(AidenScreen.ChatDetail("c1")) }) { Text("list c1") }
+                Button(onClick = { navigator.openFromShell(AidenScreen.ChatDetail("c2")) }) { Text("list c2") }
+            }
+            is AidenScreen.BotProfile -> Column {
+                var showingDetail by remember { mutableStateOf(false) }
+                BackHandler(enabled = showingDetail) { showingDetail = false }
+                Text(if (showingDetail) "bot detail" else "bot ${screen.botId}")
+                Button(onClick = { showingDetail = true }) { Text("show detail") }
+                Button(onClick = { navigator.push(AidenScreen.ChatDetail("c1")) }) { Text("open chat") }
+            }
+            is AidenScreen.ChatDetail -> Column {
+                if (LocalAidenShowsUpNavigation.current) Text("up")
+                Text("chat ${screen.chatId}")
+            }
+            else -> Text("other")
+        }
+    }
+
+    private val placeholder: String
+        get() = compose.activity.getString(R.string.navigation_detail_placeholder_title)
 
     /**
      * System back as the platform delivers it: through the activity's back dispatcher,
@@ -183,5 +224,89 @@ class AidenNavigationHostUiTest {
 
         pressSystemBack()
         compose.onNodeWithText("shell taps 0").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPhoneWindowShowsOneScreenAndKeepsTheChatsUpArrow() {
+        compose.setContent { Host() }
+        compose.onNodeWithText("list c1").performClick()
+
+        compose.onNodeWithText("chat c1").assertIsDisplayed()
+        compose.onNodeWithText("up").assertIsDisplayed()
+        compose.onNodeWithText("shell taps 0").assertDoesNotExist()
+    }
+
+    @Test
+    fun aWideWindowShowsTheShellBesideTheChatItOpened() {
+        compose.setContent { WideHost() }
+        compose.onNodeWithText(placeholder).assertExists()
+        compose.onNodeWithText("tap").performClick()
+        compose.onNodeWithText("list c1").performClick()
+
+        compose.onNodeWithText("chat c1").assertExists()
+        compose.onNodeWithText("shell taps 1").assertExists()
+        compose.onNodeWithText(placeholder).assertDoesNotExist()
+        // The shell beside it already leads back, so the chat drops its own arrow.
+        compose.onNodeWithText("up").assertDoesNotExist()
+        val shell = compose.onNodeWithText("shell taps 1").getUnclippedBoundsInRoot()
+        val chat = compose.onNodeWithText("chat c1").getUnclippedBoundsInRoot()
+        assertTrue("the chat sits beside the list pane", chat.left >= shell.left + AidenListPaneWidth)
+
+        // Choosing another chat in the list replaces the open one instead of stacking.
+        compose.onNodeWithText("list c2").performClick()
+        compose.onNodeWithText("chat c2").assertExists()
+        compose.onNodeWithText("chat c1").assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(listOf(AidenScreen.ProductShell, AidenScreen.ChatDetail("c2")), navigator.stack.entries)
+        }
+
+        pressSystemBack()
+        compose.onNodeWithText(placeholder).assertExists()
+        compose.onNodeWithText("chat c2").assertDoesNotExist()
+        compose.onNodeWithText("shell taps 1").assertExists()
+        compose.runOnIdle { assertFalse(navigator.stack.canPop) }
+    }
+
+    @Test
+    fun aWideWindowScrubsPredictiveBackInsideTheDetailPane() {
+        compose.setContent { WideHost() }
+        compose.onNodeWithText("tap").performClick()
+        compose.onNodeWithText("list c1").performClick()
+
+        dragBack(progress = 0.6f)
+        compose.onNodeWithText(placeholder).assertExists()
+        compose.onNodeWithText("chat c1").assertExists()
+        compose.onNodeWithText("shell taps 1").assertExists()
+
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.dispatchOnBackCancelled() }
+        compose.waitForIdle()
+        compose.onNodeWithText("chat c1").assertExists()
+        compose.onNodeWithText(placeholder).assertDoesNotExist()
+
+        dragBack(progress = 0.8f)
+        pressSystemBack()
+        compose.onNodeWithText(placeholder).assertExists()
+        compose.onNodeWithText("chat c1").assertDoesNotExist()
+        compose.onNodeWithText("shell taps 1").assertExists()
+    }
+
+    @Test
+    fun aScreenOpenedOverTheListDetailLayoutCoversItAndReturnsToIt() {
+        compose.setContent { WideHost() }
+        compose.onNodeWithText("tap").performClick()
+        compose.onNodeWithText("list c1").performClick()
+        compose.onNodeWithText("open bot").performClick()
+
+        compose.onNodeWithText("bot b1").assertExists()
+        compose.onNodeWithText("shell taps 1").assertDoesNotExist()
+
+        dragBack(progress = 0.6f)
+        compose.onNodeWithText("chat c1").assertExists()
+        compose.onNodeWithText("shell taps 1").assertExists()
+
+        pressSystemBack()
+        compose.onNodeWithText("chat c1").assertExists()
+        compose.onNodeWithText("shell taps 1").assertExists()
+        compose.onNodeWithText("bot b1").assertDoesNotExist()
     }
 }

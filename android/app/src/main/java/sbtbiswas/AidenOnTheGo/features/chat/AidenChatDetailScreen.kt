@@ -75,6 +75,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenShowsUpNavigation
 import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
@@ -469,7 +470,7 @@ fun AidenChatDetailScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    if (LocalAidenShowsUpNavigation.current) IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
                     }
                 },
