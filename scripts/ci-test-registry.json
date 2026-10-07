@@ -662,6 +662,7 @@
         "renderer/main/chat-transition.test.tsx",
         "renderer/main/remote-chat-view.test.tsx",
         "renderer/main/remote-new-chat-view.test.tsx",
+        "renderer/main/studio-capability-route.test.tsx",
         "renderer/pill/pill-copied-notice.test.tsx",
         "renderer/shared/advisor.test.ts",
         "renderer/shared/appearance.test.ts",
