@@ -28,6 +28,7 @@ const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
   deepseek: new URL("../assets/provider-logos/deepseek.svg", import.meta.url).href,
   fireworks: new URL("../assets/provider-logos/fireworks.svg", import.meta.url).href,
   "github-copilot": new URL("../assets/provider-logos/github-copilot.svg", import.meta.url).href,
+  antigravity: new URL("../assets/provider-logos/antigravity.svg", import.meta.url).href,
   google: new URL("../assets/provider-logos/google.svg", import.meta.url).href,
   "google-vertex": new URL("../assets/provider-logos/google-vertex.svg", import.meta.url).href,
   grok: new URL("../assets/provider-logos/grok.svg", import.meta.url).href,

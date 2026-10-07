@@ -72,8 +72,20 @@ class AidenProviderIconTest {
     @Test
     fun saturatedBrandFillsAreNeverSwapped() {
         val darkRaised = AidenThemeCatalog.palette(AidenThemePresetID.AIDEN, true).raised
-        listOf("openai", "anthropic", "google", "deepseek", "mistral").forEach { slug ->
+        listOf("openai", "anthropic", "google", "antigravity", "deepseek", "mistral").forEach { slug ->
             assertFalse(slug, aidenMonogramBlendsIntoSurface(aidenProviderBrandFill(slug)!!, darkRaised))
+        }
+    }
+
+    @Test
+    fun antigravityMonogramUsesItsBrandBlueWithLegibleLargeInk() {
+        AidenThemePresetID.entries.forEach { preset ->
+            listOf(true, false).forEach { isDark ->
+                val badge = monogramFor("antigravity", preset, isDark)
+                assertEquals(Color(0xFF3186FF), badge.fill)
+                // The monogram is a bold glyph at over half the badge size: large text, 3:1.
+                assertTrue("antigravity on $preset (dark=$isDark)", contrast(badge.ink, badge.fill) >= 3f)
+            }
         }
     }
 

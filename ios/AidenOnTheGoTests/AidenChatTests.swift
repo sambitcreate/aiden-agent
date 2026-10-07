@@ -4656,6 +4656,11 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "custom:lmstudio-2"), "lmstudio")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "custom:ollama-42"), "ollama")
+        // A desktop-started Google Antigravity chat shows its own mark, not a "G" monogram.
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "antigravity"), "antigravity")
+        for slug in AidenProviderIconResolver.supportedSlugs {
+            XCTAssertNotNil(UIImage(named: "ProviderLogo-\(slug)"), "\(slug) needs a bundled logo")
+        }
         XCTAssertNil(AidenProviderIconResolver.slug(providerID: "custom:lmstudio-1"))
         XCTAssertNil(AidenProviderIconResolver.slug(providerID: "future-provider"))
     }

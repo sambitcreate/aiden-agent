@@ -42,6 +42,7 @@ class AidenModelPreferenceTest {
     fun azureProviderIdentityKeepsItsArtwork() {
         assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure"))
         assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure-openai-responses"))
+        assertEquals("antigravity", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("antigravity"))
     }
 
     @get:Rule

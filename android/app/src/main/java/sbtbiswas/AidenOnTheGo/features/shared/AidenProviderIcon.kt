@@ -28,7 +28,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
 object AidenProviderIconResolver {
     val supportedSlugs = setOf(
-        "amazon-bedrock", "ant-ling", "anthropic", "apple-foundation-models",
+        "amazon-bedrock", "ant-ling", "anthropic", "antigravity",
+        "apple-foundation-models",
         "azure-openai-responses", "cerebras", "claude", "cloudflare-ai-gateway",
         "cloudflare-workers-ai", "concentrate", "deepseek", "fireworks",
         "github-copilot", "google", "google-vertex", "grok", "groq",
@@ -130,6 +131,7 @@ internal fun aidenProviderBrandFill(slug: String?): Color? = when (slug) {
     "openai", "openai-codex" -> Color(0xFF10A37F)
     "claude", "anthropic" -> Color(0xFFD97706)
     "google", "google-vertex" -> Color(0xFF4285F4)
+    "antigravity" -> Color(0xFF3186FF)
     "deepseek" -> Color(0xFF0066FF)
     "grok", "xai" -> Color(0xFF1D1D1D)
     "mistral" -> Color(0xFFFF7000)

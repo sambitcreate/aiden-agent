@@ -27,6 +27,7 @@ export const PROVIDER_ICON_SLUGS = [
   "amazon-bedrock",
   "ant-ling",
   "anthropic",
+  "antigravity",
   "apple-foundation-models",
   "azure-openai-responses",
   "cerebras",
