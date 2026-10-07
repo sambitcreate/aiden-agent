@@ -1,4 +1,4 @@
-import { StudioAssetError, type StudioAssetMediaType } from "./contract.js";
+import { StudioAssetError, isStudioAssetMediaType, type StudioAssetMediaType } from "./contract.js";
 import { studioAssetGrantToken, type StudioAssetGrants } from "./delivery-core.js";
 import type { StudioAssetStore } from "./store.js";
 
@@ -48,10 +48,13 @@ export function createStudioAssetRequestHandler(deps: {
     } catch (error) {
       return failureForError(error);
     }
+    // Defense in depth: only the image types the validator produces are ever served.
+    if (!isStudioAssetMediaType(body.mediaType)) return failure(500);
     return new Response(request.method === "HEAD" ? null : Buffer.from(body.bytes), {
       status: 200,
       headers: {
         "content-type": body.mediaType,
+        "content-length": String(body.bytes.byteLength),
         "cache-control": "no-store",
         "content-disposition": "inline",
         "x-content-type-options": "nosniff",

@@ -427,11 +427,15 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       // Bounded so a wedged queue cannot hold quit; a store that was never
       // opened (flags off) resolves at once.
       Promise.race([
-        studioAssetStore.close(),
-        new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref()),
-      ]).catch((error) =>
-        logger.warn("studio", "Studio asset store did not close cleanly.", error),
-      ),
+        studioAssetStore.close().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+      ])
+        .then((closed) => {
+          if (!closed) logger.warn("studio", "Studio asset store did not close within the shutdown budget.");
+        })
+        .catch((error) =>
+          logger.warn("studio", "Studio asset store did not close cleanly.", error),
+        ),
       browserService.shutdown(),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss

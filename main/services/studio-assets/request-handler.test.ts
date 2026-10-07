@@ -103,22 +103,71 @@ test("a collected asset is not found and a closed store is unavailable", async (
   assert.equal((await f.handle(new Request(keptUrl))).status, 503);
 });
 
-test("unexpected store failures answer 500 without leaking internals", async () => {
-  const grants = {
-    resolve: () => ({ assetId: "a".repeat(64), rendition: "original" as const }),
-  };
-  const handle = createStudioAssetRequestHandler({
-    grants,
-    store: {
-      read: async () => {
-        throw new Error("EIO: /Users/someone/Library/Application Support/studio-assets/blobs/secret");
-      },
-      thumbnail: async () => {
-        throw new StudioAssetError("invalid_image", "bad pixels");
-      },
+test("HEAD reports the exact content length with no body", async (t) => {
+  const f = await fixture(t);
+  const bytes = pngBytes(64, 32, 7);
+  const asset = await f.store.put({ bytes });
+  const url = f.grants.issue(f.owner, asset.assetId, "original");
+  const head = await f.handle(new Request(url, { method: "HEAD" }));
+  assert.equal(head.headers.get("content-length"), String(bytes.byteLength));
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  const get = await f.handle(new Request(url));
+  assert.equal(get.headers.get("content-length"), String(bytes.byteLength));
+});
+
+const STUB_GRANT = "aiden-asset://grant/" + "A".repeat(43);
+
+function stubbedHandler(
+  rendition: "original" | "thumb-256",
+  store: Parameters<typeof createStudioAssetRequestHandler>[0]["store"],
+) {
+  return createStudioAssetRequestHandler({
+    grants: { resolve: () => ({ assetId: "a".repeat(64), rendition }) },
+    store,
+  });
+}
+
+test("a stored media type outside the image allowlist is never served", async () => {
+  const handle = stubbedHandler("original", {
+    read: async () =>
+      ({
+        record: { mediaType: "text/html" },
+        bytes: new TextEncoder().encode("<script>alert(1)</script>"),
+      }) as never,
+    thumbnail: async () => {
+      throw new Error("unused");
     },
   });
-  const failed = await handle(new Request("aiden-asset://grant/" + "A".repeat(43)));
+  const response = await handle(new Request(STUB_GRANT));
+  assert.equal(response.status, 500);
+  assert.notEqual(response.headers.get("content-type"), "text/html");
+  assert.doesNotMatch(await response.text(), /script|html/u);
+});
+
+test("unexpected store failures answer 500 without leaking internals", async () => {
+  const handle = stubbedHandler("original", {
+    read: async () => {
+      throw new Error("EIO: /Users/someone/Library/Application Support/studio-assets/blobs/secret");
+    },
+    thumbnail: async () => {
+      throw new Error("unused");
+    },
+  });
+  const failed = await handle(new Request(STUB_GRANT));
   assert.equal(failed.status, 500);
   assert.doesNotMatch(await failed.text(), /Users|secret|EIO/u);
+});
+
+test("store errors other than not_found and unavailable answer 500", async () => {
+  const handle = stubbedHandler("thumb-256", {
+    read: async () => {
+      throw new Error("unused");
+    },
+    thumbnail: async () => {
+      throw new StudioAssetError("invalid_image", "bad pixels at /private/path");
+    },
+  });
+  const failed = await handle(new Request(STUB_GRANT));
+  assert.equal(failed.status, 500);
+  assert.doesNotMatch(await failed.text(), /bad pixels|private/u);
 });

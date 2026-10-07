@@ -1,6 +1,11 @@
 import { MAX_DISPLAY_IMAGE_DIMENSION, MAX_DISPLAY_IMAGE_PIXELS } from "../display-image-extension.js";
 
-export type StudioAssetMediaType = "image/png" | "image/jpeg" | "image/webp";
+export const STUDIO_ASSET_MEDIA_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+export type StudioAssetMediaType = (typeof STUDIO_ASSET_MEDIA_TYPES)[number];
+
+export function isStudioAssetMediaType(value: unknown): value is StudioAssetMediaType {
+  return (STUDIO_ASSET_MEDIA_TYPES as readonly unknown[]).includes(value);
+}
 export type StudioAssetThumbnailEdge = 256 | 512;
 export type StudioAssetRendition = "original" | "thumb-256" | "thumb-512";
 
