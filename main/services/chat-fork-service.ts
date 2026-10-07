@@ -116,15 +116,17 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
         const source = await deps.chatStore.get(request.chatId);
         if (!source) throw new ChatForkError("not_found", "The chat is no longer available.");
         caller.assertSource?.(source);
-        const blocked = await deps.blockedReason?.(request.chatId);
-        if (blocked) throw new ChatForkError("unavailable", blocked);
-
-        if (chatSurface(source) === "feature") {
+        // Surface refusal precedes the artifact check so an owned chat reports
+        // "ineligible", not a recoverable "unavailable".
+        const surface = chatSurface(source);
+        if (surface !== "regular" && surface !== "bot" && surface !== "assistant") {
           throw new ChatForkError(
             "ineligible",
             "This chat belongs to another Aiden feature and cannot be copied.",
           );
         }
+        const blocked = await deps.blockedReason?.(request.chatId);
+        if (blocked) throw new ChatForkError("unavailable", blocked);
 
         if (source.botId) {
           if (!caller.copyBotChat) {

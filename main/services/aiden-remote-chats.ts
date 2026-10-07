@@ -1434,7 +1434,9 @@ export class AidenRemoteChatService {
     if (!metadata) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
-    if (chatSurface(metadata) === "feature") {
+    const surface = chatSurface(metadata);
+    // Allow-list: a surface this route does not know is refused by default.
+    if (surface !== "regular" && surface !== "bot" && surface !== "assistant") {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (!metadata.botId) return {};

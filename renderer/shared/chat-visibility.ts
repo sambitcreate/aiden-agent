@@ -41,7 +41,7 @@ export function chatSurface(chat: ChatSurfaceInput): ChatSurface {
   return "regular";
 }
 
-/** An ordinary workspace chat: listed in the sidebar, search, Remote summaries and peers. */
+/** True for an ordinary user chat (surface "regular"). Listings apply their own surface allow-lists. */
 export function isUserVisibleChat(chat: ChatSurfaceInput): boolean {
   return chatSurface(chat) === "regular";
 }

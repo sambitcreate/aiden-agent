@@ -291,7 +291,12 @@ test("feature-owned chats are ineligible for copy and fork", async (t) => {
       return { isAborted: () => false, release: () => undefined };
     },
   };
-  const forks = service(store, { published: (chat) => published.push(chat), startSummary: () => undefined });
+  // A pending artifact block must not mask the ownership refusal as "unavailable".
+  const forks = service(store, {
+    published: (chat) => published.push(chat),
+    startSummary: () => undefined,
+    blockedReason: async () => "Recover the visual artifact first.",
+  });
 
   await rejectsWith(forks.fork({ chatId: owned.id }, recordingCaller), "ineligible");
   await rejectsWith(
