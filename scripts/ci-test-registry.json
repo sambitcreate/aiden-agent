@@ -171,6 +171,7 @@
         "main/services/schedule-service-core.test.ts",
         "main/services/schedule-store.test.ts",
         "main/services/schedule-tool.test.ts",
+        "main/services/scheduled-bot-routines.test.ts",
         "main/services/scheduled-chat-creation.test.ts",
         "main/services/scratch-workspace.test.ts",
         "main/services/secret-map-core.test.ts",
@@ -218,7 +219,9 @@
         "scripts/run-ci-tests.test.mjs",
         "scripts/ci-timings.test.mjs",
         "scripts/worktree-file-io.test.mjs",
-        "main/services/generation-delta-coalescer.test.ts"
+        "main/services/generation-delta-coalescer.test.ts",
+        "main/services/bot-connection-dismissals.test.ts",
+        "main/services/bot-runtime-tools/suggest-connection.test.ts"
       ],
       "preserved": [
         "browser",
@@ -689,6 +692,7 @@
         "renderer/shared/assistant.test.ts",
         "renderer/shared/attachment-contract.test.ts",
         "renderer/shared/bot-capabilities.test.ts",
+        "renderer/shared/bot-routine-label.test.ts",
         "renderer/shared/btw.test.ts",
         "renderer/shared/chat-message-contract.test.ts",
         "renderer/shared/chat-pull-requests.test.ts",
@@ -732,7 +736,10 @@
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
         "scripts/update-model-capabilities.test.mjs",
         "scripts/vendor-cua-driver.test.mjs",
-        "scripts/verify-macos-package.test.mjs"
+        "scripts/verify-macos-package.test.mjs",
+        "renderer/components/bots/bot-connection-ui.test.tsx",
+        "renderer/shared/bot-connections.test.ts",
+        "renderer/shared/bot-presets.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",
