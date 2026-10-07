@@ -49,7 +49,7 @@ export class GitHubRateLimitGate implements GitHubRequestGate {
 
   admit(request: GitHubAdmissionRequest): GitHubAdmission {
     const interactive = request.interactive === true;
-    const check = this.governor.check(request.scope, { interactive });
+    const check = this.governor.check(request.scope);
     if (!check.ok) {
       this.ledger.recordRefusal(request.operation, request.kind, "paused");
       return { ok: false, result: { kind: "rate-limited", retryAt: check.retryAt, message: PAUSED_MESSAGE, sent: false } };

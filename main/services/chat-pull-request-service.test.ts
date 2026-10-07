@@ -759,3 +759,38 @@ test("every unresolved create outcome notifies after its durable intent is visib
     assert.equal((await visible[0]).length, 1);
   }
 });
+
+test("a rate limit keeps cached snapshots and tells the caller when reads resume", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const retryAt = Date.now() + 10 * 60_000;
+  let limited = false;
+  let changes = 0;
+  const { service, calls } = fakeService(
+    directory,
+    {
+      getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
+      getPullRequest: async () =>
+        (limited
+          ? { availability: "rate-limited", message: "paused", retryAt }
+          : ready({ pullRequest: summary(12) })) as GitHubPullRequestStatus,
+      currentPullRequest: async () =>
+        ({ availability: "rate-limited", message: "paused", retryAt }) as GitHubPullRequestStatus,
+    },
+    { onChanged: () => (changes += 1) },
+  );
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
+  const linked = changes;
+  limited = true;
+
+  const refreshed = await service.refresh(CHAT);
+  assert.equal(refreshed.rateLimitedUntil, retryAt);
+  assert.equal(refreshed.links.length, 1);
+  assert.equal(refreshed.links[0]?.checksState, "passing");
+  assert.equal(calls.getPullRequest, 1, "stops at the first rate-limited read");
+  assert.equal(changes, linked);
+
+  const current = await service.current(CHAT);
+  assert.equal(current.rateLimitedUntil, retryAt);
+  assert.equal(current.message, "paused");
+});

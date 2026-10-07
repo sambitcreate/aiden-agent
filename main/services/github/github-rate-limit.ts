@@ -1,5 +1,6 @@
 // Per (host, credential) pause after GitHub reports a rate limit. While a
-// scope is paused, background requests are refused locally and never sent.
+// scope is paused, every request is refused locally and never sent: retrying
+// before GitHub's reset only prolongs a secondary limit.
 
 const BASE_BACKOFF_MS = 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
@@ -7,8 +8,6 @@ const MAX_BACKOFF_MS = 15 * 60_000;
 export interface RateLimitLease {
   scope: string;
   generation: number;
-  /** The request passed an active pause (interactive); its success proves nothing. */
-  passedPause: boolean;
 }
 
 interface ScopeState {
@@ -29,11 +28,10 @@ export class GitHubRateLimitGovernor {
     this.now = options.now ?? Date.now;
   }
 
-  check(scope: string, options: { interactive?: boolean } = {}): RateLimitCheck {
+  check(scope: string): RateLimitCheck {
     const state = this.state(scope);
-    const paused = state.pausedUntil > this.now();
-    if (paused && !options.interactive) return { ok: false, retryAt: state.pausedUntil };
-    return { ok: true, lease: { scope, generation: state.generation, passedPause: paused } };
+    if (state.pausedUntil > this.now()) return { ok: false, retryAt: state.pausedUntil };
+    return { ok: true, lease: { scope, generation: state.generation } };
   }
 
   /**
@@ -56,7 +54,7 @@ export class GitHubRateLimitGovernor {
   /** A success clears the backoff only if no newer rate limit was recorded. */
   recordSuccess(lease: RateLimitLease): void {
     const state = this.scopes.get(lease.scope);
-    if (!state || lease.passedPause || lease.generation !== state.generation) return;
+    if (!state || lease.generation !== state.generation) return;
     state.strikes = 0;
     state.pausedUntil = 0;
   }

@@ -87,7 +87,7 @@ describe("GitHub rate-limit gate", () => {
     assert.equal(gate.governor.pausedUntil("github.com:token-a"), time.now() + 120_000);
   });
 
-  it("lets an interactive request through a pause without lifting it for background work", async () => {
+  it("holds interactive requests until retryAt as well", async () => {
     let limited = true;
     const { api, time, requests } = harness(() =>
       limited ? jsonResponse({ message: "API rate limit exceeded" }, 429) : jsonResponse({ id: 1 }),
@@ -97,9 +97,11 @@ describe("GitHub rate-limit gate", () => {
     time.advance(10_000);
 
     const clicked = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app", interactive: true });
-    assert.equal(clicked.kind, "ok");
-    const background = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app" });
-    assert.equal(background.kind === "rate-limited" && background.sent, false);
+    assert.equal(clicked.kind === "rate-limited" && clicked.sent, false);
+    assert.equal(requests.length, 1);
+    time.advance(50_001);
+    const later = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app", interactive: true });
+    assert.equal(later.kind, "ok");
     assert.equal(requests.length, 2);
   });
 

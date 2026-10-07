@@ -161,6 +161,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -192,12 +193,16 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 
 export interface GitHubPullRequestListStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequests?: GitHubPullRequestSummary[];
 }
 
@@ -210,6 +215,8 @@ export interface GitHubRepositoryRef {
 export interface GitHubRepositoryStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   repository?: GitHubRepositoryRef;
 }
 

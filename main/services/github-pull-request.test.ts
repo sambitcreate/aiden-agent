@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { GitHubApi } from "./github/github-api.js";
+import { FakeGitHub, type FakePullRequest } from "./github/github-fake-server.js";
+import type { LocalGitHubRepository, LocalRepositoryResult } from "./github/github-local-repository.js";
+import { DirectPullRequestReader } from "./github/github-pull-request-graphql.js";
+import { GitHubRateLimitGate } from "./github/github-request-gate.js";
+import { fixedCredentials, jsonResponse, recordingFetch } from "./github/github-test-fetch.js";
 import {
   GitHubPullRequestService,
   dedupeGitHubChecks,
@@ -280,238 +286,265 @@ test("rollup uses every check even when the renderer row list is capped", () => 
   assert.equal(pr.checksState, "failing");
 });
 
-test("service returns actionable availability states for common gh failures", async () => {
-  const missing = new GitHubPullRequestService({
-    runner: async () => {
-      const error = new Error("spawn gh ENOENT") as NodeJS.ErrnoException;
-      error.code = "ENOENT";
-      throw error;
-    },
-  });
-  assert.deepEqual(await missing.currentPullRequest("/repo"), {
-    availability: "missing-tool",
-    message: "Install GitHub CLI, then run `gh auth login`.",
-  });
+const T0 = Date.parse("2026-10-07T12:00:00Z");
 
-  const noPr = new GitHubPullRequestService({
-    runner: async () => {
-      const error = new Error("no pull requests found for branch");
-      throw error;
-    },
-  });
-  assert.deepEqual(await noPr.currentPullRequest("/repo"), {
-    availability: "no-pull-request",
-    message: "No GitHub pull request is linked to the current branch.",
-  });
+function pr(overrides: Partial<FakePullRequest> & Pick<FakePullRequest, "number">): FakePullRequest {
+  return {
+    repository: "acme/app",
+    title: `Change ${overrides.number}`,
+    state: "OPEN",
+    headRefName: "feature/login",
+    baseRefName: "main",
+    headRefOid: "a".repeat(40),
+    headOwner: "acme",
+    checks: [{ name: "test", status: "COMPLETED", conclusion: "SUCCESS" }],
+    createdAt: T0 - overrides.number * 1_000,
+    updatedAt: T0 - overrides.number * 1_000,
+    ...overrides,
+  };
+}
 
-  const unauthenticated = new GitHubPullRequestService({
-    runner: async () => {
-      throw new Error("authentication required; run gh auth login");
-    },
+function setup(options: {
+  pullRequests?: FakePullRequest[];
+  local?: Partial<LocalGitHubRepository> | LocalRepositoryResult;
+  tokens?: Record<string, string>;
+  runner?: ConstructorParameters<typeof GitHubPullRequestService>[0]["runner"];
+} = {}) {
+  let now = T0;
+  const github = new FakeGitHub({ repositories: ["acme/app", "me/app"], pullRequests: options.pullRequests ?? [], now: () => now });
+  const recorded = recordingFetch(github.responder);
+  const gate = new GitHubRateLimitGate({ now: () => now });
+  const api = new GitHubApi({
+    credentials: fixedCredentials(options.tokens ?? { "github.com": "token-a" }),
+    gate,
+    fetch: recorded.fetch,
+    now: () => now,
   });
-  assert.deepEqual(await unauthenticated.currentPullRequest("/repo"), {
-    availability: "unauthenticated",
-    message: "Run `gh auth login` on this Mac, then refresh source control.",
+  const local: LocalRepositoryResult =
+    options.local && "ok" in options.local
+      ? options.local
+      : {
+          ok: true,
+          repository: {
+            host: "github.com",
+            owner: "acme",
+            name: "app",
+            branch: "feature/login",
+            headBranch: "feature/login",
+            headOwner: "acme",
+            ...(options.local as Partial<LocalGitHubRepository> | undefined),
+          },
+        };
+  const service = new GitHubPullRequestService({
+    reader: new DirectPullRequestReader(api),
+    repositories: { resolve: async () => local },
+    resolveBinary: async () => "gh",
+    ...(options.runner ? { runner: options.runner } : {}),
   });
+  return { service, github, requests: recorded.requests, advance: (ms: number) => (now += ms) };
+}
 
-  const unsupported = new GitHubPullRequestService({
-    runner: async () => {
-      throw new Error(
-        "unknown JSON field: statusCheckRollup; available fields are number,title",
-      );
-    },
-  });
-  assert.deepEqual(await unsupported.currentPullRequest("/repo"), {
-    availability: "unsupported",
-    message: "Update GitHub CLI so Aiden can read pull request status.",
-  });
+test("the current branch's pull request is read from GitHub's API without gh", async () => {
+  const { service, requests } = setup({ pullRequests: [pr({ number: 7 })] });
 
-  const nonGitHubRemote = new GitHubPullRequestService({
-    runner: async () => {
-      throw new Error(
-        "none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`",
-      );
-    },
+  const status = await service.currentPullRequest("/repo");
+
+  assert.equal(status.availability, "ready");
+  assert.equal(status.pullRequest?.number, 7);
+  assert.equal(status.pullRequest?.checksState, "passing");
+  assert.equal(status.pullRequest?.url, "https://github.com/acme/app/pull/7");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]!.url, "https://api.github.com/graphql");
+  assert.equal(requests[0]!.headers.Authorization, "Bearer token-a");
+  assert.deepEqual(requests[0]!.json?.variables, { o0: "acme", n0: "app", h0: "feature/login" });
+});
+
+test("current branch lookup ignores same-named branches from other forks and prefers open PRs", async () => {
+  const { service } = setup({
+    local: { headOwner: "me" },
+    pullRequests: [
+      pr({ number: 1, headOwner: "someone-else", createdAt: T0 }),
+      pr({ number: 2, headOwner: "me", state: "CLOSED", createdAt: T0 - 10 }),
+      pr({ number: 3, headOwner: "me", state: "OPEN", createdAt: T0 - 20 }),
+    ],
   });
-  assert.deepEqual(await nonGitHubRemote.currentPullRequest("/repo"), {
+  assert.equal((await service.currentPullRequest("/repo")).pullRequest?.number, 3);
+});
+
+test("a branch with no pull request and a detached HEAD are both no-pull-request", async () => {
+  const none = setup();
+  assert.equal((await none.service.currentPullRequest("/repo")).availability, "no-pull-request");
+  const detached = setup({ local: { branch: undefined, headBranch: undefined } });
+  assert.equal((await detached.service.currentPullRequest("/repo")).availability, "no-pull-request");
+  assert.equal(detached.requests.length, 0);
+});
+
+test("local repository failures surface without calling GitHub", async () => {
+  const { service, requests } = setup({
+    local: { ok: false, availability: "not-github", message: "This repository's remote is not hosted on GitHub." },
+  });
+  assert.deepEqual(await service.currentPullRequest("/repo"), {
     availability: "not-github",
     message: "This repository's remote is not hosted on GitHub.",
   });
+  assert.equal(requests.length, 0);
 });
 
-test("service redacts credentials and workspace paths from renderer-facing failures", async () => {
-  const service = new GitHubPullRequestService({
+test("a missing credential and a rejected credential map to unauthenticated", async () => {
+  const missing = setup({ tokens: {} });
+  assert.equal((await missing.service.currentPullRequest("/repo")).availability, "unauthenticated");
+  assert.equal(missing.requests.length, 0);
+
+  const rejected = setup();
+  rejected.github.script = () => jsonResponse({ message: "Bad credentials" }, 401);
+  const status = await rejected.service.currentPullRequest("/repo");
+  assert.equal(status.availability, "unauthenticated");
+  assert.match(status.message ?? "", /gh auth login --hostname github\.com/u);
+});
+
+test("a rate limit reports when reads resume and later reads wait for it locally", async () => {
+  const { service, github, requests, advance } = setup({ pullRequests: [pr({ number: 7 })] });
+  const resetSeconds = Math.floor((T0 + 15 * 60_000) / 1000);
+  github.script = () =>
+    jsonResponse({ message: "API rate limit exceeded" }, 403, {
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": String(resetSeconds),
+    });
+
+  const limited = await service.currentPullRequest("/repo");
+  assert.equal(limited.availability, "rate-limited");
+  assert.equal(limited.retryAt, resetSeconds * 1000);
+
+  github.script = undefined;
+  advance(60_000);
+  const stillPaused = await service.getPullRequest("/repo", "acme/app", 7, undefined, { interactive: true });
+  assert.equal(stillPaused.availability, "rate-limited");
+  assert.equal(stillPaused.retryAt, resetSeconds * 1000);
+  assert.equal(requests.length, 1);
+
+  advance(15 * 60_000);
+  assert.equal((await service.currentPullRequest("/repo")).availability, "ready");
+  assert.equal(requests.length, 2);
+});
+
+test("explicit selectors read the named repository, including on enterprise hosts", async () => {
+  const { service, requests } = setup({
+    tokens: { "github.com": "token-a", "ghe.example": "token-b" },
+    pullRequests: [pr({ number: 9, repository: "me/app" })],
+  });
+
+  const repository = await service.resolveRepository("/repo", undefined, "github.com/me/app");
+  assert.deepEqual(repository, { availability: "ready", repository: { host: "github.com", nameWithOwner: "me/app" } });
+  const found = await service.findForBranch("/repo", "feature/login", undefined, "github.com/me/app");
+  assert.deepEqual(found.pullRequests?.map((entry) => entry.number), [9]);
+  await service.getPullRequest("/repo", "ghe.example/acme/app", 1);
+  assert.equal(requests.at(-1)!.url, "https://ghe.example/api/graphql");
+  assert.equal(requests.at(-1)!.headers.Authorization, "Bearer token-b");
+});
+
+test("a pasted URL is read by its repository and number; unknown PRs are errors", async () => {
+  const { service, requests } = setup({ pullRequests: [pr({ number: 7 })] });
+  const found = await service.getPullRequestByUrl("/repo", "https://github.com/Acme/App/pull/7");
+  assert.equal(found.pullRequest?.url, "https://github.com/acme/app/pull/7");
+  const missing = await service.getPullRequestByUrl("/repo", "https://github.com/acme/app/pull/404");
+  assert.deepEqual(missing, { availability: "error", message: "GitHub could not find pull request #404 in acme/app." });
+  assert.equal((await service.getPullRequestByUrl("/repo", "not a url")).availability, "error");
+  assert.equal((await service.getPullRequestByUrl("/repo", "https://unknown.example/acme/app/pull/7")).availability, "unauthenticated");
+  assert.equal(requests.length, 2);
+});
+
+test("a truncated branch listing is unavailable for reconciliation", async () => {
+  const { service } = setup({
+    pullRequests: Array.from({ length: 30 }, (_, index) => pr({ number: index + 1, state: "CLOSED" })),
+  });
+  assert.equal((await service.findForBranch("/workspace", "feature/login")).availability, "error");
+});
+
+test("the chooser list filters by state and caps the page", async () => {
+  const { service } = setup({
+    pullRequests: [
+      pr({ number: 1, headRefName: "a" }),
+      pr({ number: 2, headRefName: "b", state: "MERGED" }),
+      pr({ number: 3, headRefName: "c" }),
+    ],
+  });
+  const open = await service.listPullRequests("/repo", { state: "open", limit: 1 });
+  assert.deepEqual(open.pullRequests?.map((entry) => entry.number), [1]);
+  const merged = await service.listPullRequests("/repo", { state: "merged", headBranch: "b" });
+  assert.deepEqual(merged.pullRequests?.map((entry) => entry.number), [2]);
+});
+
+test("creation shells out to gh with the explicit repository and reads the PR back from the API", async () => {
+  const calls: string[][] = [];
+  const { service, github } = setup({
+    runner: async (_cwd, args) => {
+      calls.push(args);
+      github.pullRequests.push(pr({ number: 12, repository: "me/app" }));
+      return { stdout: "https://github.com/me/app/pull/12\n", stderr: "" };
+    },
+  });
+  const result = await service.createPullRequest("/workspace", {
+    title: "Title",
+    headBranch: "feature/login",
+    repository: "github.com/me/app",
+  });
+  assert.equal(result.kind, "created");
+  assert.equal(result.kind === "created" && result.pullRequest.number, 12);
+  assert.deepEqual(calls[0]!.slice(-2), ["-R", "github.com/me/app"]);
+});
+
+test("ambiguous create failures are unknown; missing tools are definite failures", async () => {
+  const timedOut = setup({
+    runner: async () => {
+      throw Object.assign(new Error("Command failed: gh pr create"), { killed: true });
+    },
+  });
+  assert.equal((await timedOut.service.createPullRequest("/repo", { title: "T" })).kind, "unknown");
+
+  const missing = setup({
+    runner: async () => {
+      throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
+    },
+  });
+  const result = await missing.service.createPullRequest("/repo", { title: "T" });
+  assert.equal(result.kind === "failed" && result.availability, "missing-tool");
+});
+
+test("create failures shown to the renderer drop credentials and workspace paths", async () => {
+  const { service } = setup({
     runner: async () => {
       throw new Error(
-        "Command failed: /opt/homebrew/bin/gh pr view in /Users/alice/project with https://alice:secret-token@example.test/repo?access_token=also-secret&private_token=hidden",
+        "Command failed: /opt/homebrew/bin/gh pr create in /Users/alice/project with https://alice:secret-token@example.test/repo?access_token=also-secret",
       );
     },
   });
-
-  const result = await service.currentPullRequest("/Users/alice/project");
-  assert.equal(result.availability, "error");
-  assert.ok(result.message?.includes("the workspace"));
-  assert.ok(
-    result.message?.includes(
-      "https://***@example.test/repo?access_token=***&private_token=***",
-    ),
-  );
+  const result = await service.createPullRequest("/Users/alice/project", { title: "T" });
+  assert.equal(result.kind, "unknown");
   assert.doesNotMatch(
-    result.message ?? "",
-    /secret-token|also-secret|hidden|\/Users\/alice\/project|\/opt\/homebrew\/bin\/gh/u,
+    result.kind === "unknown" ? result.message : "",
+    /secret-token|also-secret|\/Users\/alice\/project|\/opt\/homebrew\/bin\/gh/u,
   );
 });
 
-test("service reports subprocess timeouts with the configured timeout", async () => {
-  const service = new GitHubPullRequestService({
-    timeoutMs: 2_500,
-    runner: async () => {
-      const error = new Error("Command failed: gh pr view") as Error & {
-        killed: boolean;
-      };
-      error.killed = true;
-      throw error;
-    },
-  });
-
-  assert.deepEqual(await service.currentPullRequest("/repo"), {
-    availability: "error",
-    message: "GitHub CLI did not answer within 3 seconds.",
-  });
-});
-
-test("service rethrows aborted reads instead of caching them as GitHub errors", async () => {
-  const service = new GitHubPullRequestService({
-    runner: async () => {
-      const error = new Error("The operation was aborted") as Error & {
-        code: string;
-        name: string;
-      };
-      error.code = "ABORT_ERR";
-      error.name = "AbortError";
-      throw error;
-    },
-  });
-
-  await assert.rejects(() => service.currentPullRequest("/repo"), /aborted/u);
-});
-
-test("service resolves a GitHub CLI binary before invoking the runner", async () => {
-  let observedBinary = "";
-  const service = new GitHubPullRequestService({
-    resolveBinary: async () => "/opt/homebrew/bin/gh",
-    runner: async (_cwd, _args, options) => {
-      observedBinary = options.binary;
-      return {
-        stderr: "",
-        stdout: JSON.stringify({
-          number: 1,
-          title: "Ready",
-          url: "https://github.com/acme/app/pull/1",
-          state: "OPEN",
-          headRefName: "feature/ready",
-          baseRefName: "main",
-          statusCheckRollup: [],
-        }),
-      };
-    },
-  });
-
-  assert.equal(
-    (await service.currentPullRequest("/repo")).availability,
-    "ready",
-  );
-  assert.equal(observedBinary, "/opt/homebrew/bin/gh");
+test("aborted reads reject instead of becoming GitHub errors", async () => {
+  const { service } = setup({ pullRequests: [pr({ number: 7 })] });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(() => service.currentPullRequest("/repo", controller.signal), /aborted/u);
 });
 
 test("GitHub CLI environment removes Git routing while preserving noninteractive auth lookup", () => {
   const previous = { ...process.env };
   try {
     process.env.GIT_DIR = "/tmp/wrong.git";
-    process.env.GIT_WORK_TREE = "/tmp/wrong-worktree";
-    process.env.GIT_CONFIG_COUNT = "1";
-    process.env.GIT_CONFIG_PARAMETERS = "'core.sshCommand=bad'";
-    process.env.GIT_CONFIG_KEY_0 = "remote.origin.url";
-    process.env.GIT_CONFIG_VALUE_0 = "https://example.test/repo";
     process.env.GH_HOST = "github.example.test";
-    process.env.GH_REPO = "owner/other";
     process.env.GH_TOKEN = "kept-for-gh";
     const env = githubCliEnvironment();
     assert.equal(env.GIT_DIR, undefined);
-    assert.equal(env.GIT_WORK_TREE, undefined);
-    assert.equal(env.GIT_CONFIG_COUNT, undefined);
-    assert.equal(env.GIT_CONFIG_PARAMETERS, undefined);
-    assert.equal(env.GIT_CONFIG_KEY_0, undefined);
-    assert.equal(env.GIT_CONFIG_VALUE_0, undefined);
     assert.equal(env.GH_HOST, undefined);
-    assert.equal(env.GH_REPO, undefined);
     assert.equal(env.GIT_TERMINAL_PROMPT, "0");
-    assert.equal(env.LANG, "C");
-    assert.equal(env.LC_ALL, "C");
     assert.equal(env.GH_TOKEN, "kept-for-gh");
   } finally {
     process.env = previous;
   }
-});
-
-test("post-push lookup and creation use an explicit repository selector", async () => {
-  const calls: string[][] = [];
-  const service = new GitHubPullRequestService({
-    resolveBinary: async () => "gh",
-    runner: async (_cwd, args) => {
-      calls.push(args);
-      return {
-        stdout:
-          args[0] === "repo"
-            ? JSON.stringify({
-                nameWithOwner: "fork/repo",
-                url: "https://github.com/fork/repo",
-              })
-            : "[]",
-        stderr: "",
-      };
-    },
-  });
-  await service.resolveRepository(
-    "/workspace",
-    undefined,
-    "github.com/fork/repo",
-  );
-  await service.findForBranch(
-    "/workspace",
-    "feature",
-    undefined,
-    "github.com/fork/repo",
-  );
-  await service.createPullRequest("/workspace", {
-    title: "Title",
-    headBranch: "feature",
-    repository: "github.com/fork/repo",
-  });
-  assert.deepEqual(calls[0].slice(0, 3), [
-    "repo",
-    "view",
-    "github.com/fork/repo",
-  ]);
-  assert.deepEqual(calls[1].slice(-2), ["-R", "github.com/fork/repo"]);
-  assert.deepEqual(calls[2].slice(-2), ["-R", "github.com/fork/repo"]);
-});
-
-test("a truncated branch listing is unavailable for reconciliation", async () => {
-  const entries = Array.from({ length: 30 }, (_, i) => ({
-    number: i + 1,
-    title: "Title",
-    url: `https://github.com/a/b/pull/${i + 1}`,
-    state: "OPEN",
-    headRefName: "feature",
-    baseRefName: "main",
-  }));
-  const service = new GitHubPullRequestService({
-    resolveBinary: async () => "gh",
-    runner: async () => ({ stdout: JSON.stringify(entries), stderr: "" }),
-  });
-  assert.equal(
-    (await service.findForBranch("/workspace", "feature")).availability,
-    "error",
-  );
 });

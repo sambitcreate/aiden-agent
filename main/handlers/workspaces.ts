@@ -22,7 +22,7 @@ import {
   type GitDiffInput,
   type GitPushInput,
 } from "../services/git.js";
-import { githubCurrentPullRequest } from "../services/github-pull-request.js";
+import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
 import { GitRepoWatcher } from "../services/git-repo-watcher.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import {

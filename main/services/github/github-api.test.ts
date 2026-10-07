@@ -159,6 +159,21 @@ test("GraphQL errors fail with GitHub's message; NOT_FOUND keeps partial data", 
   assert.deepEqual(partial.kind === "not-found" ? partial.data : undefined, { a: { id: 1 }, b: null });
 });
 
+test("errors scoped to one field leave the rest of a GraphQL answer usable", async () => {
+  const { client } = api(() =>
+    jsonResponse({
+      data: { e0: { nameWithOwner: "a/b" }, e1: null },
+      errors: [{ type: "FORBIDDEN", message: "Resource not accessible", path: ["e1"] }],
+    }),
+  );
+  const result = await client.graphql({ ...read, host: "github.com", query: "query { e0 e1 }" });
+  assert.equal(result.kind, "ok");
+  assert.deepEqual(result.kind === "ok" ? result.data : undefined, { e0: { nameWithOwner: "a/b" }, e1: null });
+  assert.deepEqual(result.kind === "ok" ? result.errors : undefined, [
+    { type: "FORBIDDEN", message: "Resource not accessible", path: ["e1"] },
+  ]);
+});
+
 test("a 401 drops the token so the next request asks the credential source again", async () => {
   let issued = 0;
   const recorded = recordingFetch((request) =>

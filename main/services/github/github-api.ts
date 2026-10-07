@@ -26,8 +26,15 @@ export interface GitHubCredentialProvider {
   invalidate(host: string, fingerprint?: string): void;
 }
 
+/** A GraphQL error tied to one field of an otherwise usable answer. */
+export interface GitHubGraphQlFieldError {
+  type?: string;
+  message?: string;
+  path?: Array<string | number>;
+}
+
 export type GitHubApiResult<T> =
-  | { kind: "ok"; data: T; status: number; etag?: string }
+  | { kind: "ok"; data: T; status: number; etag?: string; errors?: GitHubGraphQlFieldError[] }
   | { kind: "not-modified"; etag?: string }
   | {
       kind: "rate-limited";
@@ -37,7 +44,7 @@ export type GitHubApiResult<T> =
       sent: boolean;
     }
   | { kind: "unauthorized"; message: string }
-  | { kind: "not-found"; message: string; data?: T }
+  | { kind: "not-found"; message: string; data?: T; errors?: GitHubGraphQlFieldError[] }
   | { kind: "failed"; status?: number; message: string }
   | {
       kind: "unavailable";
@@ -49,7 +56,7 @@ export interface GitHubRequestContext {
   host: string;
   /** Stable label for usage accounting, e.g. `pr.summary.batch`. */
   operation: string;
-  /** A user-initiated read; may spend the reserve and pass a pause. */
+  /** A user-initiated read; may spend the GraphQL reserve kept back from background reads. */
   interactive?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -134,6 +141,16 @@ export function retryAtFrom(headers: RateLimitHeaders, now: number): number | un
 interface GraphQlError {
   type?: unknown;
   message?: unknown;
+  path?: unknown;
+}
+
+function fieldError(error: GraphQlError): GitHubGraphQlFieldError {
+  const type = typeof error.type === "string" ? error.type : undefined;
+  const message = boundedMessage(error.message);
+  const path = Array.isArray(error.path)
+    ? error.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number")
+    : undefined;
+  return { ...(type ? { type } : {}), ...(message ? { message } : {}), ...(path ? { path } : {}) };
 }
 
 const RATE_LIMIT_MESSAGE = /(?:secondary )?rate limit|abuse detection/iu;
@@ -494,12 +511,19 @@ export class GitHubApi {
       ) {
         return this.rateLimitedResult(limitedHeaders, firstMessage);
       }
+      const fieldErrors = errors.map(fieldError);
       if (errors.every((error) => error.type === "NOT_FOUND")) {
         return {
           kind: "not-found",
           message: firstMessage ?? "GitHub could not find that resource.",
           ...(data !== undefined && data !== null ? { data } : {}),
+          errors: fieldErrors,
         };
+      }
+      // Errors scoped to a field leave the rest of the answer usable; a batched
+      // document reports each alias's failure on its own.
+      if (data !== undefined && data !== null && fieldErrors.every((error) => error.path && error.path.length > 0)) {
+        return { kind: "ok", data, status, errors: fieldErrors };
       }
       return { kind: "failed", status, message: firstMessage ?? "GitHub returned a GraphQL error." };
     }

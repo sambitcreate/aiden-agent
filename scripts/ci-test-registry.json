@@ -95,6 +95,7 @@
         "main/services/github/github-credentials.test.ts",
         "main/services/github/github-api.test.ts",
         "main/services/github/github-request-gate.test.ts",
+        "main/services/github/github-local-repository.test.ts",
         "main/services/linux-dictation-portal.test.ts",
         "main/services/local-runtime-status.test.ts",
         "main/services/main-window-state-core.test.ts",
