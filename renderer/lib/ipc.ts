@@ -1222,6 +1222,18 @@ export const botsApi = {
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
   stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Answer a Bot tool approval by its wait id; the first answer wins. */
+  approve: (waitId: string, decision: "allow" | "deny") =>
+    invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  pendingApprovals: (botId: string) =>
+    invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
+      "bots:pendingApprovals",
+      botId,
+    ),
+  onApproval: (handler: (prompt: import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt) => void) =>
+    onNotification("bots:approval", handler),
+  onApprovalSettled: (handler: (settled: { botId: string; waitId: string; outcome: string }) => void) =>
+    onNotification("bots:approval-settled", handler),
   liveSubscribe: (botId: string) =>
     invoke<import("../shared/bot-live").BotLiveSnapshot>("bots:live:subscribe", botId),
   liveUnsubscribe: (botId: string) => invoke<void>("bots:live:unsubscribe", botId),

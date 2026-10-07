@@ -241,3 +241,26 @@ test("text before a tool call folds under Updates, and only the final answer is 
   fireEvent.click(screen.getByRole("button", { name: "Updates" }));
   assert.ok(await screen.findByText("Let me check your calendar."));
 });
+
+test("a tool call that needs approval asks in the chat and answers by wait id", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:pendingApprovals": () => [],
+    "bots:approve": () => ({ decided: true }),
+  });
+  emitBotTestNotification("bots:approval", {
+    botId: "bot-1",
+    waitId: "wait-7",
+    toolCallId: "call-7",
+    toolName: "send_email",
+    summary: "Send the weekly update to the team.",
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs approval" });
+  assert.ok(within(card).getByText("Send the weekly update to the team."));
+  fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:approve")));
+  assert.deepEqual(calls.find((call) => call.channel === "bots:approve")?.args, [
+    { waitId: "wait-7", decision: "allow" },
+  ]);
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs approval" }), null));
+});

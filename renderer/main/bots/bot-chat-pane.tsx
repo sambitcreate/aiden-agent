@@ -14,6 +14,7 @@ import type { Attachment } from "../../lib/types";
 import { useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
+import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import { BotChatActions, BotChatTitle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
@@ -64,6 +65,74 @@ export function BotInterruptedCard({
         )}
         <Button variant="transparent" size="medium" disabled={busy} onClick={onDismiss}>
           Dismiss
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Tool approvals a Bot is waiting on, live: pushed prompts and withdrawals, plus a read on mount. */
+function useBotApprovals(botId: string | undefined) {
+  const [prompts, setPrompts] = React.useState<BotApprovalPrompt[]>([]);
+  React.useEffect(() => {
+    if (!botId) return;
+    let active = true;
+    void botsApi.pendingApprovals(botId).then((pending) => {
+      if (active) setPrompts((current) => mergePrompts(current, pending));
+    }).catch(() => undefined);
+    const offPrompt = botsApi.onApproval((prompt) => {
+      if (prompt.botId === botId) setPrompts((current) => mergePrompts(current, [prompt]));
+    });
+    const offSettled = botsApi.onApprovalSettled((settled) => {
+      if (settled.botId === botId) {
+        setPrompts((current) => current.filter((prompt) => prompt.waitId !== settled.waitId));
+      }
+    });
+    return () => {
+      active = false;
+      offPrompt();
+      offSettled();
+    };
+  }, [botId]);
+  const remove = React.useCallback(
+    (waitId: string) => setPrompts((current) => current.filter((prompt) => prompt.waitId !== waitId)),
+    [],
+  );
+  return { prompts, remove };
+}
+
+function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): BotApprovalPrompt[] {
+  const byId = new Map(current.map((prompt) => [prompt.waitId, prompt] as const));
+  for (const prompt of next) byId.set(prompt.waitId, prompt);
+  return [...byId.values()];
+}
+
+/** A Bot's tool call that needs the person's yes or no before it runs. */
+export function BotApprovalCard({
+  name,
+  prompt,
+  onAnswer,
+}: {
+  name: string;
+  prompt: BotApprovalPrompt;
+  onAnswer(decision: "allow" | "deny"): void;
+}) {
+  return (
+    <div role="group" aria-label={`${name} needs approval`} className="flex max-w-md flex-col gap-3 rounded-2xl bg-control/50 p-4">
+      <Text as="p" color="primary">
+        {`${name} wants to use ${prompt.toolName}.`}
+      </Text>
+      {prompt.summary ? (
+        <Text as="p" variant="small" color="secondary" className="whitespace-pre-wrap break-words">
+          {prompt.summary}
+        </Text>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="accent" size="medium" onClick={() => onAnswer("allow")}>
+          Allow
+        </Button>
+        <Button variant="transparent" size="medium" onClick={() => onAnswer("deny")}>
+          Deny
         </Button>
       </div>
     </div>
@@ -181,6 +250,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const running = state?.kind === "running";
 
   const connectionSetup = useConnectionSetup(() => live.reload());
+  const approvals = useBotApprovals(botId);
 
   React.useEffect(() => {
     const node = scrollRef.current;
@@ -296,6 +366,19 @@ export function BotChatPane({ botId }: { botId: string }) {
               onReviewAccess={openProfile}
             />
           ) : null}
+          {approvals.prompts.map((prompt) => (
+            <BotApprovalCard
+              key={prompt.waitId}
+              name={current.name}
+              prompt={prompt}
+              onAnswer={(decision) => {
+                approvals.remove(prompt.waitId);
+                void botsApi.approve(prompt.waitId, decision).catch((error) => {
+                  toast.error(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
+                });
+              }}
+            />
+          ))}
           {state?.kind === "model_error" ? (
             <Text as="p" variant="small" color="secondary" role="alert">
               {state.message}
