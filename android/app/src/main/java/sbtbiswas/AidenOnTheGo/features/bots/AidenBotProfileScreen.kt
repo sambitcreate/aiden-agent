@@ -154,17 +154,22 @@ fun AidenBotProfileScreen(
 
     fun refresh() {
         val cl = client ?: return
+        // The pairing this read belongs to; a removed or switched pairing never gets it back.
+        val requestInstance = coordinator.activeInstanceId
         scope.launch {
             isLoading = true
             loadFailed = false
             try {
                 val b = cl.bot(botId)
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
                 botDetail = b
                 coordinator.botCache.putBotDetail(b)
                 // Favorites stay as shown while a pin or reorder is still being written.
                 val fav = cl.botFavorites()
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
                 if (!favoritesInFlight) favorites = fav
                 val page = cl.botConversations(botId = botId)
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
                 conversations = aidenCanonicalBotConversations(page.conversations)
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error

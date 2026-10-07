@@ -92,6 +92,7 @@ class AidenNavigationHostUiTest {
             is AidenScreen.ChatDetail -> Column {
                 if (LocalAidenShowsUpNavigation.current) Text("up")
                 Text("chat ${screen.chatId}")
+                Text(if (LocalAidenIsCommittedDestination.current) "committed ${screen.chatId}" else "previewing ${screen.chatId}")
             }
             else -> Text("other")
         }
@@ -196,6 +197,32 @@ class AidenNavigationHostUiTest {
         compose.onNodeWithText("chat c1").assertIsDisplayed()
         compose.onNodeWithText("bot b1").assertDoesNotExist()
         compose.runOnIdle { assertEquals(3, navigator.stack.depth) }
+    }
+
+    @Test
+    fun aChatRevealedByABackGestureIsNotCommittedUntilThePopLands() {
+        compose.setContent { Host(reduceMotion = false) }
+        compose.runOnUiThread {
+            navigator.push(AidenScreen.ChatDetail("c1"))
+            navigator.push(AidenScreen.ChatDetail("c2"))
+        }
+        compose.onNodeWithText("committed c2").assertIsDisplayed()
+
+        dragBack(progress = 0.6f)
+        // The chat underneath is composed for the preview but must not count as opened
+        // (no read report, no notification dismissal) while the gesture can still cancel.
+        compose.onNodeWithText("previewing c1").assertExists()
+        compose.onNodeWithText("committed c1").assertDoesNotExist()
+        compose.onNodeWithText("committed c2").assertExists()
+
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.dispatchOnBackCancelled() }
+        compose.waitForIdle()
+        compose.onNodeWithText("committed c2").assertIsDisplayed()
+        compose.onNodeWithText("committed c1").assertDoesNotExist()
+
+        dragBack(progress = 0.6f)
+        pressSystemBack()
+        compose.onNodeWithText("committed c1").assertIsDisplayed()
     }
 
     @Test

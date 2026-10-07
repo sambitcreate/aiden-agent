@@ -204,7 +204,7 @@ private fun AidenDesktopSpeechGroup(
                         AidenSpeechModelRow(
                             model = model,
                             status = status,
-                            enabled = state.isConnected,
+                            enabled = state.isConnected && !state.isSavingSpeech,
                             onSelect = { onSelect(model.id) },
                             onDownload = { onDownload(model.id) },
                             onCancel = { onCancel(model.id) }

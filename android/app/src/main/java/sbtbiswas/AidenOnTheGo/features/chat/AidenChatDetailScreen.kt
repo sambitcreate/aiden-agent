@@ -75,6 +75,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenIsCommittedDestination
 import sbtbiswas.AidenOnTheGo.navigation.LocalAidenShowsUpNavigation
 import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
@@ -244,12 +245,16 @@ fun AidenChatDetailScreen(
         }
     }
 
+    // Foreground means resumed and committed: a chat revealed under a predictive-back
+    // gesture must not be marked read or have its notification quieted until the pop lands.
+    val isCommittedDestination = LocalAidenIsCommittedDestination.current
+    val committed by rememberUpdatedState(isCommittedDestination)
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> viewModel.startProgressObservation()
                 Lifecycle.Event.ON_STOP -> viewModel.stopProgressObservation()
-                Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(true)
+                Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(committed)
                 Lifecycle.Event.ON_PAUSE -> {
                     viewModel.setChatForegrounded(false)
                     viewModel.flushDraft()
@@ -261,15 +266,17 @@ fun AidenChatDetailScreen(
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             viewModel.startProgressObservation()
         }
-        viewModel.setChatForegrounded(
-            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        )
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.setChatForegrounded(false)
             viewModel.stopProgressObservation()
             viewModel.flushDraft()
         }
+    }
+    LaunchedEffect(viewModel, isCommittedDestination) {
+        viewModel.setChatForegrounded(
+            isCommittedDestination && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        )
     }
 
     LaunchedEffect(serverInfo) {

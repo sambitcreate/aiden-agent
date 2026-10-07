@@ -5,6 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.serialization.builtins.ListSerializer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Rule
@@ -92,5 +95,40 @@ class AidenRemoteCoordinatorClientTest {
         installations.setActiveInstallation(first.id)
         coordinator.refreshClient()
         assertEquals(saved, coordinator.workspaces.value)
+    }
+
+    @Test
+    fun aReadThatOutlivesItsPairingCannotRecreateOrCrossItsCache() {
+        val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        val first = installations.addInstallation(exchange("one", "sha256/one"), null)
+        val coordinator = AidenRemoteCoordinator(
+            installationStore = installations,
+            storageDir = tempFolder.root,
+            scope = CoroutineScope(Dispatchers.Unconfined + Job().apply { cancel() })
+        )
+        val key = AidenReadSnapshotKeys.gitReview("w1")
+        val serializer = ListSerializer(AidenWorkspace.serializer())
+        val response = listOf(AidenWorkspace(id = "w1", name = "Aiden", permission = AidenWorkspacePermission.ASK, revision = "r1"))
+
+        coordinator.refreshClient()
+        val heldClient = coordinator.client.value
+        assertTrue(coordinator.storeReadSnapshotIfCurrent(heldClient, "one", key, response, serializer))
+
+        // Switching pairings: the held read for "one" must not publish or write.
+        val second = installations.addInstallation(exchange("two", "sha256/two"), null)
+        coordinator.refreshClient()
+        assertFalse(coordinator.storeReadSnapshotIfCurrent(heldClient, "one", AidenReadSnapshotKeys.gitBranches("w1"), response, serializer))
+        assertNull(coordinator.readSnapshotCache.load("one", AidenReadSnapshotKeys.gitBranches("w1"), serializer))
+        assertNull("another pairing's cache stays untouched", coordinator.readSnapshotCache.load("two", key, serializer))
+
+        // Removing the pairing purges it; a read that lands afterwards must not bring it back.
+        installations.setActiveInstallation(first.id)
+        coordinator.refreshClient()
+        val removedClient = coordinator.client.value
+        coordinator.removeInstallation(first.id)
+        coordinator.refreshClient()
+        assertFalse(coordinator.storeReadSnapshotIfCurrent(removedClient, "one", key, response, serializer))
+        assertNull(coordinator.readSnapshotCache.load("one", key, serializer))
+        assertEquals(second.id, installations.activeInstallation?.id)
     }
 }

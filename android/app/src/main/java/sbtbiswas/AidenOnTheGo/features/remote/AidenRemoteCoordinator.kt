@@ -103,6 +103,27 @@ class AidenRemoteCoordinator(
     val activeInstanceId: String?
         get() = installationStore.activeInstallation?.instanceId
 
+    /**
+     * True while [client] is still the active client of installation [instanceId]. A read
+     * started before a pairing was removed, revoked, or switched must check this right before
+     * it publishes or caches its response, so it can never recreate a purged cache.
+     */
+    fun holdsReadAuthority(client: AidenRemoteClient?, instanceId: String?): Boolean =
+        client != null && instanceId != null && _client.value === client && activeInstanceId == instanceId
+
+    /** Stores [value] in the read-snapshot cache only if the request still holds read authority. */
+    fun <T> storeReadSnapshotIfCurrent(
+        client: AidenRemoteClient?,
+        instanceId: String?,
+        key: String,
+        value: T,
+        serializer: kotlinx.serialization.KSerializer<T>
+    ): Boolean {
+        if (!holdsReadAuthority(client, instanceId)) return false
+        readSnapshotCache.store(instanceId!!, key, value, serializer)
+        return true
+    }
+
     fun presentError(message: String) {
         _errorMessage.value = message
     }

@@ -59,7 +59,15 @@ class AidenSettingsStoreTest {
         }
         override suspend fun readAloudStatus(): AidenReadAloudStatus { read(); return AidenReadAloudStatus(true, true, "t1") }
         override suspend fun speechStatus(): AidenSpeechStatus { read(); return speech }
-        override suspend fun selectSpeechModel(modelId: String): AidenSpeechStatus { read(); speech = speechStatus(modelId); return speech }
+        var speechGate: CompletableDeferred<Unit>? = null
+        val speechSelections = mutableListOf<String>()
+        override suspend fun selectSpeechModel(modelId: String): AidenSpeechStatus {
+            read()
+            speechSelections += modelId
+            speech = speechStatus(modelId)
+            speechGate?.await()
+            return speechStatus(modelId)
+        }
         override suspend fun downloadSpeechModel(modelId: String): AidenSpeechStatus = throw IOException("disk full")
         override suspend fun cancelSpeechModelDownload(modelId: String): AidenSpeechStatus = speech
     }
@@ -133,6 +141,55 @@ class AidenSettingsStoreTest {
         advanceUntilIdle()
 
         assertEquals(confirmed, store.state.value.speech)
+    }
+
+    @Test
+    fun aRejectedMemoryChangeNeverReachesTheDiskCacheThroughAConcurrentRefresh() = runTest {
+        val cache = AidenSettingsCache(tempFolder.root)
+        val store = store(cache)
+        val remote = FakeRemote()
+        store.bind("mac", remote)
+        store.refresh()
+        advanceUntilIdle()
+
+        remote.memoryGate = CompletableDeferred()
+        remote.failMemoryUpdate = true
+        store.setMemoryEnabled(false)
+        runCurrent()
+        // Another section refreshes successfully while the change is unconfirmed.
+        store.refresh()
+        advanceUntilIdle()
+        assertEquals("the desktop has not confirmed the change", true, cache.load("mac")?.memory?.enabled)
+
+        remote.memoryGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(true, store.state.value.memory?.enabled)
+        assertEquals("a cold launch shows the confirmed value", true, AidenSettingsCache(tempFolder.root).load("mac")?.memory?.enabled)
+    }
+
+    @Test
+    fun aSecondSpeechSelectionWaitsSoAnOlderResponseCannotWinOverTheDesktop() = runTest {
+        val cache = AidenSettingsCache(tempFolder.root)
+        val store = store(cache)
+        val remote = FakeRemote()
+        store.bind("mac", remote)
+        store.refreshSpeech()
+        advanceUntilIdle()
+
+        remote.speechGate = CompletableDeferred()
+        store.selectSpeechModel("large")
+        runCurrent()
+        assertTrue(store.state.value.isSavingSpeech)
+        store.selectSpeechModel("small")
+        runCurrent()
+        remote.speechGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("only the first action reached the desktop", listOf("large"), remote.speechSelections)
+        assertEquals(remote.speech.selectedModelId, store.state.value.speech?.selectedModelId)
+        assertEquals(remote.speech.selectedModelId, cache.load("mac")?.speech?.selectedModelId)
+        assertFalse(store.state.value.isSavingSpeech)
     }
 
     @Test

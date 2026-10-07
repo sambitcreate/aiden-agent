@@ -97,15 +97,18 @@ fun AidenGitScreen(
 
     fun refreshGit() {
         if (client != null) {
+            val requestClient = client
+            val requestInstance = instanceId
             isLoading = true
             reviewLoadFailed = false
             scope.launch {
                 try {
-                    val res = client.gitReview(workspaceId)
+                    val res = requestClient.gitReview(workspaceId)
+                    // A pairing removed or switched mid-read must not get this response back.
+                    if (!coordinator.storeReadSnapshotIfCurrent(requestClient, requestInstance, AidenReadSnapshotKeys.gitReview(workspaceId), res, AidenGitResult.serializer())) return@launch
                     gitReviewResult = res
                     reviewIsFresh = true
                     lastError = null
-                    instanceId?.let { snapshots.store(it, AidenReadSnapshotKeys.gitReview(workspaceId), res, AidenGitResult.serializer()) }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     reviewLoadFailed = true
@@ -594,11 +597,14 @@ fun AidenGitScreen(
 
         LaunchedEffect(Unit) {
             if (client != null) {
+                val requestClient = client
+                val requestInstance = instanceId
                 try {
-                    val res = client.gitBranches(workspaceId)
+                    val res = requestClient.gitBranches(workspaceId)
+                    if (!coordinator.holdsReadAuthority(requestClient, requestInstance)) return@LaunchedEffect
                     branchesResult = res.branches
                     res.branches?.let { branches ->
-                        instanceId?.let { snapshots.store(it, AidenReadSnapshotKeys.gitBranches(workspaceId), branches, AidenGitBranches.serializer()) }
+                        coordinator.storeReadSnapshotIfCurrent(requestClient, requestInstance, AidenReadSnapshotKeys.gitBranches(workspaceId), branches, AidenGitBranches.serializer())
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -919,11 +925,13 @@ fun AidenGitScreen(
 
         LaunchedEffect(Unit) {
             if (client != null) {
+                val requestClient = client
+                val requestInstance = instanceId
                 try {
-                    val res = client.gitWorktrees(workspaceId)
+                    val res = requestClient.gitWorktrees(workspaceId)
                     val fresh = res.worktrees ?: AidenGitWorktrees(worktrees = emptyList())
+                    if (!coordinator.storeReadSnapshotIfCurrent(requestClient, requestInstance, AidenReadSnapshotKeys.gitWorktrees(workspaceId), fresh, AidenGitWorktrees.serializer())) return@LaunchedEffect
                     worktreesList = fresh.worktrees
-                    instanceId?.let { snapshots.store(it, AidenReadSnapshotKeys.gitWorktrees(workspaceId), fresh, AidenGitWorktrees.serializer()) }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     if (worktreesList == null) {

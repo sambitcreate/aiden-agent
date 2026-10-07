@@ -225,7 +225,11 @@ fun AidenNavigationHost(
     @Composable
     fun Entry(screen: AidenScreen) {
         navigator.entryStates.SaveableStateProvider(screen.stateKey) {
-            content(screen)
+            // A screen revealed by a back gesture, or still animating out, is composed
+            // but not yet (or no longer) the committed destination.
+            CompositionLocalProvider(LocalAidenIsCommittedDestination provides (screen.stateKey in scene.screenKeys)) {
+                content(screen)
+            }
         }
     }
 
@@ -294,6 +298,13 @@ fun AidenNavigationHost(
  * pops it.
  */
 val LocalAidenShowsUpNavigation = compositionLocalOf { true }
+
+/**
+ * True only for a screen that belongs to the committed navigation stack. Side effects that
+ * mean "the user is looking at this" (marking a chat read, quieting its notification) must
+ * wait for it, since predictive back composes the previous screen before the pop commits.
+ */
+val LocalAidenIsCommittedDestination = compositionLocalOf { true }
 
 /** M3 list pane width beside a detail pane. */
 val AidenListPaneWidth = 360.dp

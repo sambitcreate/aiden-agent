@@ -82,6 +82,8 @@ data class AidenSettingsState(
     val readAloud: AidenReadAloudStatus? = null,
     val readAloudFailure: AidenSettingsFailure? = null,
     val speech: AidenSpeechStatus? = null,
+    /** A speech action is awaiting the desktop; further speech actions wait for it. */
+    val isSavingSpeech: Boolean = false,
     val speechFailure: AidenSettingsFailure? = null
 ) {
     val isLoadingProviders: Boolean get() = isConnected && providers == null && providersFailure == null
@@ -158,6 +160,7 @@ class AidenSettingsStore(
                 speech = speechBaseline ?: current.speech,
                 isConnected = remote != null,
                 isSavingMemory = false,
+                isSavingSpeech = false,
                 providersFailure = null,
                 memoryFailure = null,
                 readAloudFailure = null,
@@ -209,8 +212,12 @@ class AidenSettingsStore(
         val gen = generation
         speechJob = scope.launch {
             fetch(gen, { remote.speechStatus() }) { state, status ->
-                if (status == null) state.copy(speechFailure = AidenSettingsFailure.UNAVAILABLE)
-                else state.copy(speech = status, speechFailure = null)
+                when {
+                    // A speech action in flight owns the visible status until it reconciles.
+                    state.isSavingSpeech -> state
+                    status == null -> state.copy(speechFailure = AidenSettingsFailure.UNAVAILABLE)
+                    else -> state.copy(speech = status, speechFailure = null)
+                }
             }
             pollSpeechWhileDownloading()
         }
@@ -247,7 +254,7 @@ class AidenSettingsStore(
                 if (saved == null) it.copy(memory = previous, isSavingMemory = false, memoryFailure = AidenSettingsFailure.SAVE_FAILED)
                 else it.copy(memory = saved, isSavingMemory = false, memoryFailure = null)
             }
-            if (saved != null) persist()
+            persist()
         }
     }
 
@@ -278,14 +285,21 @@ class AidenSettingsStore(
         call: suspend (AidenSettingsRemote) -> AidenSpeechStatus
     ) {
         val remote = remote ?: return
-        val previous = _state.value.speech ?: return
+        val state = _state.value
+        val previous = state.speech ?: return
+        // One speech action at a time, so an older response can never undo a newer choice.
+        if (state.isSavingSpeech) return
         val gen = generation
-        if (unconfirmedSpeechBaseline == null) unconfirmedSpeechBaseline = previous
-        _state.update { it.copy(speech = optimistic(previous), speechFailure = null) }
+        unconfirmedSpeechBaseline = previous
+        _state.value = state.copy(speech = optimistic(previous), isSavingSpeech = true, speechFailure = null)
         scope.launch {
             val result = try {
                 call(remote)
             } catch (cancelled: CancellationException) {
+                if (gen == generation) {
+                    unconfirmedSpeechBaseline = null
+                    _state.update { it.copy(speech = previous, isSavingSpeech = false) }
+                }
                 throw cancelled
             } catch (_: Exception) {
                 null
@@ -293,13 +307,11 @@ class AidenSettingsStore(
             if (gen != generation) return@launch
             unconfirmedSpeechBaseline = null
             _state.update {
-                if (result == null) it.copy(speech = previous, speechFailure = AidenSettingsFailure.SAVE_FAILED)
-                else it.copy(speech = result, speechFailure = null)
+                if (result == null) it.copy(speech = previous, isSavingSpeech = false, speechFailure = AidenSettingsFailure.SAVE_FAILED)
+                else it.copy(speech = result, isSavingSpeech = false, speechFailure = null)
             }
-            if (result != null) {
-                persist()
-                pollSpeechWhileDownloading()
-            }
+            persist()
+            if (result != null) pollSpeechWhileDownloading()
         }
     }
 
@@ -318,7 +330,7 @@ class AidenSettingsStore(
                     break
                 }
                 if (gen != generation) break
-                _state.update { it.copy(speech = status, speechFailure = null) }
+                _state.update { if (it.isSavingSpeech) it else it.copy(speech = status, speechFailure = null) }
             }
             if (gen == generation) persist()
         }
@@ -360,9 +372,19 @@ class AidenSettingsStore(
         if (value != null) persist()
     }
 
-    /** Writes the latest state, serialized on one writer so an older snapshot never lands last. */
+    /**
+     * Writes the latest desktop-confirmed state, serialized on one writer so an older snapshot
+     * never lands last. Sections with an unconfirmed optimistic change persist their confirmed
+     * value, so a rejected change can never reappear on a cold launch.
+     */
     private fun persist() {
-        scope.launch(writer) { _state.value.snapshot()?.let(cache::store) }
+        val confirmed = _state.value.let { state ->
+            state.copy(
+                memory = unconfirmedMemoryBaseline ?: state.memory,
+                speech = unconfirmedSpeechBaseline ?: state.speech
+            )
+        }.snapshot() ?: return
+        scope.launch(writer) { cache.store(confirmed) }
     }
 
     private data class AidenProviderListing(val providers: List<AidenSettingsProvider>, val canCreate: Boolean)
