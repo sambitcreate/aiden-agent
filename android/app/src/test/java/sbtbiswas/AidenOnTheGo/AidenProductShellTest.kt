@@ -230,49 +230,21 @@ class AidenProductShellTest {
 
     @Test
     fun testBotsHomeContentStates() {
-        fun resolve(hasSnapshot: Boolean, loading: Boolean, bots: Int, error: Boolean = false) =
+        fun resolve(hasSnapshot: Boolean, bots: Int, error: Boolean = false, query: Boolean = false, matches: Int = bots) =
             aidenBotsHomeContentState(
                 hasSnapshot = hasSnapshot,
-                isLoading = loading,
                 totalBotCount = bots,
-                activeBotCount = bots,
-                conversationCount = 0,
-                hasQuery = false,
-                filteredBotCount = bots,
-                filteredConversationCount = 0,
+                hasQuery = query,
+                filteredBotCount = matches,
                 hasError = error
             )
 
-        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, true, 0))
-        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, false, 0))
-        assertEquals(AidenBotsHomeContentState.ERROR, resolve(false, false, 0, error = true))
-        assertEquals(AidenBotsHomeContentState.EMPTY, resolve(true, false, 0))
-        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, false, 2))
-    }
-
-    @Test
-    fun testBotContactSectionsNeverDuplicateFavorites() {
-        val allBots = listOf("bot-1", "bot-2", "bot-3", "bot-4")
-        val favorites = listOf("bot-1", "bot-3")
-
-        val favoriteSection = allBots.filter { favorites.contains(it) }
-        val regularSection = allBots.filter { !favorites.contains(it) }
-
-        assertEquals(listOf("bot-1", "bot-3"), favoriteSection)
-        assertEquals(listOf("bot-2", "bot-4"), regularSection)
-        assertTrue(favoriteSection.intersect(regularSection.toSet()).isEmpty())
-    }
-
-    @Test
-    fun testArchivedBotChatsRemainReadOnly() {
-        fun isChatReadOnly(botHealth: AidenBotHealth, accessMode: AidenBotAccessMode): Boolean {
-            if (botHealth == AidenBotHealth.ARCHIVED) return true
-            return false
-        }
-
-        assertTrue(isChatReadOnly(AidenBotHealth.ARCHIVED, AidenBotAccessMode.FULL))
-        assertTrue(isChatReadOnly(AidenBotHealth.ARCHIVED, AidenBotAccessMode.CUSTOM))
-        assertFalse(isChatReadOnly(AidenBotHealth.READY, AidenBotAccessMode.FULL))
-        assertFalse(isChatReadOnly(AidenBotHealth.READY, AidenBotAccessMode.CUSTOM))
+        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, 0))
+        assertEquals(AidenBotsHomeContentState.ERROR, resolve(false, 0, error = true))
+        assertEquals(AidenBotsHomeContentState.EMPTY, resolve(true, 0))
+        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, 2))
+        assertEquals(AidenBotsHomeContentState.NO_RESULTS, resolve(true, 2, query = true, matches = 0))
+        // A saved snapshot keeps showing through a later load error.
+        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, 2, error = true))
     }
 }

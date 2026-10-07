@@ -31,6 +31,7 @@ import { registerAssistantLiveHandlers } from "./assistant-live.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerBotHandlers } from "./bots.js";
+import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
@@ -72,6 +73,8 @@ export function registerHandlers(): void {
   registerModelInsightsHandlers();
   registerDictationHandlers();
   registerScheduledTaskHandlers();
+  // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
+  if (hostPlatformCapabilities().bots) registerBotRoutineHandlers();
   registerAssistantHandlers();
   registerShortcutHandlers();
   registerTelegramHandlers();

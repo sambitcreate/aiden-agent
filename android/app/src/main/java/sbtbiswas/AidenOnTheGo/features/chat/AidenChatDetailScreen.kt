@@ -73,6 +73,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotChatTopBar
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleteDialog
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleter
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotFilesSheet
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotChatPlaceholder
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotDeleteAvailable
+import sbtbiswas.AidenOnTheGo.features.bots.rememberAidenBotChatIdentity
 import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
@@ -109,6 +116,8 @@ fun AidenChatDetailScreen(
     networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     startVoiceOnOpen: Boolean = false,
     onNavigateToChat: (String) -> Unit = {},
+    onNavigateToBotProfile: (String) -> Unit = {},
+    botDeleter: AidenBotDeleter? = null,
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -408,6 +417,46 @@ fun AidenChatDetailScreen(
         consumedItemCount = itemCount
     }
 
+    val botIdentity = chat?.botId?.let { rememberAidenBotChatIdentity(coordinator, it, chat?.title.orEmpty()) }
+    val canDeleteBot = botIdentity != null && aidenBotDeleteAvailable(serverInfo, botDeleter)
+    var showBotFiles by remember(chatId) { mutableStateOf(false) }
+    var confirmingBotDelete by remember(chatId) { mutableStateOf(false) }
+    var isDeletingBot by remember(chatId) { mutableStateOf(false) }
+
+    if (showBotFiles) {
+        AidenBotFilesSheet(chatId = chatId, coordinator = coordinator, onDismiss = { showBotFiles = false })
+    }
+    if (confirmingBotDelete && botIdentity != null) {
+        AidenBotDeleteDialog(
+            name = botIdentity.name,
+            isDeleting = isDeletingBot,
+            onDismiss = { confirmingBotDelete = false },
+            onConfirm = {
+                val cl = coordinator.client.value
+                val deleter = botDeleter
+                if (cl == null || deleter == null) {
+                    confirmingBotDelete = false
+                    return@AidenBotDeleteDialog
+                }
+                scope.launch {
+                    isDeletingBot = true
+                    try {
+                        deleter.delete(cl, botIdentity.botId)
+                        confirmingBotDelete = false
+                        onNavigateBack()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        confirmingBotDelete = false
+                        coordinator.presentError("Aiden couldn’t delete this Bot. Try again.")
+                    } finally {
+                        isDeletingBot = false
+                    }
+                }
+            }
+        )
+    }
+
     workspaceFileReference?.let { reference ->
         val workspaceId = chat?.workspaceId
         if (workspaceId != null && chat?.isBotChat != true) {
@@ -422,45 +471,61 @@ fun AidenChatDetailScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.statusBars,
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = chat?.title?.ifEmpty { "Chat" } ?: "Chat",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        chat?.modelId?.let { model ->
+            val botId = chat?.botId
+            if (botId != null && botIdentity != null) {
+                AidenBotChatTopBar(
+                    identity = botIdentity,
+                    coordinator = coordinator,
+                    isStreaming = isStreaming,
+                    canStop = viewModel.canStopCurrentRun && !isStopping,
+                    onStop = { viewModel.cancelTurn() },
+                    onBack = onNavigateBack,
+                    onOpenProfile = { onNavigateToBotProfile(botId) },
+                    onOpenFiles = { showBotFiles = true },
+                    canDelete = canDeleteBot,
+                    onDelete = { confirmingBotDelete = true }
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Column {
                             Text(
-                                text = model,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.secondary,
+                                text = chat?.title?.ifEmpty { "Chat" } ?: "Chat",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
+                            chat?.modelId?.let { model ->
+                                Text(
+                                    text = model,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.secondary,
+                                    maxLines = 1
+                                )
+                            }
                         }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
-                    }
-                },
-                actions = {
-                    if (isStreaming) {
-                        IconButton(
-                            onClick = { viewModel.cancelTurn() },
-                            enabled = viewModel.canStopCurrentRun && !isStopping
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = palette.canvas,
-                    titleContentColor = palette.foreground
+                    },
+                    actions = {
+                        if (isStreaming) {
+                            IconButton(
+                                onClick = { viewModel.cancelTurn() },
+                                enabled = viewModel.canStopCurrentRun && !isStopping
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = palette.canvas,
+                        titleContentColor = palette.foreground
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
             Column(
@@ -731,7 +796,7 @@ fun AidenChatDetailScreen(
                     onSelectModel = if (chat == null || chat?.isBotChat == true) null else { provider, model, level ->
                         viewModel.selectModel(provider.id, model.id, level)
                     },
-                    placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
+                    placeholder = if (chat?.isBotChat == true) aidenBotChatPlaceholder(botIdentity?.name) else "Message Aiden",
                     isReadOnly = false,
                     voiceErrorMessage = voiceInput.errorMessage,
                     modifier = Modifier.fillMaxWidth()

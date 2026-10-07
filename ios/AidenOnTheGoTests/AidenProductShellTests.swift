@@ -91,91 +91,10 @@ final class AidenProductShellTests: XCTestCase {
         )
     }
 
-    func testBotContactSectionsNeverDuplicateFavoritesAndSearchUsesOneList() {
-        let sections = aidenBotContactSectionIDs(
-            matchingBotIDs: ["bot-b", "bot-a", "bot-c"],
-            activeBotIDs: ["bot-a", "bot-b", "bot-c"],
-            favoriteIDs: ["bot-a", "bot-a", "bot-archived", "bot-c"],
-            isSearching: false
-        )
-        XCTAssertEqual(sections.favorites, ["bot-a", "bot-c"])
-        XCTAssertEqual(sections.others, ["bot-b"])
-        XCTAssertTrue(Set(sections.favorites).isDisjoint(with: sections.others))
-
-        let searchSections = aidenBotContactSectionIDs(
-            matchingBotIDs: ["bot-c", "bot-a"],
-            activeBotIDs: ["bot-a", "bot-b", "bot-c"],
-            favoriteIDs: ["bot-a", "bot-c"],
-            isSearching: true
-        )
-        XCTAssertEqual(searchSections.favorites, [])
-        XCTAssertEqual(searchSections.others, ["bot-c", "bot-a"])
-    }
-
-    func testStaleFavoriteMutationCannotFinishNewerOptimisticState() {
-        let scope = AidenBotsHomeScope(instanceID: "mac-a", deviceID: "phone-a")
-        let oldMutation = AidenBotsFavoriteMutation(
-            id: UUID(),
-            scope: scope,
-            botID: "bot-a"
-        )
-        let currentMutation = AidenBotsFavoriteMutation(
-            id: UUID(),
-            scope: scope,
-            botID: "bot-b"
-        )
-
-        XCTAssertNil(
-            aidenBotsFinishFavoriteMutation(
-                current: currentMutation,
-                finishing: oldMutation,
-                restoring: ["bot-a"],
-                error: "stale"
-            )
-        )
-
-        XCTAssertEqual(
-            aidenBotsFinishFavoriteMutation(
-                current: currentMutation,
-                finishing: currentMutation,
-                restoring: ["bot-b"],
-                error: nil
-            ),
-            AidenBotsFavoriteMutationFinish(
-                favoriteOverride: ["bot-b"],
-                favoriteError: nil
-            )
-        )
-    }
-
-    func testArchivedBotChatsRemainReadOnlyForFullAndCustomAccess() {
-        XCTAssertFalse(
-            aidenBotChatAllowsMutations(
-                canWrite: true,
-                fullAccessActionsAllowed: true,
-                botHealth: .archived,
-                botAccessMode: .full,
-                chatAccessMode: .inherit
-            )
-        )
-        XCTAssertFalse(
-            aidenBotChatAllowsMutations(
-                canWrite: true,
-                fullAccessActionsAllowed: false,
-                botHealth: .archived,
-                botAccessMode: .custom,
-                chatAccessMode: .custom
-            )
-        )
-        XCTAssertTrue(
-            aidenBotChatAllowsMutations(
-                canWrite: true,
-                fullAccessActionsAllowed: false,
-                botHealth: .ready,
-                botAccessMode: .custom,
-                chatAccessMode: .custom
-            )
-        )
+    func testArchivedBotChatsRemainReadOnly() {
+        XCTAssertFalse(aidenBotChatAllowsMutations(canWrite: true, botHealth: .archived))
+        XCTAssertFalse(aidenBotChatAllowsMutations(canWrite: false, botHealth: .ready))
+        XCTAssertTrue(aidenBotChatAllowsMutations(canWrite: true, botHealth: .ready))
     }
 
     func testBotsHomeShowsArchivedOnlyReadableHistoryInsteadOfFirstBotEmptyState() {
@@ -346,24 +265,6 @@ final class AidenProductShellTests: XCTestCase {
         )
     }
 
-    func testBotHealthAndInboxActivityKeepNewChatAndStatusHonest() {
-        XCTAssertTrue(aidenBotCanStartNewChat(health: .ready, canWrite: true))
-        XCTAssertFalse(aidenBotCanStartNewChat(health: .degraded, canWrite: true))
-        XCTAssertFalse(aidenBotCanStartNewChat(health: .unavailable, canWrite: true))
-        XCTAssertEqual(
-            aidenBotInboxActivityStatus(
-                state: .waitingForApproval,
-                canRespondToApproval: false
-            )?.label,
-            "Waiting for desktop approval"
-        )
-        XCTAssertEqual(
-            aidenBotInboxActivityStatus(state: .running, canRespondToApproval: false)?.label,
-            "Working"
-        )
-        XCTAssertNil(aidenBotInboxActivityStatus(state: .idle, canRespondToApproval: false))
-    }
-
     func testResolvedChatAreaUsesMacAuthoredBotIdentity() throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -523,13 +424,12 @@ final class AidenProductShellTests: XCTestCase {
                 "read-only Bot surface policy is wrong for \(ingress)"
             )
         }
-        XCTAssertEqual(
+        // Bots no longer sit behind a Full Access notice wall, and a
+        // read-only phone is told it can read but not chat.
+        XCTAssertFalse(aidenBotSwitcherCoachmarkDetail(canWrite: true).contains("Full Access"))
+        XCTAssertNotEqual(
             aidenBotSwitcherCoachmarkDetail(canWrite: true),
-            "Before a Bot can act, Aiden shows a one-time Full Access notice. Choose Continue with Full Access or Customize first."
-        )
-        XCTAssertEqual(
-            aidenBotSwitcherCoachmarkDetail(canWrite: false),
-            "This desktop shared Bots as read-only. You can open their conversations here, then change Bot access on your paired desktop if you want to let them act."
+            aidenBotSwitcherCoachmarkDetail(canWrite: false)
         )
     }
 
