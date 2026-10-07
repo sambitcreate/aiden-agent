@@ -13,10 +13,27 @@ import {
   Text,
   toast,
 } from "../../components/ui";
+import { botsApi } from "../../lib/ipc";
+import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
 import { BotCharacterCard } from "./bot-character-card";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
+import { BotRoutines } from "./bot-routines";
+
+/** The file's bytes as base64 (no data: prefix). */
+function readFileAsBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("The photo could not be read."));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const comma = result.indexOf(",");
+      resolve(comma === -1 ? "" : result.slice(comma + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 /** Saves an inline field when it loses focus or on Return, if it changed. */
 function InlineField({
@@ -95,6 +112,35 @@ export function BotProfile({
   onDelete(): void;
 }) {
   const qc = useQueryClient();
+  const photoInput = React.useRef<HTMLInputElement | null>(null);
+  const [photoBusy, setPhotoBusy] = React.useState(false);
+  const choosePhoto = async (file: File) => {
+    if (file.type !== "image/png" && file.type !== "image/jpeg") {
+      toast.error("Choose a PNG or JPEG photo.");
+      return;
+    }
+    setPhotoBusy(true);
+    try {
+      const data = await readFileAsBase64(file);
+      await botsApi.setPhoto(bot.id, { mimeType: file.type, data });
+      invalidateBotCanonicalPhotos();
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, `Aiden couldn’t change ${bot.name}’s photo.`));
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+  const removePhoto = async () => {
+    setPhotoBusy(true);
+    try {
+      await botsApi.removePhoto(bot.id);
+      invalidateBotCanonicalPhotos();
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, `Aiden couldn’t remove ${bot.name}’s photo.`));
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
   const save = async (patch: BotIdentityPatch) => {
     try {
       await updateBotIdentity(qc, bot.id, patch);
@@ -125,7 +171,40 @@ export function BotProfile({
         </DropdownMenu>
       </header>
       <div className="grid place-items-center">
+        <div className="relative">
         <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="preview" />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              iconOnly
+              variant="filled"
+              size="small"
+              aria-label={`Photo options for ${bot.name}`}
+              className="absolute -bottom-1 -right-1"
+              disabled={photoBusy}
+            >
+              <Ellipsis />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center">
+            <DropdownMenuItem onSelect={() => photoInput.current?.click()}>Choose photo</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void removePhoto()}>Remove photo</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <input
+          ref={photoInput}
+          type="file"
+          accept="image/png,image/jpeg"
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void choosePhoto(file);
+          }}
+        />
+        </div>
       </div>
       <div className="rounded-card bg-well p-3">
         <InlineField
@@ -159,6 +238,7 @@ export function BotProfile({
           <ChevronRight aria-hidden="true" className="size-4 text-tertiary" />
         </button>
       </div>
+      <BotRoutines bot={bot} />
       <Button variant="accent" size="large" onClick={onOpenChat}>
         <MessageCircle /> Chat with {bot.name}
       </Button>
