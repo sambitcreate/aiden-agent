@@ -119,13 +119,6 @@ class AidenBotProfileBehaviorTest {
     }
 
     @Test
-    fun legacyAvatarsOpenInTheCharacterCardWithTheirShapeAndColour() {
-        val recipe = AidenBotCharacter.recipe(AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.LEAF))
-        assertEquals(AidenBotAvatarShape.DROP, recipe.shape)
-        assertEquals(AidenBotAvatarColor.MINT, recipe.color)
-    }
-
-    @Test
     fun autoAssignedCharacterIsStablePerNameAndVariesAcrossNames() {
         assertEquals(AidenBotCharacter.autoAssigned("Meal Planner"), AidenBotCharacter.autoAssigned("  meal planner "))
         val looks = listOf("Meal Planner", "Chief of Staff", "Inbox Helper", "Researcher", "Scout", "Coach")
@@ -172,33 +165,31 @@ class AidenBotProfileBehaviorTest {
     }
 
     @Test
-    fun createUsesTheAnswerAsSubtitleAndInstructionsWithTheFirstModel() {
-        val catalog = fixture.botCapabilityCatalog
+    fun createUsesTheAnswerAsSubtitleAndInstructionsAndOmitsAccess() {
         val request = requireNotNull(
-            AidenBotCreateDraft(name = " Meal Planner ", help = "Plan my meals\nKeep it cheap").request(catalog)
+            AidenBotCreateDraft(name = " Meal Planner ", help = "Plan my meals\nKeep it cheap").request()
         )
         assertEquals("Meal Planner", request.name)
         assertEquals("Plan my meals", request.purpose)
         assertEquals("Plan my meals\nKeep it cheap", request.instructions)
         assertEquals(AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned("Meal Planner")), request.avatar)
-        val firstModel = catalog.providers.first { it.available }.models.first { it.available }
-        val chosen = request.access.custom?.let { it.providerId to it.modelId } ?: (request.access.providerId to request.access.modelId)
-        assertEquals(firstModel.id, chosen.second)
+        // Revision 25: no access on the wire means Full; no model is required to create.
+        val wire = AidenBotWireJson.json.parseToJsonElement(
+            AidenBotWireJson.json.encodeToString(AidenBotCreateRequest.serializer(), request)
+        ) as kotlinx.serialization.json.JsonObject
+        assertFalse(wire.containsKey("access"))
     }
 
     @Test
     fun createWithoutAnAnswerFallsBackToDefaultInstructions() {
-        val request = requireNotNull(AidenBotCreateDraft(name = "Scout").request(fixture.botCapabilityCatalog))
+        val request = requireNotNull(AidenBotCreateDraft(name = "Scout").request())
         assertEquals("", request.purpose)
         assertEquals(AIDEN_BOT_DEFAULT_INSTRUCTIONS, request.instructions)
     }
 
     @Test
-    fun createNeedsANameAndAnAvailableModel() {
-        val catalog = fixture.botCapabilityCatalog
-        assertNull(AidenBotCreateDraft(name = "  ", help = "Anything").request(catalog))
-        val noModels = catalog.copy(providers = catalog.providers.map { p -> p.copy(models = p.models.map { it.copy(available = false) }) })
-        assertNull(AidenBotCreateDraft(name = "Scout").request(noModels))
+    fun createNeedsAName() {
+        assertNull(AidenBotCreateDraft(name = "  ", help = "Anything").request())
     }
 
     // Advanced

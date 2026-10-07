@@ -9,19 +9,19 @@ final class AidenBotHomeProfileTests: XCTestCase {
         name: String,
         purpose: String = "",
         updatedAt: String,
-        archived: Bool = false
+        sessionState: String? = nil
     ) throws -> AidenBotSummary {
         var object: [String: Any] = [
             "id": id,
             "name": name,
             "purpose": purpose,
-            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "sky", "eyes": "wide", "detail": "orbit"]],
-            "health": archived ? "archived" : "ready",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "sky"]],
+            "health": "ready",
             "createdAt": "2026-08-18T17:00:00.000Z",
             "updatedAt": updatedAt,
             "revision": "rev-\(id)",
         ]
-        if archived { object["archivedAt"] = updatedAt }
+        if let sessionState { object["sessionState"] = sessionState }
         return try AidenRemoteJSONDecoder.decode(
             AidenBotSummary.self,
             from: JSONSerialization.data(withJSONObject: object)
@@ -63,11 +63,10 @@ final class AidenBotHomeProfileTests: XCTestCase {
 
     // MARK: Bots home
 
-    func testHomeShowsOneRowPerBotNewestChatFirstAndHidesArchivedBots() throws {
+    func testHomeShowsOneRowPerBotNewestChatFirst() throws {
         let bots = [
             try summary(id: "quiet", name: "Quiet", purpose: "Meal prepping", updatedAt: "2026-08-18T19:30:00.000Z"),
             try summary(id: "busy", name: "Busy", updatedAt: "2026-08-18T18:00:00.000Z"),
-            try summary(id: "old", name: "Old", updatedAt: "2026-08-18T20:00:00.000Z", archived: true),
         ]
         let conversations = [
             try conversation(
@@ -76,7 +75,6 @@ final class AidenBotHomeProfileTests: XCTestCase {
                 state: "running",
                 updatedAt: "2026-08-18T21:00:00.000Z"
             ),
-            try conversation(botID: "old", preview: "Archived chat", updatedAt: "2026-08-18T22:00:00.000Z"),
         ]
 
         let rows = aidenBotHomeRows(bots: bots, conversations: conversations, query: "")
@@ -86,6 +84,29 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertTrue(rows[0].isWorking)
         XCTAssertEqual(rows[1].preview, "Say hello")
         XCTAssertFalse(rows[1].isWorking)
+    }
+
+    func testHomeRowSubtitleReportsAPausedTurnOrAMissingModel() throws {
+        let bots = [
+            try summary(id: "paused", name: "Paused", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "interrupted"),
+            try summary(id: "fresh", name: "Fresh", updatedAt: "2026-08-18T17:30:00.000Z", sessionState: "needs_model"),
+            try summary(id: "working", name: "Working", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running"),
+        ]
+        let conversations = [
+            try conversation(botID: "paused", preview: "Your first meeting is", updatedAt: "2026-08-18T18:00:00.000Z"),
+        ]
+
+        let rows = Dictionary(uniqueKeysWithValues: aidenBotHomeRows(
+            bots: bots,
+            conversations: conversations,
+            query: ""
+        ).map { ($0.id, $0) })
+
+        XCTAssertEqual(rows["paused"]?.preview, "Paused — tap to resume")
+        XCTAssertEqual(rows["fresh"]?.preview, "Needs an AI model")
+        XCTAssertEqual(rows["working"]?.preview, "Say hello")
+        XCTAssertEqual(rows["working"]?.isWorking, true)
+        XCTAssertEqual(rows["paused"]?.isWorking, false)
     }
 
     func testHomeSearchMatchesNameSubtitlePreviewAndServerMatches() throws {
@@ -162,12 +183,6 @@ final class AidenBotHomeProfileTests: XCTestCase {
         guard case let .recipe(recipe)? = patch.avatar else { return XCTFail("Expected a recipe avatar") }
         XCTAssertEqual(recipe.shape, .drop)
         XCTAssertEqual(recipe.color, .coral)
-    }
-
-    func testLegacyAvatarOpensWithItsDesktopColourAndShape() {
-        let draft = AidenBotCharacterDraft(avatar: .legacy(.ember))
-        XCTAssertEqual(draft.shape, .peak)
-        XCTAssertEqual(draft.color, .coral)
     }
 
     // MARK: Create

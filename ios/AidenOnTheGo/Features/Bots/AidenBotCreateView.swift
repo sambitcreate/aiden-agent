@@ -25,6 +25,11 @@ struct AidenBotCreateView: View {
     @State private var activeAttempt: AidenBotCreateAttempt?
     @State private var retainedAttempt: AidenBotCreateAttempt?
     @State private var retainedCreatedBot: AidenBotDetail?
+    /// A durable-session host lets a Bot start without an AI model; it then
+    /// reports `needs_model` until one is chosen on the Mac.
+    @State private var allowsModellessCreate = false
+    @State private var modellessName = ""
+    @State private var modellessPurpose = ""
     @FocusState private var nameIsFocused: Bool
 
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
@@ -37,8 +42,24 @@ struct AidenBotCreateView: View {
         guard capturedContext.map(coordinator.isCurrent) == true,
               coordinator.connectionState == .connected,
               coordinator.installationStore.activeInstallation?.canWriteBots == true,
-              !isSaving, let catalog, let draft else { return false }
-        return draft.isSaveable(catalog: catalog)
+              !isSaving else { return false }
+        if let catalog, let draft { return draft.isSaveable(catalog: catalog) }
+        return allowsModellessCreate && (try? modellessRequest()) != nil
+    }
+
+    private var usesDurableSession: Bool {
+        AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator)
+    }
+
+    private func modellessRequest() throws -> AidenBotCreateRequest {
+        let purpose = modellessPurpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try AidenBotCreateRequest(
+            name: modellessName.trimmingCharacters(in: .whitespacesAndNewlines),
+            purpose: purpose,
+            instructions: AidenBotEditorDraft.seededInstructions(helpWith: purpose),
+            avatar: .recipe(AidenBotEditorDraft.defaultAvatar),
+            access: nil
+        )
     }
 
     var body: some View {
@@ -78,7 +99,7 @@ struct AidenBotCreateView: View {
 
     @ViewBuilder
     private var content: some View {
-        if draft != nil {
+        if draft != nil || allowsModellessCreate {
             Form {
                 Section {
                     TextField("Name", text: binding(\.name))
@@ -111,17 +132,25 @@ struct AidenBotCreateView: View {
     }
 
     private var accessNote: String {
-        guard let catalog, AidenBotEditorDraft.fullAccessAccepted(in: catalog) else {
-            return "You can choose what it can use later in Advanced."
+        if draft == nil {
+            return "It needs an AI model before it can reply. Choose one on your Mac."
         }
         return "It can use everything your Mac allows. You can change this later in Advanced."
     }
 
     private func binding(_ keyPath: WritableKeyPath<AidenBotEditorDraft, String>) -> Binding<String> {
         Binding(
-            get: { draft?[keyPath: keyPath] ?? "" },
+            get: {
+                if let draft { return draft[keyPath: keyPath] }
+                return keyPath == \AidenBotEditorDraft.name ? modellessName : modellessPurpose
+            },
             set: { value in
-                guard var next = draft else { return }
+                retainedAttempt = nil
+                retainedCreatedBot = nil
+                guard var next = draft else {
+                    if keyPath == \AidenBotEditorDraft.name { modellessName = value } else { modellessPurpose = value }
+                    return
+                }
                 next[keyPath: keyPath] = value
                 if keyPath == \AidenBotEditorDraft.purpose {
                     next.instructions = AidenBotEditorDraft.seededInstructions(helpWith: value)
@@ -145,13 +174,19 @@ struct AidenBotCreateView: View {
             let loadedCatalog = try await coordinator.remoteClient(for: context).botCapabilityCatalog()
             guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
                   !Task.isCancelled else { return }
-            let loadedDraft = try aidenBotEditorResolvedDraft(
-                mode: .create(defaultAccess: .recommended),
-                catalog: loadedCatalog,
-                bot: nil
-            )
+            let loadedDraft: AidenBotEditorDraft?
+            do {
+                loadedDraft = try aidenBotEditorResolvedDraft(
+                    mode: .create(defaultAccess: .recommended),
+                    catalog: loadedCatalog,
+                    bot: nil
+                )
+            } catch AidenBotContractError.invalidCombination("no available provider and model") where usesDurableSession {
+                loadedDraft = nil
+            }
             capturedContext = context
             catalog = loadedCatalog
+            allowsModellessCreate = loadedDraft == nil
             if draft == nil {
                 draft = loadedDraft
             }
@@ -170,10 +205,15 @@ struct AidenBotCreateView: View {
 
     @MainActor
     private func create() async {
-        guard canCreate, let context = capturedContext, let catalog, let draft else { return }
+        guard canCreate, let context = capturedContext else { return }
         var sentAttempt: AidenBotCreateAttempt?
         do {
-            let request = try draft.createRequest(catalog: catalog)
+            let request: AidenBotCreateRequest
+            if let catalog, let draft {
+                request = try draft.createRequest(catalog: catalog)
+            } else {
+                request = try modellessRequest()
+            }
             let attempt: AidenBotCreateAttempt
             if let retainedAttempt, retainedAttempt.context == context, retainedAttempt.request == request {
                 attempt = retainedAttempt
@@ -198,15 +238,19 @@ struct AidenBotCreateView: View {
                 guard isCurrent(attempt) else { return }
                 retainedCreatedBot = created
             }
-            _ = try await client.createBotChat(
-                botId: created.id,
-                request: try AidenBotChatCreateRequest(
-                    providerId: draft.customAccess.providerID,
-                    modelId: draft.customAccess.modelID
-                ),
-                idempotencyKey: attempt.chatIdempotencyKey
-            )
-            guard isCurrent(attempt) else { return }
+            // A durable-session host gives every Bot its one conversation;
+            // older hosts need the Bot chat created explicitly.
+            if !usesDurableSession, let draft {
+                _ = try await client.createBotChat(
+                    botId: created.id,
+                    request: try AidenBotChatCreateRequest(
+                        providerId: draft.customAccess.providerID,
+                        modelId: draft.customAccess.modelID
+                    ),
+                    idempotencyKey: attempt.chatIdempotencyKey
+                )
+                guard isCurrent(attempt) else { return }
+            }
             let authoritative = try await client.bot(id: created.id)
             guard isCurrent(attempt) else { return }
             retainedAttempt = nil

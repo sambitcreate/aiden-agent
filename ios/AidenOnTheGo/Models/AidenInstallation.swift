@@ -7,7 +7,7 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
     var name: String
     let endpoint: URL
     let serverSpkiSha256: String
-    let pairingTrust: AidenRemoteContractFixture.PairingTrust?
+    let pairingTrust: AidenRemotePairing.PairingTrust?
     let credentialScope: String
     /// Grants issued to this authenticated device during pairing. This value
     /// can narrow after an authenticated server refresh, but never widen.
@@ -34,8 +34,8 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
     }
 
     init(
-        exchange: AidenRemoteContractFixture.PairingExchange,
-        pairingTrust: AidenRemoteContractFixture.PairingTrust,
+        exchange: AidenRemotePairing.PairingExchange,
+        pairingTrust: AidenRemotePairing.PairingTrust,
         name: String,
         createdAt: Date = Date(),
         lastConnectedAt: Date? = nil
@@ -64,7 +64,7 @@ struct AidenInstallation: Codable, Identifiable, Equatable, Sendable {
         endpoint = try values.decode(URL.self, forKey: .endpoint)
         serverSpkiSha256 = try values.decode(String.self, forKey: .serverSpkiSha256)
         pairingTrust = try values.decodeIfPresent(
-            AidenRemoteContractFixture.PairingTrust.self,
+            AidenRemotePairing.PairingTrust.self,
             forKey: .pairingTrust
         )
         credentialScope = try values.decodeIfPresent(String.self, forKey: .credentialScope)
@@ -210,8 +210,8 @@ final class AidenInstallationStore {
     }
 
     func savePairing(
-        _ exchange: AidenRemoteContractFixture.PairingExchange,
-        trust: AidenRemoteContractFixture.PairingTrust,
+        _ exchange: AidenRemotePairing.PairingExchange,
+        trust: AidenRemotePairing.PairingTrust,
         name: String,
         validatedServer: AidenServer? = nil,
         now: Date = Date(),

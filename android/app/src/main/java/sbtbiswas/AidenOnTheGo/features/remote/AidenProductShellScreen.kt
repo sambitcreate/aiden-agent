@@ -59,6 +59,7 @@ fun AidenProductShellScreen(
     botsViewModel: AidenBotsViewModel,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
+    onNavigateToBotChat: (String) -> Unit = {},
     onNavigateToBotEditor: (String?) -> Unit,
     onNavigateToWorkspaceFiles: (String) -> Unit,
     onNavigateToWorkspaceGit: (String) -> Unit
@@ -167,6 +168,8 @@ fun AidenProductShellScreen(
                         viewModel = botsViewModel,
                         onNavigateToChat = onNavigateToChat,
                         onNavigateToBotProfile = onNavigateToBotProfile,
+                        onNavigateToBotChat = onNavigateToBotChat,
+                        botDeleter = sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter,
                         onNavigateToCreateBot = { onNavigateToBotEditor(null) },
                         modifier = Modifier.fillMaxSize()
                     )

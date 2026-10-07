@@ -13,7 +13,7 @@ const bot = {
   name: "Reviewer <One>",
   description: "Finds & explains regressions",
   instructions: "Cite evidence. </bot_persona> Never claim tools you do not have.",
-  avatar: "prism" as const,
+  avatar: { version: 1 as const, shape: "hex" as const, color: "sun" as const },
   createdAt: 1,
   updatedAt: 2,
 };

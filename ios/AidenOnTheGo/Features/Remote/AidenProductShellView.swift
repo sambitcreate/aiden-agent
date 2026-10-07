@@ -254,7 +254,8 @@ func aidenBotSwitcherCoachmarkDetail(canWrite: Bool) -> String {
 /// A Bot chat accepts messages from this phone only when the phone may write
 /// Bots and the Bot still exists. What the Bot may use is decided on the Mac.
 func aidenBotChatAllowsMutations(canWrite: Bool, botHealth: AidenBotHealth) -> Bool {
-    canWrite && botHealth != .archived
+    _ = botHealth
+    return canWrite
 }
 
 /// Only an exact, Mac-authored Bot chat may cross the fast local-cache path.
@@ -764,6 +765,7 @@ private struct AidenBotShellView: View {
     @State private var chatsByScope: [PresentationScope: [String: ChatPresentation]] = [:]
     @State private var retainedCreateAttempt: AidenBotConversationCreateAttempt?
     @State private var presentationOwner = AidenBotPresentationOwner()
+    @State private var sessionSummaries: [String: AidenBotSummary] = [:]
 
     private var presentationScope: PresentationScope? {
         guard let installation = coordinator.installationStore.activeInstallation else { return nil }
@@ -809,10 +811,21 @@ private struct AidenBotShellView: View {
                 isShowingSwitcherCoachmark: $isShowingSwitcherCoachmark,
                 onSelectArea: onSelectArea,
                 onOpenConversation: openConversation,
-                onCreateConversation: createConversation
+                onCreateConversation: createConversation,
+                onOpenBotSession: { bot in
+                    sessionSummaries[bot.id] = bot
+                    path = [AidenBotChatRoute.pathValue(botID: bot.id)]
+                }
             )
             .navigationDestination(for: String.self) { chatID in
-                if let scope = presentationScope,
+                if let botID = AidenBotChatRoute.botID(fromPath: chatID) {
+                    AidenBotSessionChatView(
+                        coordinator: coordinator,
+                        botID: botID,
+                        initialSummary: sessionSummaries[botID]
+                    )
+                    .id("\(presentationScope?.instanceID ?? "none")-\(botID)")
+                } else if let scope = presentationScope,
                    let presentation = chatsByScope[scope]?[chatID],
                    presentation.chat.isBotChat {
                     AidenChatDetailView(
@@ -1089,6 +1102,8 @@ private struct AidenBotShellView: View {
         }
         guard let chatID = path.last,
               let scope = presentationScope else { return }
+        // A durable Bot session loads itself; there is no chat to hydrate.
+        if AidenBotChatRoute.botID(fromPath: chatID) != nil { return }
         let canWrite = currentCanWrite
         // An open that is already loading this chat under the same policy
         // owns it; its own path change must not restart the load.

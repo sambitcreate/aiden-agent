@@ -603,13 +603,13 @@ class AidenRemoteClientTest {
         // 1. Bot list
         server.enqueue(
             MockResponse().setResponseCode(200).setBody("""
-                {"bots":[],"maxBots":256,"favorites":{"botIds":[],"revision":"fav_0"}}
+                {"bots":[],"maxBots":256}
             """.trimIndent())
         )
-        val bots = client.bots(includeArchived = true)
+        val bots = client.bots()
         val listRequest = server.takeRequest()
         assertEquals("GET", listRequest.method)
-        assertEquals("/api/aiden/v1/bots?includeArchived=true", listRequest.path)
+        assertEquals("/api/aiden/v1/bots", listRequest.path)
         assertEquals(0, bots.bots.size)
 
         // 2. Update bot identity with If-Match

@@ -12,7 +12,6 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
-import sbtbiswas.AidenOnTheGo.models.AidenBotFavorites
 import sbtbiswas.AidenOnTheGo.models.AidenBotList
 import sbtbiswas.AidenOnTheGo.models.AidenChatModelSelection
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
@@ -97,8 +96,7 @@ class AidenInstallationRemovalTest {
         coordinator.botCache.activate(installation.instanceId, installation.deviceId)
         coordinator.botCache.putBotList(
             AidenBotList(
-                bots = emptyList(),
-                favorites = AidenBotFavorites(botIds = emptyList(), revision = "favorites-one")
+                bots = emptyList()
             )
         )
 

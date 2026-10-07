@@ -1,17 +1,62 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DataStore } from "./data-store.js";
 import {
+  BOT_AVATAR_COLORS,
+  BOT_AVATAR_SHAPES,
   BOT_LIMITS,
   isBotAvatar,
-  isBotAvatarAppearance,
-  isLegacyBotAvatar,
   type BotAvatar,
   type BotAvatarAppearance,
   type BotCreateInput,
   type BotDefinition,
   type BotUpdateInput,
-  type LegacyBotAvatar,
 } from "../../renderer/shared/bots.js";
+
+/**
+ * Storage-only compatibility. The primary record still writes a legacy avatar
+ * id (older releases dropped Bots without one), and older stores carried the
+ * retired `eyes`/`detail` axes. Both are read here and never leave the store.
+ */
+const STORED_LEGACY_AVATARS = ["spark", "orbit", "leaf", "prism", "wave", "ember"] as const;
+type LegacyBotAvatar = (typeof STORED_LEGACY_AVATARS)[number];
+
+const LEGACY_AVATAR_RECIPES: Record<LegacyBotAvatar, BotAvatarAppearance> = {
+  spark: { version: 1, shape: "wisp", color: "lilac" },
+  orbit: { version: 1, shape: "orb", color: "sky" },
+  leaf: { version: 1, shape: "drop", color: "mint" },
+  prism: { version: 1, shape: "hex", color: "sun" },
+  wave: { version: 1, shape: "cloud", color: "periwinkle" },
+  ember: { version: 1, shape: "peak", color: "coral" },
+};
+
+function isLegacyBotAvatar(value: unknown): value is LegacyBotAvatar {
+  return typeof value === "string" && (STORED_LEGACY_AVATARS as readonly string[]).includes(value);
+}
+
+/** A stored recipe, with any retired `eyes`/`detail` axes dropped. */
+function storedAppearance(value: unknown): BotAvatarAppearance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const avatar = value as Record<string, unknown>;
+  if (
+    avatar.version !== 1 ||
+    !Object.keys(avatar).every((key) => ["version", "shape", "color", "eyes", "detail"].includes(key)) ||
+    !(BOT_AVATAR_SHAPES as readonly unknown[]).includes(avatar.shape) ||
+    !(BOT_AVATAR_COLORS as readonly unknown[]).includes(avatar.color) ||
+    (avatar.eyes !== undefined && typeof avatar.eyes !== "string") ||
+    (avatar.detail !== undefined && typeof avatar.detail !== "string")
+  ) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    shape: avatar.shape as BotAvatarAppearance["shape"],
+    color: avatar.color as BotAvatarAppearance["color"],
+  };
+}
+
+function isBotAvatarAppearance(value: unknown): value is BotAvatarAppearance {
+  return storedAppearance(value) !== undefined;
+}
 import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 
 type StoredBotDefinition = Omit<BotDefinition, "avatar" | "revision"> & {
@@ -51,12 +96,12 @@ interface StoredBotAppearance {
 }
 
 function botAppearanceRecipeRevision(botId: string, avatar: BotAvatarAppearance): string {
+  return recipeRevision(botId, legacyAvatarFor(avatar), avatar);
+}
+
+function recipeRevision(botId: string, legacyAvatar: LegacyBotAvatar, avatar: unknown): string {
   return `botavatar_${createHash("sha256")
-    .update(JSON.stringify({
-      botId,
-      legacyAvatar: legacyAvatarFor(avatar),
-      avatar,
-    }), "utf8")
+    .update(JSON.stringify({ botId, legacyAvatar, avatar }), "utf8")
     .digest("base64url")}`;
 }
 
@@ -69,9 +114,7 @@ function sameAppearance(left: BotAvatarAppearance, right: BotAvatarAppearance): 
   return (
     left.version === right.version &&
     left.shape === right.shape &&
-    left.color === right.color &&
-    left.eyes === right.eyes &&
-    left.detail === right.detail
+    left.color === right.color
   );
 }
 
@@ -100,9 +143,8 @@ function legacyAvatarFor(avatar: BotAvatar): LegacyBotAvatar {
 }
 
 function storedAvatar(avatar: BotAvatar): Pick<StoredBotDefinition, "avatar" | "avatarAppearance"> {
-  return isBotAvatarAppearance(avatar)
-    ? { avatar: legacyAvatarFor(avatar), avatarAppearance: { ...avatar } }
-    : { avatar };
+  const recipe = storedAppearance(avatar)!;
+  return { avatar: legacyAvatarFor(recipe), avatarAppearance: recipe };
 }
 
 function botForRenderer(
@@ -120,7 +162,7 @@ function botForRenderer(
   return {
     ...stored,
     revision: botIdentityRevision(bot),
-    avatar: appearance ? { ...appearance } : stored.avatar,
+    avatar: appearance ? { ...appearance } : { ...LEGACY_AVATAR_RECIPES[stored.avatar] },
   };
 }
 
@@ -182,11 +224,7 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     )
   )
     return null;
-  const appearance = isBotAvatarAppearance(bot.avatarAppearance)
-    ? bot.avatarAppearance
-    : isBotAvatarAppearance(bot.avatar)
-      ? bot.avatar
-      : undefined;
+  const appearance = storedAppearance(bot.avatarAppearance) ?? storedAppearance(bot.avatar);
   const avatar = isLegacyBotAvatar(bot.avatar)
     ? bot.avatar
     : legacyAvatarFor(bot.avatar as BotAvatarAppearance);
@@ -254,11 +292,20 @@ function normalizeAppearanceState(value: unknown): BotAppearanceState {
     for (const entry of raw.appearances) {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
       const candidate = entry as Record<string, unknown>;
+      const recipe = storedAppearance(candidate.avatar);
       const legacyAvatar = isLegacyBotAvatar(candidate.legacyAvatar)
         ? candidate.legacyAvatar
-        : isBotAvatarAppearance(candidate.avatar)
-          ? legacyAvatarFor(candidate.avatar)
+        : recipe
+          ? legacyAvatarFor(recipe)
           : undefined;
+      // Revisions written before the retired axes were dropped hash the full
+      // stored recipe; carry a matching marker over to the trimmed recipe.
+      const carried = (revision: unknown): unknown =>
+        recipe && legacyAvatar && revision === recipeRevision(candidate.botId as string, legacyAvatar, candidate.avatar)
+          ? recipeRevision(candidate.botId as string, legacyAvatar, recipe)
+          : revision;
+      candidate.primaryRevision = carried(candidate.primaryRevision);
+      candidate.committedRevision = carried(candidate.committedRevision);
       if (
         typeof candidate.botId !== "string" ||
         candidate.botId.length === 0 ||
@@ -289,7 +336,7 @@ function normalizeAppearanceState(value: unknown): BotAppearanceState {
         /^botavatar_[A-Za-z0-9_-]{43}$/u.test(candidate.committedRevision)
           ? { committedRevision: candidate.committedRevision }
           : {}),
-        avatar: { ...candidate.avatar },
+        avatar: recipe!,
       });
     }
   }

@@ -23,7 +23,7 @@ function bot(
     name: `Bot ${id}`,
     description: `Purpose ${id}`,
     instructions: `Private instructions ${id}`,
-    avatar: "spark",
+    avatar: { version: 1, shape: "wisp", color: "lilac" },
     createdAt: 1,
     updatedAt: 2,
     ...overrides,

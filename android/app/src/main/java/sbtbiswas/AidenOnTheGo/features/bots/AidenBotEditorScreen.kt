@@ -43,21 +43,18 @@ data class AidenBotCreateDraft(
         get() = name.isNotBlank()
 
     /**
-     * The create request for this draft, or null when the Mac has no AI model ready. The
-     * answer becomes the subtitle and seeds the instructions; the character is picked
-     * from the name; the model is the first one the Mac can run.
+     * The create request for this draft. The answer becomes the subtitle and seeds the
+     * instructions; the character is picked from the name. Access is omitted, which the
+     * Mac treats as Full; a Bot made before any AI model is ready reports `needs_model`.
      */
-    fun request(catalog: AidenBotCapabilityCatalog): AidenBotCreateRequest? {
+    fun request(): AidenBotCreateRequest? {
         if (!canCreate) return null
-        val custom = AidenBotCustomAccessDraft.fromCatalog(catalog) ?: return null
-        val usesFull = catalog.notice.acceptedDecision == AidenBotNoticeDecision.CONTINUE_FULL
         val trimmedName = name.trim().take(AidenBotWire.MAX_NAME_LENGTH)
         return AidenBotCreateRequest(
             name = trimmedName,
             purpose = aidenBotSubtitle(help),
             instructions = help.trim().take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH).ifEmpty { AIDEN_BOT_DEFAULT_INSTRUCTIONS },
-            avatar = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(trimmedName)),
-            access = aidenBotAccessUpdate(usesFull, custom, catalog)
+            avatar = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(trimmedName))
         )
     }
 }
@@ -135,47 +132,26 @@ private fun AidenBotCreateScreen(
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
-    var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     var draft by remember { mutableStateOf(AidenBotCreateDraft()) }
     var isSaving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // One key per attempt, so a retried Create never makes two Bots.
     val botKey = remember { UUID.randomUUID() }
-    val chatKey = remember { UUID.randomUUID() }
 
-    LaunchedEffect(client) {
-        val cl = client ?: return@LaunchedEffect
-        try {
-            catalog = cl.botCapabilityCatalog()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            error = "Aiden couldn’t reach your Mac. Try again."
-        }
-    }
-
-    val cat = catalog
-    val needsModel = cat != null && AidenBotCustomAccessDraft.fromCatalog(cat) == null
     AidenBotEditorScaffold(
         title = "New Bot",
         actionLabel = if (isSaving) "Creating…" else "Create",
-        actionEnabled = !isSaving && cat != null && draft.request(cat) != null,
+        actionEnabled = !isSaving && client != null && draft.request() != null,
         onNavigateBack = onNavigateBack,
         onAction = {
             val cl = client ?: return@AidenBotEditorScaffold
-            val request = cat?.let { draft.request(it) } ?: return@AidenBotEditorScaffold
+            val request = draft.request() ?: return@AidenBotEditorScaffold
             scope.launch {
                 isSaving = true
                 error = null
                 try {
                     val created = cl.createBot(request, botKey)
-                    try {
-                        cl.createBotChat(created.id, AidenBotChatCreateRequest(), chatKey)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        // The chat is created on first open instead.
-                    }
+                    coordinator.botCache.putBotDetail(created)
                     onBotSaved(created.id)
                 } catch (e: CancellationException) {
                     throw e
@@ -212,13 +188,6 @@ private fun AidenBotCreateScreen(
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )
-        if (needsModel) {
-            Text(
-                text = "Needs an AI model. Set one up in Aiden on your Mac, then come back.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = palette.warning
-            )
-        }
         error?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
     }
 }

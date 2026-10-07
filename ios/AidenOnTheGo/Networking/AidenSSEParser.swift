@@ -167,3 +167,62 @@ enum AidenSSELineDecoder {
         }
     }
 }
+
+/// Parses `GET /bots/{botId}/session/events` (contract revision 25). Order is
+/// carried by each frame's `(epoch, seq)`, so an SSE `id:` line is optional;
+/// when present it must equal `seq`, and an `event:` name must equal `type`.
+struct AidenBotSessionSSEParser: AidenSSEEventParsing {
+    private var eventID: String?
+    private var eventName: String?
+    private var dataLines: [String] = []
+    private var frameBytes = 0
+
+    init() {}
+
+    mutating func consume(line: String) throws -> AidenBotSessionEvent? {
+        frameBytes += line.utf8.count + 1
+        guard frameBytes <= AidenRemoteProtocol.maxSSEFrameBytes else {
+            throw AidenSSEParserError.frameTooLarge
+        }
+        guard !line.isEmpty else { return try finishFrame() }
+        guard !line.hasPrefix(":") else { return nil }
+        let field: Substring
+        var value: Substring = ""
+        if let separator = line.firstIndex(of: ":") {
+            field = line[..<separator]
+            var start = line.index(after: separator)
+            if start < line.endIndex, line[start] == " " { start = line.index(after: start) }
+            value = line[start...]
+        } else {
+            field = Substring(line)
+        }
+        switch field {
+        case "id": eventID = String(value)
+        case "event": eventName = String(value)
+        case "data": dataLines.append(String(value))
+        default: break
+        }
+        return nil
+    }
+
+    private mutating func finishFrame() throws -> AidenBotSessionEvent? {
+        defer {
+            eventID = nil
+            eventName = nil
+            dataLines.removeAll(keepingCapacity: true)
+            frameBytes = 0
+        }
+        guard !dataLines.isEmpty else {
+            if eventID == nil, eventName == nil { return nil }
+            throw AidenSSEParserError.missingData
+        }
+        let event = try AidenRemoteJSONDecoder.decode(
+            AidenBotSessionEvent.self,
+            from: Data(dataLines.joined(separator: "\n").utf8),
+            maximumBytes: AidenRemoteProtocol.maxSSEFrameBytes
+        )
+        if let eventID, Int(eventID) != event.seq { throw AidenSSEParserError.eventIDMismatch }
+        if let eventName, eventName != event.wireType { throw AidenSSEParserError.eventNameMismatch }
+        return event
+    }
+}

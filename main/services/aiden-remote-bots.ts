@@ -4,8 +4,6 @@ import {
   type BotAccessUpdate,
   type BotAccessView,
   type BotCapabilityCatalog,
-  type BotChatAccessUpdate,
-  type BotChatAccessView,
 } from "../../renderer/shared/bot-capabilities.js";
 import type {
   BotCreateInput,
@@ -31,13 +29,9 @@ import {
   parseAidenRemoteBotAccessUpdateRequest,
   parseAidenRemoteBotAccessView,
   parseAidenRemoteBotCapabilityCatalog,
-  parseAidenRemoteBotChatAccessUpdateRequest,
-  parseAidenRemoteBotChatAccessView,
   parseAidenRemoteBotChatCreateRequest,
   parseAidenRemoteBotCreateRequest,
   parseAidenRemoteBotDetail,
-  parseAidenRemoteBotFavoritesUpdateRequest,
-  parseAidenRemoteBotFavoritesView,
   parseAidenRemoteBotIdentityPatchRequest,
   parseAidenRemoteBotList,
   parseAidenRemoteBotSummary,
@@ -46,15 +40,13 @@ import {
   type AidenRemoteBotAvatarAsset,
   type AidenRemoteBotAvatarUploadRequest,
   type AidenRemoteBotCapabilityCatalog,
-  type AidenRemoteBotChatAccessView,
   type AidenRemoteBotDetail,
-  type AidenRemoteBotFavoritesUpdateRequest,
-  type AidenRemoteBotFavoritesView,
   type AidenRemoteBotHealth,
   type AidenRemoteBotList,
   type AidenRemoteBotSummary,
   type AidenRemoteBotConversationPage,
   type AidenRemoteBotConversationQuery,
+  type AidenRemoteBotSessionStateKind,
 } from "./aiden-remote-protocol.js";
 import type { BotAvatarApplicationAdapter } from "./bot-avatar-application-adapter.js";
 import {
@@ -73,10 +65,8 @@ import {
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 
 const BOT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
-const CHAT_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
 const MAX_BOTS = 256;
-const MAX_FAVORITES = 20;
 
 async function mapBounded<Input, Output>(
   values: readonly Input[],
@@ -94,59 +84,9 @@ async function mapBounded<Input, Output>(
   return output;
 }
 
-export interface AidenRemoteBotFavoritesSnapshot {
-  version: 1;
-  botIds: string[];
-}
-
-export const EMPTY_AIDEN_REMOTE_BOT_FAVORITES: AidenRemoteBotFavoritesSnapshot = {
-  version: 1,
-  botIds: [],
-};
-
-export function normalizeAidenRemoteBotFavoritesSnapshot(
-  value: unknown,
-): AidenRemoteBotFavoritesSnapshot {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    (value as { version?: unknown }).version !== 1 ||
-    !Array.isArray((value as { botIds?: unknown }).botIds)
-  ) {
-    throw new Error("Bot favorites storage is invalid.");
-  }
-  const keys = Object.keys(value);
-  const botIds = (value as { botIds: unknown[] }).botIds;
-  if (
-    keys.length !== 2 ||
-    !keys.includes("version") ||
-    !keys.includes("botIds") ||
-    botIds.length > MAX_FAVORITES ||
-    botIds.some((id) => typeof id !== "string" || !BOT_ID.test(id)) ||
-    new Set(botIds).size !== botIds.length
-  ) {
-    throw new Error("Bot favorites storage is invalid.");
-  }
-  return { version: 1, botIds: [...botIds] as string[] };
-}
-
-function favoriteRevision(botIds: readonly string[]): string {
-  return `botfavrev_${createHash("sha256")
-    .update(JSON.stringify(botIds), "utf8")
-    .digest("base64url")}`;
-}
-
 function safeBotId(value: string): string {
   if (!BOT_ID.test(value)) {
     throw new AidenRemoteServiceError("invalid_request", "The Bot identifier is invalid.", 400);
-  }
-  return value;
-}
-
-function safeChatId(value: string): string {
-  if (!CHAT_ID.test(value)) {
-    throw new AidenRemoteServiceError("invalid_request", "The chat identifier is invalid.", 400);
   }
   return value;
 }
@@ -166,17 +106,8 @@ function parseRequest<Result>(
 function mapBotMutationError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotApplicationUnavailableError) {
-    throw error.reason === "archived"
-      ? new AidenRemoteServiceError(
-          "bot_archived",
-          "Restore this Bot before making changes.",
-          409,
-        )
-      : new AidenRemoteServiceError(
-          "not_found",
-          "This Bot no longer exists.",
-          404,
-        );
+    // Deleted Bots are retired records; to a paired device they no longer exist.
+    throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
   }
   if (error instanceof BotHistoricalChatReadOnlyError) {
     throw new AidenRemoteServiceError(
@@ -240,14 +171,19 @@ function mapBotMutationError(error: unknown): never {
   throw error;
 }
 
+function recipe(avatar: BotDefinition["avatar"]): AidenRemoteBotAvatarView["semantic"] {
+  return { version: 1, shape: avatar.shape, color: avatar.color };
+}
+
 function defaultAvatar(bot: BotDefinition): AidenRemoteBotAvatarView {
-  return { semantic: structuredClone(bot.avatar) };
+  return { semantic: recipe(bot.avatar) };
 }
 
 export function projectAidenRemoteBotSummary(
   bot: BotDefinition,
   avatar: AidenRemoteBotAvatarView = defaultAvatar(bot),
-  health: Exclude<AidenRemoteBotHealth, "archived"> = "ready",
+  health: AidenRemoteBotHealth = "ready",
+  sessionState?: AidenRemoteBotSessionStateKind,
 ): AidenRemoteBotSummary {
   const base = {
     id: bot.id,
@@ -258,11 +194,11 @@ export function projectAidenRemoteBotSummary(
     updatedAt: new Date(bot.updatedAt).toISOString(),
     revision: bot.revision,
   };
-  return parseAidenRemoteBotSummary(
-    bot.archivedAt === undefined
-      ? { ...base, health }
-      : { ...base, health: "archived", archivedAt: new Date(bot.archivedAt).toISOString() },
-  );
+  return parseAidenRemoteBotSummary({
+    ...base,
+    health,
+    ...(sessionState === undefined ? {} : { sessionState }),
+  });
 }
 
 type BotApplicationPort = {
@@ -274,8 +210,6 @@ type BotApplicationPort = {
     access?: BotAccessUpdate;
   }): Promise<BotDefinition>;
   updateBot(input: BotUpdateInput): Promise<BotDefinition>;
-  archiveBot(input: { botId: string; expectedRevision: string }): Promise<BotDefinition>;
-  restoreBot(input: { botId: string; expectedRevision: string }): Promise<BotDefinition>;
   createChat(input: {
     audienceId: string;
     botId: string;
@@ -300,14 +234,6 @@ type BotApplicationPort = {
     expectedRevision: string;
     access: BotAccessUpdate;
   }): Promise<BotAccessView>;
-  getChatAccess(chatId: string): Promise<BotChatAccessView>;
-  updateChatAccess(input: {
-    audienceId: string;
-    botId: string;
-    chatId: string;
-    expectedRevision: string;
-    access: BotChatAccessUpdate;
-  }): Promise<BotChatAccessView>;
   withBotMutation?<Result>(
     botId: string,
     action: () => Promise<Result>,
@@ -317,11 +243,10 @@ type BotApplicationPort = {
 export interface AidenRemoteBotServiceOptions {
   application: BotApplicationPort;
   chatStore: { get(chatId: string): Promise<Chat | null> };
-  favorites: {
-    load(): Promise<AidenRemoteBotFavoritesSnapshot>;
-    save(snapshot: AidenRemoteBotFavoritesSnapshot): Promise<void>;
-  };
-  withFavoritesMutation?<Result>(action: () => Promise<Result>): Promise<Result>;
+  /** Permanently erases a Bot (the durable session's `deleteBot`). */
+  deleteBot?(botId: string): Promise<void>;
+  /** Durable session state per Bot, for `sessionState` on summaries. */
+  sessionStates?(botIds: readonly string[]): Promise<ReadonlyMap<string, AidenRemoteBotSessionStateKind>>;
   resolveProviderModel?: (input: {
     audienceId: string;
     botId: string;
@@ -340,10 +265,10 @@ export interface AidenRemoteBotServiceOptions {
       input: Readonly<AidenRemoteBotConversationQuery>,
     ): Promise<AidenRemoteBotConversationPage>;
   };
-  health?: (botId: string) => Promise<Exclude<AidenRemoteBotHealth, "archived">>;
+  health?: (botId: string) => Promise<AidenRemoteBotHealth>;
   healthBatch?: (
     botIds: readonly string[],
-  ) => Promise<ReadonlyMap<string, Exclude<AidenRemoteBotHealth, "archived">>>;
+  ) => Promise<ReadonlyMap<string, AidenRemoteBotHealth>>;
   idempotency?: AidenIdempotencyLedger;
   persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
   notifyBotsChanged?: (botId?: string) => void;
@@ -352,36 +277,21 @@ export interface AidenRemoteBotServiceOptions {
 
 export class AidenRemoteBotService {
   private readonly idempotency: AidenIdempotencyLedger;
-  private favoritesTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: AidenRemoteBotServiceOptions) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
   }
 
-  private serializeFavorites<Result>(action: () => Promise<Result>): Promise<Result> {
-    if (this.options.withFavoritesMutation) {
-      return this.options.withFavoritesMutation(action);
-    }
-    const result = this.favoritesTail.then(action, action);
-    this.favoritesTail = result.then(() => undefined, () => undefined);
-    return result;
-  }
-
-  private withBotMutationLocks<Result>(
-    botIds: readonly string[],
+  /** Shared with the durable-session routes so every Bot POST uses one ledger. */
+  executeIdempotent<Result>(
+    scope: { deviceId: string; route: string; resourceId: string; key: string },
+    input: unknown,
     action: () => Promise<Result>,
   ): Promise<Result> {
-    const ids = [...new Set(botIds)].sort();
-    const lock = this.options.application.withBotMutation;
-    if (!lock || ids.length === 0) return action();
-    const acquire = (index: number): Promise<Result> =>
-      index >= ids.length
-        ? action()
-        : lock(ids[index]!, () => acquire(index + 1));
-    return acquire(0);
+    return this.executeIdempotentInternal(scope, input, action);
   }
 
-  private async executeIdempotent<Result>(
+  private async executeIdempotentInternal<Result>(
     scope: { deviceId: string; route: string; resourceId: string; key: string },
     input: unknown,
     action: () => Promise<Result>,
@@ -434,22 +344,13 @@ export class AidenRemoteBotService {
     return result!;
   }
 
-  private async bot(botId: string, includeArchived = true): Promise<BotDefinition> {
+  /** A live Bot. A deleted Bot (a retired record) reads as missing. */
+  async bot(botId: string): Promise<BotDefinition> {
     const bot = await this.options.application.get(safeBotId(botId));
-    if (!bot || (!includeArchived && bot.archivedAt !== undefined)) {
+    if (!bot || bot.archivedAt !== undefined) {
       throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
     }
     return bot;
-  }
-
-  private requireActive(bot: BotDefinition): void {
-    if (bot.archivedAt !== undefined) {
-      throw new AidenRemoteServiceError(
-        "bot_archived",
-        "Restore this Bot before making changes.",
-        409,
-      );
-    }
   }
 
   private requireAvatarRevision(
@@ -520,7 +421,11 @@ export class AidenRemoteBotService {
   private async avatar(bot: BotDefinition): Promise<AidenRemoteBotAvatarView> {
     if (!this.options.avatar) return defaultAvatar(bot);
     try {
-      return structuredClone(await this.options.avatar.view(bot.id, bot.avatar));
+      const view = await this.options.avatar.view(bot.id, bot.avatar);
+      return {
+        semantic: recipe(view.semantic as BotDefinition["avatar"]),
+        ...(view.asset ? { asset: structuredClone(view.asset) } : {}),
+      };
     } catch {
       // Asset corruption or a rollback companion failure must not make the Bot
       // identity unreadable. The semantic avatar is the canonical safe fallback.
@@ -530,12 +435,18 @@ export class AidenRemoteBotService {
 
   private async summary(
     bot: BotDefinition,
-    projectedHealth?: Exclude<AidenRemoteBotHealth, "archived">,
+    projectedHealth?: AidenRemoteBotHealth,
+    projectedSession?: AidenRemoteBotSessionStateKind,
   ): Promise<AidenRemoteBotSummary> {
-    const health = bot.archivedAt === undefined
-      ? projectedHealth ?? await this.options.health?.(bot.id) ?? "ready"
-      : "ready";
-    return projectAidenRemoteBotSummary(bot, await this.avatar(bot), health);
+    const health = projectedHealth ?? await this.options.health?.(bot.id) ?? "ready";
+    const sessionState = projectedSession ??
+      (await this.options.sessionStates?.([bot.id]))?.get(bot.id);
+    return projectAidenRemoteBotSummary(bot, await this.avatar(bot), health, sessionState);
+  }
+
+  /** The public summary of one live Bot (presets, list rows). */
+  async summaryOf(botId: string): Promise<AidenRemoteBotSummary> {
+    return this.summary(await this.bot(botId));
   }
 
   private async detail(
@@ -562,40 +473,21 @@ export class AidenRemoteBotService {
     });
   }
 
-  private async favoritesViewUnderLock(
-    activeBotIds?: ReadonlySet<string>,
-  ): Promise<AidenRemoteBotFavoritesView> {
-    const snapshot = normalizeAidenRemoteBotFavoritesSnapshot(await this.options.favorites.load());
-    const active = activeBotIds ?? new Set(
-      (await this.options.application.list(false)).map(({ id }) => id),
-    );
-    const botIds = snapshot.botIds.filter((botId) => active.has(botId));
-    if (botIds.length !== snapshot.botIds.length) {
-      await this.options.favorites.save({ version: 1, botIds });
-    }
-    return parseAidenRemoteBotFavoritesView({
-      botIds,
-      revision: favoriteRevision(botIds),
-    });
-  }
-
-  private favoritesView(activeBotIds?: ReadonlySet<string>): Promise<AidenRemoteBotFavoritesView> {
-    return this.serializeFavorites(() => this.favoritesViewUnderLock(activeBotIds));
-  }
-
-  async list(includeArchived = false): Promise<AidenRemoteBotList> {
-    const bots = await this.options.application.list(includeArchived);
+  async list(): Promise<AidenRemoteBotList> {
+    // Deleted Bots are retired records and never leave the host.
+    const bots = (await this.options.application.list(false))
+      .filter(({ archivedAt }) => archivedAt === undefined);
     if (bots.length > MAX_BOTS) {
       throw new AidenRemoteServiceError("internal_error", "Aiden has too many Bots to project safely.", 500);
     }
-    const active = new Set(bots.filter(({ archivedAt }) => archivedAt === undefined).map(({ id }) => id));
-    const activeBots = bots.filter(({ archivedAt }) => archivedAt === undefined);
-    const health = await this.options.healthBatch?.(activeBots.map(({ id }) => id));
-    const [summaries, favorites] = await Promise.all([
-      mapBounded(bots, 8, (bot) => this.summary(bot, health?.get(bot.id))),
-      this.favoritesView(active),
+    const ids = bots.map(({ id }) => id);
+    const [health, sessions] = await Promise.all([
+      this.options.healthBatch?.(ids),
+      this.options.sessionStates?.(ids),
     ]);
-    return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS, favorites });
+    const summaries = await mapBounded(bots, 8, (bot) =>
+      this.summary(bot, health?.get(bot.id) ?? "ready", sessions?.get(bot.id)));
+    return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS });
   }
 
   async get(botId: string, audienceId?: string): Promise<AidenRemoteBotDetail> {
@@ -637,7 +529,7 @@ export class AidenRemoteBotService {
         },
         { expectedRevision, upload: parsed },
         () => this.options.application.withBotMutation!(botId, async () => {
-          const current = await this.bot(botId, false);
+          const current = await this.bot(botId);
           const currentAsset = await this.options.avatar!.view(current.id, current.avatar);
           this.requireAvatarRevision(
             current,
@@ -675,7 +567,7 @@ export class AidenRemoteBotService {
     }
     try {
       const bot = await this.options.application.withBotMutation(botId, async () => {
-        const current = await this.bot(botId, false);
+        const current = await this.bot(botId);
         const currentAsset = await this.options.avatar!.view(current.id, current.avatar);
         const assetRevision = currentAsset.asset?.assetRevision ?? null;
         this.requireAvatarRevision(
@@ -709,7 +601,7 @@ export class AidenRemoteBotService {
     if (!this.options.avatar) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     }
-    await this.bot(botId, true);
+    await this.bot(botId);
     try {
       return await this.options.avatar.content(botId, assetRevision);
     } catch (error) {
@@ -744,9 +636,10 @@ export class AidenRemoteBotService {
               ...(parsed.purpose ? { description: parsed.purpose } : {}),
               instructions: parsed.instructions,
               ...(parsed.openingGreeting ? { openingGreeting: parsed.openingGreeting } : {}),
-              avatar: structuredClone(parsed.avatar),
+              avatar: recipe(parsed.avatar),
             },
-            access: parsed.access as BotAccessUpdate,
+            // Omitted access is Full; a missing AI model leaves the Bot in `needs_model`.
+            ...(parsed.access ? { access: parsed.access as BotAccessUpdate } : {}),
           });
           this.options.notifyBotsChanged?.(created.id);
           return this.detail(created, deviceId);
@@ -769,7 +662,6 @@ export class AidenRemoteBotService {
       "The Bot identity update is invalid.",
     );
     const existing = await this.bot(botId);
-    this.requireActive(existing);
     try {
       const updated = await this.options.application.updateBot({
         id: existing.id,
@@ -782,7 +674,7 @@ export class AidenRemoteBotService {
         ...(parsed.openingGreeting !== undefined
           ? parsed.openingGreeting ? { openingGreeting: parsed.openingGreeting } : {}
           : existing.openingGreeting ? { openingGreeting: existing.openingGreeting } : {}),
-        avatar: structuredClone(parsed.avatar ?? existing.avatar),
+        avatar: recipe(parsed.avatar ?? existing.avatar),
       });
       this.options.notifyBotsChanged?.(updated.id);
       return this.detail(updated, audienceId);
@@ -791,52 +683,30 @@ export class AidenRemoteBotService {
     }
   }
 
-  async archive(botId: string, expectedRevision: string): Promise<AidenRemoteBotDetail> {
-    const existing = await this.bot(botId);
-    this.requireActive(existing);
-    try {
-      // The application archive hook shares the process-wide favorites lane.
-      // Do not hold that lane while invoking the hook or it would self-deadlock.
-      const archived = await this.options.application.archiveBot({
-        botId: existing.id,
-        expectedRevision,
-      });
-      await this.favoritesView();
-      this.options.notifyBotsChanged?.(archived.id);
-      return this.detail(archived);
-    } catch (error) {
-      return mapBotMutationError(error);
+  /**
+   * `DELETE /bots/{id}`: permanently erase the Bot (chat, memory, routines,
+   * files, photo). `If-Match` guards against deleting a Bot that changed.
+   */
+  async delete(botId: string, expectedRevision: string): Promise<void> {
+    if (!this.options.deleteBot) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     }
-  }
-
-  async restore(
-    deviceId: string,
-    botId: string,
-    expectedRevision: string,
-    idempotencyKey: string,
-  ): Promise<AidenRemoteBotDetail> {
     const existing = await this.bot(botId);
-    try {
-      return await this.executeIdempotent(
-        {
-          deviceId,
-          route: "POST /bots/{id}/restore",
-          resourceId: existing.id,
-          key: idempotencyKey,
-        },
-        { expectedRevision },
-        async () => {
-          const restored = await this.options.application.restoreBot({
-            botId: existing.id,
-            expectedRevision,
-          });
-          this.options.notifyBotsChanged?.(restored.id);
-          return this.detail(restored);
-        },
+    if (existing.revision !== expectedRevision) {
+      throw new AidenRemoteServiceError(
+        "revision_conflict",
+        "This Bot changed. Refresh it before trying again.",
+        409,
+        false,
+        { currentRevision: existing.revision },
       );
+    }
+    try {
+      await this.options.deleteBot(existing.id);
     } catch (error) {
       return mapBotMutationError(error);
     }
+    this.options.notifyBotsChanged?.(existing.id);
   }
 
   async capabilityCatalog(
@@ -861,7 +731,6 @@ export class AidenRemoteBotService {
       "The Bot access update is invalid.",
     );
     const existing = await this.bot(botId);
-    this.requireActive(existing);
     try {
       const access = await this.options.application.updateBotAccess({
         audienceId: deviceId,
@@ -890,7 +759,6 @@ export class AidenRemoteBotService {
       "The Bot chat creation request is invalid.",
     );
     const existing = await this.bot(botId);
-    this.requireActive(existing);
     try {
       const replayedOrCreated = await this.executeIdempotent(
         {
@@ -1006,108 +874,5 @@ export class AidenRemoteBotService {
       ...(selection.providerId !== undefined ? { providerId: selection.providerId } : {}),
       ...(selection.modelId !== undefined ? { modelId: selection.modelId } : {}),
     });
-  }
-
-  async getChatAccess(chatId: string): Promise<AidenRemoteBotChatAccessView> {
-    const chat = await this.options.chatStore.get(safeChatId(chatId));
-    if (!chat?.botId) {
-      throw new AidenRemoteServiceError("not_found", "This Bot chat no longer exists.", 404);
-    }
-    const access = await this.options.application.getChatAccess(chat.id);
-    if (access.botId !== chat.botId || access.chatId !== chat.id) {
-      throw new AidenRemoteServiceError("not_found", "This Bot chat no longer exists.", 404);
-    }
-    return parseAidenRemoteBotChatAccessView(access);
-  }
-
-  async updateChatAccess(
-    deviceId: string,
-    chatId: string,
-    expectedRevision: string,
-    input: unknown,
-  ): Promise<AidenRemoteBotChatAccessView> {
-    const parsed = parseRequest(
-      parseAidenRemoteBotChatAccessUpdateRequest,
-      input,
-      "The Bot chat access update is invalid.",
-    );
-    const chat = await this.options.chatStore.get(safeChatId(chatId));
-    if (!chat?.botId) {
-      throw new AidenRemoteServiceError("not_found", "This Bot chat no longer exists.", 404);
-    }
-    const bot = await this.bot(chat.botId);
-    this.requireActive(bot);
-    try {
-      const access = await this.options.application.updateChatAccess({
-        audienceId: deviceId,
-        botId: bot.id,
-        chatId: chat.id,
-        expectedRevision,
-        access: parsed as BotChatAccessUpdate,
-      });
-      this.options.notifyChatsChanged?.(chat.id);
-      return parseAidenRemoteBotChatAccessView(access);
-    } catch (error) {
-      return mapBotMutationError(error);
-    }
-  }
-
-  async favorites(): Promise<AidenRemoteBotFavoritesView> {
-    return this.favoritesView();
-  }
-
-  async updateFavorites(
-    expectedRevision: string,
-    input: unknown,
-  ): Promise<AidenRemoteBotFavoritesView> {
-    const parsed = parseRequest(
-      parseAidenRemoteBotFavoritesUpdateRequest,
-      input,
-      "The Bot favorites update is invalid.",
-    );
-    const requested = (parsed as AidenRemoteBotFavoritesUpdateRequest).botIds;
-    // Match the desktop archive lock order: sorted Bot gates, then the one
-    // process-wide favorites lane. This makes update-vs-archive linearizable.
-    try {
-      return await this.withBotMutationLocks(requested, () => this.serializeFavorites(async () => {
-      const snapshot = normalizeAidenRemoteBotFavoritesSnapshot(await this.options.favorites.load());
-      const activeBots = await this.options.application.list(false);
-      const allBots = await this.options.application.list(true);
-      const activeIds = new Set(activeBots.map(({ id }) => id));
-      const archivedIds = new Set(
-        allBots.filter(({ archivedAt }) => archivedAt !== undefined).map(({ id }) => id),
-      );
-      const currentIds = snapshot.botIds.filter((id) => activeIds.has(id));
-      const currentRevision = favoriteRevision(currentIds);
-      if (expectedRevision !== currentRevision) {
-        throw new AidenRemoteServiceError(
-          "revision_conflict",
-          "Bot favorites changed. Refresh them before trying again.",
-          409,
-          false,
-          { currentRevision },
-        );
-      }
-      const archived = requested.find((id) => archivedIds.has(id));
-      if (archived) {
-        throw new AidenRemoteServiceError(
-          "bot_archived",
-          "Archived Bots cannot be added to favorites.",
-          409,
-        );
-      }
-      if (requested.some((id) => !activeIds.has(id))) {
-        throw new AidenRemoteServiceError("not_found", "A selected Bot no longer exists.", 404);
-      }
-      await this.options.favorites.save({ version: 1, botIds: [...requested] });
-      this.options.notifyBotsChanged?.();
-      return parseAidenRemoteBotFavoritesView({
-        botIds: requested,
-        revision: favoriteRevision(requested),
-      });
-      }));
-    } catch (error) {
-      return mapBotMutationError(error);
-    }
   }
 }

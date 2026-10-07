@@ -265,8 +265,8 @@ final class AidenRemoteCoordinator {
     }
 
     func activatePairing(
-        payload: AidenRemoteContractFixture.PairingPayload,
-        exchange: AidenRemoteContractFixture.PairingExchange
+        payload: AidenRemotePairing.PairingPayload,
+        exchange: AidenRemotePairing.PairingExchange
     ) async throws {
         let temporaryName = exchange.displayName
             ?? payload.bootstrap.endpoint.host

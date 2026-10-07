@@ -8,6 +8,8 @@ sealed class AidenScreen {
     data object ProductShell : AidenScreen()
     data class ChatDetail(val chatId: String, val startsVoice: Boolean = false) : AidenScreen()
     data class BotProfile(val botId: String) : AidenScreen()
+    /** A Bot's one chat, addressed by Bot id (revision 25); older Macs resolve a chat id. */
+    data class BotChat(val botId: String) : AidenScreen()
     data class BotEditor(val botId: String?) : AidenScreen()
     data class WorkspaceFiles(val workspaceId: String) : AidenScreen()
     data class WorkspaceGit(val workspaceId: String) : AidenScreen()
@@ -25,6 +27,7 @@ sealed class AidenScreen {
             ProductShell -> "shell"
             is ChatDetail -> "chat$SEPARATOR${screen.chatId}"
             is BotProfile -> "bot$SEPARATOR${screen.botId}"
+            is BotChat -> "bot-chat$SEPARATOR${screen.botId}"
             is BotEditor -> screen.botId?.let { "bot-edit$SEPARATOR$it" } ?: "bot-new"
             is WorkspaceFiles -> "files$SEPARATOR${screen.workspaceId}"
             is WorkspaceGit -> "git$SEPARATOR${screen.workspaceId}"
@@ -39,6 +42,7 @@ sealed class AidenScreen {
                 id.isEmpty() -> null
                 kind == "chat" -> ChatDetail(id)
                 kind == "bot" -> BotProfile(id)
+                kind == "bot-chat" -> BotChat(id)
                 kind == "bot-edit" -> BotEditor(id)
                 kind == "files" -> WorkspaceFiles(id)
                 kind == "git" -> WorkspaceGit(id)
@@ -87,6 +91,13 @@ class AidenNavigationStack private constructor(val entries: List<AidenScreen>) {
         if (current !is AidenScreen.BotEditor) return push(profile)
         val below = pop() ?: Root
         return if (below.current == profile) below else below.push(profile)
+    }
+
+    /** Creating a Bot opens its chat in place of the create flow. */
+    fun completeBotCreate(botId: String): AidenNavigationStack {
+        val chat = AidenScreen.BotChat(botId)
+        if (current !is AidenScreen.BotEditor) return push(chat)
+        return (pop() ?: Root).push(chat)
     }
 
     /** True when this stack is [previous] with screens popped off its top. */

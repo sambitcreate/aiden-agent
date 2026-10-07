@@ -6,21 +6,36 @@ import androidx.compose.runtime.Composable
 import sbtbiswas.AidenOnTheGo.models.AidenServer
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
 /**
- * Feature token a paired Mac advertises once it serves Bot deletion. Until the Remote
- * contract revision that adds `DELETE /bots/{id}` lands, no host advertises it and every
- * Delete entry point stays hidden.
+ * Feature token a paired Mac advertises once it serves Bot deletion (contract revision 25).
+ * Without it every Delete entry point stays hidden.
  */
-const val AIDEN_BOT_DELETE_FEATURE = "bot-delete-v1"
+const val AIDEN_BOT_DELETE_FEATURE = AidenRemoteProtocol.BOT_DELETE_FEATURE
 
-/** Permanently deletes one Bot on the paired Mac. Supplied by the Remote client once the route exists. */
+/** Permanently deletes one Bot on the paired Mac. */
 fun interface AidenBotDeleter {
     suspend fun delete(client: AidenRemoteClient, botId: String)
+}
+
+/**
+ * The live deleter: reads the Bot's current revision for `If-Match`, then sends
+ * `DELETE /bots/{id}`. A Bot that is already gone (404) counts as deleted.
+ */
+val AidenRemoteBotDeleter = AidenBotDeleter { client, botId ->
+    val revision = try {
+        client.bot(botId).revision
+    } catch (error: AidenRemoteClientException.Server) {
+        if (error.statusCode == 404) return@AidenBotDeleter
+        throw error
+    }
+    client.deleteBot(botId, revision)
 }
 
 /** Delete is offered only when the Mac advertises it, this phone may change Bots, and a deleter exists. */

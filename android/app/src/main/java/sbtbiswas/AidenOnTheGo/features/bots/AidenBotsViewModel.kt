@@ -77,7 +77,7 @@ class AidenBotsViewModel(
             _isLoading.value = _botList.value == null
             try {
                 supervisorScope {
-                    val botsRequest = async { request { client.bots(includeArchived = false) } }
+                    val botsRequest = async { request { client.bots() } }
                     val conversationsRequest = async { request { client.botConversations() } }
                     val botsResult = botsRequest.await()
                     val conversationsResult = conversationsRequest.await()
@@ -160,10 +160,7 @@ class AidenBotsViewModel(
 
     private fun forgetBot(botId: String) {
         _botList.value?.let { list ->
-            val next = list.copy(
-                bots = list.bots.filterNot { it.id == botId },
-                favorites = list.favorites.copy(botIds = list.favorites.botIds.filterNot { it == botId })
-            )
+            val next = list.copy(bots = list.bots.filterNot { it.id == botId })
             _botList.value = next
             botCache?.putBotList(next)
         }
@@ -172,6 +169,54 @@ class AidenBotsViewModel(
         botCache?.botConversations?.value?.let { page ->
             botCache.putBotConversations(page.copy(conversations = page.conversations.filterNot { it.botId == botId }))
         }
+    }
+
+    private val _presets = MutableStateFlow<List<AidenBotPreset>>(emptyList())
+    /** Starter Bots for the empty home ("Meet Your First Bot"), when the Mac serves them. */
+    val presets: StateFlow<List<AidenBotPreset>> = _presets.asStateFlow()
+    private var presetsClient: AidenRemoteClient? = null
+    private val presetKeys = AidenBotActionKeys()
+
+    fun loadPresets() {
+        val client = coordinator.client.value ?: return
+        if (presetsClient === client || coordinator.serverInfo.value?.supportsBotPresets != true) return
+        presetsClient = client
+        viewModelScope.launch {
+            try {
+                _presets.value = client.botPresets().presets
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                presetsClient = null
+            }
+        }
+    }
+
+    /**
+     * Creates (or finds) the preset's Bot and adds it to the list. Returns its id, or null
+     * when the Mac couldn't be reached; a retry reuses the same idempotency key.
+     */
+    suspend fun startPreset(presetId: String): String? {
+        val client = coordinator.client.value ?: return null
+        val action = "preset:$presetId"
+        return try {
+            val result = client.createBotFromPreset(presetId, presetKeys.key(action))
+            presetKeys.complete(action)
+            acceptBot(result.bot)
+            result.bot.id
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _errorMessage.value = "Aiden couldn’t start this Bot. Try again."
+            null
+        }
+    }
+
+    private fun acceptBot(bot: AidenBotSummary) {
+        val list = _botList.value ?: AidenBotList(bots = emptyList())
+        val next = list.copy(bots = list.bots.filterNot { it.id == bot.id } + bot)
+        _botList.value = next
+        botCache?.putBotList(next)
     }
 
     fun acceptConversation(conversation: AidenBotConversationItem) {

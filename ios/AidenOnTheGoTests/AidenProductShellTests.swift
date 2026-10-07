@@ -91,8 +91,7 @@ final class AidenProductShellTests: XCTestCase {
         )
     }
 
-    func testArchivedBotChatsRemainReadOnly() {
-        XCTAssertFalse(aidenBotChatAllowsMutations(canWrite: true, botHealth: .archived))
+    func testBotChatMutationsFollowTheWritePermission() {
         XCTAssertFalse(aidenBotChatAllowsMutations(canWrite: false, botHealth: .ready))
         XCTAssertTrue(aidenBotChatAllowsMutations(canWrite: true, botHealth: .ready))
     }

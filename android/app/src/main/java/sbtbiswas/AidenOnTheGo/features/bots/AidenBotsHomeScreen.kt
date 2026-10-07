@@ -81,11 +81,17 @@ data class AidenBotHomeRow(
     val conversation: AidenBotConversationItem?
 ) {
     val isWorking: Boolean
-        get() = conversation != null && conversation.activityState != AidenBotConversationActivityState.IDLE
+        get() = bot.sessionState == AidenBotSessionState.RUNNING ||
+            (conversation != null && conversation.activityState != AidenBotConversationActivityState.IDLE)
 
     /** The line under the name: what needs the person first, then the last message, then the subtitle. */
     val preview: String
         get() {
+            when (bot.sessionState) {
+                AidenBotSessionState.INTERRUPTED -> return AidenBotSessionCopy.PAUSED_ROW
+                AidenBotSessionState.NEEDS_MODEL -> return AidenBotSessionCopy.NEEDS_MODEL
+                else -> {}
+            }
             val conv = conversation
             if (conv?.activityState == AidenBotConversationActivityState.WAITING_FOR_APPROVAL) {
                 return if (conv.canRespondToApproval) "Needs your OK" else "Waiting for your OK on your Mac"
@@ -101,7 +107,7 @@ data class AidenBotHomeRow(
 
 /**
  * Bots newest first, filtered by [query] against the name, subtitle, last message and
- * any Bots the Mac matched remotely. Archived Bots no longer appear.
+ * any Bots the Mac matched remotely.
  */
 fun aidenBotHomeRows(
     bots: List<AidenBotSummary>,
@@ -112,7 +118,6 @@ fun aidenBotHomeRows(
     val byBot = aidenCanonicalBotConversations(conversations).associateBy { it.botId }
     val needle = query.trim()
     return bots
-        .filter { it.health != AidenBotHealth.ARCHIVED }
         .map { AidenBotHomeRow(it, byBot[it.id]) }
         .filter { row ->
             needle.isEmpty() ||
@@ -198,6 +203,7 @@ fun AidenBotsHomeScreen(
     onNavigateToBotProfile: (String) -> Unit,
     onNavigateToCreateBot: () -> Unit,
     modifier: Modifier = Modifier,
+    onNavigateToBotChat: (String) -> Unit = {},
     botDeleter: AidenBotDeleter? = null
 ) {
     val palette = AidenTheme.palette
@@ -228,13 +234,23 @@ fun AidenBotsHomeScreen(
     }
     val contentState = aidenBotsHomeContentState(
         hasSnapshot = botList != null,
-        totalBotCount = allBots.count { it.health != AidenBotHealth.ARCHIVED },
+        totalBotCount = allBots.size,
         hasQuery = searchQuery.isNotBlank(),
         filteredBotCount = rows.size,
         hasError = errorMessage != null
     )
 
+    val presets by viewModel.presets.collectAsStateWithLifecycle()
+    var startingPresetId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(client, connectionState, serverInfo) {
+        if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.loadPresets()
+    }
+
     fun openChat(bot: AidenBotSummary) {
+        if (serverInfo?.supportsBotDurableSession == true) {
+            onNavigateToBotChat(bot.id)
+            return
+        }
         scope.launch {
             val existing = aidenCanonicalBotConversations(conversations).firstOrNull { it.botId == bot.id }
             if (existing != null) {
@@ -293,6 +309,24 @@ fun AidenBotsHomeScreen(
             }
             AidenBotsHomeContentState.EMPTY -> item(key = "empty") {
                 val connected = connectionState == AidenConnectionState.CONNECTED
+                if (connected && presets.isNotEmpty()) {
+                    AidenMeetYourFirstBot(
+                        presets = presets,
+                        startingPresetId = startingPresetId,
+                        onStartChat = { preset ->
+                            if (startingPresetId != null) return@AidenMeetYourFirstBot
+                            startingPresetId = preset.id
+                            scope.launch {
+                                val botId = viewModel.startPreset(preset.id)
+                                startingPresetId = null
+                                if (botId != null) onNavigateToBotChat(botId)
+                            }
+                        },
+                        onCreateMyOwn = onNavigateToCreateBot,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                    return@item
+                }
                 AidenEmptyState(
                     icon = Icons.Default.SmartToy,
                     title = if (connected) "Make your first Bot" else "No saved Bots",

@@ -232,7 +232,7 @@ test("archived Bot file reads retain exact read authority while writes remain bl
     id: "bot-1",
     name: "Archivist",
     instructions: "Keep records.",
-    avatar: "spark",
+    avatar: { version: 1, shape: "wisp", color: "lilac" },
     revision: "bot-revision-1",
     createdAt: 1,
     updatedAt: 2,

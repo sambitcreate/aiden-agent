@@ -155,7 +155,7 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(24, fixture.contractRevision)
+        assertEquals(25, fixture.contractRevision)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         val runControlError = requireNotNull(fixture.runControlError).error
@@ -188,10 +188,10 @@ class AidenBotContractTest {
         assertEquals(AidenBotAvatarAssetMimeType.PNG, fixture.botAvatarMetadata.mimeType)
         assertEquals(512, fixture.botAvatarMetadata.width)
         assertEquals(fixture.botCreate.request.avatar, fixture.botCreate.response.avatar.semantic)
-        assertEquals(fixture.botCapabilityCatalog.revision, fixture.botCreate.request.access.catalogRevision)
+        // Revision 25: access is optional on create (omitted = Full) and a new Bot may need a model.
+        assertNull(fixture.botCreate.request.access)
+        assertEquals(AidenBotSessionState.NEEDS_MODEL, fixture.botCreate.response.sessionState)
         assertNull(fixture.botIdentity.response.openingGreeting)
-        assertEquals(AidenBotHealth.ARCHIVED, fixture.botArchive.bot.health)
-        assertEquals(AidenBotHealth.READY, fixture.botRestore.bot.health)
         assertEquals(AidenBotConversationActivityState.WAITING_FOR_APPROVAL, fixture.botConversation.activityState)
         assertEquals(listOf(fixture.botConversation), fixture.botConversations.conversations)
         assertEquals(30, fixture.botConversationQuery.limit)
@@ -200,12 +200,6 @@ class AidenBotContractTest {
         assertEquals(AidenBotAccessMode.FULL, fixture.botPolicy.accessMode)
         assertEquals(AidenBotAccessMode.CUSTOM, fixture.botPolicyUpdate.response.accessMode)
         assertEquals(fixture.botCapabilityCatalog.revision, fixture.botPolicyUpdate.request.catalogRevision)
-        assertEquals(AidenBotChatAccessMode.INHERIT, fixture.botChatSubset.mode)
-        assertEquals(AidenBotChatAccessMode.CUSTOM, fixture.botChatSubsetUpdate.response.mode)
-        assertEquals(fixture.botPolicyUpdate.response.revision, fixture.botChatSubsetUpdate.request.expectedBotPolicyRevision)
-        assertEquals(fixture.botFavoritesUpdate.response, fixture.botFavorites)
-        assertTrue(fixture.botNotice.requiresAcknowledgement)
-        assertEquals(AidenBotDecision.CONTINUE_FULL, fixture.botNoticeAcknowledgement.response.acceptedDecision)
         assertEquals(fixture.botAvatarMetadata, fixture.botAvatarUpload.response)
         val taskProgress = requireNotNull(fixture.taskProgress)
         val agentRoster = requireNotNull(fixture.agentRoster)
@@ -279,41 +273,21 @@ class AidenBotContractTest {
 
     @Test
     fun testBotAvatarRecipeAndPresentation() {
-        val recipe = AidenBotAvatarRecipe(
-            version = 1,
-            shape = AidenBotAvatarShape.ORB,
-            color = AidenBotAvatarColor.LILAC,
-            eyes = AidenBotAvatarEyes.HAPPY,
-            detail = AidenBotAvatarDetail.SPARKLES
-        )
-        val avatar = AidenBotSemanticAvatar.Recipe(recipe)
-        val presentation = aidenBotAvatarPresentation(avatar)
-
+        val recipe = AidenBotAvatarRecipe(version = 1, shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.PLUM)
+        val presentation = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Recipe(recipe))
         assertEquals(AidenBotAvatarShape.ORB, presentation.shape)
-        assertEquals(AidenBotAvatarColor.LILAC, presentation.color)
-
-        // Legacy conversion
-        val legacyAvatar = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.SPARK)
-        val legacyPres = aidenBotAvatarPresentation(legacyAvatar)
-        assertEquals(AidenBotAvatarShape.WISP, legacyPres.shape)
-        assertEquals(AidenBotAvatarColor.SUN, legacyPres.color)
+        assertEquals(AidenBotAvatarColor.PLUM, presentation.color)
     }
 
     @Test
     fun testBotCreationRequestValidation() {
-        val recipe = AidenBotAvatarRecipe(
-            shape = AidenBotAvatarShape.HEX,
-            color = AidenBotAvatarColor.MINT,
-            eyes = AidenBotAvatarEyes.WIDE,
-            detail = AidenBotAvatarDetail.HALO
-        )
+        val recipe = AidenBotAvatarRecipe(shape = AidenBotAvatarShape.HEX, color = AidenBotAvatarColor.MINT)
         val validRequest = AidenBotCreateRequest(
             name = "Valid Bot",
             purpose = "Helps with unit tests",
             openingGreeting = "Hello from Bot!",
             instructions = "You are a test bot.",
-            avatar = AidenBotSemanticAvatar.Recipe(recipe),
-            access = AidenBotAccessUpdate.full("rev_1")
+            avatar = AidenBotSemanticAvatar.Recipe(recipe)
         )
         assertEquals("Valid Bot", validRequest.name)
 
@@ -324,8 +298,7 @@ class AidenBotContractTest {
                 name = longName,
                 purpose = "Test",
                 instructions = "Instructions",
-                avatar = AidenBotSemanticAvatar.Recipe(recipe),
-                access = AidenBotAccessUpdate.full("rev_1")
+                avatar = AidenBotSemanticAvatar.Recipe(recipe)
             )
         }
     }

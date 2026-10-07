@@ -570,8 +570,8 @@ enum AidenRemoteClientError: Error, LocalizedError {
 }
 
 struct AidenManualPairingResult {
-    let payload: AidenRemoteContractFixture.PairingPayload
-    let exchange: AidenRemoteContractFixture.PairingExchange
+    let payload: AidenRemotePairing.PairingPayload
+    let exchange: AidenRemotePairing.PairingExchange
 }
 
 final class AidenRemoteClient: @unchecked Sendable {
@@ -764,14 +764,14 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     static func pair(
-        payload: AidenRemoteContractFixture.PairingPayload,
+        payload: AidenRemotePairing.PairingPayload,
         deviceName: String,
         deviceType: AidenDeviceType,
         clientVersion: String,
         acceptsBotCapabilities: Bool = AppConfig.botFirstMobileEnabled,
         session injectedSession: URLSession? = nil,
         now: Date = Date()
-    ) async throws -> AidenRemoteContractFixture.PairingExchange {
+    ) async throws -> AidenRemotePairing.PairingExchange {
         let payload = try payload.validated(at: now)
         let bootstrap = payload.bootstrap
         let client: AidenRemoteClient
@@ -796,7 +796,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             acceptsDisplayName: true,
             acceptsBotCapabilities: acceptsBotCapabilities
         )
-        let exchange: AidenRemoteContractFixture.PairingExchange
+        let exchange: AidenRemotePairing.PairingExchange
         do {
             exchange = try await client.send(
                 method: "POST",
@@ -861,7 +861,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         endpoint: URL,
         session injectedSession: URLSession? = nil,
         now: Date = Date()
-    ) async throws -> AidenRemoteContractFixture.PairingPayload {
+    ) async throws -> AidenRemotePairing.PairingPayload {
         let normalizedCode = try normalizeManualPairingCode(code)
         guard isCanonicalAidenEndpoint(endpoint) else {
             throw AidenRemoteClientError.invalidEndpoint
@@ -869,7 +869,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let client = injectedSession.map {
             AidenRemoteClient(endpoint: endpoint, credential: nil, session: $0)
         } ?? AidenRemoteClient(endpoint: endpoint, ownedSession: makeSealedBootstrapSession(endpoint: endpoint))
-        let sealed: AidenRemoteContractFixture.ManualPairingBootstrap = try await client.send(
+        let sealed: AidenRemotePairing.ManualPairingBootstrap = try await client.send(
             method: "POST",
             path: ["pairing", "manual-bootstrap"],
             body: EmptyRequest(),
@@ -1406,12 +1406,8 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     // MARK: - Bots
 
-    func bots(includeArchived: Bool = false) async throws -> AidenBotList {
-        try await send(
-            method: "GET",
-            path: ["bots"],
-            query: [URLQueryItem(name: "includeArchived", value: includeArchived ? "true" : "false")]
-        )
+    func bots() async throws -> AidenBotList {
+        try await send(method: "GET", path: ["bots"])
     }
 
     func bot(id: String) async throws -> AidenBotDetail {
@@ -1449,33 +1445,17 @@ final class AidenRemoteClient: @unchecked Sendable {
         return try validatedBotDetail(detail, expectedID: id)
     }
 
-    func archiveBot(id: String, revision: String) async throws -> AidenBotDetail {
+    /// Permanently erases a Bot (`bot-delete-v1`). A 404 means the Bot is
+    /// already gone, which is the outcome the caller asked for.
+    func deleteBot(id: String, revision: String) async throws {
         try validateBotIdentifier(id)
         try validateRevision(revision)
-        let response: AidenBotArchiveResponse = try await send(
+        try await sendWithoutResponse(
             method: "DELETE",
             path: ["bots", id],
-            headers: ["If-Match": revision]
+            headers: ["If-Match": revision],
+            acceptedStatus: [204, 404]
         )
-        return try validatedBotDetail(response.bot, expectedID: id)
-    }
-
-    func restoreBot(
-        id: String,
-        revision: String,
-        idempotencyKey: UUID = UUID()
-    ) async throws -> AidenBotDetail {
-        try validateBotIdentifier(id)
-        try validateRevision(revision)
-        let response: AidenBotRestoreResponse = try await send(
-            method: "POST",
-            path: ["bots", id, "restore"],
-            headers: [
-                "If-Match": revision,
-                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
-            ]
-        )
-        return try validatedBotDetail(response.bot, expectedID: id)
     }
 
     func botConversations(
@@ -1557,67 +1537,160 @@ final class AidenRemoteClient: @unchecked Sendable {
         return response
     }
 
-    func botChatAccess(chatId: String) async throws -> AidenBotChatAccessView {
-        try validateRemoteIdentifier(chatId)
-        let response: AidenBotChatAccessView = try await send(
-            method: "GET",
-            path: ["chats", chatId, "capabilities"]
-        )
-        guard response.chatId == chatId else {
-            throw AidenRemoteClientError.invalidResponse
+    // MARK: Contract revision 25: durable Bot sessions
+
+    func botSession(botId: String) async throws -> AidenBotSession {
+        try validateBotIdentifier(botId)
+        let session: AidenBotSession = try await send(method: "GET", path: ["bots", botId, "session"])
+        guard session.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return session
+    }
+
+    /// The Bot's live session stream. The first frame is always a snapshot;
+    /// every frame must name this Bot.
+    func botSessionEvents(botId: String) -> AsyncThrowingStream<AidenBotSessionEvent, Error> {
+        sseStream(
+            path: ["bots", botId, "session", "events"],
+            after: 0,
+            parser: AidenBotSessionSSEParser()
+        ) { event in
+            guard event.botId == botId else { throw AidenRemoteClientError.invalidResponse }
         }
-        return response
     }
 
-    func updateBotChatAccess(
-        chatId: String,
-        revision: String,
-        update: AidenBotChatAccessUpdate
-    ) async throws -> AidenBotChatAccessView {
-        try validateRemoteIdentifier(chatId)
-        try validateRevision(revision)
-        let response: AidenBotChatAccessView = try await send(
-            method: "PATCH",
-            path: ["chats", chatId, "capabilities"],
-            body: update,
-            headers: ["If-Match": revision]
-        )
-        guard response.chatId == chatId else {
-            throw AidenRemoteClientError.invalidResponse
-        }
-        return response
-    }
-
-    func botFavorites() async throws -> AidenBotFavorites {
-        try await send(method: "GET", path: ["bot-favorites"])
-    }
-
-    func updateBotFavorites(
-        _ update: AidenBotFavoritesUpdateRequest,
-        revision: String
-    ) async throws -> AidenBotFavorites {
-        try validateRevision(revision)
+    func sendBotMessage(
+        botId: String,
+        request: AidenBotMessageRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotMessageReceipt {
+        try validateBotIdentifier(botId)
         return try await send(
-            method: "PATCH",
-            path: ["bot-favorites"],
-            body: update,
-            headers: ["If-Match": revision]
+            method: "POST",
+            path: ["bots", botId, "messages"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 201, 202]
         )
     }
 
-    func botAccessNotice() async throws -> AidenBotNoticeStatus {
-        try await send(method: "GET", path: ["bot-access-notice"])
+    func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("resume", botId: botId, idempotencyKey: idempotencyKey)
     }
 
-    func acknowledgeBotAccessNotice(
-        _ acknowledgement: AidenBotNoticeAcknowledgement,
-        idempotencyKey: UUID = UUID()
-    ) async throws -> AidenBotNoticeStatus {
+    func dismissBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("dismiss", botId: botId, idempotencyKey: idempotencyKey)
+    }
+
+    func stopBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("stop", botId: botId, idempotencyKey: idempotencyKey)
+    }
+
+    private func botSessionAction(
+        _ action: String,
+        botId: String,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotSessionStateView {
+        try validateBotIdentifier(botId)
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, action],
+            body: AidenBotSessionActionRequest(),
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 202]
+        )
+    }
+
+    // MARK: Routines (`bot-routines-v1`)
+
+    func botRoutines(botId: String) async throws -> [AidenBotRoutine] {
+        try validateBotIdentifier(botId)
+        let list: AidenBotRoutineList = try await send(method: "GET", path: ["bots", botId, "routines"])
+        guard list.routines.allSatisfy({ $0.botId == botId }) else { throw AidenRemoteClientError.invalidResponse }
+        return list.routines
+    }
+
+    func createBotRoutine(
+        botId: String,
+        request: AidenBotRoutineCreateRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutine {
+        try validateBotIdentifier(botId)
+        let routine: AidenBotRoutine = try await send(
+            method: "POST",
+            path: ["bots", botId, "routines"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 201]
+        )
+        guard routine.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return routine
+    }
+
+    func updateBotRoutine(
+        botId: String,
+        routineId: String,
+        revision: String,
+        request: AidenBotRoutineUpdateRequest
+    ) async throws -> AidenBotRoutine {
+        try validateBotIdentifier(botId)
+        try validateSafeIdentifier(routineId, maximumScalars: 160)
+        try validateRevision(revision)
+        let routine: AidenBotRoutine = try await send(
+            method: "PATCH",
+            path: ["bots", botId, "routines", routineId],
+            body: request,
+            headers: ["If-Match": revision]
+        )
+        guard routine.botId == botId, routine.id == routineId else { throw AidenRemoteClientError.invalidResponse }
+        return routine
+    }
+
+    func deleteBotRoutine(botId: String, routineId: String, revision: String) async throws {
+        try validateBotIdentifier(botId)
+        try validateSafeIdentifier(routineId, maximumScalars: 160)
+        try validateRevision(revision)
+        try await sendWithoutResponse(
+            method: "DELETE",
+            path: ["bots", botId, "routines", routineId],
+            headers: ["If-Match": revision],
+            acceptedStatus: [204]
+        )
+    }
+
+    // MARK: Connection requests and presets
+
+    func requestBotConnection(
+        botId: String,
+        request: AidenBotConnectionRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotConnectionRequestReceipt {
+        try validateBotIdentifier(botId)
+        let receipt: AidenBotConnectionRequestReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "connection-requests"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 202]
+        )
+        guard receipt.pluginId == request.pluginId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    func botPresets() async throws -> [AidenBotPreset] {
+        let list: AidenBotPresetList = try await send(method: "GET", path: ["bot-presets"])
+        return list.presets
+    }
+
+    func createBotFromPreset(
+        _ request: AidenBotPresetCreateRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotPresetCreateResult {
         try await send(
             method: "POST",
-            path: ["bot-access-notice", "acknowledgement"],
-            body: acknowledgement,
-            headers: idempotencyHeaders(idempotencyKey)
+            path: ["bots", "from-preset"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 201]
         )
     }
 

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 24,
+  "contractRevision": 25,
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
@@ -50,9 +50,56 @@
     "instanceId": "instance_fixture_01",
     "name": "Fixture Aiden",
     "appVersion": "0.30.0",
-    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-agent-interrupt-v1", "chat-read-state-v1"],
+    "capabilities": [
+      "server:read",
+      "chat:read",
+      "chat:write",
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "bot:read",
+      "bot:write",
+      "tasks:read",
+      "agents:read",
+      "questions:respond",
+      "skills:invoke"
+    ],
+    "serverCapabilities": [
+      "server:read",
+      "chat:read",
+      "chat:write",
+      "approval:respond",
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "files:read",
+      "files:write",
+      "git:read",
+      "git:write",
+      "schedule:read",
+      "schedule:write",
+      "bot:read",
+      "bot:write",
+      "tasks:read",
+      "agents:read",
+      "questions:respond",
+      "skills:invoke"
+    ],
+    "features": [
+      "chat-summaries-v1",
+      "chat-tasks-v1",
+      "chat-agents-v1",
+      "chat-run-input-v1",
+      "chat-question-prompts-v1",
+      "chat-skills-v1",
+      "chat-agent-interrupt-v1",
+      "chat-read-state-v1",
+      "bot-delete-v1",
+      "bot-durable-session-v1",
+      "bot-routines-v1",
+      "bot-connection-requests-v1",
+      "bot-presets-v1"
+    ],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -322,9 +369,7 @@
       "semantic": {
         "version": 1,
         "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
+        "color": "rose"
       },
       "asset": {
         "assetRevision": "avatar_revision_3",
@@ -335,6 +380,7 @@
       }
     },
     "health": "ready",
+    "sessionState": "interrupted",
     "createdAt": "2026-08-18T17:00:00.000Z",
     "updatedAt": "2026-08-18T18:45:00.000Z",
     "revision": "bot_revision_7"
@@ -349,9 +395,7 @@
           "semantic": {
             "version": 1,
             "shape": "orb",
-            "color": "sky",
-            "eyes": "wide",
-            "detail": "orbit"
+            "color": "rose"
           },
           "asset": {
             "assetRevision": "avatar_revision_3",
@@ -362,16 +406,13 @@
           }
         },
         "health": "ready",
+        "sessionState": "interrupted",
         "createdAt": "2026-08-18T17:00:00.000Z",
         "updatedAt": "2026-08-18T18:45:00.000Z",
         "revision": "bot_revision_7"
       }
     ],
-    "maxBots": 256,
-    "favorites": {
-      "botIds": ["bot_fixture_01"],
-      "revision": "bot_favorites_revision_2"
-    }
+    "maxBots": 256
   },
   "botDetail": {
     "id": "bot_fixture_01",
@@ -383,9 +424,7 @@
       "semantic": {
         "version": 1,
         "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
+        "color": "rose"
       },
       "asset": {
         "assetRevision": "avatar_revision_3",
@@ -396,6 +435,7 @@
       }
     },
     "health": "ready",
+    "sessionState": "idle",
     "access": {
       "botId": "bot_fixture_01",
       "accessMode": "full",
@@ -419,9 +459,7 @@
     "semantic": {
       "version": 1,
       "shape": "orb",
-      "color": "sky",
-      "eyes": "wide",
-      "detail": "orbit"
+      "color": "rose"
     },
     "asset": {
       "assetRevision": "avatar_revision_3",
@@ -440,14 +478,7 @@
       "avatar": {
         "version": 1,
         "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
-      },
-      "access": {
-        "accessMode": "full",
-        "catalogRevision": "bot_catalog_revision_3",
-        "confirmedForeground": true
+        "color": "rose"
       }
     },
     "response": {
@@ -460,12 +491,11 @@
         "semantic": {
           "version": 1,
           "shape": "orb",
-          "color": "sky",
-          "eyes": "wide",
-          "detail": "orbit"
+          "color": "rose"
         }
       },
       "health": "ready",
+      "sessionState": "needs_model",
       "access": {
         "botId": "bot_fixture_01",
         "accessMode": "full",
@@ -491,9 +521,7 @@
         "semantic": {
           "version": 1,
           "shape": "orb",
-          "color": "sky",
-          "eyes": "wide",
-          "detail": "orbit"
+          "color": "rose"
         },
         "asset": {
           "assetRevision": "avatar_revision_3",
@@ -515,73 +543,6 @@
       "updatedAt": "2026-08-18T18:46:00.000Z",
       "revision": "bot_revision_8"
     }
-  },
-  "botArchive": {
-    "id": "bot_fixture_01",
-    "name": "Scout",
-    "purpose": "Finds the signal in a busy week",
-    "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
-    "avatar": {
-      "semantic": {
-        "version": 1,
-        "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
-      },
-      "asset": {
-        "assetRevision": "avatar_revision_3",
-        "mimeType": "image/png",
-        "width": 512,
-        "height": 512,
-        "byteSize": 1024
-      }
-    },
-    "health": "archived",
-    "access": {
-      "botId": "bot_fixture_01",
-      "accessMode": "full",
-      "revision": "bot_policy_revision_5",
-      "policyEpoch": "bot_policy_epoch_5",
-      "summary": "Can use your Mac, shell, enabled connections, and skills."
-    },
-    "createdAt": "2026-08-18T17:00:00.000Z",
-    "updatedAt": "2026-08-18T18:47:00.000Z",
-    "archivedAt": "2026-08-18T18:47:00.000Z",
-    "revision": "bot_revision_9"
-  },
-  "botRestore": {
-    "id": "bot_fixture_01",
-    "name": "Scout",
-    "purpose": "Finds the signal in a busy week",
-    "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
-    "avatar": {
-      "semantic": {
-        "version": 1,
-        "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
-      },
-      "asset": {
-        "assetRevision": "avatar_revision_3",
-        "mimeType": "image/png",
-        "width": 512,
-        "height": 512,
-        "byteSize": 1024
-      }
-    },
-    "health": "ready",
-    "access": {
-      "botId": "bot_fixture_01",
-      "accessMode": "full",
-      "revision": "bot_policy_revision_6",
-      "policyEpoch": "bot_policy_epoch_6",
-      "summary": "Can use your Mac, shell, enabled connections, and skills."
-    },
-    "createdAt": "2026-08-18T17:00:00.000Z",
-    "updatedAt": "2026-08-18T18:48:00.000Z",
-    "revision": "bot_revision_10"
   },
   "botConversation": {
     "chatId": "chat_bot_fixture_01",
@@ -709,11 +670,7 @@
         "label": "Web",
         "available": true
       }
-    ],
-    "notice": {
-      "version": "bot-full-access-v1",
-      "requiresAcknowledgement": true
-    }
+    ]
   },
   "botPolicy": {
     "botId": "bot_fixture_01",
@@ -757,77 +714,6 @@
       }
     }
   },
-  "botChatSubset": {
-    "chatId": "chat_bot_fixture_01",
-    "botId": "bot_fixture_01",
-    "mode": "inherit",
-    "revision": "chat_policy_revision_2",
-    "botPolicyRevision": "bot_policy_revision_4",
-    "summary": "Inherits Scout's Full Access."
-  },
-  "botChatSubsetUpdate": {
-    "request": {
-      "mode": "custom",
-      "catalogRevision": "bot_catalog_revision_3",
-      "expectedBotPolicyRevision": "bot_policy_revision_5",
-      "custom": {
-        "providerId": "provider_fixture",
-        "modelId": "model_fixture",
-        "fileScopeIds": ["scope.bot_home"],
-        "shellEnabled": false,
-        "connectionIds": ["connection.calendar"],
-        "skillIds": ["skill.research"],
-        "otherCapabilityIds": ["capability.web"]
-      }
-    },
-    "response": {
-      "chatId": "chat_bot_fixture_01",
-      "botId": "bot_fixture_01",
-      "mode": "custom",
-      "revision": "chat_policy_revision_3",
-      "botPolicyRevision": "bot_policy_revision_5",
-      "summary": "Uses a reduced subset of Scout's access.",
-      "custom": {
-        "providerId": "provider_fixture",
-        "modelId": "model_fixture",
-        "fileScopeIds": ["scope.bot_home"],
-        "shellEnabled": false,
-        "connectionIds": ["connection.calendar"],
-        "skillIds": ["skill.research"],
-        "otherCapabilityIds": ["capability.web"]
-      }
-    }
-  },
-  "botFavorites": {
-    "botIds": ["bot_fixture_01"],
-    "revision": "bot_favorites_revision_2"
-  },
-  "botFavoritesUpdate": {
-    "request": {
-      "botIds": ["bot_fixture_01"]
-    },
-    "response": {
-      "botIds": ["bot_fixture_01"],
-      "revision": "bot_favorites_revision_2"
-    }
-  },
-  "botNotice": {
-    "version": "bot-full-access-v1",
-    "requiresAcknowledgement": true
-  },
-  "botNoticeAcknowledgement": {
-    "request": {
-      "version": "bot-full-access-v1",
-      "decision": "continue_full",
-      "confirmedForeground": true
-    },
-    "response": {
-      "version": "bot-full-access-v1",
-      "requiresAcknowledgement": false,
-      "acceptedAt": "2026-08-18T19:03:00.000Z",
-      "acceptedDecision": "continue_full"
-    }
-  },
   "botAvatarUpload": {
     "request": {
       "mimeType": "image/png",
@@ -847,6 +733,395 @@
     "width": 512,
     "height": 512,
     "byteSize": 1024
+  },
+  "botSession": {
+    "botId": "bot_fixture_01",
+    "epoch": "epoch_fixture_01",
+    "seq": 12,
+    "state": "interrupted",
+    "interrupted": true,
+    "partial": "Your first meeting is at 9",
+    "entries": [
+      {
+        "type": "notice",
+        "id": "entry_2",
+        "notice": "session_reset"
+      },
+      {
+        "type": "message",
+        "id": "entry_3",
+        "role": "user",
+        "text": "Plan my week, please.",
+        "createdAt": "2026-08-18T19:00:00.000Z"
+      },
+      {
+        "type": "message",
+        "id": "entry_5",
+        "role": "assistant",
+        "text": "Here is a first pass at your week.",
+        "createdAt": "2026-08-18T19:00:20.000Z"
+      },
+      {
+        "type": "message",
+        "id": "entry_8",
+        "role": "user",
+        "text": "Give me a short brief for today.",
+        "label": "Morning brief",
+        "createdAt": "2026-08-19T15:00:00.000Z"
+      },
+      {
+        "type": "connect_card",
+        "id": "entry_9",
+        "pluginId": "google-calendar",
+        "name": "Google Calendar",
+        "iconId": "google-calendar",
+        "reason": "I can check your meetings before I plan.",
+        "status": "pending"
+      },
+      {
+        "type": "message",
+        "id": "entry_11",
+        "role": "assistant",
+        "text": "Your first meeting is",
+        "interrupted": true,
+        "createdAt": "2026-08-19T15:00:05.000Z"
+      }
+    ],
+    "hasOlder": false
+  },
+  "botSessionNeedsModel": {
+    "botId": "bot_fixture_02",
+    "epoch": "epoch_fixture_02",
+    "seq": 0,
+    "state": "needs_model",
+    "interrupted": false,
+    "entries": [],
+    "hasOlder": false
+  },
+  "botSessionEvents": [
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 12,
+      "type": "snapshot",
+      "payload": {
+        "session": {
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_01",
+          "seq": 12,
+          "state": "interrupted",
+          "interrupted": true,
+          "partial": "Your first meeting is at 9",
+          "entries": [
+            {
+              "type": "notice",
+              "id": "entry_2",
+              "notice": "session_reset"
+            },
+            {
+              "type": "message",
+              "id": "entry_3",
+              "role": "user",
+              "text": "Plan my week, please.",
+              "createdAt": "2026-08-18T19:00:00.000Z"
+            },
+            {
+              "type": "message",
+              "id": "entry_5",
+              "role": "assistant",
+              "text": "Here is a first pass at your week.",
+              "createdAt": "2026-08-18T19:00:20.000Z"
+            },
+            {
+              "type": "message",
+              "id": "entry_8",
+              "role": "user",
+              "text": "Give me a short brief for today.",
+              "label": "Morning brief",
+              "createdAt": "2026-08-19T15:00:00.000Z"
+            },
+            {
+              "type": "connect_card",
+              "id": "entry_9",
+              "pluginId": "google-calendar",
+              "name": "Google Calendar",
+              "iconId": "google-calendar",
+              "reason": "I can check your meetings before I plan.",
+              "status": "pending"
+            },
+            {
+              "type": "message",
+              "id": "entry_11",
+              "role": "assistant",
+              "text": "Your first meeting is",
+              "interrupted": true,
+              "createdAt": "2026-08-19T15:00:05.000Z"
+            }
+          ],
+          "hasOlder": false
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 13,
+      "type": "partial",
+      "payload": {
+        "text": "Your first meeting is at 9:30"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 14,
+      "type": "entry",
+      "payload": {
+        "entry": {
+          "type": "message",
+          "id": "entry_13",
+          "role": "assistant",
+          "text": "Your first meeting is at 9:30 with Dana.",
+          "createdAt": "2026-08-19T15:01:00.000Z"
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 15,
+      "type": "state",
+      "payload": {
+        "state": "interrupted",
+        "interrupted": true,
+        "blocked": "access_changed"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 16,
+      "type": "closed",
+      "payload": {}
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_03",
+      "seq": 1,
+      "type": "state",
+      "payload": {
+        "state": "idle",
+        "interrupted": false
+      }
+    }
+  ],
+  "botSessionSend": {
+    "request": {
+      "text": "Plan my week, please."
+    },
+    "response": {
+      "submissionId": "17",
+      "deduped": false,
+      "state": "running",
+      "interrupted": false
+    }
+  },
+  "botSessionResume": {
+    "request": {},
+    "response": {
+      "state": "running",
+      "interrupted": false
+    }
+  },
+  "botSessionDismiss": {
+    "request": {},
+    "response": {
+      "state": "idle",
+      "interrupted": false
+    }
+  },
+  "botRoutines": {
+    "routines": [
+      {
+        "id": "task_fixture_routine_01",
+        "botId": "bot_fixture_01",
+        "name": "Morning brief",
+        "message": "Give me a short brief for today.",
+        "schedule": {
+          "kind": "weekdays",
+          "time": "08:00"
+        },
+        "timezone": "America/Los_Angeles",
+        "label": "Weekdays at 8:00 AM",
+        "enabled": true,
+        "nextRunAt": "2026-08-20T15:00:00.000Z",
+        "lastRunAt": "2026-08-19T15:00:00.000Z",
+        "lastResult": "success",
+        "updatedAt": "2026-08-18T19:00:00.000Z",
+        "revision": "routine_revision_1787079600000"
+      },
+      {
+        "id": "task_fixture_routine_02",
+        "botId": "bot_fixture_01",
+        "name": "Weekly meal plan",
+        "message": "Plan this week's meals and the shopping list.",
+        "schedule": {
+          "kind": "weekly",
+          "days": [
+            0
+          ],
+          "time": "09:00"
+        },
+        "timezone": "America/Los_Angeles",
+        "label": "Every Sunday at 9:00 AM",
+        "enabled": true,
+        "nextRunAt": "2026-08-23T16:00:00.000Z",
+        "updatedAt": "2026-08-18T19:05:00.000Z",
+        "revision": "routine_revision_1787079900000"
+      }
+    ]
+  },
+  "botRoutineCreate": {
+    "request": {
+      "name": "Weekly meal plan",
+      "schedule": {
+        "kind": "weekly",
+        "days": [
+          0
+        ],
+        "time": "09:00"
+      },
+      "message": "Plan this week's meals and the shopping list."
+    },
+    "response": {
+      "id": "task_fixture_routine_02",
+      "botId": "bot_fixture_01",
+      "name": "Weekly meal plan",
+      "message": "Plan this week's meals and the shopping list.",
+      "schedule": {
+        "kind": "weekly",
+        "days": [
+          0
+        ],
+        "time": "09:00"
+      },
+      "timezone": "America/Los_Angeles",
+      "label": "Every Sunday at 9:00 AM",
+      "enabled": true,
+      "nextRunAt": "2026-08-23T16:00:00.000Z",
+      "updatedAt": "2026-08-18T19:05:00.000Z",
+      "revision": "routine_revision_1787079900000"
+    }
+  },
+  "botRoutineUpdate": {
+    "request": {
+      "enabled": false
+    },
+    "response": {
+      "id": "task_fixture_routine_01",
+      "botId": "bot_fixture_01",
+      "name": "Morning brief",
+      "message": "Give me a short brief for today.",
+      "schedule": {
+        "kind": "weekdays",
+        "time": "08:00"
+      },
+      "timezone": "America/Los_Angeles",
+      "label": "Weekdays at 8:00 AM",
+      "enabled": false,
+      "lastRunAt": "2026-08-19T15:00:00.000Z",
+      "lastResult": "success",
+      "updatedAt": "2026-08-19T16:00:00.000Z",
+      "revision": "routine_revision_1787166000000"
+    }
+  },
+  "botConnectionRequest": {
+    "request": {
+      "pluginId": "google-calendar"
+    },
+    "response": {
+      "pluginId": "google-calendar",
+      "name": "Google Calendar",
+      "status": "sent"
+    }
+  },
+  "botPresets": {
+    "presets": [
+      {
+        "id": "chief-of-staff",
+        "name": "Chief of Staff",
+        "subtitle": "Keeps your week on track",
+        "avatar": {
+          "version": 1,
+          "shape": "hex",
+          "color": "periwinkle"
+        },
+        "suggestedConnections": [
+          {
+            "pluginId": "gmail",
+            "name": "Gmail",
+            "iconId": "gmail"
+          },
+          {
+            "pluginId": "google-calendar",
+            "name": "Google Calendar",
+            "iconId": "google-calendar"
+          }
+        ],
+        "suggestedRoutine": {
+          "name": "Morning brief",
+          "label": "Weekdays at 8:00 AM"
+        }
+      },
+      {
+        "id": "researcher",
+        "name": "Researcher",
+        "subtitle": "Digs into topics and sums them up",
+        "avatar": {
+          "version": 1,
+          "shape": "orb",
+          "color": "mint"
+        },
+        "suggestedConnections": [
+          {
+            "pluginId": "composio",
+            "name": "Composio",
+            "iconId": "composio"
+          }
+        ]
+      }
+    ]
+  },
+  "botPresetCreate": {
+    "request": {
+      "presetId": "chief-of-staff"
+    },
+    "response": {
+      "created": true,
+      "bot": {
+        "id": "bot_fixture_03",
+        "name": "Chief of Staff",
+        "purpose": "Keeps your week on track",
+        "avatar": {
+          "semantic": {
+            "version": 1,
+            "shape": "hex",
+            "color": "periwinkle"
+          }
+        },
+        "health": "ready",
+        "sessionState": "needs_model",
+        "createdAt": "2026-08-19T10:00:00.000Z",
+        "updatedAt": "2026-08-19T10:00:00.000Z",
+        "revision": "bot_revision_1"
+      }
+    }
   },
   "taskProgress": {
     "version": 1,
@@ -1104,7 +1379,15 @@
     "nextOffset": 2,
     "complete": true
   },
-  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 24, "pairingRequests": true },
+  "hostHealth": {
+    "ok": true,
+    "protocolVersion": 1,
+    "instanceId": "instance_fixture_01",
+    "displayName": "Fixture Aiden",
+    "platform": "mac",
+    "contractRevision": 25,
+    "pairingRequests": true
+  },
   "hostFeedEvents": [
     { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
     { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false } },

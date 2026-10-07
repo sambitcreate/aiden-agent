@@ -242,7 +242,7 @@ function bot(archived = false): BotDefinition {
     revision: "bot-rev-1",
     name: "Bot A",
     instructions: "Help.",
-    avatar: "spark",
+    avatar: { version: 1, shape: "wisp", color: "lilac" },
     createdAt: 1,
     updatedAt: 1,
     ...(archived ? { archivedAt: 2 } : {}),

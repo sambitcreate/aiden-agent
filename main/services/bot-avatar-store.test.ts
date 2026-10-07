@@ -261,19 +261,19 @@ test("application adapter projects semantic fallback and exposes only canonical 
       mintAssetId: () => ASSET_A, mintAssetRevision: () => REVISION_A,
     });
     const adapter = createBotAvatarApplicationAdapter({ store, ownerId: OWNER_A });
-    assert.deepEqual(await adapter.view(BOT_A, "spark"), { semantic: "spark" });
+    assert.deepEqual(await adapter.view(BOT_A, { version: 1, shape: "wisp", color: "lilac" }), { semantic: { version: 1, shape: "wisp", color: "lilac" } });
     const asset = await adapter.put({
       botId: BOT_A, expectedAssetRevision: null, operationId: "remote-operation-1",
     }, {
       mimeType: "image/jpeg",
       data: jpeg(100, 80).toString("base64"),
     });
-    assert.deepEqual(await adapter.view(BOT_A, "spark"), { semantic: "spark", asset });
+    assert.deepEqual(await adapter.view(BOT_A, { version: 1, shape: "wisp", color: "lilac" }), { semantic: { version: 1, shape: "wisp", color: "lilac" }, asset });
     assert.deepEqual((await adapter.content(BOT_A, REVISION_A)).bytes, png(512, 512, 8));
     await adapter.delete({
       botId: BOT_A, expectedAssetRevision: REVISION_A, operationId: "remote-operation-2",
     });
-    assert.deepEqual(await adapter.view(BOT_A, "spark"), { semantic: "spark" });
+    assert.deepEqual(await adapter.view(BOT_A, { version: 1, shape: "wisp", color: "lilac" }), { semantic: { version: 1, shape: "wisp", color: "lilac" } });
   } finally { await rm(paths.parent, { recursive: true, force: true }); }
 });
 
@@ -293,7 +293,7 @@ test("renderer projection returns exact canonical bytes without exposing private
       revision: "bot-revision-a",
       name: "Planner",
       instructions: "Plan carefully.",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
       createdAt: 1,
       updatedAt: 1,
     };
@@ -315,14 +315,14 @@ test("renderer projection preserves the semantic fallback for missing or stale r
     revision: "bot-revision-a",
     name: "Planner",
     instructions: "Plan carefully.",
-    avatar: "spark",
+    avatar: { version: 1, shape: "wisp", color: "lilac" },
     createdAt: 1,
     updatedAt: 1,
   };
   assert.equal(await projectBotAvatarForRenderer(BOT_A, {
     bots: { get: async () => null },
     avatar: {
-      view: async () => ({ semantic: "spark" }),
+      view: async () => ({ semantic: { version: 1, shape: "wisp", color: "lilac" } }),
       content: async () => { throw new Error("must not read"); },
     },
   }), null);
@@ -330,7 +330,7 @@ test("renderer projection preserves the semantic fallback for missing or stale r
     bots: { get: async () => bot },
     avatar: {
       view: async () => ({
-        semantic: "spark",
+        semantic: { version: 1, shape: "wisp", color: "lilac" },
         asset: { assetRevision: REVISION_A, mimeType: "image/png", width: 512, height: 512, byteSize: 1 },
       }),
       content: async () => { throw new Error("concurrently replaced"); },
@@ -348,7 +348,7 @@ test("renderer projection reconciles one concurrent canonical-photo replacement"
       revision: "bot-revision-a",
       name: "Planner",
       instructions: "Plan carefully.",
-      avatar: "spark",
+      avatar: { version: 1, shape: "wisp", color: "lilac" },
       createdAt: 1,
       updatedAt: 1,
     }) },
@@ -356,7 +356,7 @@ test("renderer projection reconciles one concurrent canonical-photo replacement"
       view: async () => {
         views += 1;
         return {
-          semantic: "spark",
+          semantic: { version: 1, shape: "wisp", color: "lilac" },
           asset: {
             assetRevision: views === 1 ? REVISION_A : replacementRevision,
             mimeType: "image/png",

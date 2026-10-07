@@ -230,32 +230,43 @@ export interface AidenRemoteRouterDependencies {
     AidenRemoteSpeechService,
     "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe"
   >;
-  botNotice?: {
-    status(deviceId: string): Promise<BotNoticeStatus>;
-    acknowledge(
-      deviceId: string,
-      acknowledgement: BotNoticeAcknowledgement,
-    ): Promise<BotNoticeStatus>;
-  };
   bots?: Pick<
     AidenRemoteBotService,
     | "list"
     | "get"
     | "create"
     | "updateIdentity"
-    | "archive"
-    | "restore"
     | "capabilityCatalog"
     | "updateAccess"
     | "createChat"
-    | "getChatAccess"
-    | "updateChatAccess"
-    | "favorites"
-    | "updateFavorites"
   > & Partial<Pick<
     AidenRemoteBotService,
-    "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+    "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
   >>;
+  /**
+   * Durable Bot sessions, routines, connection requests and starter presets
+   * (contract revision 25). Absent: those routes are `not_found` and their
+   * feature tokens are never advertised.
+   */
+  botSessions?: Pick<
+    AidenRemoteBotSessionService,
+    | "session"
+    | "openEvents"
+    | "send"
+    | "resume"
+    | "dismiss"
+    | "stop"
+    | "listRoutines"
+    | "createRoutine"
+    | "updateRoutine"
+    | "deleteRoutine"
+    | "requestConnection"
+    | "presets"
+    | "createFromPreset"
+    | "supportsRoutines"
+    | "supportsPresets"
+    | "supportsConnectionRequests"
+  >;
   /**
    * Simulator sharing with paired Macs (Simulator devices Phase 5). Absent
    * when the feature is off; `/simulators` routes then return `not_found`.
@@ -315,12 +326,14 @@ export type AidenRemoteRouteLabel =
   | "server"
   | "deviceIdentity"
   | "deviceCapabilities"
-  | "botAccessNotice"
   | "bots"
   | "bot"
+  | "botSession"
+  | "botSessionEvents"
+  | "botRoutines"
+  | "botConnectionRequests"
+  | "botPresets"
   | "botCapabilities"
-  | "botChatCapabilities"
-  | "botFavorites"
   | "botConversations"
   | "botAvatar"
   | "botFiles"
@@ -385,12 +398,20 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   server: ["/server"],
   deviceIdentity: ["/device/identity"],
   deviceCapabilities: ["/device/capabilities"],
-  botAccessNotice: ["/bot-access-notice", "/bot-access-notice/acknowledgement"],
-  bots: ["/bots", "/bots/:botId/chats"],
-  bot: ["/bots/:botId", "/bots/:botId/restore"],
+  bots: ["/bots", "/bots/:botId/chats", "/bots/from-preset"],
+  bot: ["/bots/:botId"],
+  botSession: [
+    "/bots/:botId/session",
+    "/bots/:botId/messages",
+    "/bots/:botId/resume",
+    "/bots/:botId/dismiss",
+    "/bots/:botId/stop",
+  ],
+  botSessionEvents: ["/bots/:botId/session/events"],
+  botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
+  botConnectionRequests: ["/bots/:botId/connection-requests"],
+  botPresets: ["/bot-presets"],
   botCapabilities: ["/bot-capabilities", "/bots/:botId/capabilities"],
-  botChatCapabilities: ["/chats/:chatId/capabilities"],
-  botFavorites: ["/bot-favorites"],
   botConversations: ["/bot-conversations"],
   botFiles: ["/bot-conversations/:chatId/files"],
   botFile: ["/bot-conversations/:chatId/files/:fileId"],

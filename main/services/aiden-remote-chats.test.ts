@@ -244,7 +244,7 @@ function fixture(
               revision: `botrev:${id}`,
               name: "Fixture bot",
               instructions: "Be helpful.",
-              avatar: "spark" as const,
+              avatar: { version: 1 as const, shape: "wisp" as const, color: "lilac" as const },
               createdAt: 1_000,
               updatedAt: 2_000,
               ...(botArchived ? { archivedAt: 3_000 } : {}),

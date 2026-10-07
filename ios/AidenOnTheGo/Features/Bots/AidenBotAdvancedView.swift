@@ -50,7 +50,6 @@ struct AidenBotAdvancedView: View {
         capturedContext.map(coordinator.isCurrent) == true
             && coordinator.connectionState == .connected
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
-            && baselineBot?.health != .archived
     }
 
     private var canSave: Bool {
@@ -218,8 +217,6 @@ struct AidenBotAdvancedView: View {
         } footer: {
             if draft?.usesFullAccess == true {
                 Text("It can use everything your Mac allows. Your Mac still asks before risky steps.")
-            } else if !AidenBotEditorDraft.fullAccessAccepted(in: catalog) {
-                Text("Your Mac is set to pick what each Bot can use.")
             } else {
                 Text("Turn on only what this Bot needs.")
             }
@@ -286,7 +283,7 @@ struct AidenBotAdvancedView: View {
             get: { draft?.usesFullAccess ?? false },
             set: { enabled in
                 guard var next = draft else { return }
-                next.usesFullAccess = enabled && AidenBotEditorDraft.fullAccessAccepted(in: catalog)
+                next.usesFullAccess = enabled
                 draft = next
             }
         )
@@ -481,7 +478,7 @@ struct AidenBotAdvancedView: View {
             draft = loadedDraft
             _ = await coordinator.withRetainedInstallationData(for: context) {
                 _ = try? await AidenBotCache.shared.mergeAndStore(
-                    AidenBotCacheSegments(catalogsByBotID: [botID: loadedCatalog], notice: loadedCatalog.notice),
+                    AidenBotCacheSegments(catalogsByBotID: [botID: loadedCatalog]),
                     instanceId: context.instanceId,
                     deviceId: context.deviceId
                 )

@@ -1,7 +1,3 @@
-/** Legacy avatar ids are still read from older Bot stores; Aiden never writes them. */
-export const BOT_AVATARS = ["spark", "orbit", "leaf", "prism", "wave", "ember"] as const;
-export type LegacyBotAvatar = (typeof BOT_AVATARS)[number];
-
 export const BOT_AVATAR_SHAPES = [
   "wisp",
   "orb",
@@ -34,6 +30,10 @@ export const BOT_AVATAR_COLORS = [
   "coral",
   "peach",
   "aqua",
+  "rose",
+  "lime",
+  "plum",
+  "graphite",
 ] as const;
 export type BotAvatarColor = (typeof BOT_AVATAR_COLORS)[number];
 
@@ -46,55 +46,25 @@ export const BOT_AVATAR_COLOR_LABELS: Record<BotAvatarColor, string> = {
   coral: "Coral",
   peach: "Peach",
   aqua: "Aqua",
+  rose: "Rose",
+  lime: "Lime",
+  plum: "Plum",
+  graphite: "Graphite",
 };
 
-/**
- * Retired avatar axes. Every Bot now renders one fixed eye mark, and Aiden no
- * longer offers these as choices. They stay in the stored and paired-device
- * recipe until the next Aiden Remote revision drops them on all clients.
- */
-export const BOT_AVATAR_EYES = ["dots", "wide", "happy", "sleepy", "focus", "wink"] as const;
-export type BotAvatarEyes = (typeof BOT_AVATAR_EYES)[number];
-
-export const BOT_AVATAR_DETAILS = [
-  "none",
-  "halo",
-  "orbit",
-  "sparkles",
-  "antenna",
-  "bolts",
-] as const;
-export type BotAvatarDetail = (typeof BOT_AVATAR_DETAILS)[number];
-
-/**
- * A bounded, theme-safe vector recipe. Only `shape` and `color` are chosen by
- * people; `eyes` and `detail` are retired and ignored by the renderer.
- */
+/** A bounded, theme-safe vector recipe: one colour and one shape, with one fixed eye mark. */
 export interface BotAvatarAppearance {
   version: 1;
   shape: BotAvatarShape;
   color: BotAvatarColor;
-  eyes: BotAvatarEyes;
-  detail: BotAvatarDetail;
 }
 
-export type BotAvatar = LegacyBotAvatar | BotAvatarAppearance;
+export type BotAvatar = BotAvatarAppearance;
 
 export const DEFAULT_BOT_AVATAR: BotAvatarAppearance = {
   version: 1,
   shape: "wisp",
   color: "lilac",
-  eyes: "dots",
-  detail: "sparkles",
-};
-
-const LEGACY_BOT_AVATAR_APPEARANCES: Record<LegacyBotAvatar, BotAvatarAppearance> = {
-  spark: DEFAULT_BOT_AVATAR,
-  orbit: { version: 1, shape: "orb", color: "sky", eyes: "wide", detail: "orbit" },
-  leaf: { version: 1, shape: "drop", color: "mint", eyes: "happy", detail: "none" },
-  prism: { version: 1, shape: "hex", color: "sun", eyes: "focus", detail: "bolts" },
-  wave: { version: 1, shape: "cloud", color: "periwinkle", eyes: "sleepy", detail: "halo" },
-  ember: { version: 1, shape: "peak", color: "coral", eyes: "wink", detail: "antenna" },
 };
 
 export const BOT_LIMITS = {
@@ -170,30 +140,24 @@ function includes<const Values extends readonly string[]>(
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-export function isLegacyBotAvatar(value: unknown): value is LegacyBotAvatar {
-  return includes(BOT_AVATARS, value);
-}
-
+/** Exact recipe check for new input (IPC, Remote, tools). */
 export function isBotAvatarAppearance(value: unknown): value is BotAvatarAppearance {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const avatar = value as Record<string, unknown>;
   const keys = Object.keys(avatar);
   return (
-    keys.length === 5 &&
-    keys.every((key) => ["version", "shape", "color", "eyes", "detail"].includes(key)) &&
+    keys.length === 3 &&
+    keys.every((key) => ["version", "shape", "color"].includes(key)) &&
     avatar.version === 1 &&
     includes(BOT_AVATAR_SHAPES, avatar.shape) &&
-    includes(BOT_AVATAR_COLORS, avatar.color) &&
-    includes(BOT_AVATAR_EYES, avatar.eyes) &&
-    includes(BOT_AVATAR_DETAILS, avatar.detail)
+    includes(BOT_AVATAR_COLORS, avatar.color)
   );
 }
 
 export function isBotAvatar(value: unknown): value is BotAvatar {
-  return isLegacyBotAvatar(value) || isBotAvatarAppearance(value);
+  return isBotAvatarAppearance(value);
 }
 
 export function resolveBotAvatar(value: BotAvatar): BotAvatarAppearance {
-  const appearance = typeof value === "string" ? LEGACY_BOT_AVATAR_APPEARANCES[value] : value;
-  return { ...appearance };
+  return { version: 1, shape: value.shape, color: value.color };
 }

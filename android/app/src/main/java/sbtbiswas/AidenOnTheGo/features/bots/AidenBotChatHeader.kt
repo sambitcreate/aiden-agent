@@ -80,7 +80,8 @@ fun AidenBotChatTopBar(
     onStop: () -> Unit,
     onBack: () -> Unit,
     onOpenProfile: () -> Unit,
-    onOpenFiles: () -> Unit,
+    /** Null hides Files, for chats with no file index (the durable session). */
+    onOpenFiles: (() -> Unit)?,
     canDelete: Boolean,
     onDelete: () -> Unit
 ) {
@@ -148,14 +149,16 @@ fun AidenBotChatTopBar(
                             onOpenProfile()
                         }
                     )
-                    DropdownMenuItem(
-                        text = { Text("Files") },
-                        leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
-                        onClick = {
-                            menuOpen = false
-                            onOpenFiles()
-                        }
-                    )
+                    if (onOpenFiles != null) {
+                        DropdownMenuItem(
+                            text = { Text("Files") },
+                            leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onOpenFiles()
+                            }
+                        )
+                    }
                     if (canDelete) {
                         DropdownMenuItem(
                             text = { Text("Delete", color = palette.danger) },

@@ -14,14 +14,6 @@ enum AidenBotContractError: Error, Equatable, LocalizedError {
             String(
                 localized: "One or more selected AI, Files, Connections, or Skills are no longer available. Review this Bot’s access choices and try again."
             )
-        case .invalidCombination("chat access exceeds bot"):
-            String(
-                localized: "This chat is asking for more access than the Bot currently allows. Reduce the chat’s access or expand the Bot’s access, then try again."
-            )
-        case .invalidCombination("full access notice"):
-            String(
-                localized: "Review and accept the Full Access notice before giving this Bot full access."
-            )
         case .invalidField, .invalidCombination:
             String(
                 localized: "Aiden Agent returned Bot information this version of Aiden On The Go can’t use. Update Aiden Agent and Aiden On The Go, then try again."
@@ -30,7 +22,7 @@ enum AidenBotContractError: Error, Equatable, LocalizedError {
     }
 }
 
-private struct AidenBotDynamicCodingKey: CodingKey {
+struct AidenBotDynamicCodingKey: CodingKey {
     let stringValue: String
     let intValue: Int? = nil
 
@@ -38,7 +30,7 @@ private struct AidenBotDynamicCodingKey: CodingKey {
     init?(intValue: Int) { return nil }
 }
 
-private enum AidenBotWire {
+enum AidenBotWire {
     static let maxNameLength = 80
     static let maxPurposeLength = 280
     static let maxGreetingLength = 2_000
@@ -46,7 +38,6 @@ private enum AidenBotWire {
     static let maxSummaryLength = 280
     static let maxPreviewLength = 500
     static let maxBots = 256
-    static let maxFavorites = 20
     static let maxConversationPage = 50
     static let maxChatMessages = 10_000
     static let maxChatTitleLength = 1_024
@@ -59,7 +50,6 @@ private enum AidenBotWire {
     static let maxOtherCapabilities = 128
     static let maxAvatarBase64Length = 5_592_408
     static let maxAvatarBytes = 4 * 1_048_576
-    static let fullAccessNoticeVersion = "bot-full-access-v1"
 
     static func requiredString<Key: CodingKey>(
         _ values: KeyedDecodingContainer<Key>,
@@ -187,44 +177,25 @@ private enum AidenBotWire {
     }
 }
 
-enum AidenBotLegacyAvatar: String, Codable, CaseIterable, Sendable {
-    case spark, orbit, leaf, prism, wave, ember
-}
-
 enum AidenBotAvatarShape: String, Codable, CaseIterable, Sendable {
     case wisp, orb, drop, hex, cloud, peak, squircle, capsule
 }
 
 enum AidenBotAvatarColor: String, Codable, CaseIterable, Sendable {
-    case lilac, sky, mint, sun, periwinkle, coral, peach, aqua
+    case lilac, sky, mint, sun, periwinkle, coral, peach, aqua, rose, lime, plum, graphite
 }
 
-enum AidenBotAvatarEyes: String, Codable, CaseIterable, Sendable {
-    case dots, wide, happy, sleepy, focus, wink
-}
-
-enum AidenBotAvatarDetail: String, Codable, CaseIterable, Sendable {
-    case none, halo, orbit, sparkles, antenna, bolts
-}
-
+/// A Bot character on the wire: `{version: 1, shape, color}`. Older hosts may
+/// still send `eyes` and `detail`; they are accepted, ignored, and never sent.
 struct AidenBotAvatarRecipe: Codable, Equatable, Sendable {
     let version: Int
     let shape: AidenBotAvatarShape
     let color: AidenBotAvatarColor
-    let eyes: AidenBotAvatarEyes
-    let detail: AidenBotAvatarDetail
 
-    init(
-        shape: AidenBotAvatarShape,
-        color: AidenBotAvatarColor,
-        eyes: AidenBotAvatarEyes,
-        detail: AidenBotAvatarDetail
-    ) {
+    init(shape: AidenBotAvatarShape, color: AidenBotAvatarColor) {
         version = 1
         self.shape = shape
         self.color = color
-        self.eyes = eyes
-        self.detail = detail
     }
 
     init(from decoder: Decoder) throws {
@@ -233,11 +204,13 @@ struct AidenBotAvatarRecipe: Codable, Equatable, Sendable {
         guard version == 1 else { throw AidenBotContractError.invalidField("avatar.version") }
         shape = try values.decode(AidenBotAvatarShape.self, forKey: .shape)
         color = try values.decode(AidenBotAvatarColor.self, forKey: .color)
-        eyes = try values.decode(AidenBotAvatarEyes.self, forKey: .eyes)
-        detail = try values.decode(AidenBotAvatarDetail.self, forKey: .detail)
     }
 
-    fileprivate static func decodeRequest(from decoder: Decoder) throws -> Self {
+    private enum CodingKeys: String, CodingKey {
+        case version, shape, color
+    }
+
+    static func decodeRequest(from decoder: Decoder) throws -> Self {
         try AidenBotWire.requireOnlyKeys(
             decoder,
             allowed: ["version", "shape", "color", "eyes", "detail"]
@@ -246,35 +219,27 @@ struct AidenBotAvatarRecipe: Codable, Equatable, Sendable {
     }
 }
 
+/// A Bot's semantic avatar. Since revision 25 it is always a recipe; the
+/// legacy string ids are gone from the wire.
 enum AidenBotSemanticAvatar: Codable, Equatable, Sendable {
-    case legacy(AidenBotLegacyAvatar)
     case recipe(AidenBotAvatarRecipe)
 
-    init(from decoder: Decoder) throws {
-        let value = try decoder.singleValueContainer()
-        if let legacy = try? value.decode(AidenBotLegacyAvatar.self) {
-            self = .legacy(legacy)
-        } else {
-            self = .recipe(try AidenBotAvatarRecipe(from: decoder))
+    var recipe: AidenBotAvatarRecipe {
+        switch self {
+        case let .recipe(value): value
         }
+    }
+
+    init(from decoder: Decoder) throws {
+        self = .recipe(try AidenBotAvatarRecipe(from: decoder))
     }
 
     func encode(to encoder: Encoder) throws {
-        switch self {
-        case let .legacy(value):
-            var container = encoder.singleValueContainer()
-            try container.encode(value)
-        case let .recipe(value):
-            try value.encode(to: encoder)
-        }
+        try recipe.encode(to: encoder)
     }
 
-    fileprivate static func decodeRequest(from decoder: Decoder) throws -> Self {
-        let value = try decoder.singleValueContainer()
-        if let legacy = try? value.decode(AidenBotLegacyAvatar.self) {
-            return .legacy(legacy)
-        }
-        return .recipe(try AidenBotAvatarRecipe.decodeRequest(from: decoder))
+    static func decodeRequest(from decoder: Decoder) throws -> Self {
+        .recipe(try AidenBotAvatarRecipe.decodeRequest(from: decoder))
     }
 }
 
@@ -335,7 +300,7 @@ struct AidenBotAvatarView: Codable, Equatable, Sendable {
 }
 
 enum AidenBotHealth: String, Codable, Sendable {
-    case ready, degraded, unavailable, archived
+    case ready, degraded, unavailable
 }
 
 struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
@@ -347,7 +312,8 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let revision: String
-    let archivedAt: Date?
+    /// Present when the host advertises `bot-durable-session-v1`.
+    let sessionState: AidenBotSessionStateKind?
 
     init(detail: AidenBotDetail) {
         id = detail.id
@@ -358,7 +324,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
         createdAt = detail.createdAt
         updatedAt = detail.updatedAt
         revision = detail.revision
-        archivedAt = detail.archivedAt
+        sessionState = detail.sessionState
     }
 
     init(from decoder: Decoder) throws {
@@ -377,6 +343,11 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
         )
         avatar = try values.decode(AidenBotAvatarView.self, forKey: .avatar)
         health = try values.decode(AidenBotHealth.self, forKey: .health)
+        sessionState = try AidenBotWire.optional(
+            AidenBotSessionStateKind.self,
+            from: values,
+            forKey: .sessionState
+        )
         let createdTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
         createdAt = createdTimestamp.date
         let updatedTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
@@ -386,10 +357,6 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
             forKey: .revision,
             maxLength: AidenRemoteProtocol.maxIdentifierLength
         )
-        archivedAt = try AidenBotWire.optional(Date.self, from: values, forKey: .archivedAt)
-        guard (health == .archived) == (archivedAt != nil) else {
-            throw AidenBotContractError.invalidCombination("bot health/timestamps")
-        }
         guard AidenRemoteTimestamp.isOrdered(
             createdAt: createdTimestamp,
             updatedAt: updatedTimestamp
@@ -399,48 +366,51 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// `GET /bots`: `{bots, maxBots}`. Revision 25 removed Favorites, so a
+/// payload still carrying `favorites` is rejected.
 struct AidenBotList: Codable, Equatable, Sendable {
     let bots: [AidenBotSummary]
     let maxBots: Int
-    let favorites: AidenBotFavorites
 
-    init(
-        bots: [AidenBotSummary],
-        maxBots: Int = AidenBotWire.maxBots,
-        favorites: AidenBotFavorites
-    ) throws {
-        let archivedBotIDs = Set(bots.lazy.filter { $0.health == .archived }.map(\.id))
-        guard bots.count <= AidenBotWire.maxBots,
-              maxBots == AidenBotWire.maxBots,
-              bots.count <= maxBots,
-              Set(bots.map(\.id)).count == bots.count,
-              Set(favorites.botIds).isSubset(of: Set(bots.map(\.id))),
-              Set(favorites.botIds).isDisjoint(with: archivedBotIDs) else {
+    init(bots: [AidenBotSummary], maxBots: Int = AidenBotWire.maxBots) throws {
+        guard Self.isValid(bots: bots, maxBots: maxBots) else {
             throw AidenBotContractError.invalidField("bots")
         }
         self.bots = bots
         self.maxBots = maxBots
-        self.favorites = favorites
-    }
-
-    func replacingFavorites(_ favorites: AidenBotFavorites) throws -> Self {
-        try Self(bots: bots, maxBots: maxBots, favorites: favorites)
     }
 
     init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["bots", "maxBots"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
         bots = try values.decode([AidenBotSummary].self, forKey: .bots)
         maxBots = try values.decode(Int.self, forKey: .maxBots)
-        favorites = try values.decode(AidenBotFavorites.self, forKey: .favorites)
-        let archivedBotIDs = Set(bots.lazy.filter { $0.health == .archived }.map(\.id))
-        guard bots.count <= AidenBotWire.maxBots,
-              maxBots == AidenBotWire.maxBots,
-              bots.count <= maxBots,
-              Set(bots.map(\.id)).count == bots.count,
-              Set(favorites.botIds).isSubset(of: Set(bots.map(\.id))),
-              Set(favorites.botIds).isDisjoint(with: archivedBotIDs) else {
+        guard Self.isValid(bots: bots, maxBots: maxBots) else {
             throw AidenBotContractError.invalidField("bots")
         }
+    }
+
+    /// The same list without one Bot, used after a permanent delete.
+    func removing(botID: String) throws -> Self {
+        try Self(bots: bots.filter { $0.id != botID }, maxBots: maxBots)
+    }
+
+    /// The same list with one Bot inserted or replaced, used after a create.
+    func upserting(_ bot: AidenBotSummary) throws -> Self {
+        var next = bots.filter { $0.id != bot.id }
+        next.append(bot)
+        return try Self(bots: next, maxBots: maxBots)
+    }
+
+    private static func isValid(bots: [AidenBotSummary], maxBots: Int) -> Bool {
+        bots.count <= AidenBotWire.maxBots
+            && maxBots == AidenBotWire.maxBots
+            && bots.count <= maxBots
+            && Set(bots.map(\.id)).count == bots.count
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bots, maxBots
     }
 }
 
@@ -458,7 +428,8 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let revision: String
-    let archivedAt: Date?
+    /// Present when the host advertises `bot-durable-session-v1`.
+    let sessionState: AidenBotSessionStateKind?
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -487,6 +458,11 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
         )
         avatar = try values.decode(AidenBotAvatarView.self, forKey: .avatar)
         health = try values.decode(AidenBotHealth.self, forKey: .health)
+        sessionState = try AidenBotWire.optional(
+            AidenBotSessionStateKind.self,
+            from: values,
+            forKey: .sessionState
+        )
         access = try values.decode(AidenBotAccessView.self, forKey: .access)
         modelSelection = try AidenBotWire.optional(
             AidenBotModelSelection.self,
@@ -507,9 +483,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
             forKey: .revision,
             maxLength: AidenRemoteProtocol.maxIdentifierLength
         )
-        archivedAt = try AidenBotWire.optional(Date.self, from: values, forKey: .archivedAt)
-        guard access.botId == id,
-              (health == .archived) == (archivedAt != nil) else {
+        guard access.botId == id else {
             throw AidenBotContractError.invalidCombination("bot detail identity/state")
         }
         guard AidenRemoteTimestamp.isOrdered(
@@ -548,7 +522,9 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
     let openingGreeting: String?
     let instructions: String
     let avatar: AidenBotSemanticAvatar
-    let access: AidenBotAccessUpdate
+    /// Optional since revision 25: omitted means Full Access by default, and a
+    /// Bot created without an AI model reports `sessionState: needs_model`.
+    let access: AidenBotAccessUpdate?
 
     init(
         name: String,
@@ -556,7 +532,7 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
         openingGreeting: String? = nil,
         instructions: String,
         avatar: AidenBotSemanticAvatar,
-        access: AidenBotAccessUpdate
+        access: AidenBotAccessUpdate? = nil
     ) throws {
         try AidenBotWire.validateString(name, field: "name", maxLength: AidenBotWire.maxNameLength, allowEmpty: false)
         try AidenBotWire.validateString(purpose, field: "purpose", maxLength: AidenBotWire.maxPurposeLength, allowEmpty: true)
@@ -596,7 +572,7 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
         avatar = try AidenBotSemanticAvatar.decodeRequest(
             from: values.superDecoder(forKey: .avatar)
         )
-        access = try values.decode(AidenBotAccessUpdate.self, forKey: .access)
+        access = try values.decodeIfPresent(AidenBotAccessUpdate.self, forKey: .access)
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -1009,7 +985,6 @@ struct AidenBotCapabilityCatalog: Codable, Equatable, Sendable {
     let skills: [AidenBotCapabilityOption]
     let skillsEnabled: Bool
     let otherCapabilities: [AidenBotCapabilityOption]
-    let notice: AidenBotNoticeStatus
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -1026,7 +1001,6 @@ struct AidenBotCapabilityCatalog: Codable, Equatable, Sendable {
         skillsEnabled = values.contains(.skillsEnabled)
             ? try values.decode(Bool.self, forKey: .skillsEnabled) : true
         otherCapabilities = try values.decode([AidenBotCapabilityOption].self, forKey: .otherCapabilities)
-        notice = try values.decode(AidenBotNoticeStatus.self, forKey: .notice)
 
         guard providers.count <= AidenBotWire.maxProviders,
               providers.reduce(0, { $0 + $1.models.count }) <= AidenBotWire.maxAggregateModels,
@@ -1341,284 +1315,6 @@ enum AidenBotAccessUpdate: Codable, Equatable, Sendable {
     }
 }
 
-enum AidenBotChatAccessMode: String, Codable, Sendable {
-    case inherit
-    case custom
-}
-
-struct AidenBotChatAccessView: Codable, Equatable, Sendable {
-    let chatId: String
-    let botId: String
-    let mode: AidenBotChatAccessMode
-    let revision: String
-    let botPolicyRevision: String
-    let summary: String
-    let custom: AidenBotCustomSelection?
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        chatId = try AidenBotWire.requiredString(
-            values,
-            forKey: .chatId,
-            maxLength: AidenRemoteProtocol.maxIdentifierLength
-        )
-        botId = try AidenBotWire.identifier(
-            values,
-            forKey: .botId,
-            maxLength: AidenRemoteProtocol.maxBotIdentifierLength
-        )
-        mode = try values.decode(AidenBotChatAccessMode.self, forKey: .mode)
-        revision = try AidenBotWire.requiredString(
-            values,
-            forKey: .revision,
-            maxLength: AidenRemoteProtocol.maxIdentifierLength
-        )
-        botPolicyRevision = try AidenBotWire.requiredString(
-            values,
-            forKey: .botPolicyRevision,
-            maxLength: AidenRemoteProtocol.maxIdentifierLength
-        )
-        summary = try AidenBotWire.requiredString(values, forKey: .summary, maxLength: AidenBotWire.maxSummaryLength)
-        custom = try AidenBotWire.optional(AidenBotCustomSelection.self, from: values, forKey: .custom)
-        guard (mode == .custom) == (custom != nil) else {
-            throw AidenBotContractError.invalidCombination("chat access mode/custom")
-        }
-    }
-}
-
-enum AidenBotChatAccessUpdate: Codable, Equatable, Sendable {
-    case inherit(catalogRevision: String, expectedBotPolicyRevision: String)
-    case custom(
-        catalogRevision: String,
-        expectedBotPolicyRevision: String,
-        selection: AidenBotCustomSelection
-    )
-
-    var catalogRevision: String {
-        switch self {
-        case let .inherit(catalogRevision, _), let .custom(catalogRevision, _, _):
-            return catalogRevision
-        }
-    }
-
-    var expectedBotPolicyRevision: String {
-        switch self {
-        case let .inherit(_, revision), let .custom(_, revision, _):
-            return revision
-        }
-    }
-
-    var customSelection: AidenBotCustomSelection? {
-        switch self {
-        case .inherit:
-            return nil
-        case let .custom(_, _, selection):
-            return selection
-        }
-    }
-
-    init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        let mode = try values.decode(AidenBotChatAccessMode.self, forKey: .mode)
-        let catalogRevision = try AidenBotWire.requiredString(
-            values,
-            forKey: .catalogRevision,
-            maxLength: AidenRemoteProtocol.maxIdentifierLength
-        )
-        let expectedBotPolicyRevision = try AidenBotWire.requiredString(
-            values,
-            forKey: .expectedBotPolicyRevision,
-            maxLength: AidenRemoteProtocol.maxIdentifierLength
-        )
-        switch mode {
-        case .inherit:
-            guard !values.contains(.custom) else {
-                throw AidenBotContractError.invalidCombination("inherited chat access")
-            }
-            self = .inherit(
-                catalogRevision: catalogRevision,
-                expectedBotPolicyRevision: expectedBotPolicyRevision
-            )
-        case .custom:
-            self = .custom(
-                catalogRevision: catalogRevision,
-                expectedBotPolicyRevision: expectedBotPolicyRevision,
-                selection: try AidenBotCustomSelection.decodeRequest(
-                    from: values.superDecoder(forKey: .custom)
-                )
-            )
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case let .inherit(catalogRevision, expectedBotPolicyRevision):
-            try values.encode(AidenBotChatAccessMode.inherit, forKey: .mode)
-            try values.encode(catalogRevision, forKey: .catalogRevision)
-            try values.encode(expectedBotPolicyRevision, forKey: .expectedBotPolicyRevision)
-        case let .custom(catalogRevision, expectedBotPolicyRevision, selection):
-            try values.encode(AidenBotChatAccessMode.custom, forKey: .mode)
-            try values.encode(catalogRevision, forKey: .catalogRevision)
-            try values.encode(expectedBotPolicyRevision, forKey: .expectedBotPolicyRevision)
-            try values.encode(selection, forKey: .custom)
-        }
-    }
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case mode, catalogRevision, expectedBotPolicyRevision, custom
-    }
-}
-
-struct AidenBotFavorites: Codable, Equatable, Sendable {
-    static let maximumCount = AidenBotWire.maxFavorites
-
-    let botIds: [String]
-    let revision: String
-
-    init(botIds: [String], revision: String) throws {
-        self.botIds = try AidenBotWire.uniqueIdentifiers(
-            botIds,
-            field: "botIds",
-            maxItems: AidenBotWire.maxFavorites,
-            maxLength: AidenRemoteProtocol.maxBotIdentifierLength
-        )
-        try AidenBotWire.validateString(revision, field: "revision", maxLength: AidenRemoteProtocol.maxIdentifierLength, allowEmpty: false)
-        self.revision = revision
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        botIds = try AidenBotWire.uniqueIdentifiers(
-            values.decode([String].self, forKey: .botIds),
-            field: "botIds",
-            maxItems: AidenBotWire.maxFavorites,
-            maxLength: AidenRemoteProtocol.maxBotIdentifierLength
-        )
-        revision = try AidenBotWire.requiredString(
-            values,
-            forKey: .revision,
-            maxLength: AidenRemoteProtocol.maxIdentifierLength
-        )
-    }
-}
-
-struct AidenBotFavoritesUpdateRequest: Codable, Equatable, Sendable {
-    let botIds: [String]
-
-    init(botIds: [String]) throws {
-        self.botIds = try AidenBotWire.uniqueIdentifiers(
-            botIds,
-            field: "botIds",
-            maxItems: AidenBotWire.maxFavorites,
-            maxLength: AidenRemoteProtocol.maxBotIdentifierLength
-        )
-    }
-
-    init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["botIds"])
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        botIds = try AidenBotWire.uniqueIdentifiers(
-            values.decode([String].self, forKey: .botIds),
-            field: "botIds",
-            maxItems: AidenBotWire.maxFavorites,
-            maxLength: AidenRemoteProtocol.maxBotIdentifierLength
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case botIds
-    }
-}
-
-enum AidenBotNoticeDecision: String, Codable, Sendable {
-    case continueFull = "continue_full"
-    case customizeFirst = "customize_first"
-}
-
-struct AidenBotNoticeStatus: Codable, Equatable, Sendable {
-    let version: String
-    let requiresAcknowledgement: Bool
-    let acceptedAt: Date?
-    let acceptedDecision: AidenBotNoticeDecision?
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        version = try AidenBotWire.requiredString(values, forKey: .version, maxLength: 80)
-        requiresAcknowledgement = try values.decode(Bool.self, forKey: .requiresAcknowledgement)
-        acceptedAt = try AidenBotWire.optional(Date.self, from: values, forKey: .acceptedAt)
-        acceptedDecision = try AidenBotWire.optional(AidenBotNoticeDecision.self, from: values, forKey: .acceptedDecision)
-        guard version == AidenBotWire.fullAccessNoticeVersion,
-              requiresAcknowledgement
-                ? (acceptedAt == nil && acceptedDecision == nil)
-                : (acceptedAt != nil && acceptedDecision != nil) else {
-            throw AidenBotContractError.invalidCombination("notice acknowledgement")
-        }
-    }
-}
-
-struct AidenBotNoticeAcknowledgement: Codable, Equatable, Sendable {
-    let version: String
-    let decision: AidenBotNoticeDecision
-    let confirmedForeground: Bool
-
-    init(version: String, decision: AidenBotNoticeDecision) throws {
-        guard version == AidenBotWire.fullAccessNoticeVersion else {
-            throw AidenBotContractError.invalidField("version")
-        }
-        self.version = version
-        self.decision = decision
-        confirmedForeground = true
-    }
-
-    init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        version = try AidenBotWire.requiredString(values, forKey: .version, maxLength: 80)
-        decision = try values.decode(AidenBotNoticeDecision.self, forKey: .decision)
-        confirmedForeground = try values.decode(Bool.self, forKey: .confirmedForeground)
-        guard version == AidenBotWire.fullAccessNoticeVersion,
-              confirmedForeground else {
-            throw AidenBotContractError.invalidField("notice acknowledgement")
-        }
-    }
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case version, decision, confirmedForeground
-    }
-}
-
-struct AidenBotArchiveResponse: Codable, Equatable, Sendable {
-    let bot: AidenBotDetail
-
-    init(from decoder: Decoder) throws {
-        bot = try AidenBotDetail(from: decoder)
-        guard bot.health == .archived, bot.archivedAt != nil else {
-            throw AidenBotContractError.invalidCombination("archive response")
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try bot.encode(to: encoder)
-    }
-}
-
-struct AidenBotRestoreResponse: Codable, Equatable, Sendable {
-    let bot: AidenBotDetail
-
-    init(from decoder: Decoder) throws {
-        bot = try AidenBotDetail(from: decoder)
-        guard bot.health != .archived, bot.archivedAt == nil else {
-            throw AidenBotContractError.invalidCombination("restore response")
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try bot.encode(to: encoder)
-    }
-}
-
 struct AidenBotAvatarUpload: Codable, Equatable, Sendable {
     let mimeType: AidenBotAvatarUploadMimeType
     let data: String
@@ -1655,177 +1351,4 @@ struct AidenBotAvatarUpload: Codable, Equatable, Sendable {
 }
 
 typealias AidenBotAvatarUploadResult = AidenBotAvatarAsset
-typealias AidenBotFavoritesView = AidenBotFavorites
 typealias AidenBotProviderModelOption = AidenBotModelOption
-
-struct AidenBotCreateContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotCreateRequest
-    let response: AidenBotDetail
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        request = try values.decode(AidenBotCreateRequest.self, forKey: .request)
-        response = try values.decode(AidenBotDetail.self, forKey: .response)
-        guard response.name == request.name,
-              response.purpose == request.purpose,
-              response.openingGreeting == request.openingGreeting,
-              response.instructions == request.instructions,
-              response.avatar.semantic == request.avatar else {
-            throw AidenBotContractError.invalidCombination("bot create fixture")
-        }
-        switch request.access {
-        case .full:
-            guard response.access.accessMode == .full else {
-                throw AidenBotContractError.invalidCombination("bot create access fixture")
-            }
-        case let .custom(_, selection, _):
-            guard response.access.accessMode == .custom,
-                  response.access.custom == selection else {
-                throw AidenBotContractError.invalidCombination("bot create access fixture")
-            }
-        }
-    }
-}
-
-struct AidenBotIdentityContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotIdentityPatch
-    let response: AidenBotDetail
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        request = try values.decode(AidenBotIdentityPatch.self, forKey: .request)
-        response = try values.decode(AidenBotDetail.self, forKey: .response)
-
-        let greetingMatches: Bool
-        if let greeting = request.openingGreeting {
-            greetingMatches = greeting.isEmpty
-                ? response.openingGreeting == nil
-                : response.openingGreeting == greeting
-        } else {
-            greetingMatches = true
-        }
-        guard request.name.map({ $0 == response.name }) ?? true,
-              request.purpose.map({ $0 == response.purpose }) ?? true,
-              greetingMatches,
-              request.instructions.map({ $0 == response.instructions }) ?? true,
-              request.avatar.map({ $0 == response.avatar.semantic }) ?? true else {
-            throw AidenBotContractError.invalidCombination("bot identity fixture")
-        }
-    }
-}
-
-struct AidenBotChatCreateContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotChatCreateRequest
-    let response: AidenBotChatCreateResponse
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        request = try values.decode(AidenBotChatCreateRequest.self, forKey: .request)
-        response = try values.decode(AidenBotChatCreateResponse.self, forKey: .response)
-        guard request.providerId.map({ $0 == response.chat.providerId }) ?? true,
-              request.modelId.map({ $0 == response.chat.modelId }) ?? true else {
-            throw AidenBotContractError.invalidCombination("bot chat create fixture")
-        }
-    }
-}
-
-struct AidenBotPolicyUpdateContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotAccessUpdate
-    let response: AidenBotAccessView
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        request = try values.decode(AidenBotAccessUpdate.self, forKey: .request)
-        response = try values.decode(AidenBotAccessView.self, forKey: .response)
-        switch request {
-        case .full:
-            guard response.accessMode == .full else {
-                throw AidenBotContractError.invalidCombination("bot policy fixture")
-            }
-        case let .custom(_, selection, _):
-            guard response.accessMode == .custom, response.custom == selection else {
-                throw AidenBotContractError.invalidCombination("bot policy fixture")
-            }
-        }
-    }
-}
-
-struct AidenBotChatSubsetUpdateContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotChatAccessUpdate
-    let response: AidenBotChatAccessView
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        request = try values.decode(AidenBotChatAccessUpdate.self, forKey: .request)
-        response = try values.decode(AidenBotChatAccessView.self, forKey: .response)
-        guard request.expectedBotPolicyRevision == response.botPolicyRevision else {
-            throw AidenBotContractError.invalidCombination("chat policy revision fixture")
-        }
-        switch request {
-        case .inherit:
-            guard response.mode == .inherit else {
-                throw AidenBotContractError.invalidCombination("chat policy fixture")
-            }
-        case let .custom(_, _, selection):
-            guard response.mode == .custom, response.custom == selection else {
-                throw AidenBotContractError.invalidCombination("chat policy fixture")
-            }
-        }
-    }
-}
-
-struct AidenBotFavoritesUpdateContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotFavoritesUpdateRequest
-    let response: AidenBotFavorites
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        request = try values.decode(AidenBotFavoritesUpdateRequest.self, forKey: .request)
-        response = try values.decode(AidenBotFavorites.self, forKey: .response)
-        guard request.botIds == response.botIds else {
-            throw AidenBotContractError.invalidCombination("bot favorites fixture")
-        }
-    }
-}
-
-struct AidenBotNoticeAcknowledgementContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotNoticeAcknowledgement
-    let response: AidenBotNoticeStatus
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        request = try values.decode(AidenBotNoticeAcknowledgement.self, forKey: .request)
-        response = try values.decode(AidenBotNoticeStatus.self, forKey: .response)
-        guard request.version == response.version,
-              !response.requiresAcknowledgement,
-              request.decision == response.acceptedDecision else {
-            throw AidenBotContractError.invalidCombination("bot notice fixture")
-        }
-    }
-}
-
-struct AidenBotAvatarUploadContractFixture: Codable, Equatable, Sendable {
-    let request: AidenBotAvatarUpload
-    let response: AidenBotAvatarAsset
-}
-
-struct AidenBotLegacyNonNegotiatingFixture: Codable, Equatable {
-    let pairingExchange: AidenRemoteContractFixture.PairingExchange
-    let server: AidenServer
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        pairingExchange = try values.decode(
-            AidenRemoteContractFixture.PairingExchange.self,
-            forKey: .pairingExchange
-        )
-        server = try values.decode(AidenServer.self, forKey: .server)
-        let legacyCapabilities = Set(pairingExchange.capabilities)
-        guard legacyCapabilities == Set(server.capabilities),
-              server.serverCapabilities == nil,
-              !legacyCapabilities.contains(.botRead),
-              !legacyCapabilities.contains(.botWrite) else {
-            throw AidenBotContractError.invalidCombination("legacy Bot negotiation fixture")
-        }
-    }
-}

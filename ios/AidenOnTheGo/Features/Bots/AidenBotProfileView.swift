@@ -66,7 +66,6 @@ struct AidenBotProfileView: View {
         capturedContext.map(coordinator.isCurrent) == true
             && coordinator.connectionState == .connected
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
-            && detail?.health != .archived
             && !isSaving
             && !isDeleting
     }
@@ -219,6 +218,11 @@ struct AidenBotProfileView: View {
                     .padding(.bottom, 16)
 
                 instructionsRow(detail)
+
+                if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.routines, coordinator: coordinator) {
+                    AidenBotRoutinesSection(coordinator: coordinator, botID: detail.id, canWrite: canWrite)
+                        .padding(.top, 16)
+                }
             }
             .frame(maxWidth: 640)
             .padding(.horizontal, 20)
