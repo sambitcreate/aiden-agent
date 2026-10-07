@@ -98,6 +98,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.io.File
 import kotlin.math.abs
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 enum class MessageClusterPosition {
     SINGLE, FIRST, MIDDLE, LAST
@@ -433,7 +435,7 @@ fun AidenChatDetailScreen(
                 title = {
                     Column {
                         Text(
-                            text = chat?.title?.ifEmpty { "Chat" } ?: "Chat",
+                            text = chat?.title?.ifEmpty { stringResource(R.string.chat_title_fallback) } ?: stringResource(R.string.chat_title_fallback),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
@@ -470,7 +472,7 @@ fun AidenChatDetailScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
@@ -479,7 +481,7 @@ fun AidenChatDetailScreen(
                             onClick = { viewModel.cancelTurn() },
                             enabled = viewModel.canStopCurrentRun && !isStopping
                         ) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
+                            Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.action_stop), tint = palette.danger)
                         }
                     }
                 },
@@ -543,21 +545,21 @@ fun AidenChatDetailScreen(
                                 if (!approval.canRespond) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "This paired device can review approvals but cannot respond.",
+                                        text = stringResource(R.string.chat_approval_review_only),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
                                 } else if (isAutomation && !approval.hasRequiredWriteCapability) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Schedule write access is required to approve this task.",
+                                        text = stringResource(R.string.chat_approval_schedule_write_required),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
                                 } else if (requiresDesktopConfirmation) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.",
+                                        text = stringResource(R.string.chat_approval_confirm_on_desktop),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
@@ -772,7 +774,7 @@ fun AidenChatDetailScreen(
                                 AidenModelRoute(providerId, modelId)
                             }
                     },
-                    placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
+                    placeholder = if (chat?.isBotChat == true) stringResource(R.string.chat_composer_placeholder_bot, chat?.title ?: stringResource(R.string.bot_profile_bot_fallback)) else stringResource(R.string.chat_composer_placeholder),
                     isReadOnly = false,
                     voiceErrorMessage = voiceInput.errorMessage,
                     modifier = Modifier.fillMaxWidth()
@@ -1268,7 +1270,7 @@ private fun AssistantMessageRow(
         if (progressText.isNotEmpty()) {
             var showProgress by remember { mutableStateOf(false) }
             Text(
-                text = if (showProgress) "Hide progress" else "Show progress",
+                text = if (showProgress) stringResource(R.string.chat_progress_hide) else stringResource(R.string.chat_progress_show),
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.accent,
                 modifier = Modifier
@@ -1365,7 +1367,7 @@ private fun AssistantMessageRow(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Can't view on this device. View in Aiden Agent.",
+                        text = stringResource(R.string.chat_artifact_unsupported),
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary,
                     )
@@ -1524,7 +1526,7 @@ internal fun ActiveStreamingCard(
                     ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Aiden is working...",
+                        text = stringResource(R.string.chat_working),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = palette.secondary
@@ -1539,10 +1541,11 @@ internal fun ActiveStreamingCard(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 // A paused run, not an error: neutral copy and icon, no banner.
+                val waitingDescription = stringResource(R.string.chat_waiting_network_cd)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.semantics(mergeDescendants = true) {
-                        contentDescription = "Aiden is waiting for the network to return"
+                        contentDescription = waitingDescription
                     }
                 ) {
                     Icon(
@@ -1553,7 +1556,7 @@ internal fun ActiveStreamingCard(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Waiting for network",
+                        text = stringResource(R.string.chat_waiting_network),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = palette.secondary
@@ -1629,7 +1632,7 @@ private fun AidenChronologicalReasoningCard(
     if (row.text.isBlank()) {
         Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
             AidenActivityShimmerLabel(
-                label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thinking",
+                label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thinking),
                 active = active,
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.secondary,
@@ -1662,7 +1665,7 @@ private fun AidenChronologicalReasoningCard(
                 }
             ) {
                 AidenActivityShimmerLabel(
-                    label = if (active) "Thinking" else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thought",
+                    label = if (active) stringResource(R.string.chat_reasoning_thinking) else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thought),
                     active = active,
                     style = MaterialTheme.typography.labelMedium,
                     color = palette.secondary,
@@ -1670,7 +1673,7 @@ private fun AidenChronologicalReasoningCard(
                 )
                 Icon(
                     imageVector = Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse reasoning" else "Expand reasoning",
+                    contentDescription = if (expanded) stringResource(R.string.chat_reasoning_collapse) else stringResource(R.string.chat_reasoning_expand),
                     tint = palette.secondary,
                     modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
                 )
@@ -1777,7 +1780,7 @@ private fun AidenTimelineCollapsibleCard(
                 if (allowsDisclosure) {
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        contentDescription = if (isExpanded) stringResource(R.string.action_collapse) else stringResource(R.string.action_expand),
                         tint = palette.secondary,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1806,7 +1809,7 @@ private fun AidenTimelineCollapsibleCard(
                                 modifier = Modifier.weight(1f)
                             )
                             step.producedFile?.let { file ->
-                                Text("File ${file.operation} · ${file.relativePath.substringAfterLast('/')}",
+                                Text(stringResource(R.string.chat_timeline_file, file.operation, file.relativePath.substringAfterLast('/')),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.foreground, maxLines = 1)
                             }

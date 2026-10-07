@@ -35,6 +35,8 @@ import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /** How long the copy pill reads "Copied" before it reverts. */
 internal const val AIDEN_CODE_COPY_CONFIRMATION_MS = 2_000L
@@ -80,7 +82,7 @@ fun AidenCodeBlock(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = language?.uppercase()?.ifEmpty { "CODE" } ?: "CODE",
+                        text = language?.uppercase()?.ifEmpty { stringResource(R.string.chat_code_label) } ?: stringResource(R.string.chat_code_label),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -123,6 +125,7 @@ private fun AidenCodeCopyPill(
     onClick: () -> Unit
 ) {
     val reduceMotion = aidenReduceMotion()
+    val copyDescription = stringResource(if (copied) R.string.chat_code_copied else R.string.chat_code_copy_cd)
     val interaction = remember { MutableInteractionSource() }
     val fill by animateColorAsState(
         targetValue = if (copied) palette.success.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -138,7 +141,7 @@ private fun AidenCodeCopyPill(
             .tactilePress(interaction)
             .semantics {
                 role = Role.Button
-                contentDescription = if (copied) "Copied" else "Copy code"
+                contentDescription = copyDescription
                 liveRegion = LiveRegionMode.Polite
             }
     ) {
@@ -165,7 +168,7 @@ private fun AidenCodeCopyPill(
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
-                    text = if (isCopied) "Copied" else "Copy",
+                    text = if (isCopied) stringResource(R.string.chat_code_copied) else stringResource(R.string.chat_code_copy),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = ink

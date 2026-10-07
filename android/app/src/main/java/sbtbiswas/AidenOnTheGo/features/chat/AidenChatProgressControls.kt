@@ -104,6 +104,9 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import sbtbiswas.AidenOnTheGo.R
 
 internal enum class AidenTaskStepTone { DONE, ACTIVE, PENDING }
 
@@ -158,8 +161,8 @@ fun AidenChatProgressControls(
         .orEmpty()
     val hasEarlierAgents = currentRoster?.previousTurns?.isNotEmpty() == true ||
         rosterHistory.any { it.previousTurns.isNotEmpty() || it.agents.isNotEmpty() && it.turnId != currentRoster?.turnId }
-    val taskAvailabilityNote = taskProgress?.unavailableReason?.let(::taskUnavailableMessage)
-    val agentAvailabilityNote = currentRoster?.unavailableReason?.let(::agentUnavailableMessage)
+    val taskAvailabilityNote = taskProgress?.unavailableReason?.let { taskUnavailableMessage(it) }
+    val agentAvailabilityNote = currentRoster?.unavailableReason?.let { agentUnavailableMessage(it) }
     var sawIncompleteTasks by remember { mutableStateOf(false) }
     var observedTaskEpoch by remember { mutableStateOf<String?>(null) }
     var announceCompletion by remember { mutableStateOf(false) }
@@ -195,16 +198,16 @@ fun AidenChatProgressControls(
                 val currentIndex = tasks.indexOfFirst { it.status == AidenChatTaskStatus.IN_PROGRESS }
                 val completed = tasks.count { it.status == AidenChatTaskStatus.COMPLETED }
                 val title = if (currentIndex >= 0) {
-                    "Step ${currentIndex + 1} / ${tasks.size}"
+                    stringResource(R.string.chat_progress_step, currentIndex + 1, tasks.size)
                 } else {
-                    "$completed / ${tasks.size} steps"
+                    stringResource(R.string.chat_progress_steps_done, completed, tasks.size)
                 }
                 val activeTask = tasks.firstOrNull { it.status == AidenChatTaskStatus.IN_PROGRESS }
                 AidenProgressChip(
                     icon = Icons.Default.TaskAlt,
                     label = title,
                     supportingLabel = activeTask?.activeForm ?: activeTask?.subject,
-                    description = "Open task progress",
+                    description = stringResource(R.string.chat_progress_open_tasks_cd),
                     onClick = onTasksClick
                 )
             }
@@ -212,11 +215,11 @@ fun AidenChatProgressControls(
                 AidenProgressChip(
                     icon = Icons.Default.Groups,
                     label = if (agents.isNotEmpty()) {
-                        "${agents.size} agent${if (agents.size == 1) "" else "s"}"
+                        pluralStringResource(R.plurals.chat_progress_agent_count, agents.size, agents.size)
                     } else {
-                        "Earlier agents"
+                        stringResource(R.string.chat_progress_earlier_agents)
                     },
-                    description = "Open agent progress",
+                    description = stringResource(R.string.chat_progress_open_agents_cd),
                     onClick = onAgentsClick
                 )
             }
@@ -224,7 +227,7 @@ fun AidenChatProgressControls(
                 Spacer(modifier = Modifier.width(2.dp))
                 Icon(Icons.Default.CloudOff, contentDescription = null, tint = palette.secondary)
                 Text(
-                    text = "Last known",
+                    text = stringResource(R.string.chat_progress_last_known),
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.secondary
                 )
@@ -242,7 +245,7 @@ fun AidenChatProgressControls(
         }
         if (announceCompletion) {
             Text(
-                text = "All task steps complete",
+                text = stringResource(R.string.chat_progress_all_complete),
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.secondary,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
@@ -260,6 +263,11 @@ private fun AidenProgressChip(
     onClick: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val chipDescription = if (supportingLabel != null) {
+        stringResource(R.string.chat_progress_chip_supporting_cd, description, label, supportingLabel)
+    } else {
+        stringResource(R.string.chat_progress_chip_cd, description, label)
+    }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = CircleShape,
@@ -274,7 +282,7 @@ private fun AidenProgressChip(
             .clickable(role = Role.Button, onClick = onClick)
             .semantics {
                 role = Role.Button
-                contentDescription = "$description: $label${supportingLabel?.let { ", $it" } ?: ""}"
+                contentDescription = chipDescription
             }
     ) {
         Column(
@@ -357,10 +365,10 @@ private fun AidenTaskProgressContent(progress: AidenChatTaskProgress) {
         }
     }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-        Text("Task progress", style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.chat_progress_task_title), style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "${tasks.count { it.status == AidenChatTaskStatus.COMPLETED }} of ${tasks.size} steps complete",
+            text = stringResource(R.string.chat_progress_steps_complete, tasks.count { it.status == AidenChatTaskStatus.COMPLETED }, tasks.size),
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )
@@ -427,10 +435,10 @@ private fun AidenTaskStepProgressBar(statuses: List<AidenChatTaskStatus>) {
 private fun AidenTaskRow(task: AidenChatTask) {
     val palette = AidenTheme.palette
     val (icon, statusLabel, tint) = when (task.status) {
-        AidenChatTaskStatus.COMPLETED -> Triple(Icons.Default.CheckCircle, "Completed", palette.success)
-        AidenChatTaskStatus.IN_PROGRESS -> Triple(Icons.Default.PlayArrow, "In progress", palette.accent)
-        AidenChatTaskStatus.PENDING -> Triple(Icons.Default.Pending, "Pending", palette.secondary)
-        AidenChatTaskStatus.DELETED -> Triple(Icons.Default.ErrorOutline, "Deleted", palette.secondary)
+        AidenChatTaskStatus.COMPLETED -> Triple(Icons.Default.CheckCircle, stringResource(R.string.chat_task_completed), palette.success)
+        AidenChatTaskStatus.IN_PROGRESS -> Triple(Icons.Default.PlayArrow, stringResource(R.string.chat_task_in_progress), palette.accent)
+        AidenChatTaskStatus.PENDING -> Triple(Icons.Default.Pending, stringResource(R.string.chat_task_pending), palette.secondary)
+        AidenChatTaskStatus.DELETED -> Triple(Icons.Default.ErrorOutline, stringResource(R.string.chat_task_deleted), palette.secondary)
     }
     Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
@@ -447,7 +455,7 @@ private fun AidenTaskRow(task: AidenChatTask) {
                 Text(" · ${task.activeForm}", style = MaterialTheme.typography.labelSmall, color = palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (!task.blockedBy.isNullOrEmpty()) {
-                Text(" · Blocked by ${task.blockedBy.joinToString()}", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                Text(" · " + stringResource(R.string.chat_task_blocked_by, task.blockedBy.joinToString()), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
             }
         }
     }
@@ -537,7 +545,7 @@ private fun AidenAgentRosterContent(
     val attention = agents.filter { it.state == AidenChatAgentState.NEEDS_ATTENTION }
     val finished = agents.filter { it.state in setOf(AidenChatAgentState.COMPLETED, AidenChatAgentState.FAILED, AidenChatAgentState.TIMED_OUT, AidenChatAgentState.INTERRUPTED, AidenChatAgentState.STOPPED, AidenChatAgentState.UNKNOWN) }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-        Text("Agents", style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.chat_agents_title), style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(10.dp))
         val historicalSnapshots = history.filter { roster ->
             roster.turnId != null && roster.turnId != currentRoster.turnId
@@ -553,7 +561,7 @@ private fun AidenAgentRosterContent(
                 add(
                     AidenRosterTurnOption(
                         key = "current",
-                        label = "Current",
+                        label = stringResource(R.string.chat_agents_current),
                         isSelected = selectedRoster.epoch == currentRoster.epoch && selectedRoster.turnId == currentRoster.turnId,
                         turnId = null
                     )
@@ -562,8 +570,8 @@ private fun AidenAgentRosterContent(
                     add(
                         AidenRosterTurnOption(
                             key = "snapshot:${roster.epoch}:${roster.turnId}",
-                            label = roster.agents.firstOrNull()?.startedAt?.let { "Earlier · ${formatRosterDate(it)}" }
-                                ?: "Earlier session",
+                            label = roster.agents.firstOrNull()?.startedAt?.let { stringResource(R.string.chat_agents_earlier_on, formatRosterDate(it)) }
+                                ?: stringResource(R.string.chat_agents_earlier_session),
                             isSelected = roster.epoch == selectedRoster.epoch && roster.turnId == selectedRoster.turnId,
                             turnId = roster.turnId
                         )
@@ -573,7 +581,7 @@ private fun AidenAgentRosterContent(
                     add(
                         AidenRosterTurnOption(
                             key = "previous:${turn.turnId}",
-                            label = "Earlier · ${formatRosterDate(turn.startedAt)}",
+                            label = stringResource(R.string.chat_agents_earlier_on, formatRosterDate(turn.startedAt)),
                             isSelected = selectedRoster.turnId == turn.turnId,
                             turnId = turn.turnId
                         )
@@ -601,15 +609,15 @@ private fun AidenAgentRosterContent(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             if (working.isNotEmpty()) {
-                item { AidenAgentGroupLabel("Working") }
+                item { AidenAgentGroupLabel(stringResource(R.string.chat_agents_group_working)) }
                 items(working, key = { it.agentId }) { agent -> AidenAgentRow(agent, onAgentClick) }
             }
             if (attention.isNotEmpty()) {
-                item { AidenAgentGroupLabel("Needs attention") }
+                item { AidenAgentGroupLabel(stringResource(R.string.chat_agents_group_attention)) }
                 items(attention, key = { it.agentId }) { agent -> AidenAgentRow(agent, onAgentClick) }
             }
             if (finished.isNotEmpty()) {
-                item { AidenAgentGroupLabel("Finished") }
+                item { AidenAgentGroupLabel(stringResource(R.string.chat_agents_group_finished)) }
                 items(finished, key = { it.agentId }) { agent -> AidenAgentRow(agent, onAgentClick) }
             }
             if (agents.isEmpty()) {
@@ -617,9 +625,9 @@ private fun AidenAgentRosterContent(
                     Text(
                         text = selectedRoster.unavailableReason?.let { agentUnavailableMessage(it) }
                             ?: if (turnOptions.isNotEmpty() || historicalSnapshots.isNotEmpty()) {
-                                "No agents in this session. Choose an earlier session above."
+                                stringResource(R.string.chat_agents_none_choose_earlier)
                             } else {
-                                "No agents in this session."
+                                stringResource(R.string.chat_agents_none)
                             },
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary,
@@ -692,14 +700,16 @@ private fun formatRosterDate(instant: java.time.Instant): String =
         .withZone(java.time.ZoneId.systemDefault())
         .format(instant)
 
+@Composable
 private fun taskUnavailableMessage(reason: AidenChatTaskUnavailableReason): String? = when (reason) {
-    AidenChatTaskUnavailableReason.STORAGE_NOT_ENABLED -> "Task tracking is off on the Mac"
-    AidenChatTaskUnavailableReason.INVALID_SNAPSHOT -> "Task progress is temporarily unavailable"
+    AidenChatTaskUnavailableReason.STORAGE_NOT_ENABLED -> stringResource(R.string.chat_tasks_storage_off)
+    AidenChatTaskUnavailableReason.INVALID_SNAPSHOT -> stringResource(R.string.chat_tasks_unavailable)
     AidenChatTaskUnavailableReason.UNSUPPORTED -> null
 }
 
+@Composable
 private fun agentUnavailableMessage(reason: AidenChatAgentUnavailableReason): String? = when (reason) {
-    AidenChatAgentUnavailableReason.INVALID_SNAPSHOT -> "Agent progress is temporarily unavailable"
+    AidenChatAgentUnavailableReason.INVALID_SNAPSHOT -> stringResource(R.string.chat_agents_unavailable)
     AidenChatAgentUnavailableReason.UNSUPPORTED -> null
 }
 
@@ -721,12 +731,14 @@ private fun AidenAgentRow(agent: AidenChatAgent, onClick: (AidenChatAgent) -> Un
         AidenChatAgentState.RUNNING -> Icons.Default.PlayArrow
     }
     val status = agentStateLabel(agent.state)
+    val rowDescription = stringResource(R.string.chat_agent_row_cd, agent.label, status)
+    val roleAndStatus = listOfNotNull(roleLabel(agent.role), status, agent.activity).joinToString(" · ")
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = AidenUi.MinimumTouchTarget)
             .clickable(role = Role.Button) { onClick(agent) }
-            .semantics { role = Role.Button; contentDescription = "${agent.label}, $status" }
+            .semantics { role = Role.Button; contentDescription = rowDescription }
             .padding(vertical = 8.dp, horizontal = ((agent.depth - 1).coerceAtMost(4) * 12).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -734,7 +746,7 @@ private fun AidenAgentRow(agent: AidenChatAgent, onClick: (AidenChatAgent) -> Un
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(agent.label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${roleLabel(agent.role)} · $status${agent.activity?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.labelSmall, color = palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(roleAndStatus, style = MaterialTheme.typography.labelSmall, color = palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -754,10 +766,11 @@ private fun AidenAgentDetailContent(
     var confirmsStop by remember(agent.agentId) { mutableStateOf(false) }
     val palette = AidenTheme.palette
     Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
-        TextButton(onClick = onBack) { Text("Back", color = palette.foreground) }
+        TextButton(onClick = onBack) { Text(stringResource(R.string.action_back), color = palette.foreground) }
         agents.firstOrNull { it.agentId == agent.parentAgentId }?.let { parent ->
-            TextButton(onClick = { openAgent(parent) }, modifier = Modifier.semantics { contentDescription = "Open parent agent ${parent.label}" }) {
-                Text("Started by ${parent.label}", color = palette.foreground)
+            val parentDescription = stringResource(R.string.chat_agent_open_parent_cd, parent.label)
+            TextButton(onClick = { openAgent(parent) }, modifier = Modifier.semantics { contentDescription = parentDescription }) {
+                Text(stringResource(R.string.chat_agent_started_by, parent.label), color = palette.foreground)
             }
         }
         Text(agent.label, style = MaterialTheme.typography.headlineSmall, color = palette.foreground, fontWeight = FontWeight.SemiBold)
@@ -768,16 +781,16 @@ private fun AidenAgentDetailContent(
             Text(it, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        Text("${agent.turns} turns · ${agent.tools} tools · ${agent.tokens} tokens", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        Text(stringResource(R.string.chat_agent_stats, agent.turns, agent.tools, agent.tokens), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         Spacer(modifier = Modifier.height(6.dp))
-        Text("Updated ${agent.updatedAt}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        Text(stringResource(R.string.chat_agent_updated, agent.updatedAt.toString()), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         if (agent.notices?.contains(sbtbiswas.AidenOnTheGo.models.AidenChatAgentNotice.DISPLAY_FILTERED) == true) {
             Spacer(modifier = Modifier.height(12.dp))
-            Text("Some details are hidden for privacy.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+            Text(stringResource(R.string.chat_agent_privacy_hidden), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         }
         val children = AidenAgentNavigation.children(agent.agentId, agents)
         if (children.isNotEmpty()) {
-            Text("Sub-agents", style = MaterialTheme.typography.titleMedium, color = palette.foreground)
+            Text(stringResource(R.string.chat_agent_sub_agents), style = MaterialTheme.typography.titleMedium, color = palette.foreground)
             children.forEach { child -> AidenAgentRow(child, openAgent) }
         }
         if (stopControl != AidenAgentStopControl.HIDDEN) {
@@ -787,12 +800,12 @@ private fun AidenAgentDetailContent(
                 enabled = stopControl == AidenAgentStopControl.AVAILABLE
             ) {
                 Text(
-                    if (stopControl == AidenAgentStopControl.STOPPING) "Stopping…" else "Stop agent",
+                    if (stopControl == AidenAgentStopControl.STOPPING) stringResource(R.string.chat_agent_stopping) else stringResource(R.string.chat_agent_stop),
                     color = if (stopControl == AidenAgentStopControl.AVAILABLE) palette.danger else palette.secondary
                 )
             }
             Text(
-                "The Mac stops only this agent. The main run and other agents keep going.",
+                stringResource(R.string.chat_agent_stop_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = palette.secondary
             )
@@ -802,17 +815,17 @@ private fun AidenAgentDetailContent(
         val palette = AidenTheme.palette
         AlertDialog(
             onDismissRequest = { confirmsStop = false },
-            title = { Text("Stop ${agent.label}?", fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(R.string.chat_agent_stop_title, agent.label), fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "The Mac stops this delegated agent. You cannot resume it from here.",
+                    stringResource(R.string.chat_agent_stop_body),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )
             },
             confirmButton = {
                 AidenDialogConfirmButton(
-                    text = "Stop agent",
+                    text = stringResource(R.string.chat_agent_stop),
                     onClick = {
                         confirmsStop = false
                         onStop()
@@ -821,7 +834,7 @@ private fun AidenAgentDetailContent(
                 )
             },
             dismissButton = {
-                AidenDialogDismissButton(text = "Keep running", onClick = { confirmsStop = false })
+                AidenDialogDismissButton(text = stringResource(R.string.chat_agent_keep_running), onClick = { confirmsStop = false })
             },
             shape = AidenShape.Dialog,
             containerColor = palette.raised
@@ -829,22 +842,28 @@ private fun AidenAgentDetailContent(
     }
 }
 
-private fun roleLabel(role: AidenChatAgentRole): String = when (role) {
-    AidenChatAgentRole.SCOUT -> "Scout"
-    AidenChatAgentRole.PLANNER -> "Planner"
-    AidenChatAgentRole.REVIEWER -> "Reviewer"
-    AidenChatAgentRole.IMPLEMENTER -> "Implementer"
-}
+@Composable
+private fun roleLabel(role: AidenChatAgentRole): String = stringResource(
+    when (role) {
+        AidenChatAgentRole.SCOUT -> R.string.chat_agent_role_scout
+        AidenChatAgentRole.PLANNER -> R.string.chat_agent_role_planner
+        AidenChatAgentRole.REVIEWER -> R.string.chat_agent_role_reviewer
+        AidenChatAgentRole.IMPLEMENTER -> R.string.chat_agent_role_implementer
+    }
+)
 
-private fun agentStateLabel(state: AidenChatAgentState): String = when (state) {
-    AidenChatAgentState.QUEUED -> "Queued"
-    AidenChatAgentState.STARTING -> "Starting"
-    AidenChatAgentState.RUNNING -> "Working"
-    AidenChatAgentState.NEEDS_ATTENTION -> "Needs attention"
-    AidenChatAgentState.COMPLETED -> "Completed"
-    AidenChatAgentState.FAILED -> "Failed"
-    AidenChatAgentState.TIMED_OUT -> "Timed out"
-    AidenChatAgentState.INTERRUPTED -> "Interrupted"
-    AidenChatAgentState.STOPPED -> "Stopped"
-    AidenChatAgentState.UNKNOWN -> "Unknown"
-}
+@Composable
+private fun agentStateLabel(state: AidenChatAgentState): String = stringResource(
+    when (state) {
+        AidenChatAgentState.QUEUED -> R.string.chat_agent_state_queued
+        AidenChatAgentState.STARTING -> R.string.chat_agent_state_starting
+        AidenChatAgentState.RUNNING -> R.string.chat_agent_state_working
+        AidenChatAgentState.NEEDS_ATTENTION -> R.string.chat_agent_state_needs_attention
+        AidenChatAgentState.COMPLETED -> R.string.chat_agent_state_completed
+        AidenChatAgentState.FAILED -> R.string.chat_agent_state_failed
+        AidenChatAgentState.TIMED_OUT -> R.string.chat_agent_state_timed_out
+        AidenChatAgentState.INTERRUPTED -> R.string.chat_agent_state_interrupted
+        AidenChatAgentState.STOPPED -> R.string.chat_agent_state_stopped
+        AidenChatAgentState.UNKNOWN -> R.string.chat_agent_state_unknown
+    }
+)

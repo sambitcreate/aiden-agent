@@ -45,8 +45,9 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
-private const val FORK_SUMMARY_TITLE = "What happened after this point"
 private val CompactActionPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
 
 /** "Forked from {title}" at the top of a fork's transcript. Opens the source unless it was deleted. */
@@ -58,11 +59,12 @@ fun AidenForkLineageRow(
     modifier: Modifier = Modifier
 ) {
     val label = when (source) {
-        is AidenChatForkSource.Named -> "Forked from ${source.title.ifBlank { "Untitled chat" }}"
-        is AidenChatForkSource.Deleted -> "Forked from a deleted chat"
-        is AidenChatForkSource.Resolving, is AidenChatForkSource.Unknown -> "Forked from another chat"
+        is AidenChatForkSource.Named -> stringResource(R.string.chat_fork_from, source.title.ifBlank { stringResource(R.string.chat_fork_untitled) })
+        is AidenChatForkSource.Deleted -> stringResource(R.string.chat_fork_from_deleted)
+        is AidenChatForkSource.Resolving, is AidenChatForkSource.Unknown -> stringResource(R.string.chat_fork_from_other)
     }
     val opens = onOpenSource != null && source !is AidenChatForkSource.Deleted
+    val openLabel = stringResource(R.string.chat_fork_open_original)
     val interaction = remember { MutableInteractionSource() }
     Box(modifier = modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Surface(
@@ -79,7 +81,7 @@ fun AidenForkLineageRow(
                                 interactionSource = interaction,
                                 indication = ripple(),
                                 role = Role.Button,
-                                onClickLabel = "Open the original chat"
+                                onClickLabel = openLabel
                             ) {
                                 onOpenSource?.invoke(source.chatId)
                             }
@@ -154,7 +156,7 @@ fun AidenForkSummaryCard(
                         Column(modifier = Modifier.weight(1f)) {
                             SummaryTitle(palette)
                             Text(
-                                text = "Summarizing the original chat…",
+                                text = stringResource(R.string.chat_fork_summarizing),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = palette.secondary,
                                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
@@ -162,7 +164,7 @@ fun AidenForkSummaryCard(
                         }
                         if (canManage) {
                             AidenTonalButton(
-                                text = "Cancel",
+                                text = stringResource(R.string.action_cancel),
                                 onClick = onCancel,
                                 enabled = !busy,
                                 contentPadding = CompactActionPadding
@@ -174,8 +176,10 @@ fun AidenForkSummaryCard(
                 AidenChatForkSummaryState.FAILED -> {
                     SummaryTitle(palette)
                     Text(
-                        text = "${summary.error ?: "The summary could not be generated."} " +
-                            "Messages you send wait until you retry or continue without it.",
+                        text = stringResource(
+                            R.string.chat_fork_summary_failed,
+                            summary.error ?: stringResource(R.string.chat_fork_summary_failed_default)
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }
@@ -186,9 +190,9 @@ fun AidenForkSummaryCard(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            AidenPrimaryButton(text = "Retry", onClick = onRetry, enabled = !busy)
+                            AidenPrimaryButton(text = stringResource(R.string.action_retry), onClick = onRetry, enabled = !busy)
                             AidenTonalButton(
-                                text = "Continue without summary",
+                                text = stringResource(R.string.chat_fork_continue_without),
                                 onClick = onSkip,
                                 enabled = !busy
                             )
@@ -214,6 +218,7 @@ private fun ReadySummary(
         animationSpec = AidenMotion.spatial(reduceMotion),
         label = "forkSummaryChevron"
     )
+    val disclosureState = stringResource(if (expanded) R.string.state_expanded else R.string.state_collapsed)
     val interaction = remember { MutableInteractionSource() }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -225,7 +230,7 @@ private fun ReadySummary(
                 indication = ripple(),
                 role = Role.Button
             ) { expanded = !expanded }
-            .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+            .semantics { stateDescription = disclosureState }
             .padding(vertical = 2.dp)
     ) {
         Icon(
@@ -238,7 +243,7 @@ private fun ReadySummary(
         SummaryTitle(palette)
     }
     Text(
-        text = "The model sees this summary. None of it happened in this chat.",
+        text = stringResource(R.string.chat_fork_summary_note),
         style = MaterialTheme.typography.bodySmall,
         color = palette.secondary
     )
@@ -263,7 +268,7 @@ private fun ReadySummary(
 @Composable
 private fun SummaryTitle(palette: AidenPalette) {
     Text(
-        text = FORK_SUMMARY_TITLE,
+        text = stringResource(R.string.chat_fork_summary_title),
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.SemiBold,
         color = palette.foreground
@@ -274,7 +279,7 @@ private fun SummaryTitle(palette: AidenPalette) {
 private fun FocusLine(focus: String?, palette: AidenPalette) {
     if (focus.isNullOrEmpty()) return
     Text(
-        text = "Focus: $focus",
+        text = stringResource(R.string.chat_fork_focus, focus),
         style = MaterialTheme.typography.bodySmall,
         color = palette.secondary
     )
@@ -291,12 +296,11 @@ fun AidenForkSummaryDialog(
     var focus by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Fork with summary", fontWeight = FontWeight.Bold) },
+        title = { Text(stringResource(R.string.chat_fork_dialog_title), fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "The new chat keeps the conversation up to this point. Aiden summarizes what " +
-                        "happened after it in the original chat and gives that summary to the model.",
+                    stringResource(R.string.chat_fork_dialog_body),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )
@@ -305,8 +309,8 @@ fun AidenForkSummaryDialog(
                     onValueChange = {
                         focus = it.take(AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH)
                     },
-                    label = { Text("Focus the summary on…") },
-                    placeholder = { Text("For example: the decisions about the parser") },
+                    label = { Text(stringResource(R.string.chat_fork_focus_label)) },
+                    placeholder = { Text(stringResource(R.string.chat_fork_focus_placeholder)) },
                     supportingText = {
                         Text("${focus.length} / ${AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH}")
                     },
@@ -319,7 +323,7 @@ fun AidenForkSummaryDialog(
         },
         confirmButton = {
             AidenDialogConfirmButton(
-                text = "Fork",
+                text = stringResource(R.string.chat_fork_confirm),
                 onClick = { onConfirm(focus.trim().ifEmpty { null }) },
                 enabled = !busy
             )

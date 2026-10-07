@@ -56,6 +56,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /** `ask_user_question` prompt card (iOS parity: AidenQuestionCard). All
  * questions render stacked; a non-blank custom draft overrides that question's
@@ -67,6 +69,8 @@ fun AidenQuestionCard(
     onSubmit: (AidenQuestionRespondRequest) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val customAnswerDescription = stringResource(R.string.chat_question_custom_answer_cd)
+    val typeSomethingDescription = stringResource(R.string.chat_question_type_something_cd)
     var selections by remember(prompt.id) { mutableStateOf(mapOf<Int, Set<String>>()) }
     var customDrafts by remember(prompt.id) { mutableStateOf(mapOf<Int, String>()) }
     var customOpen by remember(prompt.id) { mutableStateOf(setOf<Int>()) }
@@ -96,16 +100,16 @@ fun AidenQuestionCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = "Aiden needs your input",
+                        text = stringResource(R.string.chat_question_title),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = palette.foreground
                     )
                     Text(
                         text = if (prompt.questions.size > 1) {
-                            "Answer what you can — unanswered questions are skipped."
+                            stringResource(R.string.chat_question_multi_hint)
                         } else {
-                            "Choose an option or type your own answer."
+                            stringResource(R.string.chat_question_single_hint)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary
@@ -127,7 +131,7 @@ fun AidenQuestionCard(
                     if (question.multiSelect) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Select all that apply",
+                            text = stringResource(R.string.chat_question_select_all),
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.secondary
                         )
@@ -217,12 +221,12 @@ fun AidenQuestionCard(
                                 cursorBrush = SolidColor(palette.accent),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .semantics { contentDescription = "Custom answer" }
+                                    .semantics { contentDescription = customAnswerDescription }
                             ) { innerTextField ->
                                 Box {
                                     if (draftValue.isEmpty()) {
                                         Text(
-                                            text = "Type your answer",
+                                            text = stringResource(R.string.chat_question_custom_placeholder),
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = palette.secondary
                                         )
@@ -241,7 +245,7 @@ fun AidenQuestionCard(
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.semantics {
-                                contentDescription = "Type something. Shows a field for a custom answer"
+                                contentDescription = typeSomethingDescription
                             }
                         ) {
                             Icon(
@@ -251,7 +255,7 @@ fun AidenQuestionCard(
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = "Type something.",
+                                text = stringResource(R.string.chat_question_type_something),
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.Medium,
                                 color = palette.secondary
@@ -271,7 +275,7 @@ fun AidenQuestionCard(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "This paired device cannot respond to prompts.",
+                        text = stringResource(R.string.chat_question_cannot_respond),
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary
                     )
@@ -283,13 +287,13 @@ fun AidenQuestionCard(
                     horizontalArrangement = Arrangement.End
                 ) {
                     AidenTonalButton(
-                        text = "Skip",
+                        text = stringResource(R.string.chat_question_skip),
                         onClick = { onSubmit(AidenQuestionRespondRequest(cancelled = true, answers = emptyList())) },
                         enabled = enabled
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     AidenPrimaryButton(
-                        text = "Submit",
+                        text = stringResource(R.string.chat_question_submit),
                         onClick = { onSubmit(AidenQuestionRespondRequest(cancelled = false, answers = answers)) },
                         enabled = enabled && answers.isNotEmpty()
                     )

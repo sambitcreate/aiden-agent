@@ -36,6 +36,11 @@
     <string name="action_remove">Remove</string>
     <string name="action_save">Save</string>
     <string name="action_saving">Saving…</string>
+    <string name="state_loading">Loading</string>
+    <string name="action_share">Share</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_expand">Expand</string>
+    <string name="action_collapse">Collapse</string>
     <string name="action_options">Options</string>
     <string name="action_done">Done</string>
     <string name="action_edit">Edit</string>
@@ -554,4 +559,199 @@
     <string name="bot_image_description_placeholder">Describe the appearance of your bot...</string>
     <string name="bot_avatar_saving">Saving avatar…</string>
     <string name="bot_avatar_restoring">Restoring avatar…</string>
+
+    <!-- Chat: task and agent progress -->
+    <string name="chat_progress_step">Step %1$d / %2$d</string>
+    <string name="chat_progress_steps_done">%1$d / %2$d steps</string>
+    <string name="chat_progress_open_tasks_cd">Open task progress</string>
+    <plurals name="chat_progress_agent_count">
+        <item quantity="one">%1$d agent</item>
+        <item quantity="other">%1$d agents</item>
+    </plurals>
+    <string name="chat_progress_earlier_agents">Earlier agents</string>
+    <string name="chat_progress_open_agents_cd">Open agent progress</string>
+    <string name="chat_progress_last_known">Last known</string>
+    <string name="chat_progress_all_complete">All task steps complete</string>
+    <string name="chat_progress_chip_cd">%1$s: %2$s</string>
+    <string name="chat_progress_chip_supporting_cd">%1$s: %2$s, %3$s</string>
+    <string name="chat_progress_task_title">Task progress</string>
+    <string name="chat_progress_steps_complete">%1$d of %2$d steps complete</string>
+    <string name="chat_task_completed">Completed</string>
+    <string name="chat_task_in_progress">In progress</string>
+    <string name="chat_task_pending">Pending</string>
+    <string name="chat_task_deleted">Deleted</string>
+    <string name="chat_task_blocked_by">Blocked by %1$s</string>
+    <string name="chat_agents_title">Agents</string>
+    <string name="chat_agents_current">Current</string>
+    <string name="chat_agents_earlier_on">Earlier · %1$s</string>
+    <string name="chat_agents_earlier_session">Earlier session</string>
+    <string name="chat_agents_group_working">Working</string>
+    <string name="chat_agents_group_attention">Needs attention</string>
+    <string name="chat_agents_group_finished">Finished</string>
+    <string name="chat_agents_none_choose_earlier">No agents in this session. Choose an earlier session above.</string>
+    <string name="chat_agents_none">No agents in this session.</string>
+    <string name="chat_tasks_storage_off">Task tracking is off on the Mac</string>
+    <string name="chat_tasks_unavailable">Task progress is temporarily unavailable</string>
+    <string name="chat_agents_unavailable">Agent progress is temporarily unavailable</string>
+    <string name="chat_agent_row_cd">%1$s, %2$s</string>
+    <string name="chat_agent_open_parent_cd">Open parent agent %1$s</string>
+    <string name="chat_agent_started_by">Started by %1$s</string>
+    <string name="chat_agent_stats">%1$d turns · %2$d tools · %3$d tokens</string>
+    <string name="chat_agent_updated">Updated %1$s</string>
+    <string name="chat_agent_privacy_hidden">Some details are hidden for privacy.</string>
+    <string name="chat_agent_sub_agents">Sub-agents</string>
+    <string name="chat_agent_stopping">Stopping…</string>
+    <string name="chat_agent_stop">Stop agent</string>
+    <string name="chat_agent_stop_note">The Mac stops only this agent. The main run and other agents keep going.</string>
+    <string name="chat_agent_stop_title">Stop %1$s?</string>
+    <string name="chat_agent_stop_body">The Mac stops this delegated agent. You cannot resume it from here.</string>
+    <string name="chat_agent_keep_running">Keep running</string>
+    <string name="chat_agent_role_scout">Scout</string>
+    <string name="chat_agent_role_planner">Planner</string>
+    <string name="chat_agent_role_reviewer">Reviewer</string>
+    <string name="chat_agent_role_implementer">Implementer</string>
+    <string name="chat_agent_state_queued">Queued</string>
+    <string name="chat_agent_state_starting">Starting</string>
+    <string name="chat_agent_state_working">Working</string>
+    <string name="chat_agent_state_needs_attention">Needs attention</string>
+    <string name="chat_agent_state_completed">Completed</string>
+    <string name="chat_agent_state_failed">Failed</string>
+    <string name="chat_agent_state_timed_out">Timed out</string>
+    <string name="chat_agent_state_interrupted">Interrupted</string>
+    <string name="chat_agent_state_stopped">Stopped</string>
+    <string name="chat_agent_state_unknown">Unknown</string>
+
+    <!-- Chat: forks -->
+    <string name="chat_fork_summary_title">What happened after this point</string>
+    <string name="chat_fork_from">Forked from %1$s</string>
+    <string name="chat_fork_untitled">Untitled chat</string>
+    <string name="chat_fork_from_deleted">Forked from a deleted chat</string>
+    <string name="chat_fork_from_other">Forked from another chat</string>
+    <string name="chat_fork_open_original">Open the original chat</string>
+    <string name="chat_fork_summarizing">Summarizing the original chat…</string>
+    <string name="chat_fork_summary_failed">%1$s Messages you send wait until you retry or continue without it.</string>
+    <string name="chat_fork_summary_failed_default">The summary could not be generated.</string>
+    <string name="chat_fork_continue_without">Continue without summary</string>
+    <string name="chat_fork_summary_note">The model sees this summary. None of it happened in this chat.</string>
+    <string name="chat_fork_focus">Focus: %1$s</string>
+    <string name="chat_fork_dialog_title">Fork with summary</string>
+    <string name="chat_fork_dialog_body">The new chat keeps the conversation up to this point. Aiden summarizes what happened after it in the original chat and gives that summary to the model.</string>
+    <string name="chat_fork_focus_label">Focus the summary on…</string>
+    <string name="chat_fork_focus_placeholder">For example: the decisions about the parser</string>
+    <string name="chat_fork_confirm">Fork</string>
+
+    <!-- Chat: transcript -->
+    <string name="chat_title_fallback">Chat</string>
+    <string name="chat_approval_review_only">This paired device can review approvals but cannot respond.</string>
+    <string name="chat_approval_schedule_write_required">Schedule write access is required to approve this task.</string>
+    <string name="chat_approval_confirm_on_desktop">Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.</string>
+    <string name="chat_composer_placeholder_bot">Message %1$s</string>
+    <string name="chat_composer_placeholder">Message Aiden</string>
+    <string name="chat_progress_hide">Hide progress</string>
+    <string name="chat_progress_show">Show progress</string>
+    <string name="chat_artifact_unsupported">Can\'t view on this device. View in Aiden Agent.</string>
+    <string name="chat_working">Aiden is working...</string>
+    <string name="chat_waiting_network_cd">Aiden is waiting for the network to return</string>
+    <string name="chat_waiting_network">Waiting for network</string>
+    <string name="chat_reasoning_thinking">Thinking</string>
+    <string name="chat_reasoning_thought">Thought</string>
+    <string name="chat_reasoning_collapse">Collapse reasoning</string>
+    <string name="chat_reasoning_expand">Expand reasoning</string>
+    <string name="chat_timeline_file">File %1$s · %2$s</string>
+
+    <!-- Chat: message actions -->
+    <string name="chat_message_actions">Message actions</string>
+    <string name="chat_message_select_text_action">Select text</string>
+    <string name="chat_message_ask_about">Ask about this</string>
+    <string name="chat_message_fork_here">Fork from here</string>
+    <string name="chat_message_fork_summary_action">Fork with summary</string>
+    <string name="chat_message_edit_in_fork">Edit in fork</string>
+    <string name="chat_message_copy_text">Copy Text</string>
+    <string name="chat_message_select_text">Select Text</string>
+    <string name="chat_message_fork_summary_menu">Fork with summary…</string>
+
+    <!-- Chat: image attachments -->
+    <plurals name="chat_images_count_cd">
+        <item quantity="one">%1$d image attachment</item>
+        <item quantity="other">%1$d image attachments</item>
+    </plurals>
+    <string name="chat_images_photo_position">Photo %1$d of %2$d</string>
+    <string name="chat_images_next">Next photo</string>
+    <string name="chat_images_previous">Previous photo</string>
+    <string name="chat_images_open_to_retry">Open to retry</string>
+    <string name="chat_images_loading">Loading %1$s</string>
+    <string name="chat_images_save_failed">Images couldn\'t be saved</string>
+    <string name="chat_images_saved_one">Saved to Photos</string>
+    <plurals name="chat_images_saved">
+        <item quantity="one">Saved %1$d image to Photos</item>
+        <item quantity="other">Saved %1$d images to Photos</item>
+    </plurals>
+    <string name="chat_images_permission_needed">Photos access is needed to save images</string>
+    <string name="chat_images_close_viewer">Close image viewer</string>
+    <string name="chat_images_page_position">%1$d of %2$d</string>
+    <string name="chat_images_saving">Saving images</string>
+    <string name="chat_images_save_menu">Save images</string>
+    <string name="chat_images_save_one">Save Image</string>
+    <string name="chat_images_save_all">Save All Images</string>
+
+    <!-- Chat: composer -->
+    <string name="chat_composer_remove_attachment">Remove %1$s</string>
+    <string name="chat_composer_remove_skill">Remove skill %1$s</string>
+    <string name="chat_composer_add_attachment">Add attachment</string>
+    <string name="chat_composer_photo_library">Photo Library</string>
+    <string name="chat_composer_choose_file">Choose File</string>
+    <string name="chat_composer_stop_voice">Stop voice input</string>
+    <string name="chat_composer_start_voice">Start voice input</string>
+    <string name="chat_composer_stop_generation">Stop generation</string>
+    <string name="chat_composer_send">Send message</string>
+    <string name="chat_composer_mode_steer">Steer</string>
+    <string name="chat_composer_mode_steer_detail">Add guidance without stopping</string>
+    <string name="chat_composer_mode_steer_action">Steer response</string>
+    <string name="chat_composer_mode_queue">Queue</string>
+    <string name="chat_composer_mode_queue_detail">Run after this response</string>
+    <string name="chat_composer_mode_queue_action">Queue message</string>
+    <string name="chat_composer_choose_action">Choose message action</string>
+    <string name="chat_composer_suggest_skill">Skill %1$s</string>
+    <string name="chat_composer_suggest_skill_unavailable">Skill %1$s, unavailable</string>
+    <string name="chat_composer_suggest_agent">Mention agent %1$s</string>
+    <string name="chat_composer_suggest_file">Mention file %1$s</string>
+    <string name="chat_composer_suggest_agent_tag">agent</string>
+    <string name="chat_composer_suggest_file_tag">file</string>
+
+    <!-- Chat: message footer and select text -->
+    <string name="chat_message_worked_for">· %1$s</string>
+    <string name="chat_message_copy">Copy message</string>
+    <string name="chat_message_copy_response">Copy response</string>
+    <string name="chat_read_aloud_stop">Stop reading aloud</string>
+    <string name="chat_read_aloud_start">Read response aloud</string>
+    <string name="chat_select_text_title">Select text</string>
+    <string name="chat_select_text_ask_all">Ask about all</string>
+
+    <!-- Chat: question card -->
+    <string name="chat_question_title">Aiden needs your input</string>
+    <string name="chat_question_multi_hint">Answer what you can — unanswered questions are skipped.</string>
+    <string name="chat_question_single_hint">Choose an option or type your own answer.</string>
+    <string name="chat_question_select_all">Select all that apply</string>
+    <string name="chat_question_custom_answer_cd">Custom answer</string>
+    <string name="chat_question_custom_placeholder">Type your answer</string>
+    <string name="chat_question_type_something_cd">Type something. Shows a field for a custom answer</string>
+    <string name="chat_question_type_something">Type something.</string>
+    <string name="chat_question_cannot_respond">This paired device cannot respond to prompts.</string>
+    <string name="chat_question_skip">Skip</string>
+    <string name="chat_question_submit">Submit</string>
+
+    <!-- Chat: approvals, code, transcript chrome -->
+    <string name="chat_approval_approve_task">Approve task</string>
+    <string name="chat_approval_allow_once">Allow once</string>
+    <string name="chat_approval_deny">Deny</string>
+    <string name="chat_approval_more_options">More allow options</string>
+    <string name="chat_load_earlier_loading">Loading earlier messages</string>
+    <string name="chat_load_earlier">Load earlier messages</string>
+    <string name="chat_voice_listening">Listening...</string>
+    <string name="chat_code_label">CODE</string>
+    <string name="chat_code_copied">Copied</string>
+    <string name="chat_code_copy_cd">Copy code</string>
+    <string name="chat_code_copy">Copy</string>
+    <string name="chat_jump_to_latest">Jump to latest</string>
+    <string name="chat_loading_conversation">Loading conversation</string>
 </resources>
