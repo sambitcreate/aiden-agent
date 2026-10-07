@@ -15,6 +15,7 @@ export const INVOKE_PREFIXES = [
   "devices:",
   "chats:",
   "computerUse:",
+  "designProjects:",
   "dictation:",
   "diagnostics:",
   "exa:",
