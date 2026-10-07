@@ -14,6 +14,7 @@
  *   bridge-late:<tool>  call <tool>, then call it again 400 ms later; reply with both results
  *   bridge-abandon:<tool> call <tool> but give up after 300 ms and end the turn
  *   write:<abs path>    write through fs/write_text_file without asking first
+ *   read-later:<path>   end the turn, then try to read <path> 300 ms later (logged as lateRead)
  *   slow                wait until cancelled
  *   crash               exit the process mid-turn
  *   history             reply with the number of prompts this session received
@@ -335,6 +336,16 @@ const connection = new AgentSideConnection(
             : [await call("only")];
           await client.close().catch(() => {});
           await say(`${command}:${results.join(",")}`);
+          break;
+        }
+        case "read-later": {
+          setTimeout(() => {
+            connection
+              .readTextFile({ sessionId: session.id, path: argument })
+              .then(() => log({ method: "lateRead", ok: true }))
+              .catch(() => log({ method: "lateRead", ok: false }));
+          }, 300);
+          await say("scheduled");
           break;
         }
         case "write": {

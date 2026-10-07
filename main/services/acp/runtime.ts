@@ -632,7 +632,10 @@ export class AcpHarnessRuntime {
         onUpdate: (notification) => this.onUpdate(binding, notification),
         onPermission: (request) => this.onPermission(binding, request),
         readTextFile: async (request) => {
-          const current = binding?.host ?? host;
+          // Like writes, reads need a running turn: an idle agent between
+          // turns gets no access to the chat's files.
+          const current = binding?.host;
+          if (!binding?.turn || !current) throw new AcpHarnessError("unavailable", "No response is running.");
           return readClientTextFile(request, {
             roots: current.roots,
             canWrite: () => false,

@@ -522,3 +522,15 @@ test("sign-out waits for a catalog launch that was still starting and stops it",
   reopen();
   await runtime.close();
 });
+
+test("an idle agent between turns cannot read the chat's files", async () => {
+  const h = harness();
+  const file = path.join(h.dir, "notes.txt");
+  writeFileSync(file, "private");
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const reply = await turn(h, [userMessage(`read-later:${file}`)]);
+  assert.equal(text(reply), "scheduled");
+  await waitForAgentLog(h.env, (entry) => entry.method === "lateRead");
+  assert.equal(readAgentLog(h.env).find((entry) => entry.method === "lateRead")?.ok, false);
+  await h.runtime.close();
+});
