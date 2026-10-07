@@ -1,13 +1,12 @@
 import "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../../lib/command-system";
 import { Composer } from "../../components/composer";
-import { MessageList } from "../../components/message-list";
 import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../../lib/hosts/composer-surfaces";
-import type { ChatMessage, Workspace } from "../../lib/types";
+import type { Workspace } from "../../lib/types";
 import type { GenerationTimeline } from "../../shared/generation-timeline";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { resolveBotReplyProjection } from "./bot-reply-projection";
@@ -103,44 +102,6 @@ function toolTimeline(contentOffset: number): GenerationTimeline {
     ],
   };
 }
-
-test("Bot replies fold tool activity and narration into a collapsed Updates line", () => {
-  const progress = "Let me look up a few recipes.";
-  const answer = "Here is your meal plan for the week.";
-  const content = `${progress}\n\n${answer}`;
-  const message: ChatMessage = {
-    id: "m1",
-    role: "assistant",
-    content,
-    createdAt: 2,
-    timeline: toolTimeline(progress.length),
-  };
-  render(
-    <MessageList
-      chatId="bot-chat"
-      messages={[message]}
-      streamingText={null}
-      streamingReasoning={null}
-      timeline={null}
-      liveSubagents={[]}
-      subagentsEnabled={false}
-      onOpenSubagent={() => undefined}
-      agentActivity={null}
-      error={null}
-      botPresentation
-    />,
-  );
-  const updates = screen.getByRole("button", { name: "Updates" });
-  assert.equal(updates.getAttribute("aria-expanded"), "false");
-  assert.ok(screen.getByText(answer));
-  assert.equal(screen.queryByText(progress), null);
-  assert.equal(screen.queryByText(/weeknight dinners/u), null);
-
-  fireEvent.click(updates);
-  const region = screen.getByRole("region", { name: "Updates" });
-  assert.ok(within(region).getByText(progress));
-  assert.ok(within(region).getByText(/weeknight dinners/u));
-});
 
 test("the reply projection matches the phone rule for split, running, and tool-free replies", () => {
   const text = "Checking.\n\nChecking.\n\nDone: three dinners.";

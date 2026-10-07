@@ -42,9 +42,6 @@ import {
   createAgentsInstructionNoticeLog,
 } from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
-import { BotChatActions, BotChatTitle } from "./bots/bot-chat-header";
-import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";
-import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
@@ -96,7 +93,6 @@ import {
   refreshCodexProviderState,
   useAllRegularChats,
   useChat,
-  useBot,
   useComputerUseStatus,
   useGitInfo,
   useModelInfo,
@@ -223,16 +219,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : persistedChat;
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
-  const bot = useBot(chat.data?.botId);
   // A Bot's conversation lives at its own route, rendered from the live projection.
   const botChatId = chat.data?.botId;
   React.useEffect(() => {
     if (!botChatId) return;
     void navigate({ to: "/bots/$botId/chat", params: { botId: botChatId }, replace: true });
   }, [botChatId, navigate]);
-  /** Bot chats are calm, message-style conversations with no workspace chrome. */
-  const botMode = Boolean(chat.data?.botId);
-  const [botDeleteOpen, setBotDeleteOpen] = React.useState(false);
   const settings = useSettings();
   const computerUseGloballyEnabled =
     capabilities.computerUse && settings.data?.computerUseEnabled === true;
@@ -246,9 +238,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
   const sideQuestionBlockedReason = draft
     ? "Send the first message before asking a side question."
-    : chat.data?.botId || bot.data
-      ? "Side questions are not available in Bot chats."
-      : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
         ? "Side questions are not available in Assistant chats."
         : isAcpHarnessProvider(chat.data?.providerId ?? "")
           ? "Side questions are not available with agent-backed models."
@@ -347,18 +337,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         : detachedGenerationDraining && !visibleDetachedProjection
           ? "Response continues in the background…"
           : undefined;
-  const botReadinessMessage = chat.data?.botId
-    ? bot.isLoading
-      ? "Loading bot…"
-      : !bot.data
-        ? "This bot is no longer available."
-        : undefined
-    : undefined;
-  const ready =
-    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
+  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
   const readinessMessage =
     chatReadinessMessage ??
-    botReadinessMessage ??
     modelReadinessMessage ??
     computerUseReadinessMessage;
 
@@ -937,7 +918,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
-  const forkLineage = chat.data?.botId ? undefined : chat.data?.forkedFrom;
+  const forkLineage = chat.data?.forkedFrom;
   const allChats = useAllRegularChats(Boolean(forkLineage));
   const forkSource = forkLineage
     ? allChats.data?.find((candidate) => candidate.id === forkLineage.chatId)
@@ -969,7 +950,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         await copyChat({ messageId, position }, undefined, summary);
         return;
       }
-      if (chat.data?.botId) throw new Error("Bot chats can only fork after a reply.");
       const index = messages.findIndex((message) => message.id === messageId);
       const message = messages[index];
       if (!message || message.role !== "user") {
@@ -994,7 +974,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.info("Aiden could not open the new chat.");
       }
     },
-    [chat.data?.botId, chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
+    [chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
   );
 
   const forkFromTranscript = React.useCallback(
@@ -2490,26 +2470,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : undefined;
   const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
 
+  // A Bot chat redirects to its Bot route above; render nothing while it leaves.
+  if (botChatId) return null;
+
   return (
     <>
       <ScrollArea
         className="h-full min-h-0"
         alignFooterToScrollContent
-        leading={
-          botMode && bot.data ? (
-            <BotChatTitle
-              bot={bot.data}
-              onBack={() => void navigate({ to: "/bots" })}
-              onOpenProfile={() =>
-                void navigate({ to: "/bots/$botId", params: { botId: bot.data!.id } })
-              }
-            />
-          ) : undefined
-        }
         title={
-          botMode ? (
-            <span className="sr-only">{bot.data?.name ?? "Bot"}</span>
-          ) : forkSourceLabel ? (
+          forkSourceLabel ? (
             <span className="block min-w-0" data-chat-fork-lineage>
               <span className="block truncate">{chat.data?.title ?? "New agent"}</span>
               <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
@@ -2534,18 +2504,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
           )
         }
         actions={
-          botMode ? (
-            bot.data ? (
-              <BotChatActions
-                bot={bot.data}
-                onOpenProfile={() =>
-                  void navigate({ to: "/bots/$botId", params: { botId: bot.data!.id } })
-                }
-                onOpenFiles={effectiveWorkspace ? () => environmentPanel.showTools("files") : undefined}
-                onDelete={() => setBotDeleteOpen(true)}
-              />
-            ) : undefined
-          ) : (
           <>
             <OpenInEditorPicker
               workspaceId={effectiveWorkspace?.id}
@@ -2568,7 +2526,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
               <TerminalSquare />
             </Button>
           </>
-          )
         }
         autoScrollToBottom
         autoScrollResetKey={chatId}
@@ -2658,7 +2615,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 key={chatId}
                 ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
                 readinessSettingsSection={
-                  !chatReadinessMessage && !botReadinessMessage
+                  !chatReadinessMessage
                     ? modelReadinessMessage
                       ? "providers"
                       : computerUseReadinessMessage
@@ -2708,7 +2665,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 stoppingGeneration={isStoppingGeneration}
                 configurationBusy={thinkingSaving}
                 inputRef={composerRef}
-                surfaces={botMode ? BOT_CHAT_COMPOSER_SURFACES : undefined}
                 workspace={effectiveWorkspace}
                 gitBranch={git.data?.isRepo ? git.data.branch : undefined}
                 gitDetached={git.data?.detached}
@@ -2717,8 +2673,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onChangePermission={changePermission}
                 workspacePickerEnabled={isNewChat}
                 machinePicker={
-                  // A new chat may run on a paired Mac instead; a Bot's chat stays with its Bot.
-                  isNewChat && !chat.data?.botId && newChatMachines.length > 0 ? (
+                  // A new chat may run on a paired Mac instead.
+                  isNewChat && newChatMachines.length > 0 ? (
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
@@ -2780,18 +2736,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     search: section ? { section } : {},
                   })
                 }
-                onRenameChat={botMode ? undefined : renameChat}
-                onOpenReview={botMode ? undefined : () => environmentPanel.openReview("changes")}
+                onRenameChat={renameChat}
+                onOpenReview={() => environmentPanel.openReview("changes")}
                 sessionChat={draft ? undefined : (chat.data ?? undefined)}
                 authenticatedProviders={authenticatedProviders}
                 onCloneChat={() => copyChat()}
                 onForkChat={(messageId, position) => forkFromMessage(messageId, position)}
-                onForkWithSummary={
-                  chat.data?.botId
-                    ? undefined
-                    : (messageId, position) => setForkSummaryRequest({ messageId, position })
+                onForkWithSummary={(messageId, position) =>
+                  setForkSummaryRequest({ messageId, position })
                 }
-                onExportChat={botMode ? undefined : exportChat}
+                onExportChat={exportChat}
                 onCompactChat={
                   draft
                     ? undefined
@@ -2833,7 +2787,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
-                  botMode ? undefined : googleThinkingSupported ? (
+                  googleThinkingSupported ? (
                     <ThinkingControl
                       level={googleThinkingLevel}
                       levels={googleThinkingLevels}
@@ -2880,7 +2834,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : undefined
                 }
                 contextMeter={
-                  draft || botMode ? undefined : (
+                  draft ? undefined : (
                     <ContextMeter
                       pressure={contextPressure}
                       compacting={
@@ -2898,7 +2852,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 onDraftChange={onDraftContextChange}
                 modelPicker={
-                  botMode ? undefined : (
                   <ModelPicker
                     providers={settings.data ? (providers.data ?? []) : []}
                     providerId={providerId}
@@ -2910,7 +2863,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     settingsBlockedReason={settingsBlockedReason}
                     hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
                   />
-                  )
                 }
               />
             )}
@@ -2942,9 +2894,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           </div>
         ) : messages.length === 0 && displayedStreamingText === null ? (
           <div className="flex min-h-full items-center justify-center">
-            {botMode ? (
-              <EmptyState title={bot.data ? `Ask ${bot.data.name} anything` : "Loading bot…"} />
-            ) : (providers.data ?? []).some(
+            {(providers.data ?? []).some(
               (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
             ) ? (
               <EmptyState title="What would you like to work on?" />
@@ -2970,7 +2920,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <MessageList
             key={chatId}
             chatId={chatId}
-            botPresentation={botMode}
             messages={messages}
             streamingText={displayedStreamingText}
             streamingReasoning={displayedStreamingReasoning}
@@ -2985,12 +2934,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             agentActivity={visibleAgentActivity}
             readAloudMessageId={readAloudCandidateId}
             readAloud={readAloudProps}
-            onFork={chat.data?.botId ? undefined : forkFromTranscript}
+            onFork={forkFromTranscript}
             forkDisabledReason={forkDisabledReason}
-            onForkWithSummary={
-              chat.data?.botId
-                ? undefined
-                : (messageId, position) => setForkSummaryRequest({ messageId, position })
+            onForkWithSummary={(messageId, position) =>
+              setForkSummaryRequest({ messageId, position })
             }
             forkSummary={
               forkSummary
@@ -3028,9 +2975,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }}
         onConfirm={forkWithSummary}
       />
-      {botMode && bot.data ? (
-        <BotDeleteDialog bot={bot.data} open={botDeleteOpen} onOpenChange={setBotDeleteOpen} />
-      ) : null}
     </>
   );
 }
