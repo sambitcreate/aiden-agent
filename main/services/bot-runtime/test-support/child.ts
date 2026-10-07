@@ -11,8 +11,11 @@ const helper = path.join(path.dirname(fileURLToPath(import.meta.url)), "kill-har
 
 export interface HarnessChild {
   child: ChildProcess;
-  /** Resolves with the payload of the first stdout line tagged `tag`. */
-  waitFor(tag: string, timeoutMs?: number): Promise<string>;
+  /**
+   * Resolves with the payload of the first stdout line tagged `tag`; with
+   * `expected`, only once a `tag value` line was printed for every value.
+   */
+  waitFor(tag: string, timeoutMs?: number, expected?: readonly string[]): Promise<string>;
   /** SIGKILL the child and wait for it to exit. */
   kill(): Promise<void>;
 }
@@ -40,12 +43,12 @@ export function spawnHarnessChild(mode: string, args: string[]): HarnessChild {
 
   return {
     child,
-    waitFor(tag, timeoutMs = 20_000) {
+    waitFor(tag, timeoutMs = 20_000, expected) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`child never printed ${tag}\n${stdout}\n${stderr}`)), timeoutMs);
         const check = () => {
           const match = stdout.match(new RegExp(`^${tag} (.*)$`, "mu"));
-          if (match) {
+          if (match && (expected === undefined || expected.every((value) => stdout.includes(`${tag} ${value}\n`)))) {
             clearTimeout(timer);
             resolve(match[1]!);
             return;

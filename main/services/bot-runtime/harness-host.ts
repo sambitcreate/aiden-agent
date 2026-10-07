@@ -34,8 +34,11 @@ const BOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 export interface BotHarnessHostOptions {
   /** The profile directory; Bot sessions live under `<profileDir>/bots/`. */
   profileDir: string;
-  /** Installed on every open, before anything can run (Task 1.2's `createBotRegistry`). */
-  buildRegistry(botId: string): Registry;
+  /**
+   * Installed on every open, before anything can run (`createBotRegistry`).
+   * A registry with `attachHarness` is bound to the harness it serves.
+   */
+  buildRegistry(botId: string): Registry & { attachHarness?(harness: Harness): void };
   /** pi-ai model access for generation. */
   models: Models;
   settings?: HarnessSettings;
@@ -157,17 +160,19 @@ export async function createBotHarnessHost(
     const storage = await openNodeSqliteStorage(sessionFile(botId));
     let harness: Harness | undefined;
     try {
+      const registry = opts.buildRegistry(botId);
       harness = await Harness.open(
         storage,
         {
           models: opts.models,
-          registry: opts.buildRegistry(botId),
+          registry,
           ...(opts.settings === undefined ? {} : { settings: opts.settings }),
           now,
           onReport: (error) => opts.onReport?.(botId, error),
         },
         ctx,
       );
+      registry.attachHarness?.(harness);
       const conversation = await harness.root(ctx);
       return { harness, conversation };
     } catch (error) {
