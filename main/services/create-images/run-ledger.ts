@@ -53,7 +53,9 @@ export interface AttemptFinish {
 
 const SCHEMA = `
   CREATE TABLE runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, workflow_revision INTEGER NOT NULL,
-    scope TEXT NOT NULL CHECK(scope IN ('all','from-node','node-only')), scope_node_id TEXT, state TEXT NOT NULL CHECK(state IN
+    scope TEXT NOT NULL CHECK(scope IN ('all','from-node','node-only')), scope_node_id TEXT
+    CHECK((scope = 'all' AND scope_node_id IS NULL) OR (scope <> 'all' AND coalesce(length(scope_node_id), 0) > 0)),
+    state TEXT NOT NULL CHECK(state IN
     ('running','succeeded','partial','failed','cancelled','interrupted')),
     request_limit INTEGER NOT NULL, requests_sent INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, finished_at INTEGER, end_reason TEXT);
@@ -204,7 +206,7 @@ function statements(db: DatabaseSync) {
       "UPDATE runs SET requests_sent = requests_sent + 1 WHERE id = ? AND state = 'running' AND requests_sent < request_limit",
     ),
     submit: db.prepare(
-      "UPDATE attempts SET state = 'running', submitted_at = ? WHERE run_id = ? AND node_id = ? AND variant = ? AND state = 'queued'",
+      "UPDATE attempts SET state = 'running', submitted_at = ? WHERE run_id = ? AND node_id = ? AND variant = ? AND state = 'queued' AND cancel_requested = 0",
     ),
     finish: db.prepare(
       "UPDATE attempts SET state = ?, finished_at = ?, error_code = ?, error_message = ?, truncated = ?, cost_usd = ?, cost_status = ?, output = ? WHERE run_id = ? AND node_id = ? AND variant = ? AND state IN ('queued', 'running')",

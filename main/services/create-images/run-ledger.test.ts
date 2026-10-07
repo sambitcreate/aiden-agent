@@ -56,7 +56,16 @@ test("from-node and node-only scopes round-trip with their node, and a scope the
   assert.deepEqual(ledger.snapshot("r-here")!.run.scope, { kind: "from-node", nodeId: "g1" });
   assert.deepEqual(ledger.snapshot("r-only")!.run.scope, { kind: "node-only", nodeId: "g2" });
   assert.deepEqual(ledger.snapshot("r-here")!.attempts.length, 3);
-  assert.throws(() => ledger.createRun(run({ runId: "r-bad", scope: { kind: "everything" } as never })));
+  // A node id is passed so that the scope CHECK, not a missing value, is what refuses these.
+  assert.throws(() => ledger.createRun(run({ runId: "r-bad", scope: { kind: "everything", nodeId: "g1" } as never })));
+  assert.equal(ledger.snapshot("r-bad"), null);
+});
+
+test("a from-node or node-only scope without a node id is refused", async (t) => {
+  const ledger = open(await directory(t), t);
+  assert.throws(() => ledger.createRun(run({ runId: "r-empty", scope: { kind: "from-node", nodeId: "" } })));
+  assert.throws(() => ledger.createRun(run({ runId: "r-null", scope: { kind: "node-only", nodeId: null } as never })));
+  for (const runId of ["r-empty", "r-null"]) assert.equal(ledger.snapshot(runId), null);
 });
 
 test("claims are bounded by the request limit and record submission first", async (t) => {
@@ -78,6 +87,16 @@ test("claims are bounded by the request limit and record submission first", asyn
   assert.equal(byNode.get("g2")?.state, "running");
   assert.equal(byNode.get("p")?.state, "queued");
   assert.equal(byNode.get("p")?.submittedAt, undefined);
+});
+
+test("a claim after a cancel request is refused and does not count", async (t) => {
+  const ledger = open(await directory(t), t);
+  ledger.createRun(run({ requestLimit: 2 }));
+  ledger.requestCancel("run-1");
+  assert.equal(ledger.claimProviderRequest("run-1", "g1", 0), false);
+  const snapshot = ledger.snapshot("run-1")!;
+  assert.equal(snapshot.run.requestsSent, 0);
+  assert.equal(snapshot.attempts.find((attempt) => attempt.nodeId === "g1")?.state, "queued");
 });
 
 test("terminal attempts are never overwritten and cancel requests mark live attempts only", async (t) => {
@@ -162,6 +181,8 @@ test("output sequence orders nodes by their newest output, and image counts de-d
 
 test("retention keeps the newest runs plus every run holding a node's latest output", async (t) => {
   const ledger = open(await directory(t), t);
+  // The running run is the oldest, so only its state keeps it: it falls outside the newest two.
+  ledger.createRun(run({ runId: "live", workflowId: "wf-2" }));
   ledger.createRun(run({ runId: "r1" }));
   ledger.finishAttempts([{ runId: "r1", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a")] }]);
   ledger.finishRun("r1", "partial");
@@ -170,10 +191,10 @@ test("retention keeps the newest runs plus every run holding a node's latest out
     ledger.finishAttempts([{ runId, nodeId: "g1", variant: 0, state: "failed", errorCode: "provider-error" }]);
     ledger.finishRun(runId, "failed");
   }
-  ledger.createRun(run({ runId: "live", workflowId: "wf-2" }));
-  // Keep 2 newest (r4, live); r1 holds g1's latest output; a running run is never pruned.
-  assert.deepEqual(ledger.pruneRuns(2).sort(), ["r2", "r3"]);
+  // Keep 2 newest (r3, r4); r1 holds g1's latest output; the older running run is never pruned.
+  assert.deepEqual(ledger.pruneRuns(2), ["r2"]);
   assert.equal(ledger.snapshot("r2"), null);
+  assert.ok(ledger.snapshot("r3"));
   assert.ok(ledger.snapshot("r1"));
   assert.ok(ledger.snapshot("live"));
   assert.deepEqual(ledger.pruneRuns(2), []);
