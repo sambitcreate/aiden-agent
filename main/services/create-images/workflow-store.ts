@@ -26,7 +26,7 @@ export interface ImageWorkflowStoreOptions {
   newId?: () => string;
   /** Test seam for the atomic JSON writer. */
   writeJson?: typeof writeJsonAtomic;
-  /** Receives non-fatal failures (a cache write that did not land). Defaults to `console.warn`. */
+  /** Receives non-fatal failures (a cache write that did not land). The runtime (CI-1.6) wires this to the dev log; the default drops them. */
   reportIssue?: (message: string, error: unknown) => void;
 }
 
@@ -89,7 +89,7 @@ export class ImageWorkflowStore {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.writeJson = options.writeJson ?? writeJsonAtomic;
-    this.reportIssue = options.reportIssue ?? ((message, error) => console.warn(message, error));
+    this.reportIssue = options.reportIssue ?? (() => undefined);
   }
 
   async initialize(): Promise<void> {
