@@ -66,6 +66,7 @@
         "renderer/components/settings/custom-model-options.test.tsx",
         "main/services/data-store.resilience.test.ts",
         "main/services/data-store.test.ts",
+        "main/services/design/ops-parse.test.ts",
         "main/services/dev-log.test.ts",
         "main/services/dictation-cleanup-core.test.ts",
         "main/services/dictation-coordinator.test.ts",
