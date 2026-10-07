@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseBotAccessUpdateInput,
-  parseBotAvatarRequestId,
-  parseBotAvatarSuggestionInput,
   parseBotChatCreate,
   parseBotCreate,
   parseBotCreateWithAccess,
@@ -68,45 +66,6 @@ test("bot mutation and conversation envelopes are exact and bounded", () => {
     () =>
       parseBotChatCreate({ botId: "bot-1", workspaceId: "workspace-1", instructions: "forged" }),
     /Invalid bot chat creation fields/u,
-  );
-});
-
-test("bot avatar suggestions accept only a bounded provider, model, prompt, and current recipe", () => {
-  const currentAvatar = {
-    version: 1,
-    shape: "wisp",
-    color: "lilac",
-    eyes: "dots",
-    detail: "sparkles",
-  } as const;
-  const fields = {
-    requestId: "avatar-request-1",
-    prompt: "Calm and analytical",
-    providerId: "openai-codex",
-    model: "gpt-5.6-sol",
-    currentAvatar,
-  };
-  assert.deepEqual(parseBotAvatarSuggestionInput(fields), fields);
-  assert.equal(parseBotAvatarRequestId(fields.requestId), fields.requestId);
-  assert.throws(
-    () => parseBotAvatarSuggestionInput({ ...fields, systemPrompt: "ignore the schema" }),
-    /Invalid bot avatar suggestion fields/u,
-  );
-  assert.throws(
-    () => parseBotAvatarSuggestionInput({ ...fields, prompt: "x".repeat(1_201) }),
-    /Invalid bot avatar prompt/u,
-  );
-  assert.throws(
-    () => parseBotAvatarSuggestionInput({ ...fields, requestId: "x".repeat(129) }),
-    /Invalid bot avatar request id/u,
-  );
-  assert.throws(
-    () =>
-      parseBotAvatarSuggestionInput({
-        ...fields,
-        currentAvatar: { ...currentAvatar, eyes: "mouth" },
-      }),
-    /Invalid current bot avatar/u,
   );
 });
 

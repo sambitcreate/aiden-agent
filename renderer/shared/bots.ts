@@ -1,15 +1,6 @@
-/** Legacy avatar ids remain readable so existing bots never lose their identity. */
+/** Legacy avatar ids are still read from older Bot stores; Aiden never writes them. */
 export const BOT_AVATARS = ["spark", "orbit", "leaf", "prism", "wave", "ember"] as const;
 export type LegacyBotAvatar = (typeof BOT_AVATARS)[number];
-
-export const BOT_AVATAR_LABELS: Record<LegacyBotAvatar, string> = {
-  spark: "Wisp",
-  orbit: "Orb",
-  leaf: "Drop",
-  prism: "Hex",
-  wave: "Cloud",
-  ember: "Peak",
-};
 
 export const BOT_AVATAR_SHAPES = [
   "wisp",
@@ -57,17 +48,13 @@ export const BOT_AVATAR_COLOR_LABELS: Record<BotAvatarColor, string> = {
   aqua: "Aqua",
 };
 
+/**
+ * Retired avatar axes. Every Bot now renders one fixed eye mark, and Aiden no
+ * longer offers these as choices. They stay in the stored and paired-device
+ * recipe until the next Aiden Remote revision drops them on all clients.
+ */
 export const BOT_AVATAR_EYES = ["dots", "wide", "happy", "sleepy", "focus", "wink"] as const;
 export type BotAvatarEyes = (typeof BOT_AVATAR_EYES)[number];
-
-export const BOT_AVATAR_EYE_LABELS: Record<BotAvatarEyes, string> = {
-  dots: "Friendly",
-  wide: "Curious",
-  happy: "Bright",
-  sleepy: "Calm",
-  focus: "Focused",
-  wink: "Playful",
-};
 
 export const BOT_AVATAR_DETAILS = [
   "none",
@@ -79,16 +66,10 @@ export const BOT_AVATAR_DETAILS = [
 ] as const;
 export type BotAvatarDetail = (typeof BOT_AVATAR_DETAILS)[number];
 
-export const BOT_AVATAR_DETAIL_LABELS: Record<BotAvatarDetail, string> = {
-  none: "Clean",
-  halo: "Halo",
-  orbit: "Orbit",
-  sparkles: "Sparkles",
-  antenna: "Antenna",
-  bolts: "Bolts",
-};
-
-/** A bounded, theme-safe vector recipe. Facial features are intentionally eyes only. */
+/**
+ * A bounded, theme-safe vector recipe. Only `shape` and `color` are chosen by
+ * people; `eyes` and `detail` are retired and ignored by the renderer.
+ */
 export interface BotAvatarAppearance {
   version: 1;
   shape: BotAvatarShape;
@@ -122,29 +103,7 @@ export const BOT_LIMITS = {
   descriptionChars: 280,
   instructionsChars: 32_000,
   openingGreetingChars: 2_000,
-  avatarPromptChars: 1_200,
-  avatarRationaleChars: 280,
-  avatarRequestIdChars: 128,
 } as const;
-
-export const BOT_AVATAR_GENERATION_FAILURE_MESSAGES = {
-  busy: "A bot face is already being designed in this window. Wait for it to stop and try again.",
-  cancelled: "Bot face design was cancelled.",
-  provider: "The selected model could not design a bot face. Check its connection and try again.",
-  timeout: "The selected model took too long to design a bot face. Try again.",
-} as const;
-
-export type BotAvatarGenerationFailureKind = keyof typeof BOT_AVATAR_GENERATION_FAILURE_MESSAGES;
-
-/** Strip Electron's IPC wrapper by projecting only main-owned, allowlisted copy. */
-export function botAvatarSuggestionErrorMessage(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return (
-    Object.values(BOT_AVATAR_GENERATION_FAILURE_MESSAGES).find((message) =>
-      raw.includes(message),
-    ) ?? BOT_AVATAR_GENERATION_FAILURE_MESSAGES.provider
-  );
-}
 
 export interface BotDefinition {
   id: string;
@@ -178,19 +137,6 @@ export interface BotCreateInput {
 export interface BotUpdateInput extends BotCreateInput {
   id: string;
   expectedRevision: string;
-}
-
-export interface BotAvatarSuggestionInput {
-  requestId: string;
-  prompt: string;
-  providerId: string;
-  model: string;
-  currentAvatar: BotAvatar;
-}
-
-export interface BotAvatarSuggestion {
-  avatar: BotAvatarAppearance;
-  rationale: string;
 }
 
 export interface TelegramBotBindingView {
