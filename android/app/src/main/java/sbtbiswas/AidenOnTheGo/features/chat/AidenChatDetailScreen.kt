@@ -86,6 +86,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.exponentialVerticalScrim
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
@@ -471,6 +472,7 @@ fun AidenChatDetailScreen(
                     // Insets consumption contributes only the IME delta beyond the
                     // navigation bar and keeps the whole composer above the keyboard.
                     .imePadding()
+                    .aidenReadableWidth()
                     .zIndex(1f)
             ) {
                 // Pending Approval Banner
@@ -788,6 +790,7 @@ fun AidenChatDetailScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .aidenReadableWidth()
                 // Keep the transcript beneath the floating composer. The list's
                 // own bottom inset still makes the latest message fully reachable.
                 .padding(top = padding.calculateTopPadding())

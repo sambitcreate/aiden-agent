@@ -46,6 +46,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -158,6 +159,7 @@ fun AidenWorkspaceDirectoryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .aidenReadableWidth()
         ) {
             // If a workspace is currently selected, show Workspace Detail view
             val activeWs = selectedWorkspace

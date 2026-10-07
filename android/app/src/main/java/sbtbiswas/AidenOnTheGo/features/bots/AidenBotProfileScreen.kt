@@ -38,6 +38,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -237,6 +238,7 @@ fun AidenBotProfileScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .aidenReadableWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
