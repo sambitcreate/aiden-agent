@@ -30,6 +30,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -77,6 +79,9 @@ import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import sbtbiswas.AidenOnTheGo.features.shared.aidenModelDisplayLabel
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbSize
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbState
 import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.ThinkingOrb
@@ -431,13 +436,33 @@ fun AidenChatDetailScreen(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
-                        chat?.modelId?.let { model ->
-                            Text(
-                                text = model,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.secondary,
-                                maxLines = 1
-                            )
+                        // Workspace chats show the model the next turn will use; Bot
+                        // chats keep their Bot-owned model.
+                        val subtitleProviderId = if (chat?.isBotChat == true) chat?.providerId else selectedProviderId ?: chat?.providerId
+                        val subtitleModelId = if (chat?.isBotChat == true) chat?.modelId else selectedModelId ?: chat?.modelId
+                        subtitleModelId?.let { modelId ->
+                            val providers = modelCatalog?.providers.orEmpty()
+                            val provider = providers.firstOrNull { it.id == subtitleProviderId }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (subtitleProviderId != null) {
+                                    AidenProviderIcon(
+                                        providerId = subtitleProviderId,
+                                        providerLabel = provider?.label ?: subtitleProviderId,
+                                        modelId = modelId,
+                                        artwork = provider?.artwork,
+                                        size = 14.dp,
+                                        modifier = Modifier.clearAndSetSemantics {}
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(
+                                    text = aidenModelDisplayLabel(providers, subtitleProviderId, modelId),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = palette.secondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 },
@@ -727,6 +752,22 @@ fun AidenChatDetailScreen(
                         else modelCatalog?.visibleProviders.orEmpty(),
                     onSelectModel = if (chat == null || chat?.isBotChat == true) null else { provider, model, level ->
                         viewModel.selectModel(provider.id, model.id, level)
+                    },
+                    defaultModelRoute = modelCatalog?.defaults?.let { defaults ->
+                        val providerId = defaults["providerId"]
+                        val modelId = defaults["modelId"]
+                        if (providerId != null && modelId != null) AidenModelRoute(providerId, modelId) else null
+                    },
+                    // Recents change only on an explicit pick, which also moves the selection.
+                    recentModelRoutes = remember(selectedProviderId, selectedModelId) {
+                        coordinator.installationStore.activeInstallation?.instanceId
+                            ?.let { coordinator.modelPreferenceStore.recentRoutes(it) }
+                            .orEmpty()
+                            .mapNotNull { recent ->
+                                val providerId = recent.providerId ?: return@mapNotNull null
+                                val modelId = recent.modelId ?: return@mapNotNull null
+                                AidenModelRoute(providerId, modelId)
+                            }
                     },
                     placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
                     isReadOnly = false,

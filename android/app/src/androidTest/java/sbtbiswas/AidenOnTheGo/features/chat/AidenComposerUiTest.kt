@@ -18,6 +18,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import sbtbiswas.AidenOnTheGo.config.AidenAppearanceConfig
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.AidenStillBottomSheetTag
 import sbtbiswas.AidenOnTheGo.models.AidenComposerSuggestion
 import sbtbiswas.AidenOnTheGo.models.AidenModel
 import sbtbiswas.AidenOnTheGo.models.AidenProvider
@@ -457,6 +459,44 @@ class AidenComposerUiTest {
         compose.onNodeWithText("Model & Thinking").assertDoesNotExist()
         compose.onNode(hasText("Deep model") and isSelectable()).assertDoesNotExist()
         compose.onNodeWithText("Deep model").assertIsDisplayed()
+    }
+
+    @Test
+    fun aChatOnTheMacDefaultShowsACheckedDefaultRowNamingTheResolvedModel() {
+        val fast = AidenModel(id = "fast", label = "Fast model")
+        val deep = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    selectedProvider = null,
+                    selectedModel = null,
+                    availableProviders = listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(fast, deep))),
+                    onSelectModel = { p, m, l -> picks += PickedModel(p.id, m.id, l) },
+                    defaultModelRoute = AidenModelRoute("custom", "deep")
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.onNode(hasText("Default") and isSelectable()).assertIsSelected()
+        compose.onNodeWithText("Uses Deep model · Custom").assertIsDisplayed()
+        compose.onNode(hasText("Fast model") and isSelectable()).assertIsNotSelected()
+        compose.onNode(hasText("Deep model") and isSelectable()).assertIsNotSelected()
+
+        compose.onNode(hasText("Fast model") and isSelectable()).performClick()
+        compose.runOnIdle {
+            assertEquals("custom", picks.single().providerId)
+            assertEquals("fast", picks.single().modelId)
+        }
     }
 
     @Test

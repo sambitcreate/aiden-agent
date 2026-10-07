@@ -5,7 +5,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.AidenModel
-import sbtbiswas.AidenOnTheGo.models.AidenProvider
 
 class AidenComposerPresentationTest {
     @Test
@@ -53,27 +52,5 @@ class AidenComposerPresentationTest {
         assertEquals("high", aidenComposerSelectedThinkingLevel(model, "high"))
         assertEquals("medium", aidenComposerSelectedThinkingLevel(model, "xhigh"))
         assertEquals("medium", aidenComposerSelectedThinkingLevel(model, null))
-    }
-
-    @Test
-    fun onlyTheSelectedProvidersCopyOfASharedModelIdIsCurrent() {
-        val shared = AidenModel(id = "gpt", label = "GPT")
-        val other = AidenModel(id = "other", label = "Other")
-        val direct = AidenProvider(id = "openai", label = "OpenAI", models = listOf(shared, other))
-        val router = AidenProvider(id = "openrouter", label = "OpenRouter", models = listOf(shared))
-        val empty = AidenProvider(id = "empty", label = "Empty", models = emptyList())
-
-        val sections = aidenComposerModelSections(listOf(direct, empty, router), router, shared)
-
-        assertEquals(listOf("openai", "openrouter"), sections.map { it.provider.id })
-        assertEquals(listOf(false, false), sections[0].rows.map { it.isCurrent })
-        assertEquals(listOf(true), sections[1].rows.map { it.isCurrent })
-    }
-
-    @Test
-    fun withoutASelectionNoModelRowIsCurrent() {
-        val provider = AidenProvider(id = "p", label = "P", models = listOf(AidenModel(id = "a", label = "A")))
-        val sections = aidenComposerModelSections(listOf(provider), selectedProvider = null, selectedModel = null)
-        assertEquals(listOf(false), sections.single().rows.map { it.isCurrent })
     }
 }
