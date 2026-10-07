@@ -91,6 +91,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:btw-event",
   "chats:pull-requests-changed",
   "chats:settled",
+  "designProjects:changed",
+  "designProjects:run-changed",
   "git:changed",
   "dictation:state",
   "formFill:progress",

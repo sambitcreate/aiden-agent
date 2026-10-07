@@ -98,7 +98,9 @@ import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { designProjectStore } from "./services/design/main.js";
+import { startDesignStudio } from "./services/design/startup-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
 import { startStudioAssets } from "./services/studio-assets/startup-core.js";
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
@@ -1831,6 +1833,16 @@ if (!ownsSingleInstanceLock) {
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
+      });
+      await startDesignStudio({
+        enabled: designStudioEnabled(),
+        store: designProjectStore,
+        onError: (error) =>
+          logger.warn(
+            "design",
+            "Design projects could not be restored; Design Studio will report a storage error.",
+            error,
+          ),
       });
       if (displayImageArtifactAvailability.available) {
         try {
