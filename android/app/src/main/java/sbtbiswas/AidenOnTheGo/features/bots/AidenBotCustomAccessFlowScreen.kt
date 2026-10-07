@@ -21,7 +21,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
-import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.toModelPickerProvider
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
@@ -258,53 +262,16 @@ fun AidenBotCustomAccessFlowScreen(
                 item {
                     Text("AI Model", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            cat.providers.forEach { provider ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    AidenProviderIcon(providerId = provider.id, providerLabel = provider.label, size = 22.dp)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(provider.label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                }
-                                provider.models.forEach { model ->
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable {
-                                                draft = curDraft.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            }
-                                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                                    ) {
-                                        RadioButton(
-                                            selected = curDraft.providerID == provider.id && curDraft.modelID == model.id,
-                                            onClick = {
-                                                draft = curDraft.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            },
-                                            colors = RadioButtonDefaults.colors(selectedColor = palette.accent)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(model.label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                                        if (!model.available) {
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text("(Unavailable)", style = MaterialTheme.typography.labelSmall, color = palette.danger)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    val pickerProviders = remember(cat.providers) { cat.providers.map { it.toModelPickerProvider() } }
+                    AidenModelPickerField(
+                        title = stringResource(R.string.model_picker_bot_title),
+                        providers = pickerProviders,
+                        selection = AidenModelRoute(curDraft.providerID, curDraft.modelID),
+                        onSelect = { entry ->
+                            draft = curDraft.copy(providerID = entry.provider.id, modelID = entry.model.id)
+                        },
+                        containerColor = palette.raised
+                    )
                 }
 
                 // File Scopes Section
