@@ -240,19 +240,24 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
       ) : null}
       {runtime.status === "installing" ? (
         <div className="grid gap-2">
-          <div
-            className="h-1 w-full max-w-64 overflow-hidden rounded-full bg-control"
-            role="progressbar"
-            aria-label={`${label} installation progress`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            {...(progress !== null ? { "aria-valuenow": progress } : {})}
-          >
+          {/* Only downloads have a percentage. Other phases are named in the
+              summary above, as the app's other progress bars do, instead of a
+              full bar that reads as finished. */}
+          {progress !== null ? (
             <div
-              className="h-full rounded-full bg-accent transition-[width] duration-150 motion-reduce:transition-none"
-              style={{ width: `${progress ?? 100}%`, opacity: progress === null ? 0.5 : 1 }}
-            />
-          </div>
+              className="h-1 w-full max-w-64 overflow-hidden rounded-full bg-control"
+              role="progressbar"
+              aria-label={`${label} installation progress`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+            >
+              <div
+                className="h-full rounded-full bg-accent transition-[width] duration-150 motion-reduce:transition-none"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          ) : null}
           <Button
             ref={cancelRef}
             size="small"

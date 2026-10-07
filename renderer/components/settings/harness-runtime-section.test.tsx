@@ -97,3 +97,14 @@ test("the install disclosure names only the publisher and host the runtime repor
   const unknown = render({ status: "not_installed" }, false, null);
   assert.match(unknown, /runs on its own agent runtime\. Installing downloads it\. Nothing is downloaded until you choose Install\./u);
 });
+
+test("phases without a percentage name the phase instead of drawing a bar that looks finished", () => {
+  for (const phase of ["verifying", "extracting", "validating", "activating"] as const) {
+    const html = render({ status: "installing", phase });
+    assert.doesNotMatch(html, /role="progressbar"/u, phase);
+    assert.match(html, />Cancel installation</u, phase);
+  }
+  assert.match(render({ status: "installing", phase: "verifying" }), />Checking the download…</u);
+  // A download that has not reported its size yet has no bar either.
+  assert.doesNotMatch(render({ status: "installing", phase: "downloading" }), /role="progressbar"/u);
+});
