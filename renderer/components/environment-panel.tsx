@@ -21,6 +21,7 @@ import { ChatContextPanel, type ChatContextDetails } from "./chat-context-panel"
 import { WorkspaceToolLauncher, WORKSPACE_TOOLS, workspaceToolLabel } from "./workspace-tool-launcher";
 import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
 import type { BrowserState } from "../shared/browser";
+import { acceptBrowserState } from "../lib/browser-ui-state";
 import { cn } from "../lib/ui-utils";
 import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { useActiveWorkspace } from "../lib/workspace-context";
@@ -1205,11 +1206,25 @@ function EnvironmentPanelSurface({
   const fullOpen = panel.toolsOpen;
   const terminal = useWorkspaceTerminal();
   const [browserState, setBrowserState] = React.useState<BrowserState | null>(null);
+  const browserStateRef = React.useRef<BrowserState | null>(null);
   const browser = browserState?.workspaceId === active?.id ? browserState : null;
   const workspaceRef = React.useRef(active?.id);
-  React.useLayoutEffect(() => { workspaceRef.current = active?.id; }, [active?.id]);
+  React.useLayoutEffect(() => {
+    workspaceRef.current = active?.id;
+    browserStateRef.current = null;
+    setBrowserState(null);
+  }, [active?.id]);
+  const commitBrowserState = React.useCallback((next: BrowserState | null) => {
+    if (!next) return false;
+    const accepted = acceptBrowserState(browserStateRef.current, next, workspaceRef.current ?? "");
+    if (accepted !== next) return false;
+    browserStateRef.current = accepted;
+    setBrowserState(accepted);
+    return true;
+  }, []);
   const surfaceRef = React.useRef<HTMLElement | null>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
+  const [browserFocusRequest, setBrowserFocusRequest] = React.useState<string | null>(null);
   const tabMenuSelectionRef = React.useRef(false);
   const handledSubagentFocusRef = React.useRef(0);
   const widthRef = React.useRef(width);
@@ -1222,10 +1237,13 @@ function EnvironmentPanelSurface({
     if (!owner) return;
     const result = await browserApi.command(owner, command);
     if (workspaceRef.current !== owner) return;
-    setBrowserState(result.state);
+    // Child events and command completions share one monotonic revision policy.
+    // A superseded result must not reveal or dismiss tabs either.
+    if (!commitBrowserState(result.state)) return;
     return result;
   };
   const openTool = (tool: EnvironmentPanelTab) => {
+    setBrowserFocusRequest(null);
     if (tool === "terminal") terminal.moveTo("side");
     else panel.setTab(tool);
   };
@@ -1234,13 +1252,21 @@ function EnvironmentPanelSurface({
     : [{ id: kind, kind, label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
   const selectStripTab = (entry: typeof stripTabs[number]) => {
     if (entry.kind === "browser" && entry.id !== "browser") {
-      void runBrowser({ action: "select", tabId: entry.id }).then((result) => { if (result) panel.setTab("browser"); }).catch(() => toast.error("Could not select browser tab."));
+      setBrowserFocusRequest(entry.id);
+      void runBrowser({ action: "select", tabId: entry.id }).then((result) => {
+        if (result) panel.setTab("browser");
+        if (browserStateRef.current?.activeTabId !== entry.id) setBrowserFocusRequest((current) => current === entry.id ? null : current);
+      }).catch(() => toast.error("Could not select browser tab."));
     } else openTool(entry.kind);
   };
   const closeStripTab = (entry: typeof stripTabs[number]) => {
     requestAnimationFrame(() => activeTabRef.current?.focus());
     if (entry.kind === "browser" && entry.id !== "browser") {
-      void runBrowser({ action: "close", tabId: entry.id }).then((result) => { if (result && !result.state.tabs.length) panel.closeTab("browser"); }).catch(() => toast.error("Could not close browser tab."));
+      void runBrowser({ action: "close", tabId: entry.id }).then((result) => {
+        if (!result) return;
+        if (!result.state.tabs.length) panel.closeTab("browser");
+        requestAnimationFrame(() => activeTabRef.current?.focus());
+      }).catch(() => toast.error("Could not close browser tab."));
     } else panel.closeTab(entry.kind);
   };
   widthRef.current = width;
@@ -1261,7 +1287,19 @@ function EnvironmentPanelSurface({
       return () => window.cancelAnimationFrame(frame);
     }
     activeTabRef.current?.focus();
-  }, [fullOpen, panel.frontSurface, panel.subagentFocusDetailVersion, panel.tab, presented, browser?.activeTabId]);
+  }, [fullOpen, panel.frontSurface, panel.subagentFocusDetailVersion, panel.tab, presented]);
+
+  // Only a strip interaction requests this handoff. Wait for React to commit the
+  // authoritative selection; a RAF after IPC can run before the new tab's ref.
+  React.useLayoutEffect(() => {
+    if (!browserFocusRequest || !presented || panel.tab !== "browser") return;
+    if (browser?.activeTabId === browserFocusRequest) {
+      activeTabRef.current?.focus();
+      setBrowserFocusRequest(null);
+    } else if (!browser?.tabs.some((page) => page.id === browserFocusRequest)) {
+      setBrowserFocusRequest(null);
+    }
+  }, [browserFocusRequest, browser, panel.tab, presented]);
 
   const resizeBounds = resolveEnvironmentPanelResizeBounds(containerWidth, inline);
   const clampToResizeBounds = React.useCallback(
@@ -1470,7 +1508,7 @@ function EnvironmentPanelSurface({
               <BrowserPanel
                 workspaceId={active.id}
                 integratedTabs
-                onStateChange={setBrowserState}
+                onStateChange={commitBrowserState}
                 active={presented && panel.tab === "browser"}
                 onDock={() => panel.showTools("browser")}
               />

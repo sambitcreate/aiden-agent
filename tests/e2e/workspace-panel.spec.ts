@@ -237,3 +237,87 @@ test("browser pages share the tool tab strip and the launcher hides the native p
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("browser creation and background selection preserve address focus while strip navigation moves it", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.locator("[data-environment-toggle]").click();
+  const panel = page.getByRole("complementary", { name: "Environment work surface" });
+  await panel.getByRole("button", { name: "Browser", exact: true }).click();
+  const address = panel.getByRole("textbox", { name: "Search or enter URL" });
+  const tabs = panel.getByRole("tablist", { name: "Environment views" }).getByRole("tab");
+  await panel.getByRole("button", { name: "New browser tab" }).click();
+  await expect(address).toBeFocused();
+  await panel.getByRole("button", { name: "New browser tab" }).click();
+  await expect(tabs).toHaveCount(2);
+  await expect(address).toBeFocused();
+  await tabs.first().click();
+  await expect(tabs.first()).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(tabs.last()).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(tabs.first()).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(tabs.last()).toBeFocused();
+  await panel.getByRole("button", { name: "Open tabs", exact: true }).click();
+  await page.getByRole("menuitem").first().click();
+  await expect(tabs.first()).toBeFocused();
+  await address.focus();
+  await page.evaluate(async (workspaceId) => {
+    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } }).aidenAPI.ipc;
+    const state = await ipc.invoke<{ tabs: { id: string }[] }>("browser:get-state", workspaceId);
+    await ipc.invoke("browser:command", workspaceId, { action: "select", tabId: state.tabs[1].id });
+  }, E2E_WORKSPACE_ID);
+  await expect(tabs.last()).toHaveAttribute("aria-selected", "true");
+  await expect(address).toBeFocused();
+});
+
+test("the shared browser strip ignores a delayed command snapshot after a newer close event", async ({ aiden }) => {
+  const { page, app } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.locator("[data-environment-toggle]").click();
+  const panel = page.getByRole("complementary", { name: "Environment work surface" });
+  await panel.getByRole("button", { name: "Browser", exact: true }).click();
+  await panel.getByRole("button", { name: "New browser tab" }).click();
+  await panel.getByRole("button", { name: "New browser tab" }).click();
+  const tabs = panel.getByRole("tablist", { name: "Environment views" }).getByRole("tab");
+  await expect(tabs).toHaveCount(2);
+  const closingId = await page.evaluate(async (workspaceId) => {
+    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } }).aidenAPI.ipc;
+    const state = await ipc.invoke<{ tabs: { id: string }[] }>("browser:get-state", workspaceId);
+    return state.tabs[0].id;
+  }, E2E_WORKSPACE_ID);
+  await app.evaluate(({ ipcMain }) => {
+    const control = globalThis as unknown as { heldBrowserSelect?: boolean; releaseBrowserSelect?: () => void };
+    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+    const original = handlers.get("browser:command")!;
+    let holdNextSelect = true;
+    ipcMain.removeHandler("browser:command");
+    ipcMain.handle("browser:command", async (event, ...args) => {
+      const hold = holdNextSelect && (args[1] as { action: string }).action === "select";
+      if (hold) holdNextSelect = false;
+      const result = await original(event, ...args);
+      if (hold) await new Promise<void>((resolve) => { control.releaseBrowserSelect = resolve; control.heldBrowserSelect = true; });
+      return result;
+    });
+  });
+  await tabs.first().click();
+  await expect.poll(() => app.evaluate(() => (globalThis as unknown as { heldBrowserSelect?: boolean }).heldBrowserSelect)).toBe(true);
+  await page.evaluate(async ({ workspaceId, tabId }) => {
+    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
+    await ipc.invoke("browser:command", workspaceId, { action: "close", tabId });
+  }, { workspaceId: E2E_WORKSPACE_ID, tabId: closingId });
+  await expect(tabs).toHaveCount(1);
+  // Choose another tool before the stale select returns: it must not reveal Browser.
+  await panel.getByRole("button", { name: "New workspace tab" }).click();
+  await panel.getByRole("button", { name: "Context", exact: true }).click();
+  await app.evaluate(() => (globalThis as unknown as { releaseBrowserSelect?: () => void }).releaseBrowserSelect?.());
+  await page.evaluate(async (workspaceId) => {
+    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
+    await ipc.invoke("browser:get-state", workspaceId);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  }, E2E_WORKSPACE_ID);
+  await expect(tabs).toHaveCount(2); // One surviving browser page plus Context.
+  await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.locator("#environment-browser-panel")).toBeHidden();
+});
