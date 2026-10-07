@@ -432,6 +432,7 @@
         "main/services/subagents/subagent-mcp-mutation-approval.test.ts",
         "main/services/subagents/subagent-mcp-mutation.test.ts",
         "main/services/subagents/subagent-mcp-read.test.ts",
+        "main/services/subagents/subagent-model-selection.test.ts",
         "main/services/subagents/subagent-nesting-core.test.ts",
         "main/services/subagents/subagent-packaged-soak-core.test.ts",
         "main/services/subagents/subagent-packaged-soak-main.test.ts",
