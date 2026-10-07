@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.BottomSheetDefaults
 import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -383,7 +384,7 @@ private fun AidenWorkspaceHome(
                     item {
                         Surface(
                             color = palette.raised,
-                            shape = RoundedCornerShape(18.dp),
+                            shape = MaterialTheme.shapes.large,
                             modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 6.dp)
                         ) {
                             Row(
@@ -628,7 +629,7 @@ private fun AidenWorkspaceHome(
             creationStatus?.let { status ->
                 Surface(
                     color = palette.raised,
-                    shape = RoundedCornerShape(22.dp),
+                    shape = MaterialTheme.shapes.large,
                     shadowElevation = 4.dp,
                     modifier = Modifier.align(Alignment.Center)
                 ) {
@@ -654,7 +655,7 @@ private fun AidenWorkspaceHome(
             onDismissRequest = { showScheduledTasks = false },
             sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            shape = BottomSheetDefaults.ExpandedShape,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
@@ -671,7 +672,7 @@ private fun AidenWorkspaceHome(
         ModalBottomSheet(
             onDismissRequest = { showUsage = false },
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            shape = BottomSheetDefaults.ExpandedShape,
             sheetState = usageSheetState,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
@@ -687,7 +688,7 @@ private fun AidenWorkspaceHome(
         ModalBottomSheet(
             onDismissRequest = { showNewChatChoices = false },
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            shape = BottomSheetDefaults.ExpandedShape
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
@@ -1166,7 +1167,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
         Surface(
             onClick = onToggle,
             color = Color.Transparent,
-            shape = RoundedCornerShape(18.dp),
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 1.dp)
@@ -1244,7 +1245,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
                         onClick = onCreateChat,
                         enabled = canCreateChat,
                         color = Color.Transparent,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = MaterialTheme.shapes.large,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
@@ -1272,7 +1273,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
                     Surface(
                         onClick = onRevealAllChats,
                         color = Color.Transparent,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = MaterialTheme.shapes.large,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
@@ -1302,7 +1303,7 @@ private fun AidenWorkspaceChatRow(
     Surface(
         onClick = onClick,
         color = Color.Transparent,
-        shape = RoundedCornerShape(18.dp),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
             .padding(
@@ -1361,7 +1362,7 @@ private fun AidenNewChatChoice(
     onClick: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp)) {
             Icon(icon, null, tint = if (enabled) palette.foreground else palette.secondary.copy(alpha = .45f))
             Spacer(Modifier.width(14.dp))
@@ -1392,7 +1393,7 @@ private fun AidenWorkspaceNameDialog(
         onDismissRequest = onDismiss,
         title = { Text("New Workspace") },
         text = {
-            Surface(color = fieldColor, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().height(54.dp)) {
+            Surface(color = fieldColor, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().height(54.dp)) {
                 BasicTextField(
                     value = name,
                     onValueChange = onNameChanged,

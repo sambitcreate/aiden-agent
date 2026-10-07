@@ -535,7 +535,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .clip(RoundedCornerShape(12.dp)),
+                        .clip(MaterialTheme.shapes.medium),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = palette.raised,
                         unfocusedContainerColor = palette.raised,
@@ -798,7 +798,7 @@ internal fun AidenWorkspaceFileTreeRow(
             entry.language?.let { lang ->
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = RoundedCornerShape(6.dp)
+                    shape = MaterialTheme.shapes.small
                 ) {
                     Text(
                         text = lang,

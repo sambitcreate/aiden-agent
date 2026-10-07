@@ -204,7 +204,7 @@ fun AidenGitScreen(
                         .padding(16.dp)
                         .verticalScroll(rememberScrollState()),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = MaterialTheme.shapes.medium
                 ) {
                     Column(modifier = Modifier.padding(vertical = 12.dp)) {
                         diff.diff.lines().forEach { line ->
@@ -285,7 +285,7 @@ fun AidenGitScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -300,7 +300,7 @@ fun AidenGitScreen(
                                 )
                                 Surface(
                                     color = if (review.uncommitted > 0) palette.warning.copy(alpha = 0.15f) else palette.success.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(8.dp)
+                                    shape = MaterialTheme.shapes.small
                                 ) {
                                     Text(
                                         text = if (review.uncommitted > 0) "${review.uncommitted} uncommitted" else "Clean",
@@ -384,7 +384,7 @@ fun AidenGitScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(vertical = 3.dp)
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .clip(MaterialTheme.shapes.small)
                                         .clickable(enabled = reviewIsFresh) {
                                             scope.launch {
                                                 if (client != null) {
@@ -399,7 +399,7 @@ fun AidenGitScreen(
                                             }
                                         },
                                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = MaterialTheme.shapes.small
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -408,7 +408,7 @@ fun AidenGitScreen(
                                         val statusTint = aidenGitStatusTint(file.status, palette)
                                         Surface(
                                             color = statusTint.copy(alpha = 0.15f),
-                                            shape = RoundedCornerShape(6.dp)
+                                            shape = MaterialTheme.shapes.small
                                         ) {
                                             Text(
                                                 text = file.status.symbol,
@@ -651,7 +651,7 @@ fun AidenGitScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 3.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(MaterialTheme.shapes.small)
                                 .clickable(enabled = reviewIsFresh && pendingOperation == null) {
                                     if (branch != current) {
                                         branchToCheckout = branch
@@ -660,7 +660,7 @@ fun AidenGitScreen(
                             colors = CardDefaults.cardColors(
                                 containerColor = if (branch == current) palette.accent.copy(alpha = 0.15f) else palette.raised
                             ),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = MaterialTheme.shapes.small
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -875,7 +875,7 @@ fun AidenGitScreen(
                                     .fillMaxWidth()
                                     .padding(vertical = 2.dp),
                                 colors = CardDefaults.cardColors(containerColor = palette.raised),
-                                shape = RoundedCornerShape(8.dp)
+                                shape = MaterialTheme.shapes.small
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -971,7 +971,7 @@ fun AidenGitScreen(
                                 .fillMaxWidth()
                                 .padding(vertical = 3.dp),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = MaterialTheme.shapes.small
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -995,7 +995,7 @@ fun AidenGitScreen(
                                 if (wt.managed) {
                                     Surface(
                                         color = palette.accent.copy(alpha = 0.15f),
-                                        shape = RoundedCornerShape(4.dp)
+                                        shape = MaterialTheme.shapes.extraSmall
                                     ) {
                                         Text(
                                             text = "Managed",

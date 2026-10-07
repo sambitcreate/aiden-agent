@@ -138,7 +138,7 @@ fun AidenForkSummaryCard(
 ) {
     Surface(
         color = palette.raised,
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         modifier = modifier.fillMaxWidth()
     ) {
         Column(

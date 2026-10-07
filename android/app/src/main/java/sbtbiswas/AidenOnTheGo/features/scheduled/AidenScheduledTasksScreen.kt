@@ -483,7 +483,7 @@ internal fun AidenScheduledTaskList(
                 )
                 if (!isConnected) {
                     Spacer(Modifier.height(12.dp))
-                    Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+                    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -506,7 +506,7 @@ internal fun AidenScheduledTaskList(
             item {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
                 ) {
                     Row(
@@ -583,7 +583,7 @@ internal fun AidenScheduleSearchField(value: String, onValueChanged: (String) ->
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = AidenUi.MinimumTouchTarget)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -707,7 +707,7 @@ private fun AidenScheduledTaskDetail(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = AidenUi.ScreenGutter, vertical = 10.dp)
     ) {
-        Surface(color = palette.raised, shape = RoundedCornerShape(16.dp)) {
+        Surface(color = palette.raised, shape = MaterialTheme.shapes.large) {
             Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 AidenTaskMetadataRow("Status", AidenScheduledTaskPresentation.status(task))
                 AidenTaskMetadataRow("Schedule", AidenScheduledTaskPresentation.schedule(task))
@@ -723,7 +723,7 @@ private fun AidenScheduledTaskDetail(
             Spacer(Modifier.height(AidenUi.SectionGap))
             AidenSectionLabel("Instructions")
             Spacer(Modifier.height(9.dp))
-            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(14.dp)) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium) {
                 Text(prompt, style = MaterialTheme.typography.bodyMedium, color = palette.foreground, modifier = Modifier.fillMaxWidth().padding(14.dp))
             }
         }
@@ -776,7 +776,7 @@ private fun AidenScheduledTaskDetail(
             Text("No runs yet.", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
         } else {
             runs.take(20).forEach { run ->
-                Surface(color = Color.Transparent, shape = RoundedCornerShape(12.dp)) {
+                Surface(color = Color.Transparent, shape = MaterialTheme.shapes.medium) {
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.Top) {
                         Icon(
                             if (run.status == "succeeded") Icons.Outlined.CheckCircle else Icons.Outlined.ErrorOutline,

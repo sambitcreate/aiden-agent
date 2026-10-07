@@ -430,7 +430,7 @@ fun AidenBotProfileScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -458,7 +458,7 @@ fun AidenBotProfileScreen(
                                     },
                                     enabled = favoriteIndex > 0 && !favoritesInFlight,
                                     modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = MaterialTheme.shapes.small
                                 ) {
                                     Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -472,7 +472,7 @@ fun AidenBotProfileScreen(
                                     },
                                     enabled = favoriteIndex < favoriteList.size - 1 && !favoritesInFlight,
                                     modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = MaterialTheme.shapes.small
                                 ) {
                                     Text("Move Later")
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -549,7 +549,7 @@ fun AidenBotProfileScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("Greeting", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
@@ -562,7 +562,7 @@ fun AidenBotProfileScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = MaterialTheme.shapes.medium
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("Instructions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)

@@ -503,7 +503,7 @@ fun AidenBotEditorScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = MaterialTheme.shapes.large
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Identity", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
@@ -516,7 +516,7 @@ fun AidenBotEditorScreen(
                             label = { Text("Name") },
                             placeholder = { Text("e.g. Python Pro, Code Reviewer") },
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -528,7 +528,7 @@ fun AidenBotEditorScreen(
                             label = { Text("Purpose (Optional)") },
                             placeholder = { Text("Briefly describe what this bot does") },
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -541,7 +541,7 @@ fun AidenBotEditorScreen(
                             placeholder = { Text("First message sent when starting a chat") },
                             minLines = 2,
                             maxLines = 4,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -553,7 +553,7 @@ fun AidenBotEditorScreen(
                             label = { Text("Instructions") },
                             placeholder = { Text("System instructions and behavior rules...") },
                             minLines = 4,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -563,7 +563,7 @@ fun AidenBotEditorScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = MaterialTheme.shapes.large
                 ) {
                     Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Avatar Studio", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary, modifier = Modifier.align(Alignment.Start))
@@ -651,7 +651,7 @@ fun AidenBotEditorScreen(
                         OutlinedButton(
                             border = null,
                             onClick = { showImagePlaygroundSheet = true },
-                            shape = RoundedCornerShape(10.dp),
+                            shape = MaterialTheme.shapes.small,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
@@ -665,7 +665,7 @@ fun AidenBotEditorScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = MaterialTheme.shapes.large
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Access Mode", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)

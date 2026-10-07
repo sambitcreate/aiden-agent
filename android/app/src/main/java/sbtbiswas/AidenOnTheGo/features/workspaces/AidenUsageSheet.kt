@@ -190,7 +190,7 @@ fun AidenUsageSheet(
                     first = AidenUsageOverviewMetric(Icons.Default.LocalFireDepartment, aidenUsageDayCount(summary.totals.currentStreak), "Current streak"),
                     second = AidenUsageOverviewMetric(Icons.Default.EmojiEvents, aidenUsageDayCount(summary.totals.longestStreak), "Longest streak")
                 )
-                Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 92.dp).padding(18.dp)
@@ -211,7 +211,7 @@ fun AidenUsageSheet(
 
         item {
             AidenUsageSection("Token activity") {
-                Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Daily totals", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground, modifier = Modifier.weight(1f))
@@ -226,7 +226,7 @@ fun AidenUsageSheet(
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("Less", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                             repeat(5) { level ->
-                                Box(Modifier.size(14.dp).background(aidenUsageActivityColor(level, palette.accent, palette.sidebar), RoundedCornerShape(3.dp)))
+                                Box(Modifier.size(14.dp).background(aidenUsageActivityColor(level, palette.accent, palette.sidebar), MaterialTheme.shapes.extraSmall))
                             }
                             Text("More", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                         }
@@ -248,7 +248,7 @@ fun AidenUsageSheet(
 
         item {
             AidenUsageSection("Activity insights") {
-                Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(horizontal = 18.dp)) {
                         AidenUsageInsightRow("Completed requests", NumberFormat.getPercentInstance().format(aidenUsageRatio(summary.totals.completedRequests, summary.totals.requests)))
                         AidenUsageDivider()
@@ -265,7 +265,7 @@ fun AidenUsageSheet(
         if (summary.models.isNotEmpty()) {
             item {
                 AidenUsageSection("Most used models") {
-                    Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                    Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(horizontal = 18.dp)) {
                             summary.models.take(5).forEachIndexed { index, model ->
                                 Row(
@@ -273,7 +273,7 @@ fun AidenUsageSheet(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
                                         .semantics(mergeDescendants = true) {}
                                 ) {
-                                    Surface(color = palette.sidebar, shape = RoundedCornerShape(10.dp), modifier = Modifier.size(34.dp)) {
+                                    Surface(color = palette.sidebar, shape = MaterialTheme.shapes.small, modifier = Modifier.size(34.dp)) {
                                         Box(contentAlignment = Alignment.Center) {
                                             AidenProviderIcon(
                                                 providerId = model.providerId,
@@ -304,7 +304,7 @@ fun AidenUsageSheet(
             Row(
                 verticalAlignment = Alignment.Top,
                 modifier = Modifier.fillMaxWidth()
-                    .background(palette.accent.copy(alpha = .08f), RoundedCornerShape(18.dp))
+                    .background(palette.accent.copy(alpha = .08f), MaterialTheme.shapes.large)
                     .padding(16.dp)
                     .semantics(mergeDescendants = true) {}
             ) {
@@ -345,7 +345,7 @@ private fun AidenUsageOverviewRow(first: AidenUsageOverviewMetric, second: Aiden
 @Composable
 private fun AidenUsageOverviewCard(metric: AidenUsageOverviewMetric, modifier: Modifier) {
     val palette = AidenTheme.palette
-    Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = modifier) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = modifier) {
         Column(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.heightIn(min = 118.dp).padding(16.dp)
@@ -353,7 +353,7 @@ private fun AidenUsageOverviewCard(metric: AidenUsageOverviewMetric, modifier: M
         ) {
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier.size(30.dp).background(palette.accent.copy(alpha = .12f), RoundedCornerShape(9.dp))
+                modifier = Modifier.size(30.dp).background(palette.accent.copy(alpha = .12f), MaterialTheme.shapes.small)
             ) {
                 Icon(metric.icon, null, tint = palette.accent, modifier = Modifier.size(18.dp))
             }
@@ -473,14 +473,14 @@ private fun AidenUsageTokenBar(tokens: AidenUsageTokens) {
             .semantics { hideFromAccessibility() }
     ) {
         if (segments.isEmpty()) {
-            Box(Modifier.fillMaxSize().background(palette.sidebar, RoundedCornerShape(4.dp)))
+            Box(Modifier.fillMaxSize().background(palette.sidebar, MaterialTheme.shapes.extraSmall))
         } else {
             segments.forEach { segment ->
                 Box(
                     Modifier
                         .weight(segment.fraction.coerceAtLeast(0.02f))
                         .fillMaxHeight()
-                        .background(aidenUsageTokenColor(segment.kind, palette), RoundedCornerShape(4.dp))
+                        .background(aidenUsageTokenColor(segment.kind, palette), MaterialTheme.shapes.extraSmall)
                 )
             }
         }

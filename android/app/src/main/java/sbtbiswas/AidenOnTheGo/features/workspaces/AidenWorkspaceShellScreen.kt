@@ -58,10 +58,11 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShapes
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** Corner radius of Aiden's squircle floating actions. */
-private val AidenFabShape = RoundedCornerShape(18.dp)
+private val AidenFabShape = AidenShapes.large
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -371,7 +372,7 @@ fun AidenWorkspaceDirectoryScreen(
                 ) {
                     // Search Glass Capsule
                     Surface(
-                    shape = RoundedCornerShape(27.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
                     color = palette.raised.copy(alpha = 0.94f),
                     shadowElevation = 3.dp,
                         modifier = Modifier
@@ -532,7 +533,7 @@ fun AidenWorkspaceDirectoryScreen(
                             Box(
                                 modifier = Modifier
                                     .size(40.dp)
-                                    .clip(RoundedCornerShape(10.dp))
+                                    .clip(MaterialTheme.shapes.small)
                                     .background(
                                         if (ws.isManagedWorktree) palette.accent.copy(alpha = 0.15f)
                                         else palette.secondary.copy(alpha = 0.12f)
@@ -562,7 +563,7 @@ fun AidenWorkspaceDirectoryScreen(
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Surface(
                                             color = palette.accent.copy(alpha = 0.15f),
-                                            shape = RoundedCornerShape(4.dp)
+                                            shape = MaterialTheme.shapes.extraSmall
                                         ) {
                                             Text(
                                                 text = "Worktree",
@@ -1551,7 +1552,7 @@ internal fun AidenWorkspaceMemoryRow(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(32.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(MaterialTheme.shapes.small)
                     .background(palette.accent.copy(alpha = 0.12f))
             ) {
                 Icon(Icons.Default.SdStorage, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))

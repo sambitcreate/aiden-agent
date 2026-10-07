@@ -81,9 +81,9 @@ fun AidenQuestionCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
-            .shadow(elevation = 8.dp, shape = RoundedCornerShape(24.dp)),
+            .shadow(elevation = 8.dp, shape = MaterialTheme.shapes.extraLarge),
         colors = CardDefaults.cardColors(containerColor = palette.raised),
-        shape = RoundedCornerShape(24.dp)
+        shape = MaterialTheme.shapes.extraLarge
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

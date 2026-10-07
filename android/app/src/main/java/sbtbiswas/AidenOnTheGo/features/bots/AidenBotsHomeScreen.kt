@@ -440,7 +440,7 @@ fun AidenBotsHomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 20.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = MaterialTheme.shapes.small
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -472,7 +472,7 @@ fun AidenBotsHomeScreen(
                                     Button(
                                         onClick = { viewModel.loadBots(force = true) },
                                         colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                        shape = RoundedCornerShape(24.dp),
+                                        shape = MaterialTheme.shapes.extraLarge,
                                         modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                                     ) { Text("Retry") }
                                 }
@@ -494,7 +494,7 @@ fun AidenBotsHomeScreen(
                                         Button(
                                             onClick = onNavigateToCreateBot,
                                             colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                            shape = RoundedCornerShape(24.dp),
+                                            shape = MaterialTheme.shapes.extraLarge,
                                             modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                                         ) { Text("New Bot") }
                                     }
@@ -543,7 +543,7 @@ fun AidenBotsHomeScreen(
                                                 )
                                                 .width(80.dp)
                                                 .tactilePress(pressInteraction)
-                                                .clip(RoundedCornerShape(16.dp))
+                                                .clip(MaterialTheme.shapes.large)
                                                 .clickable(
                                                     interactionSource = pressInteraction,
                                                     indication = ripple(),
@@ -598,11 +598,11 @@ fun AidenBotsHomeScreen(
 
                                 Surface(
                                     color = Color.Transparent,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = MaterialTheme.shapes.medium,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 8.dp, vertical = 1.dp)
-                                        .clip(RoundedCornerShape(14.dp))
+                                        .clip(MaterialTheme.shapes.medium)
                                         .clickable { startOrOpenChat(bot) }
                                 ) {
                                     Row(
@@ -657,7 +657,7 @@ fun AidenBotsHomeScreen(
                                                     Spacer(modifier = Modifier.height(6.dp))
                                                     Surface(
                                                         color = MaterialTheme.colorScheme.primaryContainer,
-                                                        shape = RoundedCornerShape(10.dp)
+                                                        shape = MaterialTheme.shapes.small
                                                     ) {
                                                         Row(
                                                             verticalAlignment = Alignment.CenterVertically,
@@ -722,7 +722,7 @@ fun AidenBotsHomeScreen(
             ) {
                 // Search Glass Capsule
                 Surface(
-                    shape = RoundedCornerShape(27.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
                     color = palette.raised.copy(alpha = 0.94f),
                     shadowElevation = 3.dp,
                     modifier = Modifier

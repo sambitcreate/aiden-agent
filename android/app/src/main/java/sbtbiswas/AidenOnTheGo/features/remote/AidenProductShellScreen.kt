@@ -190,7 +190,7 @@ fun AidenProductSwitcher(
         Surface(
             onClick = { expanded = true },
             color = androidx.compose.ui.graphics.Color.Transparent,
-            shape = RoundedCornerShape(24.dp),
+            shape = MaterialTheme.shapes.extraLarge,
             interactionSource = interaction,
             modifier = Modifier
                 .height(48.dp)

@@ -296,7 +296,7 @@ private fun AidenInlineImageCardDeck(
                     modifier = Modifier
                         .fillMaxSize()
                         .then(
-                            if (selected) Modifier.shadow(8.dp, RoundedCornerShape(18.dp), clip = false)
+                            if (selected) Modifier.shadow(8.dp, MaterialTheme.shapes.large, clip = false)
                             else Modifier
                         )
                         .graphicsLayer {
@@ -313,7 +313,7 @@ private fun AidenInlineImageCardDeck(
                             } else 0f
                             translationY = if (selected) 0f else with(density) { 7.dp.toPx() }
                         }
-                        .clip(RoundedCornerShape(18.dp))
+                        .clip(MaterialTheme.shapes.large)
                         .zIndex(if (selected) 2f else if (index == preferredBackground) 1f else 0f)
                     ,
                     imageCornerRadius = 18.dp

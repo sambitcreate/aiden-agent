@@ -142,7 +142,7 @@ fun AidenComposerView(
                     items(attachments, key = { it.id }) { attachment ->
                         Surface(
                             color = palette.canvas.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.animateItem(
                                 fadeInSpec = if (reduceMotion) null else AidenMotion.nonSpatialExpressiveSpring(),
                                 placementSpec = if (reduceMotion) null else AidenMotion.spatialExpressiveSpring(),
@@ -311,7 +311,7 @@ fun AidenComposerView(
                     DropdownMenu(
                         expanded = showAttachmentMenu,
                         onDismissRequest = { showAttachmentMenu = false },
-                        shape = RoundedCornerShape(18.dp),
+                        shape = MaterialTheme.shapes.large,
                         containerColor = MaterialTheme.colorScheme.surfaceContainer
                     ) {
                         DropdownMenuItem(
@@ -361,7 +361,7 @@ fun AidenComposerView(
                         Surface(
                             onClick = { showModelMenu = true },
                             color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = RoundedCornerShape(24.dp),
+                            shape = MaterialTheme.shapes.extraLarge,
                             interactionSource = pickerInteraction,
                             modifier = Modifier
                                 .heightIn(min = AidenUi.MinimumTouchTarget)
@@ -734,7 +734,7 @@ private fun AidenRunInputSplitButton(
             DropdownMenu(
                 expanded = showMenu,
                 onDismissRequest = { showMenu = false },
-                shape = RoundedCornerShape(18.dp),
+                shape = MaterialTheme.shapes.large,
                 containerColor = MaterialTheme.colorScheme.surfaceContainer
             ) {
                 runInputModeOptions.forEach { option ->
@@ -787,7 +787,7 @@ private fun AidenComposerSuggestionList(
     val visible = suggestions.take(6)
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         modifier = modifier
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {

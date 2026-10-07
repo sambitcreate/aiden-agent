@@ -514,9 +514,9 @@ fun AidenChatDetailScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .shadow(elevation = 8.dp, shape = RoundedCornerShape(24.dp)),
+                                .shadow(elevation = 8.dp, shape = MaterialTheme.shapes.extraLarge),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(24.dp)
+                            shape = MaterialTheme.shapes.extraLarge
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -607,7 +607,7 @@ fun AidenChatDetailScreen(
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 4.dp),
                             colors = CardDefaults.cardColors(containerColor = palette.danger.copy(alpha = 0.12f)),
-                            shape = RoundedCornerShape(12.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1278,7 +1278,7 @@ private fun AssistantMessageRow(
             if (showProgress) {
                 Surface(
                     color = palette.raised.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                 ) {
                     Text(
@@ -1329,7 +1329,7 @@ private fun AssistantMessageRow(
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1355,7 +1355,7 @@ private fun AssistantMessageRow(
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Text(
@@ -1407,7 +1407,7 @@ internal fun ActiveStreamingCard(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
     ) {
@@ -1451,7 +1451,7 @@ internal fun ActiveStreamingCard(
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
                     color = palette.canvas.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -1487,7 +1487,7 @@ internal fun ActiveStreamingCard(
             if (visualizingLabel != null) {
                 Surface(
                     color = palette.raised,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     AidenActivityShimmerLabel(
@@ -1601,7 +1601,7 @@ private fun AidenChronologicalTranscript(
                         )
                     }
                     AidenChronologicalRow.Kind.TOOL -> {
-                        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+                        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
                             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                                 row.steps.forEach { step ->
                                     AidenActivityShimmerLabel(
@@ -1627,7 +1627,7 @@ private fun AidenChronologicalReasoningCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     if (row.text.isBlank()) {
-        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
             AidenActivityShimmerLabel(
                 label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thinking",
                 active = active,
@@ -1652,7 +1652,7 @@ private fun AidenChronologicalReasoningCard(
         animationSpec = AidenMotion.spatial(reduceMotion),
         label = "reasoning_chevron"
     )
-    Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1745,7 +1745,7 @@ private fun AidenTimelineCollapsibleCard(
 
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         modifier = Modifier
             .fillMaxWidth()
             .animateContentSize(AidenMotion.spatialExpressiveSpring<IntSize>())
@@ -1813,7 +1813,7 @@ private fun AidenTimelineCollapsibleCard(
                             step.lineChanges?.let { lines ->
                                 Surface(
                                     color = palette.canvas,
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = MaterialTheme.shapes.extraSmall,
                                     modifier = Modifier.padding(start = 4.dp)
                                 ) {
                                     Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {

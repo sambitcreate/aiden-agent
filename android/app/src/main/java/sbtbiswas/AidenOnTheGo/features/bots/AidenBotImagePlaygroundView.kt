@@ -217,7 +217,7 @@ fun AidenBotImagePlaygroundSheet(
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = palette.raised),
-            shape = RoundedCornerShape(12.dp)
+            shape = MaterialTheme.shapes.medium
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -250,7 +250,7 @@ fun AidenBotImagePlaygroundSheet(
             placeholder = { Text("Describe the appearance of your bot...") },
             minLines = 3,
             maxLines = 5,
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -259,7 +259,7 @@ fun AidenBotImagePlaygroundSheet(
         Button(
             onClick = onDismiss,
             colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Done", color = Color.White, fontWeight = FontWeight.Bold)

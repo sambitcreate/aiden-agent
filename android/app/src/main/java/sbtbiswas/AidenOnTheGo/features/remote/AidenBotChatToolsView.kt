@@ -405,7 +405,7 @@ fun AidenBotChatToolsBar(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(containerColor = palette.raised),
-        shape = RoundedCornerShape(12.dp)
+        shape = MaterialTheme.shapes.medium
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -573,7 +573,7 @@ fun AidenBotChatAccessSheet(
                 model.bot?.let { b ->
                     Card(
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = MaterialTheme.shapes.medium,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {

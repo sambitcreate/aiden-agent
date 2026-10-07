@@ -63,7 +63,7 @@ fun AidenCodeBlock(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         modifier = modifier.fillMaxWidth()
     ) {
         Column {

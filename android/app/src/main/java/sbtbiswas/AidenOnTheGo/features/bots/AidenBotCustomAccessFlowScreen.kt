@@ -298,7 +298,7 @@ fun AidenBotCustomAccessFlowScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             val visibleScopes = aidenBotVisibleFileScopeOptions(cat.fileScopes, curDraft.fileScopeIDs)
@@ -307,7 +307,7 @@ fun AidenBotCustomAccessFlowScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .clip(MaterialTheme.shapes.small)
                                         .clickable {
                                             val next = if (curDraft.fileScopeIDs.contains(scopeItem.id))
                                                 curDraft.fileScopeIDs - scopeItem.id
@@ -350,7 +350,7 @@ fun AidenBotCustomAccessFlowScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -378,7 +378,7 @@ fun AidenBotCustomAccessFlowScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val visibleConnections = aidenBotVisibleCapabilityOptions(cat.connections, curDraft.connectionIDs)
@@ -387,7 +387,7 @@ fun AidenBotCustomAccessFlowScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(MaterialTheme.shapes.small)
                                             .clickable {
                                                 val next = if (curDraft.connectionIDs.contains(conn.id))
                                                     curDraft.connectionIDs - conn.id
@@ -426,7 +426,7 @@ fun AidenBotCustomAccessFlowScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val visibleSkills = aidenBotVisibleCapabilityOptions(cat.skills, curDraft.skillIDs)
@@ -435,7 +435,7 @@ fun AidenBotCustomAccessFlowScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(MaterialTheme.shapes.small)
                                             .clickable {
                                                 val next = if (curDraft.skillIDs.contains(skill.id))
                                                     curDraft.skillIDs - skill.id
@@ -474,7 +474,7 @@ fun AidenBotCustomAccessFlowScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val visibleOthers = aidenBotVisibleCapabilityOptions(cat.otherCapabilities, curDraft.otherCapabilityIDs)
@@ -483,7 +483,7 @@ fun AidenBotCustomAccessFlowScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(MaterialTheme.shapes.small)
                                             .clickable {
                                                 val next = if (curDraft.otherCapabilityIDs.contains(cap.id))
                                                     curDraft.otherCapabilityIDs - cap.id
