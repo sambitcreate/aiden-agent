@@ -383,7 +383,8 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \|\| !allowsMutations \}/u,
   );
   assert.match(chat, /AidenComposerView\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u);
-  assert.match(chat, /guard !model\.isReadOnlyPresentation, autoStartVoice/u);
+  // Voice-launch admission is exercised by AidenChatTests with a read-only
+  // fixture, rather than coupling this inventory check to the guard's location.
   assert.match(
     botHome,
     /private var bottomDock:[\s\S]*?TextField\("Search"[\s\S]*?accessibilityLabel\("Search Bots"\)[\s\S]*?Image\(systemName: "square\.and\.pencil"\)/u,

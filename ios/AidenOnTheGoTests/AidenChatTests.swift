@@ -7258,6 +7258,8 @@ final class AidenChatTests: XCTestCase {
     func testReadOnlyFixtureChatRejectsEveryLiveEntryPointWithoutMutatingItsChat() async {
         let chat = sampleChat()
         let model = AidenChatViewModel(readOnlyFixture: chat)
+        var captureStarts = 0
+        await model.startVoiceForLaunch(if: true) { captureStarts += 1 }
 
         XCTAssertFalse(model.isConnected)
         XCTAssertFalse(model.canSend)
@@ -7279,6 +7281,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.draft, "This must stay local")
         XCTAssertTrue(model.pendingAttachments.isEmpty)
         XCTAssertNil(model.presentedError)
+        XCTAssertEqual(captureStarts, 0, "A read-only chat cannot start microphone capture")
     }
 #endif
 
