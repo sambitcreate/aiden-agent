@@ -43,6 +43,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import androidx.compose.foundation.lazy.itemsIndexed
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
@@ -50,6 +51,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
@@ -89,6 +91,8 @@ fun AidenScheduledTasksScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var operationTaskId by remember { mutableStateOf<String?>(null) }
     var operationRequestId by remember { mutableStateOf<UUID?>(null) }
+    // A pending label for writes that wait for the desktop (Run now, Delete).
+    var operationLabel by remember { mutableStateOf<String?>(null) }
     var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     BackHandler(enabled = selectedTaskId != null) { selectedTaskId = null }
     var query by rememberSaveable { mutableStateOf("") }
@@ -152,20 +156,33 @@ fun AidenScheduledTasksScreen(
         }
     }
 
-    fun mutate(taskId: String, action: suspend () -> AidenScheduledTask) {
+    /**
+     * Sends one task write. [optimistic] shows its expected result at once; the desktop's
+     * answer replaces it, and a failure restores the task as it was before the refresh.
+     */
+    fun mutate(
+        taskId: String,
+        optimistic: ((AidenScheduledTask) -> AidenScheduledTask)? = null,
+        action: suspend () -> AidenScheduledTask
+    ) {
         val activeClient = client ?: return
         if (operationTaskId != null || !hasCurrentAccess(AidenRemoteCapability.SCHEDULE_WRITE)) return
         val requestId = UUID.randomUUID()
+        val previous = tasks.firstOrNull { it.id == taskId }
         operationTaskId = taskId
         operationRequestId = requestId
         errorMessage = null
+        if (optimistic != null && previous != null) {
+            tasks = aidenScheduledTasksReplacing(tasks, optimistic(previous))
+        }
         scope.launch {
             try {
                 val updated = action()
                 if (isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) {
-                    retainSnapshot(tasks.map { if (it.id == updated.id) updated else it })
+                    retainSnapshot(aidenScheduledTasksReplacing(tasks, updated))
                 }
             } catch (error: Exception) {
+                if (optimistic != null && previous != null) tasks = aidenScheduledTasksReplacing(tasks, previous)
                 if (error !is CancellationException && isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) {
                     errorMessage = error.message ?: "Aiden couldn't update this scheduled task."
                     refresh()
@@ -174,6 +191,7 @@ fun AidenScheduledTasksScreen(
                 if (aidenScheduledOperationCanClear(operationRequestId, requestId)) {
                     operationTaskId = null
                     operationRequestId = null
+                    operationLabel = null
                 }
             }
         }
@@ -212,10 +230,12 @@ fun AidenScheduledTasksScreen(
         val activeClient = client ?: return
         if (!hasCurrentAccess(AidenRemoteCapability.SCHEDULE_WRITE)) return
         val revision = task.revision
+        // Pause and Resume flip at once; the switch is the pending state.
+        val flipped: (AidenScheduledTask) -> AidenScheduledTask = { it.copy(enabled = !task.enabled) }
         if (task.enabled) {
-            mutate(task.id) { activeClient.pauseScheduledTask(task.id, revision) }
+            mutate(task.id, flipped) { activeClient.pauseScheduledTask(task.id, revision) }
         } else {
-            mutate(task.id) { activeClient.resumeScheduledTask(task.id, revision) }
+            mutate(task.id, flipped) { activeClient.resumeScheduledTask(task.id, revision) }
         }
     }
 
@@ -309,6 +329,7 @@ fun AidenScheduledTasksScreen(
                 isConnected = client != null && connectionState == AidenConnectionState.CONNECTED,
                 canManage = client != null && connectionState == AidenConnectionState.CONNECTED && canWriteSchedules,
                 operationInProgress = operationTaskId == selectedTask.id,
+                pendingLabel = operationLabel.takeIf { operationTaskId == selectedTask.id },
                 errorMessage = errorMessage,
                 onToggleEnabled = { toggle(selectedTask) },
                 onRunNow = {
@@ -317,6 +338,7 @@ fun AidenScheduledTasksScreen(
                     val requestId = UUID.randomUUID()
                     operationTaskId = selectedTask.id
                     operationRequestId = requestId
+                    operationLabel = "Starting…"
                     errorMessage = null
                     val runKey = pendingRunKeys.keyFor(selectedTask.id)
                     scope.launch {
@@ -337,6 +359,7 @@ fun AidenScheduledTasksScreen(
                             if (aidenScheduledOperationCanClear(operationRequestId, requestId)) {
                                 operationTaskId = null
                                 operationRequestId = null
+                                operationLabel = null
                             }
                         }
                     }
@@ -379,7 +402,8 @@ fun AidenScheduledTasksScreen(
             },
             confirmButton = {
                 AidenDialogConfirmButton(
-                    text = "Delete",
+                    // Deleting waits for the desktop; the button holds the pending label.
+                    text = if (operationTaskId == selectedTask.id && operationLabel != null) operationLabel!! else "Delete",
                     destructive = true,
                     enabled = operationTaskId == null && canWriteSchedules,
                     onClick = confirmDelete@{
@@ -388,6 +412,7 @@ fun AidenScheduledTasksScreen(
                         val requestId = UUID.randomUUID()
                         operationTaskId = selectedTask.id
                         operationRequestId = requestId
+                        operationLabel = "Deleting…"
                         scope.launch {
                             try {
                                 activeClient.removeScheduledTask(selectedTask.id, selectedTask.revision)
@@ -404,6 +429,7 @@ fun AidenScheduledTasksScreen(
                                 if (aidenScheduledOperationCanClear(operationRequestId, requestId)) {
                                     operationTaskId = null
                                     operationRequestId = null
+                                    operationLabel = null
                                 }
                             }
                         }
@@ -419,7 +445,7 @@ fun AidenScheduledTasksScreen(
 }
 
 @Composable
-private fun AidenScheduledTaskList(
+internal fun AidenScheduledTaskList(
     tasks: List<AidenScheduledTask>,
     hasAnyTasks: Boolean,
     query: String,
@@ -494,10 +520,13 @@ private fun AidenScheduledTaskList(
         }
 
         if (isLoading && !hasAnyTasks) {
-            item {
-                Box(modifier = Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-                }
+            // Only a first read with nothing saved; saved tasks stay while they refresh.
+            item(key = "scheduled-tasks-skeleton") {
+                AidenSkeletonList(
+                    count = 4,
+                    loadingDescription = "Loading scheduled tasks",
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
         } else if (tasks.isEmpty()) {
             item {
@@ -609,7 +638,7 @@ private fun AidenScheduledTaskRow(
             contentAlignment = Alignment.Center
         ) {
             if (operationInProgress) {
-                CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp)
+                AidenActivityDot(color = palette.accent)
             } else {
                 Icon(
                     if (task.enabled) Icons.Outlined.Schedule else Icons.Outlined.PauseCircle,
@@ -663,6 +692,7 @@ private fun AidenScheduledTaskDetail(
     isConnected: Boolean,
     canManage: Boolean,
     operationInProgress: Boolean,
+    pendingLabel: String?,
     errorMessage: String?,
     onToggleEnabled: () -> Unit,
     onRunNow: () -> Unit,
@@ -702,7 +732,11 @@ private fun AidenScheduledTaskDetail(
         Spacer(Modifier.height(9.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AidenPrimaryButton(
-                text = if (task.running) "Running" else "Run now",
+                text = when {
+                    pendingLabel != null && operationInProgress -> pendingLabel
+                    task.running -> "Running"
+                    else -> "Run now"
+                },
                 onClick = onRunNow,
                 enabled = canManage && !operationInProgress && !task.running,
                 leadingIcon = Icons.Default.PlayArrow
@@ -736,7 +770,7 @@ private fun AidenScheduledTaskDetail(
         AidenSectionLabel("Recent runs")
         Spacer(Modifier.height(9.dp))
         if (runsLoading && runs.isEmpty()) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            AidenSkeletonList(count = 3, leading = false, loadingDescription = "Loading recent runs")
         } else if (runs.isEmpty()) {
             Text("No runs yet.", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
         } else {
@@ -768,6 +802,12 @@ private fun AidenScheduledTaskDetail(
         Spacer(Modifier.height(28.dp))
     }
 }
+
+/** [tasks] with the task sharing [replacement]'s id swapped for it, order kept. */
+internal fun aidenScheduledTasksReplacing(
+    tasks: List<AidenScheduledTask>,
+    replacement: AidenScheduledTask
+): List<AidenScheduledTask> = tasks.map { if (it.id == replacement.id) replacement else it }
 
 @Composable
 private fun AidenTaskMetadataRow(label: String, value: String) {
