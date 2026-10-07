@@ -34,13 +34,16 @@ Antigravity keeps its own conversation memory.
 - **Rewinding or editing:** if you rewind, edit a message, or fork the chat, Aiden starts a fresh Antigravity session with a summary of the conversation. A "Started a fresh agent session" row marks when this happens.
 - **Restarts:** after a restart, Aiden resumes the previous session.
 
-Antigravity is available only in chats open on this computer. It is not available for Bots, scheduled tasks, Aiden Live, Telegram, subagents, or responses started from the iOS or Android app.
+Antigravity is available only in chats open on this computer. It is not available for Bots, Assistant chats, scheduled tasks, Aiden Live, Telegram, subagents, or responses started from the iOS or Android app.
+
+- **Assistant and Bot chats:** their model pickers leave Antigravity out. If one already has it selected, the composer explains why it can't send.
+- **On the phone:** a chat Antigravity answered on your Mac shows its activity as usual. The phone's model list omits Antigravity, so a note above the composer says which model replies from the phone will use.
 
 ## Privacy and network
 
 - **Credentials:** they stay in a private Antigravity profile inside Aiden's app data. Aiden never reads or changes `~/.gemini`.
 - **No background network:** Aiden contacts the network for Antigravity only when you install it, sign in, refresh models, or chat with it. There are no background update checks; a new runtime version arrives with a new Aiden release.
 - **Sign out:** this removes Antigravity's credentials.
-- **Remove runtime:** this deletes the downloaded files; your sign-in and chats are kept.
+- **Remove runtime:** this deletes the downloaded files; your sign-in and chats are kept. It is unavailable while an Antigravity chat is responding, and the dialog says so.
 
 To hide the provider entirely, start Aiden with `AIDEN_DISABLE_ANTIGRAVITY=1`.
