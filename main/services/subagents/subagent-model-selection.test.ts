@@ -184,13 +184,17 @@ test("an agent cannot pick a costlier hosted model unless settings allow it", ()
   );
 });
 
-test("bot and Assistant generations cannot change the child model", () => {
+test("bot and Assistant generations cannot change the child model or effort", () => {
   const settings: SubagentModelSettings = { defaultModel: "openai/gpt-mini" };
   assert.equal(subagentModelToolOptions(policy(settings, false)), undefined);
   assert.equal(selected({ role: "scout" }, policy(settings, false)).modelId, "claude-sonnet");
   assert.match(
     rejected({ role: "scout", model: "openai/gpt-mini" }, policy(settings, false)),
     /overrides are not available/,
+  );
+  assert.match(
+    rejected({ role: "scout", effort: "low" }, policy(settings, false)),
+    /effort overrides are not available/,
   );
 });
 
