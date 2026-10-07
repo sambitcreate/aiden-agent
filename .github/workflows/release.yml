@@ -73,6 +73,9 @@ jobs:
 
       - name: Verify TypeScript
         if: ${{ steps.version.outputs.publish == 'true' }}
+        # The macos-26 runner's default V8 heap (~2 GB) is below what tsc needs.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run type-check
 
       - name: Verify lint
