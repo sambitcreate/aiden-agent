@@ -36,6 +36,7 @@
     <string name="action_remove">Remove</string>
     <string name="action_save">Save</string>
     <string name="action_saving">Saving…</string>
+    <string name="action_options">Options</string>
     <string name="action_done">Done</string>
     <string name="action_edit">Edit</string>
     <string name="action_clear">Clear</string>
@@ -433,4 +434,124 @@
     <string name="usage_token_output">Output</string>
     <string name="usage_token_reasoning">Reasoning</string>
     <string name="usage_token_cache_read">Cache read</string>
+
+    <!-- Bots: home -->
+    <string name="bots_status_queued">Queued</string>
+    <string name="bots_status_working">Working</string>
+    <string name="bots_status_approval_needed">Approval needed</string>
+    <string name="bots_status_waiting_desktop">Waiting for desktop approval</string>
+    <string name="bots_status_updating">Updating</string>
+    <string name="bots_offline">Offline — showing saved Bots</string>
+    <string name="bots_load_failed_title">Bots couldn’t load</string>
+    <string name="bots_load_failed_body">Reconnect to your paired desktop and try again.</string>
+    <string name="bots_empty_title">Make your first Bot</string>
+    <string name="bots_empty_offline_title">No saved Bots</string>
+    <string name="bots_empty_body">Create a familiar helper with one persistent conversation and its own capabilities.</string>
+    <string name="bots_empty_offline_body">Reconnect to your paired desktop to load Bots.</string>
+    <string name="bots_new">New Bot</string>
+    <string name="bots_no_results">No Results for \"%1$s\"</string>
+    <string name="bots_section_favorites">Favorites</string>
+    <string name="bots_section_bots">Bots</string>
+    <string name="bots_start_conversation">Start a conversation</string>
+    <string name="bots_archived_preview">Archived · %1$s</string>
+    <string name="bots_open_details_cd">Open %1$s details</string>
+    <string name="bots_search_placeholder">Search Bots</string>
+    <string name="bots_open_chat_cd">Open Bot Chat</string>
+    <string name="bots_choose_title">Choose a Bot</string>
+    <string name="bots_choose_body">Open this Bot’s chat. Aiden starts it the first time if needed.</string>
+    <string name="bots_avatar_cd">%1$s avatar</string>
+    <string name="bots_avatar_default_cd">Bot Avatar</string>
+
+    <!-- Bots: profile -->
+    <string name="bot_profile_favorites_failed">Aiden couldn\'t update Favorites. Try again.</string>
+    <string name="bot_profile_update_failed">Aiden couldn\'t update this Bot.</string>
+    <string name="bot_profile_title">Bot Profile</string>
+    <string name="bot_profile_archive">Archive Bot</string>
+    <string name="bot_profile_restore">Restore Bot</string>
+    <string name="bot_profile_restoring">Restoring…</string>
+    <string name="bot_profile_archiving">Archiving…</string>
+    <string name="bot_profile_unavailable_title">Bot unavailable</string>
+    <string name="bot_profile_unavailable_connect">Connect to your paired desktop to see this Bot.</string>
+    <string name="bot_profile_unavailable_failed">Aiden couldn\'t load this Bot.</string>
+    <string name="bot_profile_archived_banner">Archived — chats are read-only</string>
+    <string name="bot_profile_action_chat">Chat</string>
+    <string name="bot_profile_open_chat_failed">Aiden couldn\'t open a chat with this Bot.</string>
+    <string name="bot_profile_action_access">Access</string>
+    <string name="bot_profile_action_unpin">Unpin</string>
+    <string name="bot_profile_action_pin">Pin</string>
+    <string name="bot_profile_favorite_order">Favorite Order</string>
+    <string name="bot_profile_favorite_position">%1$d of %2$d</string>
+    <string name="bot_profile_move_earlier">Move Earlier</string>
+    <string name="bot_profile_move_later">Move Later</string>
+    <string name="bot_profile_recent_chats">Recent Chats</string>
+    <string name="bot_profile_no_history">No conversation history yet.</string>
+    <string name="bot_profile_chat_fallback_title">Chat</string>
+    <string name="bot_profile_greeting">Greeting</string>
+    <string name="bot_profile_instructions">Instructions</string>
+    <string name="bot_profile_archive_title">Archive %1$s?</string>
+    <string name="bot_profile_bot_fallback">Bot</string>
+    <string name="bot_profile_archive_body">Its chats stay available to read. Restore the Bot later to edit it or start new work.</string>
+    <string name="bot_profile_loading">Loading Bot</string>
+
+    <!-- Bots: editor -->
+    <string name="bot_editor_new_title">New Bot</string>
+    <string name="bot_editor_edit_title">Edit Bot</string>
+    <string name="bot_editor_save_failed">Failed to save Bot</string>
+    <string name="bot_editor_cannot_start">Can\'t start a new Bot</string>
+    <string name="bot_editor_cannot_load">Can\'t load this Bot</string>
+    <string name="bot_editor_loading_options">Loading Bot options</string>
+    <string name="bot_editor_identity">Identity</string>
+    <string name="bot_editor_name">Name</string>
+    <string name="bot_editor_name_placeholder">e.g. Python Pro, Code Reviewer</string>
+    <string name="bot_editor_purpose">Purpose (Optional)</string>
+    <string name="bot_editor_purpose_placeholder">Briefly describe what this bot does</string>
+    <string name="bot_editor_greeting">Opening Greeting (Optional)</string>
+    <string name="bot_editor_greeting_placeholder">First message sent when starting a chat</string>
+    <string name="bot_editor_instructions_placeholder">System instructions and behavior rules...</string>
+    <string name="bot_editor_avatar_studio">Avatar Studio</string>
+    <string name="bot_editor_avatar_shape">Shape</string>
+    <string name="bot_editor_avatar_color">Color</string>
+    <string name="bot_editor_avatar_eyes">Eyes</string>
+    <string name="bot_editor_avatar_accessory">Accessory</string>
+    <string name="bot_editor_image_studio">Create with Image Studio</string>
+    <string name="bot_editor_access_mode">Access Mode</string>
+    <string name="bot_editor_provider_model">AI Provider &amp; Model</string>
+    <string name="bot_editor_file_scopes">Desktop File Scopes</string>
+    <string name="bot_editor_terminal">Terminal Execution</string>
+    <string name="bot_editor_mcp_connections">MCP Connections</string>
+    <string name="bot_editor_discard_title">Discard changes?</string>
+    <string name="bot_editor_discard_body">You have unsaved changes to this Bot. If you leave now, your changes will be discarded.</string>
+    <string name="bot_editor_access_full">Full Access</string>
+    <string name="bot_editor_access_custom">Custom Access</string>
+
+    <!-- Bots: custom access -->
+    <string name="bot_access_previous_skill_unavailable">Previously selected skill — unavailable</string>
+    <string name="bot_access_option_unavailable">%1$s — Unavailable</string>
+    <string name="bot_access_title">Custom Access</string>
+    <string name="bot_access_conflict">Access policy was changed on your paired desktop. Review the latest policy and try again.</string>
+    <string name="bot_access_conflict_fallback">Conflict updating access</string>
+    <string name="bot_access_save_failed">Failed to save access policy</string>
+    <string name="bot_access_no_bots_title">No Bots to configure</string>
+    <string name="bot_access_load_failed_title">Can\'t load access</string>
+    <string name="bot_access_no_bots_body">Create a Bot first, then choose what it can use.</string>
+    <string name="bot_access_loading">Loading access</string>
+    <string name="bot_access_select_bot">Select Bot</string>
+    <string name="bot_access_desktop_files">Desktop Files</string>
+    <string name="bot_access_terminal_shell">Terminal &amp; Shell</string>
+    <string name="bot_access_shell_title">Execute Shell Commands</string>
+    <string name="bot_access_shell_body">Allows bot to run terminal commands on the paired desktop</string>
+    <string name="bot_access_skills">Skills</string>
+    <string name="bot_access_other">Other Capabilities</string>
+    <string name="bot_access_discard_title">Discard access changes?</string>
+    <string name="bot_access_discard_body">Your unsaved Custom Access changes will be lost.</string>
+    <string name="bot_access_discard_confirm">Discard Changes</string>
+
+    <!-- Bots: Image Studio -->
+    <string name="bot_image_default_prompt">A friendly AI assistant avatar named %1$s</string>
+    <string name="bot_image_generation">Image Generation</string>
+    <string name="bot_image_generation_body">Bot photos generated on a supported Apple device can be synchronized to Android. You can also customize your Bot with the built-in Semantic Avatar studio.</string>
+    <string name="bot_image_description">Avatar Description</string>
+    <string name="bot_image_description_placeholder">Describe the appearance of your bot...</string>
+    <string name="bot_avatar_saving">Saving avatar…</string>
+    <string name="bot_avatar_restoring">Restoring avatar…</string>
 </resources>

@@ -37,6 +37,8 @@ import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Base64
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 sealed class AidenBotGeneratedAvatarError(val messageText: String) : Exception(messageText) {
     object SourceTooLarge : AidenBotGeneratedAvatarError("That image is too large. Choose another image.")
@@ -239,8 +241,8 @@ fun AidenBotGeneratedAvatarLifecycleView(
     ) {
         // Upload and revert write to the desktop, so they show an in-place pending label.
         val pendingLabel = when (phase) {
-            AidenBotGeneratedAvatarPhase.UPLOADING -> "Saving avatar…"
-            AidenBotGeneratedAvatarPhase.REVERTING -> "Restoring avatar…"
+            AidenBotGeneratedAvatarPhase.UPLOADING -> stringResource(R.string.bot_avatar_saving)
+            AidenBotGeneratedAvatarPhase.REVERTING -> stringResource(R.string.bot_avatar_restoring)
             else -> null
         }
         if (pendingLabel != null) {

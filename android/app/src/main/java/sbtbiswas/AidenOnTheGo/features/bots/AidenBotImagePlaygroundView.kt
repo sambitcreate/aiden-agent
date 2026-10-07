@@ -23,6 +23,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 data class AidenBotImagePlaygroundIdentity(
     val name: String,
@@ -180,7 +182,8 @@ fun AidenBotImagePlaygroundSheet(
     onImageSelected: (ByteArray) -> Unit
 ) {
     val palette = AidenTheme.palette
-    var prompt by remember { mutableStateOf(if (botPurpose.isNotEmpty()) botPurpose else "A friendly AI assistant avatar named $botName") }
+    val defaultPrompt = stringResource(R.string.bot_image_default_prompt, botName)
+    var prompt by remember { mutableStateOf(if (botPurpose.isNotEmpty()) botPurpose else defaultPrompt) }
     var presentationState = remember { AidenBotImagePlaygroundPresentationState() }
 
     Column(
@@ -200,14 +203,14 @@ fun AidenBotImagePlaygroundSheet(
             )
             Spacer(modifier = Modifier.width(12.dp))
             Text(
-                text = "Avatar Studio",
+                text = stringResource(R.string.bot_editor_avatar_studio),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = palette.foreground,
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = palette.foreground)
             }
         }
 
@@ -224,7 +227,7 @@ fun AidenBotImagePlaygroundSheet(
                     Icon(Icons.Default.Info, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Image Generation",
+                        text = stringResource(R.string.bot_image_generation),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = palette.foreground
@@ -232,7 +235,7 @@ fun AidenBotImagePlaygroundSheet(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Bot photos generated on a supported Apple device can be synchronized to Android. You can also customize your Bot with the built-in Semantic Avatar studio.",
+                    text = stringResource(R.string.bot_image_generation_body),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )
@@ -246,8 +249,8 @@ fun AidenBotImagePlaygroundSheet(
             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
             value = prompt,
             onValueChange = { prompt = it },
-            label = { Text("Avatar Description") },
-            placeholder = { Text("Describe the appearance of your bot...") },
+            label = { Text(stringResource(R.string.bot_image_description)) },
+            placeholder = { Text(stringResource(R.string.bot_image_description_placeholder)) },
             minLines = 3,
             maxLines = 5,
             shape = MaterialTheme.shapes.medium,
@@ -262,7 +265,7 @@ fun AidenBotImagePlaygroundSheet(
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Done", color = Color.White, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.action_done), color = Color.White, fontWeight = FontWeight.Bold)
         }
     }
 }
