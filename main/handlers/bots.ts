@@ -34,6 +34,7 @@ import {
   type AidenRemoteBotAvatarUploadRequest,
 } from "../services/aiden-remote-protocol.js";
 import { registerBotLiveHandlers } from "./bot-live.js";
+import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
 import {
   telegramBotBindingAuthority,
   telegramBotBindings,
@@ -52,6 +53,7 @@ import {
   parseBotId,
   parseBotSend,
   parseBotSessionAction,
+  parseBotApprovalDecision,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -165,11 +167,8 @@ export function registerBotHandlers(): void {
       );
     },
   );
-  ipcMain.handle("bots:list", async (_event, includeArchived: unknown) => {
-    if (includeArchived !== undefined && typeof includeArchived !== "boolean")
-      throw new Error("Invalid bot list fields.");
-    return botApplicationService.list(includeArchived === true);
-  });
+  // Bots are deleted, never archived; a legacy include-archived flag is ignored.
+  ipcMain.handle("bots:list", async () => botApplicationService.list());
   ipcMain.handle("bots:get", async (_event, id: unknown) =>
     botApplicationService.get(parseBotId(id)),
   );
@@ -250,6 +249,12 @@ export function registerBotHandlers(): void {
     projection: botLiveProjection,
     parseBotId,
   });
+  // Bot tool approvals: any desktop window may answer; the first answer wins.
+  ipcMain.handle("bots:approve", async (_event, input: unknown) => {
+    const { waitId, decision } = parseBotApprovalDecision(input);
+    return { decided: botApprovals.decide(waitId, decision) };
+  });
+  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });
@@ -473,11 +478,7 @@ function botAccessUpdateRendererError(error: unknown): unknown {
     return new Error("Bot capabilities kept changing. Review the latest choices and try again.");
   }
   if (error instanceof BotApplicationUnavailableError) {
-    return new Error(
-      error.reason === "archived"
-        ? "Restore this Bot before making changes."
-        : "This Bot no longer exists.",
-    );
+    return new Error("This Bot no longer exists.");
   }
   if (
     error instanceof BotCapabilityRevisionConflictError ||

@@ -192,6 +192,7 @@ import {
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator, type ToolApprovalDecisionPayload } from "./tool-approval.js";
+import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import {
   SCOPED_APPROVAL_OFFER,
   toolApprovalRuleTarget,
@@ -4075,7 +4076,12 @@ export const llmClient = {
     ownerDocumentId?: string,
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
-    return approvals.decide(approvalId, decision === "allow", ownerDocumentId, payload);
+    return (
+      approvals.decide(approvalId, decision === "allow", ownerDocumentId, payload) ||
+      // Bot approvals are owned by the profile, not a renderer document, and
+      // are identified by their durable `waitId`.
+      botApprovals.decide(approvalId, decision)
+    );
   },
 
   /**
@@ -4088,7 +4094,10 @@ export const llmClient = {
     decision: ApprovalDecision,
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
-    return approvals.decideAsHost(approvalId, decision === "allow", payload);
+    return (
+      approvals.decideAsHost(approvalId, decision === "allow", payload) ||
+      botApprovals.decide(approvalId, decision)
+    );
   },
 
   /** Host-authority questionnaire answer; same one-shot rule as `approveAsHost`. */

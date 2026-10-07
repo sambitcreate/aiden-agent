@@ -163,20 +163,22 @@ function parseRequest<Result>(
   }
 }
 
+function archiveRetiredError(): AidenRemoteServiceError {
+  return new AidenRemoteServiceError(
+    "invalid_request",
+    "Bots can no longer be archived or restored. Delete the Bot on your Mac instead.",
+    400,
+  );
+}
+
 function mapBotMutationError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotApplicationUnavailableError) {
-    throw error.reason === "archived"
-      ? new AidenRemoteServiceError(
-          "bot_archived",
-          "Restore this Bot before making changes.",
-          409,
-        )
-      : new AidenRemoteServiceError(
-          "not_found",
-          "This Bot no longer exists.",
-          404,
-        );
+    throw new AidenRemoteServiceError(
+      "not_found",
+      "This Bot no longer exists.",
+      404,
+    );
   }
   if (error instanceof BotHistoricalChatReadOnlyError) {
     throw new AidenRemoteServiceError(
@@ -274,8 +276,6 @@ type BotApplicationPort = {
     access?: BotAccessUpdate;
   }): Promise<BotDefinition>;
   updateBot(input: BotUpdateInput): Promise<BotDefinition>;
-  archiveBot(input: { botId: string; expectedRevision: string }): Promise<BotDefinition>;
-  restoreBot(input: { botId: string; expectedRevision: string }): Promise<BotDefinition>;
   createChat(input: {
     audienceId: string;
     botId: string;
@@ -791,22 +791,15 @@ export class AidenRemoteBotService {
     }
   }
 
+  /**
+   * Archive and restore were removed: Bots are deleted, never archived. The
+   * routes stay until the Remote contract revision replaces them with
+   * `DELETE /bots/{id}`; until then they refuse without changing anything.
+   */
   async archive(botId: string, expectedRevision: string): Promise<AidenRemoteBotDetail> {
-    const existing = await this.bot(botId);
-    this.requireActive(existing);
-    try {
-      // The application archive hook shares the process-wide favorites lane.
-      // Do not hold that lane while invoking the hook or it would self-deadlock.
-      const archived = await this.options.application.archiveBot({
-        botId: existing.id,
-        expectedRevision,
-      });
-      await this.favoritesView();
-      this.options.notifyBotsChanged?.(archived.id);
-      return this.detail(archived);
-    } catch (error) {
-      return mapBotMutationError(error);
-    }
+    await this.bot(botId);
+    void expectedRevision;
+    throw archiveRetiredError();
   }
 
   async restore(
@@ -815,28 +808,11 @@ export class AidenRemoteBotService {
     expectedRevision: string,
     idempotencyKey: string,
   ): Promise<AidenRemoteBotDetail> {
-    const existing = await this.bot(botId);
-    try {
-      return await this.executeIdempotent(
-        {
-          deviceId,
-          route: "POST /bots/{id}/restore",
-          resourceId: existing.id,
-          key: idempotencyKey,
-        },
-        { expectedRevision },
-        async () => {
-          const restored = await this.options.application.restoreBot({
-            botId: existing.id,
-            expectedRevision,
-          });
-          this.options.notifyBotsChanged?.(restored.id);
-          return this.detail(restored);
-        },
-      );
-    } catch (error) {
-      return mapBotMutationError(error);
-    }
+    await this.bot(botId);
+    void deviceId;
+    void expectedRevision;
+    void idempotencyKey;
+    throw archiveRetiredError();
   }
 
   async capabilityCatalog(

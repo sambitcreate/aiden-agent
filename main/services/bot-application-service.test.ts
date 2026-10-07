@@ -221,11 +221,24 @@ function fixture(options: {
 
   const deps = {
     botStore: {
-      async list(includeArchived = false) {
-        return bots.filter((entry) => includeArchived || entry.archivedAt === undefined);
+      async list() {
+        return bots.filter((entry) => entry.archivedAt === undefined);
       },
       async get(id: string) {
-        return bots.find((entry) => entry.id === id) ?? null;
+        return bots.find((entry) => entry.id === id && entry.archivedAt === undefined) ?? null;
+      },
+      async storedIds() {
+        return bots.map(({ id }) => id);
+      },
+      async legacyArchivedIds() {
+        return bots.filter((entry) => entry.archivedAt !== undefined).map(({ id }) => id);
+      },
+      async delete(id: string) {
+        const index = bots.findIndex((entry) => entry.id === id);
+        events.push("identity:delete");
+        if (index < 0) return false;
+        bots.splice(index, 1);
+        return true;
       },
       async createWithId(id: string, input: Omit<BotDefinition, "id" | "createdAt" | "updatedAt">) {
         events.push("identity:create");
@@ -249,28 +262,6 @@ function fixture(options: {
         bots[index] = updated;
         events.push("identity:update");
         return updated;
-      },
-      async archive(id: string, expectedRevision: string) {
-        const entry = bots.find((candidate) => candidate.id === id)!;
-        if (entry.revision !== expectedRevision) {
-          throw new Error("This Bot changed on another surface. Refresh it and try again.");
-        }
-        entry.archivedAt = entry.updatedAt + 1;
-        entry.updatedAt += 1;
-        entry.revision = `botrev:${id}:${++identityRevision}`;
-        events.push("identity:archive");
-        return { ...entry };
-      },
-      async restore(id: string, expectedRevision: string) {
-        const entry = bots.find((candidate) => candidate.id === id)!;
-        if (entry.revision !== expectedRevision) {
-          throw new Error("This Bot changed on another surface. Refresh it and try again.");
-        }
-        delete entry.archivedAt;
-        entry.updatedAt += 1;
-        entry.revision = `botrev:${id}:${++identityRevision}`;
-        events.push("identity:restore");
-        return { ...entry };
       },
     },
     chatStore: {
@@ -336,6 +327,15 @@ function fixture(options: {
         events.push("chat:remove");
         chats.delete(id);
       },
+      async clearMessages(id: string, assertCurrent?: (chat: Chat) => void | Promise<void>) {
+        const current = chats.get(id);
+        if (!current) return false;
+        await assertCurrent?.(current);
+        events.push("chat:clear");
+        const changed = current.messages.length > 0;
+        current.messages = [];
+        return changed;
+      },
       async setBotModelSelection(
         id: string,
         providerId: string,
@@ -368,12 +368,11 @@ function fixture(options: {
       },
       async migrateLegacyBotsToFull(input: {
         botIds: readonly string[];
-        archivedBotIds?: readonly string[];
         chats?: readonly { chatId: string; botId: string }[];
       }) {
         events.push("policy:migrate-full");
         for (const id of input.botIds) {
-          const expected = input.archivedBotIds?.includes(id) ? "archived" : "active";
+          const expected = "active";
           if (!policies.has(id)) {
             policies.set(id, botPolicy(id));
             authorityStatuses.set(id, expected);
@@ -403,19 +402,14 @@ function fixture(options: {
         const expected = input.archived ? "archived" : "active";
         if (value !== expected) throw new BotCapabilityUnavailableError("authority mismatch");
       },
-      async archiveBotAuthority(id: string) {
-        if (!policies.has(id)) throw new Error("missing policy");
-        const changed = authorityStatuses.get(id) !== "archived";
-        authorityStatuses.set(id, "archived");
-        events.push("policy:archive");
-        return changed;
-      },
-      async restoreBotAuthority(id: string) {
-        if (!policies.has(id)) throw new Error("missing policy");
-        const changed = authorityStatuses.get(id) !== "active";
-        authorityStatuses.set(id, "active");
-        events.push("policy:restore");
-        return changed;
+      async deleteBotAuthority(id: string) {
+        events.push("policy:delete");
+        const removed = policies.delete(id);
+        authorityStatuses.delete(id);
+        for (const [chatId, value] of chatPolicies) {
+          if (value.botId === id) chatPolicies.delete(chatId);
+        }
+        return removed;
       },
       async getBotBinding(id: string) { return botBindings.get(id); },
       async getBotModelAuthority(id: string) { return modelAuthorities.get(id); },
@@ -624,6 +618,10 @@ function fixture(options: {
       async rollbackProvision(input: { botId: string }) {
         events.push("home:rollback");
         homes.delete(input.botId);
+      },
+      async deleteHome(botId: string) {
+        events.push("home:delete");
+        return homes.delete(botId);
       },
     },
     lifecycleJournal,
@@ -1145,224 +1143,213 @@ test("sealed policy or managed-home loss blocks instead of reminting Full author
   );
 });
 
-test("archived Bot conversations remain readable", async () => {
-  const archived = bot("bot:archived");
-  archived.archivedAt = 2;
-  const app = fixture({ bots: [archived] });
+function seedChat(
+  app: ReturnType<typeof fixture>,
+  input: { id: string; botId: string; updatedAt: number; messages?: number },
+): Chat {
+  const chat: Chat = {
+    id: input.id,
+    title: input.id,
+    workspaceId: WORKSPACE_ID,
+    botId: input.botId,
+    createdAt: 1,
+    updatedAt: input.updatedAt,
+    messages: Array.from({ length: input.messages ?? 0 }, (_, index) => ({
+      id: `${input.id}:m${index}`,
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `message ${index}`,
+      createdAt: index + 1,
+    })),
+  };
+  app.chats.set(chat.id, chat);
+  app.chatPolicies.set(chat.id, {
+    botId: input.botId,
+    chatId: chat.id,
+    mode: "inherit",
+    revision: `revision:chat:${chat.id}`,
+    botPolicyRevision: app.policies.get(input.botId)?.revision ?? "revision:policy:missing",
+    summary: "Full",
+  });
+  return chat;
+}
+
+test("Bot delete erases photo, home, access and chats, then the record last", async () => {
+  const owner = bot("bot:doomed");
+  const survivor = bot("bot:survivor");
+  const app = fixture({ bots: [owner, survivor] });
+  const photos: string[] = [];
+  (app.deps as { deleteBotPhoto?: (botId: string) => Promise<void> }).deleteBotPhoto = async (botId) => {
+    photos.push(botId);
+    app.events.push("photo:delete");
+  };
   await app.service.initialize();
-  await assert.doesNotReject(app.service.listChats(archived.id));
+  const chat = await app.service.createChat({ audienceId: "device:a", botId: owner.id });
+  const kept = await app.service.createChat({ audienceId: "device:a", botId: survivor.id });
+  app.events.length = 0;
+
+  await app.service.deleteBot({ botId: owner.id });
+
+  const order = ["photo:delete", "home:delete", "policy:delete", "chat:remove", "identity:delete"];
+  assert.deepEqual(app.events.filter((event) => order.includes(event)), order);
+  assert.deepEqual(photos, [owner.id]);
+  assert.deepEqual((await app.service.list()).map(({ id }) => id), [survivor.id]);
+  assert.equal(app.homes.has(owner.id), false);
+  assert.equal(app.policies.has(owner.id), false);
+  assert.equal(app.chats.has(chat.id), false);
+  assert.equal(app.chatPolicies.has(chat.id), false);
+  assert.equal(app.pending.size, 0);
+  assert.equal(app.chats.has(kept.id), true);
+  assert.equal(app.homes.has(survivor.id), true);
+
+  app.events.length = 0;
+  await app.service.deleteBot({ botId: owner.id });
+  assert.deepEqual(app.events, [], "deleting a deleted Bot changes nothing");
 });
 
-test("archive recovery rejects a newer identity when the old intent never committed", async () => {
-  const current = bot("bot:changed", { revision: "botrev:newer", updatedAt: 2 });
+test("an interrupted Bot delete keeps the Bot listed, and a retry finishes it", async () => {
+  const owner = bot("bot:interrupted");
+  const app = fixture({ bots: [owner] });
+  await app.service.initialize();
+  await app.service.createChat({ audienceId: "device:a", botId: owner.id });
+  const chatStore = app.deps.chatStore as unknown as { remove: (...args: unknown[]) => Promise<void> };
+  const remove = chatStore.remove;
+  chatStore.remove = async () => {
+    throw new Error("disk went away");
+  };
+
+  await assert.rejects(app.service.deleteBot({ botId: owner.id }), /disk went away/u);
+  assert.deepEqual((await app.service.list()).map(({ id }) => id), [owner.id]);
+  assert.deepEqual([...app.pending.values()].map(({ kind }) => kind), ["delete_bot"]);
+
+  chatStore.remove = remove;
+  await app.service.deleteBot({ botId: owner.id });
+  assert.deepEqual(await app.service.list(), []);
+  assert.equal(app.chats.size, 0);
+  assert.equal(app.pending.size, 0);
+});
+
+test("startup rolls a pending Bot delete forward", async () => {
+  const owner = bot("bot:crashed-delete");
   const app = fixture({
-    bots: [current],
-    migrationSealed: true,
+    bots: [owner],
     pending: [{
-      operationId: "operation:archive-stale",
-      kind: "archive_bot",
-      botId: current.id,
-      subject: { expectedRevision: "botrev:older" },
-      stage: "authority_archived",
+      operationId: "operation:delete-crashed",
+      kind: "delete_bot",
+      botId: owner.id,
+      subject: {},
+      stage: "prepared",
       startedAt: 1,
       updatedAt: 1,
     }],
   });
-  app.policies.set(current.id, {
-    botId: current.id,
+  // The crash happened after access and the home were already erased.
+  await app.service.initialize();
+  assert.deepEqual(await app.service.list(), []);
+  assert.equal(app.bots.length, 0);
+  assert.equal(app.pending.size, 0);
+  assert.ok(app.events.includes("identity:delete"));
+});
+
+test("archived Bots left by an older release are erased at startup", async () => {
+  const archived = bot("bot:archived-legacy", { archivedAt: 2 });
+  const live = bot("bot:live");
+  const app = fixture({ bots: [archived, live] });
+  app.policies.set(archived.id, {
+    botId: archived.id,
     accessMode: "full",
-    revision: "revision:policy:archive-recovery",
+    revision: "revision:policy:archived",
     policyEpoch: "epoch:2",
     summary: "Full",
   });
-  app.authorityStatuses.set(current.id, "archived");
+  app.authorityStatuses.set(archived.id, "archived");
+  app.homes.set(archived.id, { botId: archived.id, workspaceId: WORKSPACE_ID, createdAt: 1 });
+  const chat = seedChat(app, { id: "chat:archived", botId: archived.id, updatedAt: 2, messages: 2 });
 
-  await assert.rejects(app.service.initialize(), /changed on another surface/u);
-  assert.equal(app.bots[0]?.archivedAt, undefined);
-  assert.equal(app.pending.size, 1);
-});
-
-test("archive fences authority both before and after the identity commit", async () => {
-  const current = bot("bot:archive-fence");
-  const app = fixture({ bots: [current] });
   await app.service.initialize();
-  app.events.length = 0;
 
-  await app.service.archiveBot({ botId: current.id, expectedRevision: current.revision });
-
-  const identityIndex = app.events.indexOf("identity:archive");
-  const fenceIndexes = app.events.flatMap((event, index) =>
-    event === "policy:fence" ? [index] : [],
-  );
-  assert.equal(fenceIndexes.length, 2);
-  assert.ok(fenceIndexes[0]! < identityIndex);
-  assert.ok(fenceIndexes[1]! > identityIndex);
+  assert.deepEqual(app.bots.map(({ id }) => id), [live.id]);
+  assert.equal(app.policies.has(archived.id), false);
+  assert.equal(app.homes.has(archived.id), false);
+  assert.equal(app.chats.has(chat.id), false);
+  assert.equal(app.chatPolicies.has(chat.id), false);
+  assert.equal(app.policies.get(live.id)?.accessMode, "full");
+  assert.equal(app.pending.size, 0);
 });
 
-test("post-visible archive and restore journal failures recover live without replaying identity", async () => {
-  const archiveOwner = bot("bot:archive-live");
-  const archiveApp = fixture({
-    bots: [archiveOwner],
-    failJournalOnceAfter: { method: "complete", stage: "identity_archived" },
-  });
-  await archiveApp.service.initialize();
-  const archived = await archiveApp.service.archiveBot({
-    botId: archiveOwner.id,
-    expectedRevision: archiveOwner.revision,
-  });
-  assert.ok(archived.archivedAt);
-  assert.equal(archiveApp.events.filter((event) => event === "identity:archive").length, 1);
-  assert.equal(archiveApp.pending.size, 0);
-
-  const restoreOwner = bot("bot:restore-live", { archivedAt: 2, updatedAt: 2 });
-  const restoreApp = fixture({
-    bots: [restoreOwner],
-    failJournalOnceAfter: { method: "checkpoint", stage: "identity_restored" },
-  });
-  await restoreApp.service.initialize();
-  const restored = await restoreApp.service.restoreBot({
-    botId: restoreOwner.id,
-    expectedRevision: restoreOwner.revision,
-  });
-  assert.equal(restored.archivedAt, undefined);
-  assert.equal(restoreApp.events.filter((event) => event === "identity:restore").length, 1);
-  assert.equal(restoreApp.pending.size, 0);
-});
-
-test("restore recovery rejects a newer archived identity when the old intent never committed", async () => {
-  const current = bot("bot:changed", {
-    revision: "botrev:newer-archived",
-    updatedAt: 3,
-    archivedAt: 2,
-  });
-  const app = fixture({
-    bots: [current],
-    migrationSealed: true,
-    pending: [{
-      operationId: "operation:restore-stale",
-      kind: "restore_bot",
-      botId: current.id,
-      subject: { expectedRevision: "botrev:older-archived" },
-      stage: "identity_restored",
-      startedAt: 1,
-      updatedAt: 1,
-    }],
-  });
-  app.policies.set(current.id, {
-    botId: current.id,
-    accessMode: "full",
-    revision: "revision:policy:restore-recovery",
-    policyEpoch: "epoch:1",
-    summary: "Full",
-  });
-  app.homes.set(current.id, { botId: current.id, workspaceId: WORKSPACE_ID, createdAt: 1 });
-
-  await assert.rejects(app.service.initialize(), /changed on another surface/u);
-  assert.equal(app.bots[0]?.archivedAt, 2);
-  assert.equal(app.pending.size, 1);
-});
-
-test("archive and restore recovery are idempotent at every protected checkpoint", async (t) => {
-  const policyFor = (botId: string): BotAccessView => ({
-    botId,
-    accessMode: "full",
-    revision: `revision:policy:${botId}`,
-    policyEpoch: "epoch:1",
-    summary: "Full",
-  });
-
-  for (const stage of ["prepared", "authority_archived", "identity_archived"] as const) {
-    await t.test(`archive ${stage}`, async () => {
-      const current = bot(`bot:archive:${stage}`);
-      if (stage === "identity_archived") {
-        current.archivedAt = 2;
-        current.updatedAt = 2;
-        current.revision = `botrev:${current.id}:archived`;
-      }
+test("a pending archive or restore from an older release erases its Bot and closes", async (t) => {
+  for (const legacy of [
+    { kind: "archive_bot" as const, stage: "authority_archived" as const },
+    { kind: "restore_bot" as const, stage: "identity_restored" as const },
+    { kind: "archive_bot" as const, stage: "identity_archived" as const },
+  ]) {
+    await t.test(`${legacy.kind} at ${legacy.stage}`, async () => {
+      const current = bot(`bot:${legacy.kind}:${legacy.stage}`);
       const app = fixture({
         bots: [current],
-        migrationSealed: true,
         pending: [{
-          operationId: `operation:archive:${stage}`,
-          kind: "archive_bot",
-          botId: current.id,
-          subject: { expectedRevision: bot(current.id).revision },
-          stage,
-          startedAt: 1,
-          updatedAt: 2,
-        }],
-      });
-      app.policies.set(current.id, policyFor(current.id));
-      app.authorityStatuses.set(
-        current.id,
-        stage === "prepared" ? "active" : "archived",
-      );
-      app.homes.set(current.id, { botId: current.id, workspaceId: WORKSPACE_ID, createdAt: 1 });
-
-      await app.service.initialize();
-      assert.ok(app.bots[0]?.archivedAt);
-      assert.equal(app.authorityStatuses.get(current.id), "archived");
-      assert.equal(app.pending.size, 0);
-    });
-  }
-
-  for (const stage of ["prepared", "identity_restored", "authority_restored"] as const) {
-    await t.test(`restore ${stage}`, async () => {
-      const current = bot(`bot:restore:${stage}`);
-      if (stage === "prepared") {
-        current.archivedAt = 2;
-        current.updatedAt = 2;
-      }
-      const app = fixture({
-        bots: [current],
-        migrationSealed: true,
-        pending: [{
-          operationId: `operation:restore:${stage}`,
-          kind: "restore_bot",
+          operationId: `operation:${legacy.kind}`,
+          kind: legacy.kind,
           botId: current.id,
           subject: { expectedRevision: current.revision },
-          stage,
+          stage: legacy.stage,
           startedAt: 1,
-          updatedAt: 2,
+          updatedAt: 1,
         }],
       });
-      app.policies.set(current.id, policyFor(current.id));
-      app.authorityStatuses.set(
-        current.id,
-        stage === "authority_restored" ? "active" : "archived",
-      );
       app.homes.set(current.id, { botId: current.id, workspaceId: WORKSPACE_ID, createdAt: 1 });
-
       await app.service.initialize();
-      assert.equal(app.bots[0]?.archivedAt, undefined);
-      assert.equal(app.authorityStatuses.get(current.id), "active");
+      assert.deepEqual(app.bots, []);
+      assert.equal(app.homes.size, 0);
       assert.equal(app.pending.size, 0);
     });
   }
 });
 
-test("startup rejects offline Bot identity rollback in either authority direction", async (t) => {
-  for (const mismatch of [
-    { identityArchived: false, protectedStatus: "archived" as const },
-    { identityArchived: true, protectedStatus: "active" as const },
-  ]) {
-    await t.test(`${mismatch.identityArchived ? "archived" : "active"} identity`, async () => {
-      const current = bot("bot:offline-rollback");
-      if (mismatch.identityArchived) current.archivedAt = 2;
-      const app = fixture({ bots: [current], migrationSealed: true });
-      app.policies.set(current.id, {
-        botId: current.id,
-        accessMode: "full",
-        revision: "revision:policy:rollback",
-        policyEpoch: "epoch:2",
-        summary: "Full",
-      });
-      app.authorityStatuses.set(current.id, mismatch.protectedStatus);
-      app.homes.set(current.id, { botId: current.id, workspaceId: WORKSPACE_ID, createdAt: 1 });
+test("legacy Bot transcripts are wiped once, keeping only an empty canonical chat", async () => {
+  const owner = bot("bot:wiped");
+  const app = fixture({ bots: [owner] });
+  let done = false;
+  const journals: string[] = [];
+  (app.deps as { legacyTranscriptWipe?: unknown }).legacyTranscriptWipe = {
+    async isDone() { return done; },
+    async markDone() { done = true; },
+    async clearChatJournal(chatId: string) { journals.push(chatId); },
+  };
+  const deletionGuard: string[] = [];
+  (app.deps as { assertChatDeletionAllowed?: unknown }).assertChatDeletionAllowed = async (
+    _botId: string,
+    chatId: string,
+  ) => {
+    deletionGuard.push(chatId);
+    if (chatId === "chat:telegram-backed") throw new Error("backs a Telegram binding");
+  };
+  app.policies.set(owner.id, {
+    botId: owner.id,
+    accessMode: "full",
+    revision: "revision:policy:wiped",
+    policyEpoch: "epoch:1",
+    summary: "Full",
+  });
+  app.authorityStatuses.set(owner.id, "active");
+  const canonical = seedChat(app, { id: "chat:canonical", botId: owner.id, updatedAt: 9, messages: 4 });
+  const historical = seedChat(app, { id: "chat:historical", botId: owner.id, updatedAt: 5, messages: 3 });
+  const backed = seedChat(app, { id: "chat:telegram-backed", botId: owner.id, updatedAt: 4, messages: 2 });
 
-      await assert.rejects(app.service.initialize(), /authority mismatch/u);
-    });
-  }
+  await app.service.initialize();
+
+  assert.deepEqual(app.chats.get(canonical.id)?.messages, []);
+  assert.equal(app.chats.has(historical.id), false);
+  assert.equal(app.chatPolicies.has(historical.id), false);
+  assert.deepEqual(app.chats.get(backed.id)?.messages, [], "a chat that cannot be deleted is emptied");
+  assert.deepEqual(journals.sort(), [backed.id, canonical.id].sort());
+  assert.equal(done, true);
+  assert.equal((await app.service.getCanonicalChat(owner.id))?.id, canonical.id);
+
+  // A second start must not repeat the wipe.
+  app.chats.get(canonical.id)!.messages.push({ id: "new", role: "user", content: "hi", createdAt: 10 });
+  const restarted = createBotApplicationService(app.deps);
+  await restarted.initialize();
+  assert.equal(app.chats.get(canonical.id)?.messages.length, 1);
 });
 
 test("Bot creation commits home then policy then visible identity", async () => {
@@ -1828,38 +1815,6 @@ test("Bot and chat access catalogs are scoped to their owning Bot while create i
   assert.deepEqual(app.catalogTargets, [owner.id, owner.id, undefined]);
 });
 
-test("archived Bot chats remain readable but reject a new delete mutation", async () => {
-  const app = fixture({ bots: [bot("bot:one", { archivedAt: 2 })] });
-  await app.service.initialize();
-  const chat: Chat = {
-    id: "chat:old",
-    title: "Old",
-    workspaceId: "legacy-workspace",
-    botId: "bot:one",
-    createdAt: 1,
-    updatedAt: 1,
-    messages: [],
-  };
-  app.chats.set(chat.id, chat);
-  app.chatPolicies.set(chat.id, {
-    botId: "bot:one",
-    chatId: chat.id,
-    mode: "inherit",
-    revision: "revision:chat:old",
-    botPolicyRevision: app.policies.get("bot:one")!.revision,
-    summary: "Full",
-  });
-  app.events.length = 0;
-  assert.deepEqual(await app.service.listChats("bot:one"), [chat]);
-  await assert.rejects(
-    app.service.deleteChat({ botId: "bot:one", chatId: chat.id }),
-    /no longer available/u,
-  );
-  assert.equal(app.chats.has(chat.id), true);
-  assert.equal(app.chatPolicies.has(chat.id), true);
-  assert.deepEqual(app.events, []);
-});
-
 test("legacy duplicate Bot chats keep the newest canonical and older history read-only", async () => {
   const owner = bot("bot:legacy-duplicates");
   const app = fixture({ bots: [owner] });
@@ -1950,7 +1905,7 @@ test("legacy duplicate Bot chats keep the newest canonical and older history rea
   assert.equal(app.chats.size, 2);
 });
 
-test("retained Bot authorization preserves archived handles and admits active writes", async () => {
+test("retained Bot authorization admits active writes and refuses unknown chats", async () => {
   const owner = bot("bot:retained");
   const app = fixture({ bots: [owner] });
   await app.service.initialize();
@@ -1985,21 +1940,6 @@ test("retained Bot authorization preserves archived handles and admits active wr
     ["policy:admit", "policy:release"],
   );
 
-  app.authorityStatuses.set(owner.id, "archived");
-  const stored = app.bots.find(({ id }) => id === owner.id)!;
-  stored.archivedAt = 2;
-  assert.equal(await app.service.authorizeRetainedChat({
-    audienceId: "device:a",
-    botId: owner.id,
-    chatId: chat.id,
-    access: "read",
-  }), true);
-  assert.equal(await app.service.authorizeRetainedChat({
-    audienceId: "device:a",
-    botId: owner.id,
-    chatId: chat.id,
-    access: "write",
-  }), true);
   assert.equal(await app.service.authorizeRetainedChat({
     audienceId: "device:a",
     botId: owner.id,

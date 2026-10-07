@@ -2,12 +2,16 @@
 // Aiden, installed in a Bot harness's registry before anything can run.
 //
 // - System prompt: the Bot's sections in the order base, persona, authority,
-//   rendered verbatim (Aiden already escapes and tags their content).
+//   then connection guidance, rendered verbatim (Aiden already escapes and
+//   tags their content). Sections are built after the tools, so the base
+//   prompt and MCP guidance describe exactly the tools offered.
 // - Tools: Aiden tools adapted by `tool-adapter.ts`, rebuilt from the current
 //   inventory on every `refresh()` (each submit and Resume). MCP tools are
 //   never replay-safe; the caller declares replay for the rest.
 // - Policy: `beforeTool` re-checks the Bot's current policy at every call and
 //   blocks a disallowed tool without running it.
+// - Images: a model without image input gets text references in place of the
+//   person's images, for that request only (see `bot-images.ts`).
 // - Approvals: an approval-gated call asks through `requestApproval` with a
 //   `waitId` persisted in the tool task's memo, so a restart re-asks the same
 //   approval instead of minting a new one.
@@ -30,16 +34,33 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
-import { adaptAidenTool, type DurableTool, type ToolReplay } from "./tool-adapter.js";
+import { withImageReferences } from "./bot-images.js";
+import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 
 export const BOT_EXTENSION_NAME = "aiden-bot";
 /** Section keys, in render order. */
-export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority"] as const;
+export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority", "aiden-guidance"] as const;
 const APPROVAL_MEMO = "aiden.approval";
 
+export interface BotApprovalRequirement {
+  summary: string;
+  /**
+   * Runs after the person allows, before the tool executes (for example to
+   * bind a Computer Use grant to this call). A throw blocks the call.
+   */
+  onAllow?(): void | Promise<void>;
+}
+
 export type BotPolicyDecision =
-  | { allowed: true; approval?: { summary: string } }
+  | { allowed: true; approval?: BotApprovalRequirement }
   | { allowed: false; reason: string };
+
+/** The call being checked. */
+export interface BotToolCallCheck {
+  callId: string;
+  args: unknown;
+  signal: AbortSignal | undefined;
+}
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
 
@@ -59,6 +80,13 @@ export interface BotToolEntry {
   replay: ToolReplay;
   /** MCP tools are forced to `unsafe` replay. */
   mcp?: boolean;
+  /** Build the tool per call from the conversation it runs in (see `tool-adapter.ts`). */
+  bind?: (call: BotToolCall) => AgentTool;
+}
+
+/** What the next request offers, so the sections can describe it. */
+export interface BotOfferedTools {
+  toolNames: readonly string[];
 }
 
 /** What the next run is for: the request that started (or will start) it. */
@@ -70,12 +98,19 @@ export interface BotTurnContext {
 export interface BotExtensionDeps {
   /** Re-read on every refresh. */
   loadBot(botId: string): Promise<BotDefinition>;
-  /** Base, persona and authority sections, in this order. */
-  systemSections(bot: BotDefinition): Promise<string[]>;
+  /** Base, persona, authority and guidance sections, in this order. Built after `currentTools`. */
+  systemSections(bot: BotDefinition, offered: BotOfferedTools): Promise<string[]>;
   currentTools(bot: BotDefinition, turn: BotTurnContext): Promise<BotToolEntry[]>;
-  checkPolicy(botId: string, toolName: string): Promise<BotPolicyDecision>;
+  checkPolicy(botId: string, toolName: string, call?: BotToolCallCheck): Promise<BotPolicyDecision>;
+  /**
+   * Ask the person. Resolves with their answer; rejects when `signal` aborts
+   * (the turn stopped or the app is quitting), so the call stays unanswered
+   * and is re-asked with the same `waitId` after Resume.
+   */
   requestApproval(request: BotApprovalRequest): Promise<"allow" | "deny">;
   readmit(botId: string): Promise<BotReadmission>;
+  /** Whether the Bot's model takes images. Defaults to true. */
+  imageInput?(botId: string): Promise<boolean>;
 }
 
 export class BotAccessChangedError extends Error {
@@ -134,21 +169,27 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
 
   const hooks = [
     hook(GenerationTask, {
-      beforeRequest: async (_request, api, context) => {
-        if (admitted) return undefined;
-        const readmission = await deps.readmit(botId);
-        if (!readmission.ok) {
-          failure = readmission;
-          return failClosed(api.taskId, context, new BotAccessChangedError(readmission.reason));
+      beforeRequest: async (request, api, context) => {
+        if (!admitted) {
+          const readmission = await deps.readmit(botId);
+          if (!readmission.ok) {
+            failure = readmission;
+            return failClosed(api.taskId, context, new BotAccessChangedError(readmission.reason));
+          }
+          failure = null;
+          admitted = true;
         }
-        failure = null;
-        admitted = true;
-        return undefined;
+        if (deps.imageInput === undefined || (await deps.imageInput(botId))) return undefined;
+        return { messages: withImageReferences(request.messages) };
       },
     }),
     hook(ToolTask, {
       beforeTool: async (call, api, context) => {
-        const decision = await deps.checkPolicy(botId, call.name);
+        const decision = await deps.checkPolicy(botId, call.name, {
+          callId: call.id,
+          args: call.arguments,
+          signal: context.abortSignal,
+        });
         if (!decision.allowed) return { block: decision.reason };
         if (decision.approval === undefined) return undefined;
         const memo = await api.memo<ApprovalMemo>(
@@ -164,7 +205,13 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           summary: memo.summary,
           signal: context.abortSignal,
         });
-        return answer === "allow" ? undefined : { block: "The person declined this action." };
+        if (answer !== "allow") return { block: "The person declined this action." };
+        try {
+          await decision.approval.onAllow?.();
+        } catch (error) {
+          return { block: error instanceof Error ? error.message : "This action can no longer run." };
+        }
+        return undefined;
       },
     }),
   ];
@@ -188,9 +235,12 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   return Object.assign(registry, {
     async refresh(turn: BotTurnContext = {}) {
       const bot = await deps.loadBot(botId);
-      const [nextSections, entries] = await Promise.all([deps.systemSections(bot), deps.currentTools(bot, turn)]);
+      const entries = await deps.currentTools(bot, turn);
+      const nextSections = await deps.systemSections(bot, { toolNames: entries.map(({ tool }) => tool.name) });
       sections = nextSections.slice(0, BOT_SECTION_KEYS.length);
-      const tools = entries.map(({ tool, replay, mcp }) => adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay }));
+      const tools = entries.map(({ tool, replay, mcp, bind }) =>
+        adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind }) }),
+      );
       registry.install(build(tools));
     },
     admissionFailure() {

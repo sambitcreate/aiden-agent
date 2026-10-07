@@ -16,7 +16,7 @@ export function createCliRemoteBots(agentDir: string, instanceId: string, runtim
   const favorites = new JsonStore<AidenRemoteBotFavoritesSnapshot>(join(agentDir, "bot-favorites.json"), EMPTY_AIDEN_REMOTE_BOT_FAVORITES);
   const bots = new AidenRemoteBotService({ avatar: createCliBotAvatars(agentDir, instanceId), application: runtime.application, chatStore: daemon.chatStore, favorites, idempotency, persistIdempotency,
     inbox: { list: (deviceId, input) => createBotInboxProjectionService({
-      listBots: () => runtime.application.list(true), listChatMetadata: () => daemon.chatStore.list(),
+      listBots: () => runtime.application.list(), listChatMetadata: () => daemon.chatStore.list(),
       projectBatch: async (request) => mergeBotInboxActivityPreviews(request, await chatApi.streams.projectChatActivities(deviceId, request.map(({ chatId }) => chatId))),
     }).list(input) },
     resolveProviderModel: async ({ audienceId, botId, providerId, modelId }) => {

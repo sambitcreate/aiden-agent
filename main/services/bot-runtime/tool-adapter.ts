@@ -10,13 +10,55 @@
 //   `api.details()` values.
 // - Replay: declared per adaptation. Only read-only or idempotent tools may be
 //   `safe`; an interrupted `unsafe` call becomes an `interrupted` error result.
+// - Call binding: a tool that needs the conversation (to read attachment
+//   snapshots or append entries) is built per call by `bind`, so nothing it
+//   depends on lives in a closure that a restart would lose.
 
 import type { Context, JsonValue } from "@earendil-works/chord";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { EntryRecord, ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 
 export type DurableTool = ToolRegistration;
 export type ToolReplay = "safe" | "unsafe";
+
+/** What a per-call tool may use of the conversation it runs in. */
+export interface BotToolCall {
+  readonly callId: string;
+  readonly signal: AbortSignal;
+  /** Committed entries of the calling conversation, oldest first. */
+  entries(): Promise<EntryRecord[]>;
+  /** Append a display/bookkeeping entry to the calling conversation. */
+  appendEntry(kind: string, data: JsonValue): Promise<void>;
+}
+
+export interface AdaptOptions {
+  replay: ToolReplay;
+  /** Build the tool for one call. `tool` still supplies the name, schema and description. */
+  bind?: (call: BotToolCall) => AgentTool;
+}
+
+const ENTRY_PAGE = 500;
+
+function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal): BotToolCall {
+  return {
+    callId: api.callId,
+    signal,
+    entries: () =>
+      api.commit(async (tx) => {
+        const entries: EntryRecord[] = [];
+        let cursor: Parameters<typeof tx.scanEntries>[2];
+        do {
+          const page = await tx.scanEntries({ conversationId: api.conversationId }, ENTRY_PAGE, cursor);
+          entries.push(...page.items);
+          cursor = page.next;
+        } while (cursor !== undefined);
+        return entries;
+      }, context),
+    appendEntry: async (kind, data) => {
+      await api.commit((tx) => tx.appendEntry(api.conversationId, { kind, data }), context);
+    },
+  };
+}
 
 function textOf(result: AgentToolResult<unknown>): string {
   return result.content
@@ -72,7 +114,7 @@ function createUpdateForwarder(api: ToolExecutionApi, context: Context) {
   };
 }
 
-export function adaptAidenTool(tool: AgentTool, opts: { replay: ToolReplay }): DurableTool {
+export function adaptAidenTool(tool: AgentTool, opts: AdaptOptions): DurableTool {
   const registration: DurableTool = {
     name: tool.name,
     description: tool.description,
@@ -83,7 +125,8 @@ export function adaptAidenTool(tool: AgentTool, opts: { replay: ToolReplay }): D
     async execute(args, api, context): Promise<ToolExecutionResult> {
       const { signal, dispose } = linkedSignal(context);
       try {
-        const result = await tool.execute(api.callId, args, signal, createUpdateForwarder(api, context));
+        const target = opts.bind ? opts.bind(callApi(api, context, signal)) : tool;
+        const result = await target.execute(api.callId, args, signal, createUpdateForwarder(api, context));
         const details = toJson(result.details);
         return {
           content: result.content,

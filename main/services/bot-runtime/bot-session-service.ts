@@ -43,7 +43,10 @@ export type BotSessionState =
   | { kind: "idle" }
   | { kind: "running"; submissionId: string }
   | { kind: "interrupted"; submissionId: string; blocked?: "access_changed" | "bot_missing" }
+  /** The Bot has no AI model configured. */
   | { kind: "needs_model" }
+  /** The Bot has a model, but it cannot be used right now (sign-in, missing provider, access). */
+  | { kind: "model_error"; message: string }
   | { kind: "unavailable"; reason: "held_by_live_process" };
 
 /** A transcript notice entry; `data` of `aiden.bot-notice`. */
@@ -88,6 +91,7 @@ export interface BotSendInput {
 
 export type BotSessionErrorReason =
   | "needs_model"
+  | "model_error"
   | "unavailable"
   | "access_changed"
   | "bot_missing"
@@ -105,6 +109,8 @@ function defaultMessage(reason: BotSessionErrorReason): string {
   switch (reason) {
     case "needs_model":
       return "This Bot needs an AI model.";
+    case "model_error":
+      return "This Bot's AI model is not available right now.";
     case "unavailable":
       return BOTS_HELD_ELSEWHERE_MESSAGE;
     case "access_changed":
@@ -152,14 +158,18 @@ export interface BotSessionServiceDeps {
   /** pi-ai model access, per Bot so a Bot's provider binding stays exact. */
   models: Models;
   extension: BotExtensionDeps;
-  /** The Bot's current model, or `null` when it has none it can use. */
+  /**
+   * The Bot's current model, or `null` when it has no model configured. Any
+   * other failure throws; its message is shown as a `model_error`.
+   */
   resolveModel(botId: string): Promise<ModelRef | null>;
   /** Every Bot record that exists. Sessions of other ids are orphans. */
   knownBotIds(): Promise<ReadonlySet<string>>;
   /**
-   * Erase everything else a Bot owns, in order (routines, home workspace,
-   * photo, Telegram binding, summaries, and finally the Bot record). Runs
-   * after the session is aborted and removed.
+   * Erase everything else a Bot owns, in order (routines, dismissals,
+   * Telegram binding, then photo, home, access, chat rows and finally the Bot
+   * record). Runs after the session is aborted and removed. Each effect must
+   * be idempotent: a failed or interrupted delete is retried from the start.
    */
   deleteEffects?: ReadonlyArray<(botId: string) => Promise<void>>;
   settings?: HarnessSettings;
@@ -279,8 +289,22 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         return { kind: "running", submissionId };
       }
     }
-    if ((await deps.resolveModel(botId)) === null) return { kind: "needs_model" };
+    const model = await modelFor(botId);
+    if (model.kind === "none") return { kind: "needs_model" };
+    if (model.kind === "error") return { kind: "model_error", message: model.message };
     return { kind: "idle" };
+  }
+
+  async function modelFor(
+    botId: string,
+  ): Promise<{ kind: "ok"; ref: ModelRef } | { kind: "none" } | { kind: "error"; message: string }> {
+    try {
+      const ref = await deps.resolveModel(botId);
+      return ref === null ? { kind: "none" } : { kind: "ok", ref };
+    } catch (error) {
+      const message = error instanceof Error && error.message.length > 0 ? error.message : defaultMessage("model_error");
+      return { kind: "error", message };
+    }
   }
 
   /** Bind the Bot's current model and reload its extension before anything runs. */
@@ -290,8 +314,10 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     registry: BotRegistry,
     requestId: string | undefined,
   ): Promise<void> {
-    const model = await deps.resolveModel(botId);
-    if (model === null) throw new BotSessionError("needs_model");
+    const resolved = await modelFor(botId);
+    if (resolved.kind === "none") throw new BotSessionError("needs_model");
+    if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message);
+    const model = resolved.ref;
     await registry.refresh(requestId === undefined ? {} : { requestId });
     const agent = await conversation.agent(ctx);
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
@@ -419,9 +445,12 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
     deleteBot(botId) {
       return serialize(botId, async () => {
+        // Another process holding the profile owns the session; erasing the
+        // Bot's data underneath it would orphan a live harness.
+        const owner = requireHost();
         deleted.add(botId);
         blocked.delete(botId);
-        if (host !== null) await host.destroy(botId);
+        await owner.destroy(botId);
         registries.delete(botId);
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
       });
