@@ -31,7 +31,21 @@ export interface StudioAssetStoreOptions {
   thumbnailer: StudioAssetThumbnailer;
   now?: () => number;
   limits?: Partial<StudioAssetLimits>;
+  /** Receives non-fatal housekeeping failures (startup sweep or collection); the store stays usable. */
+  onError?: (error: unknown) => void;
 }
+
+/**
+ * Availability of the store. "closed" means never opened or shut down, "open"
+ * means usable, and "failed" means the last initialize() could not open the
+ * database; initialize() may be called again to retry.
+ *
+ * Design Studio and Create Images report a storage error when status() is not
+ * "open": a "failed" store is a startup failure worth surfacing, while any
+ * operation on a store that is not open rejects with StudioAssetError
+ * ("unavailable"), which the aiden-asset: handler maps to HTTP 503.
+ */
+export type StudioAssetStoreStatus = "closed" | "open" | "failed";
 
 interface AssetRow {
   id: string;
@@ -83,17 +97,31 @@ export class StudioAssetStore {
   private blobWrites: Promise<unknown> = Promise.resolve();
   /** In-flight open, shared so concurrent initialize() calls never leak a second handle. */
   private opening: Promise<void> | null = null;
+  private failed = false;
 
   constructor(private readonly options: StudioAssetStoreOptions) {
     this.now = options.now ?? Date.now;
     this.limits = { ...STUDIO_ASSET_LIMITS, ...options.limits };
   }
 
+  status(): StudioAssetStoreStatus {
+    if (this.db) return "open";
+    return this.failed ? "failed" : "closed";
+  }
+
   initialize(): Promise<void> {
     if (this.db) return Promise.resolve();
-    this.opening ??= this.open().finally(() => {
-      this.opening = null;
-    });
+    this.opening ??= this.open().then(
+      () => {
+        this.failed = false;
+        this.opening = null;
+      },
+      (error: unknown) => {
+        this.failed = true;
+        this.opening = null;
+        throw error;
+      },
+    );
     return this.opening;
   }
 
@@ -123,8 +151,14 @@ export class StudioAssetStore {
     }
     this.db = db;
     this.root = root;
-    await this.exclusive(() => this.sweepOrphanFiles());
-    await this.collectGarbage();
+    // Housekeeping is best effort: a failed pass must not disable a store whose
+    // database opened, and the next start (or an explicit collection) retries it.
+    try {
+      await this.exclusive(() => this.sweepOrphanFiles());
+      await this.collectGarbage();
+    } catch (error) {
+      this.options.onError?.(error);
+    }
   }
 
   /**
@@ -143,6 +177,7 @@ export class StudioAssetStore {
         .then(() => this.close());
     }
     const db = this.db;
+    this.failed = false;
     if (!db) return Promise.resolve();
     this.db = null;
     return this.blobWrites.then(() => db.close());

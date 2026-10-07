@@ -73,19 +73,23 @@ test("with a studio flag on the store opens, then the handler serves granted ass
   assert.equal(response.headers.get("content-type"), "image/png");
 });
 
-test("the handler is not installed when the store cannot open", async (t) => {
+test("the handler is still installed when the store cannot open, and answers 503", async (t) => {
   const f = await setup(t);
-  const failure = new Error("disk unavailable");
-  const started = await f.start(true, {
-    store: {
-      initialize: async () => {
-        throw failure;
-      },
-      read: f.store.read.bind(f.store),
-      thumbnail: f.store.thumbnail.bind(f.store),
-    },
-  });
+  // A file where the store root belongs makes the directory creation fail.
+  await fs.writeFile(f.root, "not a directory");
+  const started = await f.start(true);
   assert.equal(started, false);
-  assert.equal(f.handlers.length, 0);
-  assert.deepEqual(f.errors, [failure]);
+  assert.equal(f.errors.length, 1);
+  assert.equal(f.store.status(), "failed");
+  assert.equal(f.handlers.length, 1);
+  const owner = {
+    id: 1,
+    documentId: "1:1:main",
+    isDestroyed: () => false,
+    onInvalidated: () => () => undefined,
+  };
+  const url = f.grants.issue(owner, "a".repeat(64), "original");
+  const response = await f.handlers[0]!(new Request(url));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("cache-control"), "no-store");
 });

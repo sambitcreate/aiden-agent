@@ -341,3 +341,62 @@ test("concurrent initialize calls share one open", async (t) => {
   await store.close(); // one close is enough
   assert.throws(() => store.usage(), code("unavailable"));
 });
+
+async function rawStore(t: TestContext, onError?: (error: unknown) => void) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-studio-assets-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new StudioAssetStore({
+    root: () => root,
+    thumbnailer: fakeThumbnailer().thumbnailer,
+    onError,
+  });
+  t.after(() => store.close());
+  return { root, store };
+}
+
+test("status reports closed, open, then closed again after shutdown", async (t) => {
+  const { store } = await rawStore(t);
+  assert.equal(store.status(), "closed");
+  await store.initialize();
+  assert.equal(store.status(), "open");
+  await store.close();
+  assert.equal(store.status(), "closed");
+});
+
+test("a failed startup sweep is reported and the store stays usable", async (t) => {
+  const errors: unknown[] = [];
+  const { root, store } = await rawStore(t, (error) => errors.push(error));
+  const sweepFailure = new Error("thumbs unreadable");
+  const realReaddir = fsModule.readdir;
+  fsModule.readdir = (async (...args: Parameters<typeof realReaddir>) => {
+    if (String(args[0]) === path.join(root, "thumbs")) throw sweepFailure;
+    return realReaddir(...args);
+  }) as typeof realReaddir;
+  syncBuiltinESMExports();
+  t.after(() => {
+    fsModule.readdir = realReaddir;
+    syncBuiltinESMExports();
+  });
+  await store.initialize();
+  assert.deepEqual(errors, [sweepFailure]);
+  assert.equal(store.status(), "open");
+  const record = await store.put({ bytes: pngBytes(10, 10, 5) });
+  assert.equal((await store.read(record.assetId)).bytes.byteLength, record.bytes);
+});
+
+test("a database that cannot open leaves the store failed, and a later initialize retries", async (t) => {
+  const { root, store } = await rawStore(t);
+  // A directory where the database file belongs makes the open fail.
+  const database = path.join(root, "assets-v1.sqlite");
+  await fs.mkdir(database, { recursive: true });
+  await assert.rejects(store.initialize());
+  assert.equal(store.status(), "failed");
+  assert.throws(() => store.usage(), code("unavailable"));
+  await assert.rejects(store.put({ bytes: pngBytes(10, 10, 6) }), code("unavailable"));
+
+  await fs.rm(database, { recursive: true });
+  await store.initialize();
+  assert.equal(store.status(), "open");
+  const record = await store.put({ bytes: pngBytes(10, 10, 6) });
+  assert.equal(store.get(record.assetId)?.assetId, record.assetId);
+});
