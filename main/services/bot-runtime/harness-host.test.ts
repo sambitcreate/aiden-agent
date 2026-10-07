@@ -90,7 +90,7 @@ test("(a2) an idle harness closes by itself and reopens mid-conversation", async
 
 test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the provider", async () => {
   const profile = tempProfile();
-  const child = spawnHarnessChild("stream", [profile, "bot-killed", "req-1"]);
+  const child = spawnHarnessChild("stream", [profile, "bot:killed", "req-1"]);
   const submissionId = await child.waitFor("STREAMING");
   await child.kill();
 
@@ -98,11 +98,11 @@ test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the 
   const host = await hostFor(profile, fauxModels);
   try {
     const interrupted = await host.interruptedBots();
-    assert.deepEqual(interrupted, [{ botId: "bot-killed", submissionId }]);
+    assert.deepEqual(interrupted, [{ botId: "bot:killed", submissionId }]);
     // Give a wrongly started scheduler time to reach the provider.
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(fauxModels.calls(), 0, "the scan must not resume the interrupted turn");
-    const inspection = await host.inspect("bot-killed");
+    const inspection = await host.inspect("bot:killed");
     assert.equal(inspection.scheduling, "paused");
   } finally {
     await host.shutdown();
@@ -156,12 +156,12 @@ test("(d) sweepOrphans removes directories with no known Bot", async () => {
   const profile = tempProfile();
   const host = await hostFor(profile, createFauxModels());
   try {
-    await host.open("bot-known");
+    await host.open("bot:known");
     mkdirSync(path.join(profile, "bots", "bot-orphan"), { recursive: true });
     writeFileSync(path.join(profile, "bots", "bot-orphan", BOT_SESSION_FILE), "");
-    const removed = await host.sweepOrphans(new Set(["bot-known"]));
+    const removed = await host.sweepOrphans(new Set(["bot:known"]));
     assert.deepEqual(removed, ["bot-orphan"]);
-    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot-known", "runtime.lock"]);
+    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lock"]);
   } finally {
     await host.shutdown();
   }

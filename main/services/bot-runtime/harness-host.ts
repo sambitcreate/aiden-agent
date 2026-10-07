@@ -29,7 +29,9 @@ import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE } from "./profile-lock.js"
 export const BOT_SESSION_FILE = "session.sqlite";
 export const DEFAULT_BOT_IDLE_CLOSE_MS = 600_000;
 const DESTROY_ABORT_TIMEOUT_MS = 10_000;
-const BOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+const MAX_BOT_ID_LENGTH = 200;
+const PLAIN_DIRECTORY_CHARACTER = /^[A-Za-z0-9_-]$/u;
+const ENCODED_DIRECTORY_NAME = /^(?:[A-Za-z0-9_-]|~[0-9a-f]{2})+$/u;
 
 export interface BotHarnessHostOptions {
   /** The profile directory; Bot sessions live under `<profileDir>/bots/`. */
@@ -76,7 +78,7 @@ export interface BotHarnessHost {
   close(botId: string): Promise<void>;
   /** Abort the live submission, close, and remove `bots/<id>/`. */
   destroy(botId: string): Promise<void>;
-  /** Remove Bot directories with no known Bot record. Returns the removed ids. */
+  /** Remove Bot directories with no known Bot record. Returns the removed directory names. */
   sweepOrphans(knownBotIds: ReadonlySet<string>): Promise<string[]>;
   isOpen(botId: string): boolean;
   shutdown(): Promise<void>;
@@ -105,7 +107,50 @@ export function isBotHarnessHostUnavailable(
 }
 
 export function assertBotId(botId: string): void {
-  if (!BOT_ID_PATTERN.test(botId)) throw new Error(`Invalid Bot id: ${JSON.stringify(botId)}`);
+  // Bot ids look like `bot:<uuid>`; anything else must still be one printable token.
+  if (botId.length === 0 || botId.length > MAX_BOT_ID_LENGTH || /[\u0000-\u001f\u007f/\\]/u.test(botId)) {
+    throw new Error(`Invalid Bot id: ${JSON.stringify(botId)}`);
+  }
+}
+
+/**
+ * The directory name of a Bot: its id with every character outside
+ * `[A-Za-z0-9_-]` written as `~xx` UTF-8 bytes (`bot:1` -> `bot~3a1`). It is
+ * a single safe path segment on every platform and never collides with the
+ * lock file or hidden staging names, which contain a dot.
+ */
+export function botDirectoryName(botId: string): string {
+  assertBotId(botId);
+  let name = "";
+  for (const character of botId) {
+    if (PLAIN_DIRECTORY_CHARACTER.test(character)) {
+      name += character;
+      continue;
+    }
+    for (const byte of Buffer.from(character, "utf8")) name += `~${byte.toString(16).padStart(2, "0")}`;
+  }
+  return name;
+}
+
+/** Inverse of `botDirectoryName`, or `null` for a name it never produces. */
+export function botIdFromDirectoryName(name: string): string | null {
+  if (!ENCODED_DIRECTORY_NAME.test(name)) return null;
+  const bytes: number[] = [];
+  for (let index = 0; index < name.length; ) {
+    if (name[index] === "~") {
+      bytes.push(Number.parseInt(name.slice(index + 1, index + 3), 16));
+      index += 3;
+    } else {
+      bytes.push(name.charCodeAt(index));
+      index += 1;
+    }
+  }
+  const botId = Buffer.from(bytes).toString("utf8");
+  try {
+    return botDirectoryName(botId) === name ? botId : null;
+  } catch {
+    return null;
+  }
 }
 
 /** SQLite's own verdict that the file is not (or no longer) a database. */
@@ -142,7 +187,7 @@ export async function createBotHarnessHost(
   const lifecycle = new Map<string, Promise<unknown>>();
   let shutDown = false;
 
-  const botDir = (botId: string) => path.join(botsDir, botId);
+  const botDir = (botId: string) => path.join(botsDir, botDirectoryName(botId));
   const sessionFile = (botId: string) => path.join(botDir(botId), BOT_SESSION_FILE);
 
   function serialize<T>(botId: string, action: () => Promise<T>): Promise<T> {
@@ -306,8 +351,9 @@ export async function createBotHarnessHost(
 
     async interruptedBots() {
       const result: BotInterruption[] = [];
-      for (const botId of await listBotDirectories()) {
-        if (!BOT_ID_PATTERN.test(botId) || deleted.has(botId)) continue;
+      for (const name of await listBotDirectories()) {
+        const botId = botIdFromDirectoryName(name);
+        if (botId === null || deleted.has(botId)) continue;
         const hasSession = await fs
           .stat(sessionFile(botId))
           .then(() => true)
@@ -358,9 +404,10 @@ export async function createBotHarnessHost(
     async sweepOrphans(knownBotIds) {
       const removed: string[] = [];
       for (const name of await listBotDirectories()) {
-        if (knownBotIds.has(name)) continue;
-        if (BOT_ID_PATTERN.test(name)) {
-          await serialize(name, () => closeEntry(name)).catch(() => undefined);
+        const botId = botIdFromDirectoryName(name);
+        if (botId !== null && knownBotIds.has(botId)) continue;
+        if (botId !== null) {
+          await serialize(botId, () => closeEntry(botId)).catch(() => undefined);
         }
         await fs.rm(path.join(botsDir, name), { recursive: true, force: true });
         removed.push(name);
