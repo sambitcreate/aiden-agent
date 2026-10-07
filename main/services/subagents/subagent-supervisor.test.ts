@@ -31,6 +31,8 @@ import { SUBAGENT_PARENT_SECURITY_GUIDANCE, subagentRoleSystemPrompt } from "./r
 import { normalizeSubagentModelText } from "./model-text.js";
 import { sanitizeSubagentText } from "./safe-text.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
+import { createSubagentChildModelResolver } from "./subagent-model-runtime.js";
+import type { SubagentModelPolicy } from "./subagent-model-selection.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
 import {
   isSafeSubagentIdentifier,
@@ -593,6 +595,174 @@ test("V2 authority admission floors a high-resolution remaining deadline", async
   assert.deepEqual(preparedDeadlines, [599_999, 599_999]);
   assert.match(result, /## 1\. Cat[\s\S]*Status: completed/u);
   assert.match(result, /## 2\. Moon[\s\S]*Status: completed/u);
+});
+
+function secondRuntime(): ResolvedModelRuntime {
+  const parent = runtime();
+  return {
+    ...parent,
+    provider: { ...parent.provider, id: "second-provider", label: "Second provider", models: ["second-model"] },
+    model: { ...parent.model, id: "second-model", name: "Second model", provider: "second-provider", contextWindow: 4_096 },
+  };
+}
+
+function modelPolicy(): SubagentModelPolicy {
+  return {
+    parent: {
+      providerId: "phase2-provider",
+      providerLabel: "Phase 2 provider",
+      modelId: "phase2-model",
+      modelLabel: "Phase 2 model",
+      effort: "high",
+    },
+    candidates: [
+      { providerId: "phase2-provider", providerLabel: "Phase 2 provider", modelId: "phase2-model", modelLabel: "Phase 2 model" },
+      { providerId: "second-provider", providerLabel: "Second provider", modelId: "second-model", modelLabel: "Second model" },
+    ],
+    overridesAllowed: true,
+  };
+}
+
+test("V2 siblings run their own approved models without sharing one runtime", async () => {
+  const generationId = "per-child-models";
+  const parentRuntime = runtime();
+  const persistence = createForegroundSubagentPersistenceV2({
+    store: {
+      selection: "v2",
+      async reserveRun() {},
+      releaseRunReservation() {},
+      async upsert(snapshot: unknown) { return snapshot as never; },
+    } as unknown as ProductionSubagentRunStore,
+    generationId,
+    chatId: TEST_SUPERVISOR_SCOPE.chatId,
+    workspace: {
+      id: TEST_SUPERVISOR_SCOPE.workspaceId,
+      name: "Workspace",
+      folderPath: "/workspace",
+      permission: "ask",
+      createdAt: 1,
+      updatedAt: 2,
+    },
+    runtime: parentRuntime,
+    thinkingLevel: "high",
+    ownerDocumentId: "1:2:document-one",
+    permission: "ask",
+    randomUUID: () => "00000000-0000-4000-8000-000000000001",
+  });
+  const projector = new SubagentEventProjector({
+    generationId,
+    ...TEST_SUPERVISOR_SCOPE,
+    modelId: parentRuntime.model.id,
+  });
+  const resolved: string[] = [];
+  const observed = new Map<string, { model: string; thinking: ThinkingLevel; authorityThinking?: string; permission: string; root: string; capabilities: string }>();
+  const supervisor = new SubagentSupervisor({
+    generationId,
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: parentRuntime,
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "ask",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    prepareRun: (input) => persistence.prepareRun(input),
+    selectChildModel: createSubagentChildModelResolver({
+      policy: modelPolicy(),
+      parentRuntime,
+      savedEffort: () => undefined,
+      resolveRuntime: async (providerId, modelId) => {
+        resolved.push(`${providerId}/${modelId}`);
+        return secondRuntime();
+      },
+    }),
+    runChild: async (child) => {
+      observed.set(child.request.label, {
+        model: `${child.runtime.provider.id}/${child.runtime.model.id}`,
+        thinking: child.thinkingLevel,
+        authorityThinking: child.v2Authority?.thinkingLevel,
+        permission: child.permission,
+        root: child.workspaceRoot,
+        capabilities: JSON.stringify(child.v2Authority?.capabilities),
+      });
+      return completed(child.request.label);
+    },
+  });
+  const result = await supervisor.execute(parseSubagentToolRequest({ tasks: [
+    { role: "scout", label: "Inherited", task: "Check the parent model." },
+    { role: "scout", label: "Other", task: "Check another model.", model: "second-provider/second-model" },
+  ] }));
+
+  assert.deepEqual(resolved, ["second-provider/second-model"]);
+  const inherited = observed.get("Inherited")!;
+  const other = observed.get("Other")!;
+  assert.equal(inherited.model, "phase2-provider/phase2-model");
+  assert.equal(inherited.thinking, "high");
+  assert.equal(other.model, "second-provider/second-model");
+  // A different model starts from its own default, never the parent's effort.
+  assert.equal(other.thinking, "off");
+  assert.equal(other.authorityThinking, "off");
+  assert.equal(other.permission, inherited.permission);
+  assert.equal(other.root, inherited.root);
+  assert.equal(other.capabilities, inherited.capabilities);
+  assert.match(result, /## 1\. Inherited\nRole: scout\nModel: phase2-provider\/phase2-model \(effort high\)\nStatus: completed/u);
+  assert.match(result, /## 2\. Other\nRole: scout\nModel: second-provider\/second-model \(effort off\)\nStatus: completed/u);
+  const snapshots = new Map(projector.snapshot().map((snapshot) => [snapshot.label, snapshot]));
+  assert.deepEqual(
+    [snapshots.get("Inherited")?.providerId, snapshots.get("Inherited")?.modelId, snapshots.get("Inherited")?.thinkingLevel, snapshots.get("Inherited")?.modelSelection],
+    ["phase2-provider", "phase2-model", "high", "inherited"],
+  );
+  assert.deepEqual(
+    [snapshots.get("Other")?.providerId, snapshots.get("Other")?.modelId, snapshots.get("Other")?.thinkingLevel, snapshots.get("Other")?.modelSelection],
+    ["second-provider", "second-model", "off", "requested"],
+  );
+  const reparsed = parseSubagentRunSnapshotV1(JSON.parse(JSON.stringify(snapshots.get("Other"))));
+  assert.equal(reparsed?.providerId, "second-provider");
+  assert.equal(reparsed?.thinkingLevel, "off");
+  assert.equal(reparsed?.modelSelection, "requested");
+});
+
+test("a refused child model launches, prepares, and projects nothing", async () => {
+  const projector = new SubagentEventProjector({
+    generationId: "refused-model",
+    ...TEST_SUPERVISOR_SCOPE,
+    modelId: runtime().model.id,
+  });
+  let prepared = 0;
+  let launched = 0;
+  const supervisor = new SubagentSupervisor({
+    generationId: "refused-model",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    prepareRun: async ({ identity, contextRevision }) => {
+      prepared += 1;
+      return phase6Prepared(phase6Authority({ runId: identity.runId, contextRevision, delegate: false }));
+    },
+    selectChildModel: createSubagentChildModelResolver({
+      policy: modelPolicy(),
+      parentRuntime: runtime(),
+      savedEffort: () => undefined,
+      resolveRuntime: async () => secondRuntime(),
+    }),
+    runChild: async ({ request: task }) => {
+      launched += 1;
+      return completed(task.label);
+    },
+  });
+  await assert.rejects(
+    supervisor.execute(parseSubagentToolRequest({ tasks: [
+      { role: "scout", label: "Fine", task: "Check." },
+      { role: "scout", label: "Unknown", task: "Check.", model: "missing/model" },
+    ] })),
+    /Model missing\/model is not available for subagents\. Available models: phase2-provider\/phase2-model, second-provider\/second-model\./u,
+  );
+  assert.equal(prepared, 0);
+  assert.equal(launched, 0);
+  assert.deepEqual(projector.snapshot(), []);
 });
 
 test("supervisor records only canonical non-interrupted terminal outcomes", async () => {

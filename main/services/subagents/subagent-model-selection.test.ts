@@ -232,6 +232,7 @@ const runtime = (providerId: string, modelId: string, reasoning: boolean, deploy
   model: {
     id: modelId,
     reasoning,
+    thinkingLevelMap: undefined,
     cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
   },
 });

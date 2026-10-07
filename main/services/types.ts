@@ -707,6 +707,8 @@ export interface AppSettings {
   /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
+  /** Per-subagent model and effort defaults; parsed leniently, absent means children inherit. */
+  subagentModels?: import("./subagents/subagent-model-selection.js").SubagentModelSettings;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
   /** Global skill discovery/invocation gate. Omitted means enabled. */

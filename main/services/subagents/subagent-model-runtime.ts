@@ -10,11 +10,14 @@ import { ANTHROPIC_PROVIDER_ID } from "../anthropic-provider.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "../codex-provider.js";
 import { resolveGenerationThinkingLevel } from "../generation-runtime.js";
 import { GOOGLE_PROVIDER_ID } from "../google-provider.js";
-import type { Settings } from "../types.js";
+import { isNonChatModel } from "../../../renderer/shared/model-eligibility.js";
+import type { AppSettings, Provider } from "../types.js";
 import {
   finalizeSubagentModel,
   planSubagentModel,
+  isSubagentModelKey,
   subagentModelKey,
+  type SubagentModelCandidate,
   type SubagentModelPolicy,
   type SubagentModelRequest,
   type SubagentModelRuntimeFacts,
@@ -27,7 +30,7 @@ export interface SubagentModelRuntimeLike {
 }
 
 type ThinkingSettings = Pick<
-  Settings,
+  AppSettings,
   "googleThinkingByModel" | "codexThinkingByModel" | "anthropicThinkingByModel" | "providerThinkingByModel"
 >;
 
@@ -66,6 +69,37 @@ export function subagentModelRuntimeFacts(
   };
 }
 
+const MAX_SUBAGENT_MODEL_CANDIDATES = 128;
+
+/** Connected chat models in discovery order, each provider's default first. */
+export function subagentModelCandidatesFromProviders(
+  providers: readonly Pick<Provider, "id" | "label" | "needsKey" | "hasKey" | "models" | "defaultModel" | "modelMetadata">[],
+): SubagentModelCandidate[] {
+  const candidates: SubagentModelCandidate[] = [];
+  const seen = new Set<string>();
+  for (const provider of providers) {
+    if (provider.needsKey && !provider.hasKey) continue;
+    const models = [...provider.models].sort(
+      (left, right) => Number(right === provider.defaultModel) - Number(left === provider.defaultModel),
+    );
+    for (const modelId of models) {
+      const candidate = {
+        providerId: provider.id,
+        providerLabel: provider.label.trim() || provider.id,
+        modelId,
+        modelLabel: provider.modelMetadata?.[modelId]?.name?.trim() || modelId,
+      };
+      const key = subagentModelKey(candidate);
+      if (seen.has(key) || !isSubagentModelKey(key)) continue;
+      if (isNonChatModel({ model: modelId, metadataType: provider.modelMetadata?.[modelId]?.type })) continue;
+      seen.add(key);
+      candidates.push(candidate);
+      if (candidates.length >= MAX_SUBAGENT_MODEL_CANDIDATES) return candidates;
+    }
+  }
+  return candidates;
+}
+
 export interface SubagentChildModel<Runtime> {
   selection: SubagentModelSelection;
   runtime: Runtime;
@@ -81,6 +115,8 @@ export interface SubagentModelResolverInput<Runtime extends SubagentModelRuntime
 export type SubagentChildModelResolver<Runtime> = (
   request: SubagentModelRequest,
   signal: AbortSignal,
+  /** The depth-1 child whose model a depth-2 child inherits by default. */
+  inheritFrom?: SubagentChildModel<Runtime>,
 ) => Promise<SubagentChildModel<Runtime>>;
 
 /**
@@ -105,10 +141,35 @@ export function createSubagentChildModelResolver<Runtime extends SubagentModelRu
         ...resolvedParentFacts,
         supportedEfforts: [input.policy.parent.effort, ...resolvedParentFacts.supportedEfforts],
       };
-  return async (request, signal) => {
-    const planned = planSubagentModel(input.policy, request);
+  return async (request, signal, inheritFrom) => {
+    const inherited = inheritFrom
+      ? {
+          providerId: inheritFrom.selection.providerId,
+          providerLabel: inheritFrom.selection.providerLabel,
+          modelId: inheritFrom.selection.modelId,
+          modelLabel: inheritFrom.selection.modelLabel,
+          effort: inheritFrom.selection.effort,
+        }
+      : undefined;
+    const planned = planSubagentModel(input.policy, request, inherited);
     if (!planned.ok) throw new Error(planned.error);
     const key = subagentModelKey(planned.value.candidate);
+    if (inheritFrom && inherited && key === subagentModelKey(inherited)) {
+      const facts = subagentModelRuntimeFacts(
+        inheritFrom.runtime,
+        input.savedEffort(inherited.providerId, inherited.modelId),
+      );
+      const finalized = finalizeSubagentModel(
+        input.policy,
+        planned.value,
+        facts.supportedEfforts.includes(inherited.effort)
+          ? facts
+          : { ...facts, supportedEfforts: [inherited.effort, ...facts.supportedEfforts] },
+        parentFacts,
+      );
+      if (!finalized.ok) throw new Error(finalized.error);
+      return { selection: finalized.value, runtime: inheritFrom.runtime };
+    }
     let pending = runtimes.get(key);
     if (!pending) {
       pending = input.resolveRuntime(planned.value.candidate.providerId, planned.value.candidate.modelId, signal);

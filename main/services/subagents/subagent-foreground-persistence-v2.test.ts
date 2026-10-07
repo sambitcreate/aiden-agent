@@ -128,6 +128,77 @@ test("implementer role defaults meet parent permission and independent rollout c
   await prepared.abortPreparation();
 });
 
+test("a per-child model binds only runtime identity and effort under Full and Ask", async () => {
+  const parsed = parseSubagentToolRequest({
+    tasks: [{ role: "implementer", label: "Code", task: "Update one file." }],
+  });
+  const task = parsed.tasks[0]!;
+  const requestedCapabilities = effectiveSubagentTaskCapabilities(parsed, task);
+  const parent = runtime();
+  const other: ResolvedModelRuntime = {
+    ...parent,
+    provider: { ...parent.provider, id: "provider-two", label: "Provider Two", models: ["model-two"], deployment: "local" },
+    model: { ...parent.model, id: "model-two", name: "Model Two", provider: "provider-two", contextWindow: 8_000 },
+  };
+  const modelBound = (authority: Record<string, unknown>) => {
+    const {
+      grantId: _grantId, runId: _runId, providerFingerprint: _provider, modelFingerprint: _model,
+      thinkingLevel: _thinking, budgets, ...grant
+    } = authority;
+    const { maxTokens: _tokens, maxActive: _active, ...otherBudgets } = budgets as Record<string, unknown>;
+    return { ...grant, budgets: otherBudgets };
+  };
+  const permissionsSeen = new Map<string, unknown>();
+  for (const permission of ["ask", "full"] as const) {
+    const parentWorkspace = { ...workspace, permission };
+    const approvals: string[] = [];
+    const persistence = createForegroundSubagentPersistenceV2({
+      ...input(store("v2", [])), workspace: parentWorkspace,
+      permission,
+      writeEnabled: true,
+      shellEnabled: true,
+      shellBinary: "/bin/zsh",
+      requestApproval: async (descriptor) => {
+        approvals.push(JSON.stringify(descriptor));
+        return true;
+      },
+      currentWorkspace: async () => parentWorkspace,
+      validateWorkspace: async () => {},
+    });
+    const prepare = (runId: string, childModel?: { runtime: ResolvedModelRuntime; thinkingLevel: "low" }) =>
+      persistence.prepareRun({
+        identity: { runId, groupId: "group", childId: `child-${runId}` },
+        task, requestedCapabilities, contextMode: "fresh",
+        contextRevision: "a".repeat(64), deadlineMs: 5_000, stop: () => {},
+        ...(childModel ? { childModel } : {}),
+      });
+    const inherited = await prepare(`run-${permission}-inherited`);
+    const overridden = await prepare(`run-${permission}-override`, { runtime: other, thinkingLevel: "low" });
+    const before = inherited.authority!;
+    const after = overridden.authority!;
+
+    assert.deepEqual(modelBound({ ...after }), modelBound({ ...before }));
+    assert.equal(before.thinkingLevel, "high");
+    assert.equal(after.thinkingLevel, "low");
+    assert.notEqual(after.providerFingerprint, before.providerFingerprint);
+    assert.notEqual(after.modelFingerprint, before.modelFingerprint);
+    assert.equal(after.budgets.maxActive, 1);
+    assert.ok(after.budgets.maxTokens < before.budgets.maxTokens);
+    assert.equal(after.capabilities.workspaceWrite, true);
+    assert.equal(
+      typeof overridden.prepareWorkspaceWriteApproval,
+      typeof inherited.prepareWorkspaceWriteApproval,
+    );
+    assert.equal(typeof overridden.prepareShellApproval, typeof inherited.prepareShellApproval);
+    assert.deepEqual(approvals, []);
+    permissionsSeen.set(permission, modelBound({ ...after }));
+    await inherited.abortPreparation();
+    await overridden.abortPreparation();
+  }
+  // Full and Ask still differ exactly as they did before model selection existed.
+  assert.notDeepEqual(permissionsSeen.get("ask"), permissionsSeen.get("full"));
+});
+
 test("implementer tasks fail closed during V1 rollback", async () => {
   const parsed = parseSubagentToolRequest({
     tasks: [{ role: "implementer", label: "Code", task: "Update one file." }],

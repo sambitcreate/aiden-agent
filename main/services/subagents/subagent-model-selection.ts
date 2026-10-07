@@ -8,6 +8,7 @@ import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
 } from "../../../renderer/shared/generation-thinking.js";
+import type { SubagentModelSelectionSource } from "../../../renderer/shared/subagent-runs.js";
 import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
 
 /** The tool schema lists at most this many models, parent first. */
@@ -15,18 +16,7 @@ export const MAX_SUBAGENT_MODEL_CHOICES = 6;
 const MAX_MODEL_KEY_LENGTH = 320;
 const SAFE_KEY = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u;
 
-export type SubagentModelSelectionSource =
-  | "inherited"
-  | "requested"
-  | "configured"
-  | "role_locked";
-
-export const SUBAGENT_MODEL_SELECTION_SOURCES: readonly SubagentModelSelectionSource[] = [
-  "inherited",
-  "requested",
-  "configured",
-  "role_locked",
-];
+export type { SubagentModelSelectionSource };
 
 export interface SubagentModelCandidate {
   providerId: string;
@@ -219,12 +209,15 @@ function availableList(models: readonly SubagentModelCandidate[]): string {
 export function planSubagentModel(
   policy: SubagentModelPolicy,
   request: SubagentModelRequest,
+  /** A depth-2 child inherits from its depth-1 parent, not the root response. */
+  inheritFrom: SubagentModelCandidate & { effort: GenerationThinkingLevel } = policy.parent,
 ): SubagentModelResult<SubagentModelPlan> {
   const requestable = requestableSubagentModels(policy);
   const warnings: string[] = [];
-  const parentKey = subagentModelKey(policy.parent);
+  const parentKey = subagentModelKey(inheritFrom);
   const connected = new Map<string, SubagentModelCandidate>([
-    [parentKey, policy.parent],
+    [subagentModelKey(policy.parent), policy.parent],
+    [parentKey, inheritFrom],
     ...policy.candidates.map((candidate) => [subagentModelKey(candidate), candidate] as const),
   ]);
   const role = policy.overridesAllowed ? policy.settings?.roles?.[request.role] : undefined;
@@ -241,6 +234,12 @@ export function planSubagentModel(
             : `Model ${request.model} is not available for subagents. Available models: ${availableList(requestable)}.`,
       };
     }
+  }
+  if (request.effort !== undefined && !policy.overridesAllowed) {
+    return {
+      ok: false,
+      error: "Subagent effort overrides are not available for this response; omit effort to use the current setting.",
+    };
   }
   if (request.effort !== undefined && !locked) {
     const ceiling = policy.settings?.maxEffort;
@@ -259,7 +258,7 @@ export function planSubagentModel(
     return candidate;
   };
 
-  let candidate: SubagentModelCandidate = policy.parent;
+  let candidate: SubagentModelCandidate = inheritFrom;
   let modelSource: SubagentModelSelectionSource = "inherited";
   let effort: GenerationThinkingLevel | undefined;
   let effortSource: SubagentModelSelectionSource = "inherited";
@@ -307,7 +306,7 @@ export function planSubagentModel(
   }
 
   if (effort === undefined && subagentModelKey(candidate) === parentKey) {
-    effort = policy.parent.effort;
+    effort = inheritFrom.effort;
     effortSource = "inherited";
   } else if (effort === undefined) {
     // A different model starts from its own default, never the parent's effort.
