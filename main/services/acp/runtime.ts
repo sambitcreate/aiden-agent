@@ -163,7 +163,44 @@ export class AcpHarnessRuntime {
   private disposed = false;
   /** Closed while signing out: no chat or catalog process may start. */
   private admissionClosed = false;
-  private readonly shortLived = new Set<AcpLaunchedProcess>();
+  /**
+   * Every launch from the moment it is admitted until its process is fully
+   * disposed, so sign-out can drain launches that were still starting.
+   */
+  private readonly inflight = new Set<{ launched?: AcpLaunchedProcess; done: Promise<void> }>();
+
+  /** Run `use` against a tracked launch; the record outlives disposal. */
+  private async tracked<T>(
+    launch: () => Promise<AcpLaunchedProcess>,
+    use: (launched: AcpLaunchedProcess) => Promise<T>,
+    disposeAfter: boolean,
+  ): Promise<T> {
+    let finish!: () => void;
+    const record: { launched?: AcpLaunchedProcess; done: Promise<void> } = {
+      done: new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    };
+    this.inflight.add(record);
+    let launched: AcpLaunchedProcess | undefined;
+    try {
+      launched = await launch();
+      record.launched = launched;
+      // Admission may have closed while the process was starting.
+      if (this.admissionClosed || this.disposed) {
+        await launched.dispose();
+        this.assertActive();
+      }
+      return await use(launched);
+    } catch (error) {
+      if (launched && !disposeAfter) await launched.dispose();
+      throw error;
+    } finally {
+      if (launched && disposeAfter) await launched.dispose();
+      this.inflight.delete(record);
+      finish();
+    }
+  }
   /** Called when a chat discovers the saved sign-in stopped working. */
   onSignInLost: (() => void) | undefined;
 
@@ -203,17 +240,11 @@ export class AcpHarnessRuntime {
   ): Promise<T> {
     this.assertActive();
     if (signal?.aborted) throw abortError();
-    const launched = await this.launcher.launch(purpose, cwd);
-    this.shortLived.add(launched);
-    try {
-      // Sign-out may have closed admission while this launch was starting.
-      this.assertActive();
-      const connection = new AcpConnection(launched.process, undefined, { fileSystem: false });
-      return await operation(connection);
-    } finally {
-      this.shortLived.delete(launched);
-      await launched.dispose();
-    }
+    return this.tracked(
+      () => this.launcher.launch(purpose, cwd),
+      (launched) => operation(new AcpConnection(launched.process, undefined, { fileSystem: false })),
+      true,
+    );
   }
 
   /** Close every session and forget saved bindings (used by sign-out). */
@@ -230,7 +261,11 @@ export class AcpHarnessRuntime {
   async closeAdmission(): Promise<() => void> {
     this.admissionClosed = true;
     await this.closeAll();
-    await Promise.allSettled([...this.shortLived].map((launched) => launched.dispose()));
+    const pending = [...this.inflight];
+    await Promise.allSettled(pending.map((record) => record.launched?.dispose()));
+    // Launches still starting dispose themselves on admission; wait for all.
+    await Promise.allSettled(pending.map((record) => record.done));
+    await this.closeAll();
     this.sessions.clear();
     return () => {
       this.admissionClosed = false;
@@ -570,8 +605,8 @@ export class AcpHarnessRuntime {
     let binding: Binding | undefined;
     let signInLost = false;
     let pendingLaunch: AcpLaunchedProcess | undefined;
-    const launched = await this.launcher.launch("chat", host.cwd, {
-      onStderrLine: (line) => {
+    const observers = {
+      onStderrLine: (line: string) => {
         if (signInLost || !this.definition.detectSignInPrompt?.(line)) return;
         // The agent is waiting for an interactive sign-in nobody will finish.
         signInLost = true;
@@ -583,12 +618,14 @@ export class AcpHarnessRuntime {
           void pendingLaunch?.dispose();
         }
       },
-    });
+    };
+    // The binding owns the process after this; tracking covers its start.
+    const launched = await this.tracked(
+      () => this.launcher.launch("chat", host.cwd, observers),
+      async (value) => value,
+      false,
+    );
     pendingLaunch = launched;
-    if (this.admissionClosed || this.disposed) {
-      await launched.dispose();
-      this.assertActive();
-    }
     const connection = new AcpConnection(
       launched.process,
       {

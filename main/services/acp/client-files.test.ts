@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -107,4 +107,26 @@ test("a symlink swapped in after validation never redirects a write outside the 
     },
   ).catch(() => undefined);
   assert.equal(readFileSync(victim, "utf8"), "secret", "the outside file is untouched");
+});
+
+test("a parent swapped for a link out right before creation never creates anything outside", { skip: process.platform !== "darwin" && process.platform !== "linux" }, async () => {
+  const { root, outside } = workspace();
+  const sub = path.join(root, "sub");
+  mkdirSync(sub);
+  const before = readdirSync(outside).sort();
+  await assert.rejects(
+    writeClientTextFile(
+      { path: path.join(sub, "new.txt"), content: "agent text" },
+      {
+        roots: [root],
+        canWrite: () => true,
+        beforeCreate: () => {
+          renameSync(sub, path.join(root, "sub-moved"));
+          symlinkSync(outside, sub);
+        },
+      },
+    ),
+    /could not be created safely|outside/u,
+  );
+  assert.deepEqual(readdirSync(outside).sort(), before, "nothing was created outside the folder");
 });

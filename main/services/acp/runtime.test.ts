@@ -493,3 +493,30 @@ test("a bridged tool that outlives its timeout ends the agent's turn cleanly; it
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "prompt").length, 2);
   await h.runtime.close();
 });
+
+test("sign-out waits for a catalog launch that was still starting and stops it", async () => {
+  const dir = tempDir();
+  const env = fakeAgentEnv(dir);
+  const inner = new FakeLauncher(env);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const slowLauncher = {
+    async launch(purpose: Parameters<FakeLauncher["launch"]>[0], cwd: string) {
+      await gate;
+      return inner.launch(purpose, cwd);
+    },
+  };
+  const runtime = new AcpHarnessRuntime(fakeDefinition, slowLauncher, new AcpHostRegistry(), new AcpSessionStore(path.join(dir, "s.json")));
+  const discovery = runtime.discoverModels(dir).catch((error: unknown) => error);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const closing = runtime.closeAdmission();
+  release();
+  const reopen = await closing;
+  assert.ok(inner.processes.length <= 1);
+  assert.ok(inner.processes.every((process) => !process.alive), "no process from before sign-out survives");
+  assert.match(String(await discovery), /signing out/u);
+  reopen();
+  await runtime.close();
+});

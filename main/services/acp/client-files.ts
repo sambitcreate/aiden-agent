@@ -16,6 +16,11 @@ import { lstat, mkdir, open, realpath, type FileHandle } from "node:fs/promises"
 import path from "node:path";
 
 import { isEnvironmentSecretPath } from "../coding-tools.js";
+import {
+  captureManagedWorktreeRootIdentity,
+  createConfinedWorkspaceFile,
+  ManagedWorktreeFileIoError,
+} from "../managed-worktree-file-io.js";
 import { AcpHarnessError } from "./errors.js";
 
 export const MAX_CLIENT_READ_BYTES = 8 * 1024 * 1024;
@@ -28,6 +33,8 @@ export interface AcpClientFilePolicy {
   canWrite(): boolean;
   /** Called after a successful write with the absolute real path. */
   onWrite?(absolutePath: string, before: string | undefined, after: string): void;
+  /** Test seam: runs after validation, immediately before a new file is created. */
+  beforeCreate?(): Promise<void> | void;
 }
 
 export interface ReadTextFileParams {
@@ -160,6 +167,74 @@ async function assertStillConfined(
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
+/**
+ * Create a new file anchored to directory identities, so a parent swapped
+ * after validation cannot redirect the creation outside the folder. macOS uses
+ * Aiden's packaged native helper (openat/mkdirat with O_NOFOLLOW); Linux walks
+ * /proc/self/fd, which resolves each step through the previous descriptor.
+ */
+async function createAnchored(target: string, content: string, roots: readonly string[]): Promise<void> {
+  const root = (await canonicalRoots(roots)).find((candidate) => within(target, candidate));
+  if (!root) throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
+  const relative = path.relative(root, target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new AcpHarnessError("invalid_input", "The file is outside this chat's folder.");
+  }
+  const bytes = Buffer.from(content, "utf8");
+  if (process.platform === "darwin") {
+    try {
+      const identity = await captureManagedWorktreeRootIdentity(root);
+      await createConfinedWorkspaceFile(identity, relative.split(path.sep).join("/"), bytes);
+    } catch (error) {
+      if (error instanceof ManagedWorktreeFileIoError && error.code === "destination_exists") {
+        throw new AcpHarnessError("invalid_input", "The file changed while it was being created.");
+      }
+      throw new AcpHarnessError("invalid_input", "The file could not be created safely in this chat's folder.", {
+        cause: error,
+      });
+    }
+    return;
+  }
+  if (process.platform !== "linux") {
+    throw new AcpHarnessError("unavailable", "Creating files is not supported on this platform.");
+  }
+  const parts = relative.split(path.sep);
+  const leaf = parts.pop()!;
+  let current = await open(root, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | NO_FOLLOW);
+  try {
+    for (const part of parts) {
+      const step = `/proc/self/fd/${current.fd}/${part}`;
+      let next: FileHandle;
+      try {
+        next = await open(step, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | NO_FOLLOW);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await mkdir(step);
+        next = await open(step, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | NO_FOLLOW);
+      }
+      await current.close();
+      current = next;
+    }
+    const file = await open(
+      `/proc/self/fd/${current.fd}/${leaf}`,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NO_FOLLOW,
+      0o644,
+    );
+    try {
+      await file.writeFile(bytes);
+    } finally {
+      await file.close();
+    }
+  } catch (error) {
+    if (error instanceof AcpHarnessError) throw error;
+    throw new AcpHarnessError("invalid_input", "The file could not be created safely in this chat's folder.", {
+      cause: error,
+    });
+  } finally {
+    await current.close().catch(() => undefined);
+  }
+}
+
 export async function readClientTextFile(
   params: ReadTextFileParams,
   policy: AcpClientFilePolicy,
@@ -211,25 +286,26 @@ export async function writeClientTextFile(
   }
   const target = await resolveConfinedPath(params.path, policy.roots);
   let handle: FileHandle;
-  let created = false;
   try {
     handle = await open(target, fsConstants.O_RDWR | NO_FOLLOW);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ELOOP") throw new AcpHarnessError("invalid_input", "The file changed while it was being opened.");
     if (code !== "ENOENT") throw error;
-    await mkdir(path.dirname(target), { recursive: true });
-    // The parent must still resolve inside the roots before a file is created.
-    await resolveConfinedPath(path.dirname(target), policy.roots);
-    handle = await open(target, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | NO_FOLLOW, 0o644);
-    created = true;
+    if (!policy.canWrite()) {
+      throw new AcpHarnessError("unavailable", "This chat's folder is read-only for the agent.");
+    }
+    await policy.beforeCreate?.();
+    await createAnchored(target, params.content, policy.roots);
+    policy.onWrite?.(target, undefined, params.content);
+    return {};
   }
   let before: string | undefined;
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw new AcpHarnessError("invalid_input", "The path is not a file.");
     const verified = await assertStillConfined(params.path, policy.roots, info);
-    if (!created && info.size <= MAX_CLIENT_READ_BYTES) before = await handle.readFile("utf8");
+    if (info.size <= MAX_CLIENT_READ_BYTES) before = await handle.readFile("utf8");
     // Recheck right before the write: permission can change mid-turn.
     if (!policy.canWrite()) {
       throw new AcpHarnessError("unavailable", "This chat's folder is read-only for the agent.");
