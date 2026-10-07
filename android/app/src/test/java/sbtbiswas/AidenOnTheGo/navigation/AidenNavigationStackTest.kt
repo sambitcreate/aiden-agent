@@ -85,6 +85,30 @@ class AidenNavigationStackTest {
     }
 
     @Test
+    fun settingsAndPairingPagesSurviveSavedStateRestore() {
+        val stack = root
+            .push(AidenScreen.Settings())
+            .push(AidenScreen.Settings(AidenSettingsPage.PROVIDERS))
+            .push(AidenScreen.Settings(AidenSettingsPage.ADD_PROVIDER))
+            .push(AidenScreen.Installations)
+            .push(AidenScreen.PairDesktop)
+
+        val saved = with(AidenNavigationStack.Saver) { SaverScope { true }.save(stack) }!!
+        val restored = AidenNavigationStack.Saver.restore(saved)!!
+
+        assertEquals(stack, restored)
+        assertEquals(AidenScreen.Installations, restored.pop()!!.current)
+        // Every page has its own identity, so each keeps its own saved scroll and form state.
+        assertEquals(stack.entries.size, stack.entries.map { it.stateKey }.toSet().size)
+    }
+
+    @Test
+    fun unknownSettingsPagesAreDroppedOnRestore() {
+        val restored = AidenNavigationStack.decode(listOf("settings", "settings|retired-page", "settings|voice"))
+        assertEquals(root.push(AidenScreen.Settings()).push(AidenScreen.Settings(AidenSettingsPage.VOICE)), restored)
+    }
+
+    @Test
     fun corruptSavedEntriesAreDroppedRatherThanCrashingRestore() {
         val restored = AidenNavigationStack.decode(listOf("chat|", "mystery|x", "shell", "bot|b1"))
         assertEquals(root.push(AidenScreen.BotProfile("b1")), restored)

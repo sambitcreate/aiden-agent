@@ -1,365 +1,149 @@
 package sbtbiswas.AidenOnTheGo.features.settings
 
-import android.content.Intent
 import android.os.Build
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.Devices
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.outlined.Animation
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import sbtbiswas.AidenOnTheGo.config.*
-import sbtbiswas.AidenOnTheGo.models.AidenReadAloudStatus
-import sbtbiswas.AidenOnTheGo.models.READ_ALOUD_SETUP_GUIDANCE
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import sbtbiswas.AidenOnTheGo.models.AidenSpeechStatus
-import sbtbiswas.AidenOnTheGo.models.AidenMemorySettings
-import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceMode
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
+import sbtbiswas.AidenOnTheGo.config.AidenFontSize
+import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenPresetPalette
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
+/** Appearance: mode, theme, text size, and motion. Changes apply immediately and persist. */
 @Composable
 fun AidenAppearanceSettingsScreen(
-    appearanceStore: AidenAppearanceStore? = null,
-    voiceInputStore: AidenVoiceInputStore,
-    remoteClient: AidenRemoteClient?,
-    onOpenInstallations: (() -> Unit)? = null
+    appearanceStore: AidenAppearanceStore,
+    onNavigateBack: () -> Unit
 ) {
-    val currentConfig = AidenTheme.config
-    val palette = AidenTheme.palette
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val voiceMode by voiceInputStore.mode.collectAsStateWithLifecycle()
-    var speechStatus by remember { mutableStateOf<AidenSpeechStatus?>(null) }
-    var speechError by remember { mutableStateOf<String?>(null) }
-    var readAloudStatus by remember(remoteClient) { mutableStateOf<AidenReadAloudStatus?>(null) }
-    var readAloudError by remember(remoteClient) { mutableStateOf<String?>(null) }
-    // TODO: mobile configuration is deferred; only the desktop may enable TTS.
-    suspend fun refreshReadAloud() {
-        readAloudStatus = runCatching { remoteClient?.readAloudStatus() }
-            .onSuccess { readAloudError = null }
-            .onFailure { readAloudError = "Read Aloud is unavailable. Connect to an updated desktop app." }
-            .getOrNull()
-    }
-    LaunchedEffect(remoteClient) { refreshReadAloud() }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle, remoteClient) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) scope.launch { refreshReadAloud() }
-        }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
-    }
-    var memorySettings by remember { mutableStateOf<AidenMemorySettings?>(null) }
-    var memoryError by remember { mutableStateOf<String?>(null) }
-    var memorySaving by remember { mutableStateOf(false) }
-
-    suspend fun refreshSpeech() {
-        val client = remoteClient ?: run {
-            speechStatus = null
-            return
-        }
-        runCatching { client.speechStatus() }
-            .onSuccess { speechStatus = it; speechError = null }
-            .onFailure { speechError = it.message ?: "Desktop transcription is unavailable." }
-    }
-
-    fun runSpeechAction(action: suspend () -> AidenSpeechStatus) {
-        scope.launch {
-            runCatching { action() }
-                .onSuccess { speechStatus = it; speechError = null }
-                .onFailure { speechError = it.message ?: "Desktop transcription is unavailable." }
-        }
-    }
-
-    LaunchedEffect(remoteClient, voiceMode) {
-        if (voiceMode == AidenVoiceInputMode.PAIRED_MAC) refreshSpeech()
-    }
-    LaunchedEffect(remoteClient) {
-        memorySettings = remoteClient?.let { client ->
-            runCatching { client.memorySettings() }
-                .onFailure { memoryError = it.message ?: "Memory settings are unavailable." }
-                .getOrNull()
-        }
-    }
-    LaunchedEffect(speechStatus) {
-        if (speechStatus?.models?.any { it.download?.status == "downloading" } == true) {
-            delay(1_000)
-            refreshSpeech()
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp)
+    val config = AidenTheme.config
+    AidenSettingsScaffold(
+        title = stringResource(R.string.settings_appearance),
+        onNavigateBack = onNavigateBack
     ) {
-        Text(
-            text = "Settings",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = palette.foreground
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-        AidenProviderSettings(remoteClient)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (onOpenInstallations != null) {
-            Surface(
-                onClick = onOpenInstallations,
-                color = palette.raised,
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                    Icon(Icons.Outlined.Devices, contentDescription = null, tint = palette.foreground)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Installations", style = MaterialTheme.typography.titleMedium, color = palette.foreground)
-                        Text("Pair or switch your Aiden Agent desktop", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(22.dp))
-        }
-
-        Text("Read Aloud", style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold, color = palette.foreground)
-        Spacer(Modifier.height(8.dp))
-        Surface(color = palette.raised, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text(if (readAloudStatus?.ready == true) "Ready on your Mac" else "Set up on your Mac", color = palette.foreground)
-                Text(READ_ALOUD_SETUP_GUIDANCE, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                readAloudError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = palette.secondary) }
-                TextButton(onClick = { scope.launch { refreshReadAloud() } }) { Text("Refresh status") }
-            }
-        }
-        Spacer(Modifier.height(22.dp))
-
-        Text(
-            text = "Memory",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.foreground
-        )
-        Spacer(Modifier.height(8.dp))
-        Surface(color = palette.raised, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Use memory", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                    Text("Controls recall, saving, and indexing on your paired Mac. Existing approved facts are not deleted.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                }
-                Switch(
-                    checked = memorySettings?.enabled ?: true,
-                    enabled = memorySettings != null && !memorySaving,
-                    onCheckedChange = { enabled ->
-                        val current = memorySettings ?: return@Switch
-                        memorySettings = current.copy(enabled = enabled)
-                        memorySaving = true
-                        scope.launch {
-                            runCatching { remoteClient?.updateMemorySettings(current.revision, enabled) ?: error("Connect to a paired Mac.") }
-                                .onSuccess { memorySettings = it; memoryError = null }
-                                .onFailure { memorySettings = current; memoryError = it.message ?: "Memory settings are unavailable." }
-                            memorySaving = false
-                        }
-                    }
-                )
-            }
-        }
-        memoryError?.let {
-            Spacer(Modifier.height(6.dp))
-            Text(it, style = MaterialTheme.typography.bodySmall, color = palette.danger)
-        }
-        Spacer(modifier = Modifier.height(22.dp))
-
-        Text(
-            text = "Voice input",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.foreground
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "Choose where speech is transcribed. Paired desktop sends microphone audio over Aiden's encrypted pinned connection and does not retain it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = palette.secondary
-        )
-        Spacer(Modifier.height(10.dp))
-        AidenVoiceInputModeChoices(selected = voiceMode, onSelect = voiceInputStore::updateMode)
-        Spacer(Modifier.height(10.dp))
-
-        if (voiceMode == AidenVoiceInputMode.ON_DEVICE) {
-            val available = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-            Text(
-                if (available) "On-device recognition is ready." else "On-device recognition needs language support.",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (available) palette.success else palette.warning
-            )
-            if (!available && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                TextButton(onClick = {
-                    runCatching {
-                        val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-                        recognizer.triggerModelDownload(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toLanguageTag())
-                            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-                        })
-                        scope.launch {
-                            delay(5_000)
-                            recognizer.destroy()
-                        }
-                    }.onFailure { speechError = "Android couldn't start the language download." }
-                }) { Text("Install language support") }
-            }
-        } else {
-            val status = speechStatus
-            if (remoteClient == null) {
-                Text("Connect to a paired desktop to configure transcription.", style = MaterialTheme.typography.bodySmall, color = palette.warning)
-            } else if (status == null && speechError == null) {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-            } else if (status != null) {
-                status.models.forEach { model ->
-                    Surface(color = palette.raised, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(14.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(model.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                    Text("${model.sizeLabel} · ${model.languagesLabel}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                                }
-                                when {
-                                    model.download?.status == "downloading" -> TextButton(onClick = {
-                                        runSpeechAction { remoteClient.cancelSpeechModelDownload(model.id) }
-                                    }) { Text("Cancel") }
-                                    model.installed && status.selectedModelId == model.id -> Text("Selected", style = MaterialTheme.typography.labelMedium, color = palette.accent)
-                                    model.installed -> TextButton(onClick = {
-                                        runSpeechAction { remoteClient.selectSpeechModel(model.id) }
-                                    }) { Text("Use") }
-                                    else -> TextButton(onClick = {
-                                        runSpeechAction { remoteClient.downloadSpeechModel(model.id) }
-                                    }) { Text("Download") }
-                                }
-                            }
-                            model.download?.takeIf { it.status == "downloading" }?.let { download ->
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(progress = { download.percentage / 100f }, modifier = Modifier.fillMaxWidth())
-                            }
-                            model.download?.error?.let { failure ->
-                                Spacer(Modifier.height(6.dp))
-                                Text(failure, style = MaterialTheme.typography.bodySmall, color = palette.danger)
-                            }
-                            Text(model.description, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
+        item(key = "mode") {
+            AidenSettingsGroup(title = stringResource(R.string.appearance_group_mode)) {
+                row(dividerInset = 0.dp) {
+                    val modeDescription = stringResource(R.string.appearance_mode_description)
+                    AidenSegmentedPillRow(
+                        options = AidenAppearanceMode.entries,
+                        selected = config.mode,
+                        onSelect = appearanceStore::updateMode,
+                        label = { it.title },
+                        segmentContentDescription = { String.format(modeDescription, it.title) },
+                        modifier = Modifier.padding(16.dp)
+                    )
                 }
             }
         }
-        speechError?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = palette.danger)
+        item(key = "theme") {
+            AidenSettingsGroup(title = stringResource(R.string.appearance_group_theme)) {
+                row(dividerInset = 0.dp) {
+                    AidenThemeTileGrid(
+                        selected = config.preset,
+                        onSelect = appearanceStore::updatePreset,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
         }
-
-        Spacer(modifier = Modifier.height(22.dp))
-
-        Text(
-            text = "Appearance",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.foreground
-        )
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Mode selector (System, Light, Dark)
-        Text(
-            text = "Mode",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.secondary
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        AidenSegmentedPillRow(
-            options = AidenAppearanceMode.entries,
-            selected = currentConfig.mode,
-            onSelect = { appearanceStore?.updateMode(it) },
-            label = { it.title },
-            segmentContentDescription = { "${it.title} appearance mode" }
-        )
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Theme tile grid
-        Text(
-            text = "Themes",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.secondary
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Column(modifier = Modifier.selectableGroup()) {
-            AidenThemePresetID.entries.toList().chunked(3).forEach { rowPresets ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    rowPresets.forEach { preset ->
-                        AidenThemeTile(
-                            preset = preset,
-                            selected = currentConfig.preset == preset,
-                            onClick = { appearanceStore?.updatePreset(preset) },
-                            modifier = Modifier.weight(1f)
+        item(key = "text-size") {
+            AidenSettingsGroup(title = stringResource(R.string.appearance_group_text_size), selectableGroup = true) {
+                AidenFontSize.entries.forEach { size ->
+                    row(dividerInset = AidenSettingsDefaults.DividerInsetWithIcon) {
+                        AidenSettingsRadioRow(
+                            headline = size.title,
+                            selected = config.fontSize == size,
+                            onClick = { appearanceStore.updateFontSize(size) }
                         )
                     }
-                    repeat(3 - rowPresets.size) {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
                 }
-                Spacer(modifier = Modifier.height(10.dp))
             }
         }
+        item(key = "motion") {
+            AidenSettingsGroup(title = stringResource(R.string.appearance_group_motion)) {
+                row {
+                    AidenSettingsSwitchRow(
+                        headline = stringResource(R.string.appearance_reduce_motion),
+                        supporting = stringResource(R.string.appearance_reduce_motion_supporting),
+                        checked = config.reduceMotion,
+                        leadingIcon = Icons.Outlined.Animation,
+                        onCheckedChange = appearanceStore::updateReduceMotion
+                    )
+                }
+            }
+        }
+    }
+}
 
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = "Current theme: ${currentConfig.preset.title}",
-            style = MaterialTheme.typography.bodySmall,
-            color = palette.secondary
-        )
+/** Theme presets this device can show, three per row. Dynamic color appears on Android 12+. */
+@Composable
+internal fun AidenThemeTileGrid(
+    selected: AidenThemePresetID,
+    onSelect: (AidenThemePresetID) -> Unit,
+    modifier: Modifier = Modifier,
+    presets: List<AidenThemePresetID> = AidenThemePresetID.available(Build.VERSION.SDK_INT)
+) {
+    Column(
+        modifier = modifier.selectableGroup(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        presets.chunked(3).forEach { rowPresets ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                rowPresets.forEach { preset ->
+                    AidenThemeTile(
+                        preset = preset,
+                        selected = selected == preset,
+                        onClick = { if (selected != preset) onSelect(preset) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(3 - rowPresets.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
     }
 }
 
@@ -367,6 +151,11 @@ fun AidenAppearanceSettingsScreen(
 private val AidenThemePresetID.signatureIsDark: Boolean
     get() = this == AidenThemePresetID.GRAPHITE || this == AidenThemePresetID.DUSK || this == AidenThemePresetID.MIDNIGHT
 
+/**
+ * One theme choice. The tile is a single radio button for accessibility services: its
+ * name, selection, and click are set on the tile and the decorative preview is cleared.
+ * Selection shows as a check badge inside the preview and a tonal label, never a border.
+ */
 @Composable
 private fun AidenThemeTile(
     preset: AidenThemePresetID,
@@ -375,112 +164,74 @@ private fun AidenThemeTile(
     modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
-    val preview = AidenThemeCatalog.palette(preset, preset.signatureIsDark)
+    val previewDark = if (preset.isDynamic) palette.canvas.luminance() < 0.5f else preset.signatureIsDark
+    val preview = aidenPresetPalette(preset, previewDark)
     val interaction = remember { MutableInteractionSource() }
     Column(
-        modifier = modifier.selectable(
-            selected = selected,
-            enabled = true,
-            role = Role.RadioButton,
-            interactionSource = interaction,
-            indication = ripple(),
-            onClick = onClick
-        ),
+        modifier = modifier
+            .clip(MaterialTheme.shapes.medium)
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
+                interactionSource = interaction,
+                indication = ripple(),
+                onClick = onClick
+            )
+            .clearAndSetSemantics {
+                contentDescription = preset.title
+                this.selected = selected
+                role = Role.RadioButton
+                onClick { onClick(); true }
+            },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.5f)
+                .tactilePress(interaction)
+                .clip(MaterialTheme.shapes.medium)
+                .background(preview.canvas)
+        ) {
+            Text(
+                text = "Aa",
+                style = MaterialTheme.typography.headlineMedium,
+                color = preview.foreground,
+                modifier = Modifier.align(Alignment.Center)
+            )
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1.52f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(preview.canvas)
-                    .tactilePress(interaction)
-            ) {
-                Text(
-                    text = "Aa",
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = preview.foreground,
-                    modifier = Modifier.align(Alignment.Center)
-                )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                        .size(11.dp)
-                        .clip(CircleShape)
-                        .background(preview.accent)
-                        .border(1.dp, Color.White.copy(alpha = 0.55f), CircleShape)
-                )
-            }
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(preview.accent)
+            )
             if (selected) {
                 Surface(
-                    color = palette.raised,
+                    color = palette.accent,
+                    contentColor = palette.onAccent,
                     shape = CircleShape,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = 6.dp, y = (-6).dp)
-                        .size(21.dp)
+                        .padding(6.dp)
+                        .size(20.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.padding(4.dp)
-                    )
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.padding(3.dp))
                 }
             }
         }
-        Spacer(modifier = Modifier.height(7.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             text = preset.title,
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             color = if (selected) palette.foreground else palette.secondary,
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
+                .clip(MaterialTheme.shapes.small)
                 .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                .padding(horizontal = 9.dp, vertical = 3.dp)
+                .padding(horizontal = 8.dp, vertical = 2.dp)
         )
-    }
-}
-
-internal fun AidenVoiceInputMode.choiceDescription(): String = when (this) {
-    AidenVoiceInputMode.ON_DEVICE -> "Android SpeechRecognizer; speech stays on this device."
-    AidenVoiceInputMode.PAIRED_MAC -> "Parakeet on your connected Aiden Agent desktop; final text appears after you stop."
-}
-
-/** Connected radio choice cards: a real radio control plus a tonal selected fill, no borders. */
-@Composable
-internal fun AidenVoiceInputModeChoices(
-    selected: AidenVoiceInputMode,
-    onSelect: (AidenVoiceInputMode) -> Unit
-) {
-    val palette = AidenTheme.palette
-    val modes = AidenVoiceInputMode.entries
-    AidenConnectedColumn(modifier = Modifier.selectableGroup()) {
-        modes.forEachIndexed { index, mode ->
-            val isSelected = mode == selected
-            AidenGroupCard(
-                index = index,
-                count = modes.size,
-                selected = isSelected,
-                onClick = { if (!isSelected) onSelect(mode) },
-                role = Role.RadioButton,
-                modifier = Modifier.semantics { this.selected = isSelected },
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                RadioButton(
-                    selected = isSelected,
-                    onClick = null,
-                    colors = RadioButtonDefaults.colors(selectedColor = palette.accent, unselectedColor = palette.secondary)
-                )
-                Column(Modifier.weight(1f)) {
-                    Text(mode.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                    Text(mode.choiceDescription(), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                }
-            }
-        }
+        Spacer(Modifier.height(4.dp))
     }
 }

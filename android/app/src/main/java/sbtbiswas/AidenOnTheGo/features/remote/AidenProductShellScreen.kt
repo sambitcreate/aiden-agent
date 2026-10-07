@@ -1,7 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
 import androidx.compose.ui.input.pointer.pointerInput
-import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.focusGroup
@@ -28,11 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import sbtbiswas.AidenOnTheGo.R
-import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
-import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsHomeScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
-import sbtbiswas.AidenOnTheGo.features.settings.AidenAppearanceSettingsScreen
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceShellScreen
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceHomeViewModel
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
@@ -42,7 +38,6 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -55,14 +50,14 @@ fun AidenProductShellScreen(
     navigationStore: AidenProductNavigationStore,
     installationStore: AidenInstallationStore,
     chatCache: AidenChatCache,
-    appearanceStore: AidenAppearanceStore? = null,
-    voiceInputStore: AidenVoiceInputStore,
     botsViewModel: AidenBotsViewModel,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
     onNavigateToBotEditor: (String?) -> Unit,
     onNavigateToWorkspaceFiles: (String) -> Unit,
-    onNavigateToWorkspaceGit: (String) -> Unit
+    onNavigateToWorkspaceGit: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenInstallations: () -> Unit
 ) {
     val activeArea by navigationStore.activeArea.collectAsStateWithLifecycle()
     val activeInstallationId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
@@ -73,8 +68,6 @@ fun AidenProductShellScreen(
         factory = AidenWorkspaceHomeViewModel.factory(coordinator, chatCache)
     )
 
-    var showPairingDialog by remember { mutableStateOf(false) }
-    var showSettingsSheet by remember { mutableStateOf(false) }
     val activeInstallation = installations.firstOrNull { it.id == activeInstallationId }
     val selectArea: (AidenProductArea) -> Unit = { area ->
         val instanceId = activeInstallationId
@@ -110,7 +103,7 @@ fun AidenProductShellScreen(
                 productSwitcher = {
                     AidenProductSwitcher(activeArea, botsAvailable, selectArea)
                 },
-                onOpenSettings = { showSettingsSheet = true },
+                onOpenSettings = onOpenSettings,
                 isActive = activeArea == AidenProductArea.WORKSPACES,
                 modifier = Modifier
                     .fillMaxSize()
@@ -150,12 +143,12 @@ fun AidenProductShellScreen(
                     AidenProductTopBarAction(
                         icon = Icons.Outlined.Devices,
                         contentDescription = "Installations",
-                        onClick = { showPairingDialog = true }
+                        onClick = onOpenInstallations
                     )
                     AidenProductTopBarAction(
                         icon = Icons.Outlined.Settings,
                         contentDescription = "Settings",
-                        onClick = { showSettingsSheet = true }
+                        onClick = onOpenSettings
                     )
                 }
                 Box(
@@ -173,46 +166,6 @@ fun AidenProductShellScreen(
                     )
                 }
             }
-        }
-    }
-
-    // Settings sheet
-    if (showSettingsSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showSettingsSheet = false },
-            sheetState = rememberAidenFullSheetState(),
-            containerColor = palette.raised,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            dragHandle = null,
-            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
-        ) {
-            AidenAppearanceSettingsScreen(
-                appearanceStore = appearanceStore,
-                voiceInputStore = voiceInputStore,
-                remoteClient = coordinator.client.collectAsStateWithLifecycle().value,
-                onOpenInstallations = {
-                    showSettingsSheet = false
-                    showPairingDialog = true
-                }
-            )
-        }
-    }
-
-    // Pairing sheet
-    if (showPairingDialog) {
-        ModalBottomSheet(
-            onDismissRequest = { showPairingDialog = false },
-            sheetState = rememberAidenFullSheetState(),
-            containerColor = palette.raised,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            dragHandle = null,
-            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
-        ) {
-            AidenPairingScreen(
-                coordinator = coordinator,
-                installationStore = installationStore,
-                onDismiss = { showPairingDialog = false }
-            )
         }
     }
 }

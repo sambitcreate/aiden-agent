@@ -1,3 +1,151 @@
 <resources>
     <string name="app_name">Aiden On The Go</string>
+
+    <!-- Shared actions -->
+    <string name="action_back">Back</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_remove">Remove</string>
+    <string name="action_save">Save</string>
+    <string name="action_saving">Saving…</string>
+
+    <!-- Settings root -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_loading">Loading</string>
+    <string name="settings_group_desktop">Aiden Agent</string>
+    <string name="settings_connected_desktop">Connected desktop</string>
+    <string name="settings_not_connected">Not connected</string>
+    <string name="settings_group_providers">Providers</string>
+    <string name="settings_providers">Providers</string>
+    <plurals name="settings_providers_connected">
+        <item quantity="one">%d connected</item>
+        <item quantity="other">%d connected</item>
+    </plurals>
+    <string name="settings_providers_unavailable">Providers are unavailable. Connect to an updated desktop app.</string>
+    <string name="settings_providers_footer">Model connections and API keys are stored on your paired desktop.</string>
+    <string name="settings_connect_to_manage">Connect to a paired desktop to manage this.</string>
+    <string name="settings_group_memory">Memory</string>
+    <string name="settings_use_memory">Use memory</string>
+    <string name="settings_memory_footer">Controls recall, saving, and indexing on your paired desktop. Turning it off doesn\'t delete approved facts. Workspace overrides are in each workspace\'s menu.</string>
+    <string name="settings_memory_save_failed">Couldn\'t change memory. Your previous setting is restored.</string>
+    <string name="settings_memory_stale">Couldn\'t reach your desktop. Showing the last known setting.</string>
+    <string name="settings_memory_unavailable">Memory settings are unavailable. Connect to an updated desktop app.</string>
+    <string name="settings_group_voice">Voice input</string>
+    <string name="settings_transcription">Transcription</string>
+    <string name="settings_group_read_aloud">Read Aloud</string>
+    <string name="settings_read_aloud">Read Aloud</string>
+    <string name="settings_read_aloud_ready">Ready on your desktop</string>
+    <string name="settings_read_aloud_setup">Set up on your desktop</string>
+    <string name="settings_read_aloud_unavailable">Unavailable. Connect to an updated desktop app.</string>
+    <string name="settings_group_appearance">Appearance</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_group_about">About</string>
+    <string name="settings_about">About</string>
+    <string name="settings_about_supporting">Privacy, support, license, and version</string>
+
+    <!-- Appearance -->
+    <string name="appearance_group_mode">Mode</string>
+    <string name="appearance_mode_description">%1$s appearance mode</string>
+    <string name="appearance_group_theme">Theme</string>
+    <string name="appearance_group_text_size">Text size</string>
+    <string name="appearance_group_motion">Motion</string>
+    <string name="appearance_reduce_motion">Reduce motion</string>
+    <string name="appearance_reduce_motion_supporting">Replaces springs and slides with simple fades.</string>
+
+    <!-- Voice input -->
+    <string name="voice_title">Voice input</string>
+    <string name="voice_group_transcription">Transcription</string>
+    <string name="voice_transcription_footer">Paired desktop sends microphone audio over Aiden\'s encrypted pinned connection and doesn\'t retain it.</string>
+    <string name="voice_mode_on_device_description">Android speech recognition; speech stays on this device.</string>
+    <string name="voice_mode_paired_description">Parakeet on your connected Aiden Agent desktop; text appears after you stop.</string>
+    <string name="voice_group_on_device">On-device recognition</string>
+    <string name="voice_on_device_status">Status</string>
+    <string name="voice_on_device_ready">Ready</string>
+    <string name="voice_on_device_needs_language">Needs language support</string>
+    <string name="voice_install_language">Install language support</string>
+    <string name="voice_language_download_failed">Android couldn\'t start the language download.</string>
+    <string name="voice_group_desktop_model">Desktop speech model</string>
+    <string name="voice_engine">Engine</string>
+    <string name="voice_engine_ready">Ready</string>
+    <string name="voice_engine_unavailable">Unavailable</string>
+    <string name="voice_connect_desktop">Connect to a paired desktop to configure transcription.</string>
+    <string name="voice_speech_unavailable">Desktop transcription is unavailable right now.</string>
+    <string name="voice_speech_action_failed">Your desktop couldn\'t make that change. Try again.</string>
+    <string name="voice_downloading">Downloading… %1$d%%</string>
+    <string name="voice_installing">Installing…</string>
+    <string name="voice_selected">Selected</string>
+    <string name="voice_use">Use</string>
+    <string name="voice_download">Download</string>
+
+    <!-- Providers -->
+    <string name="providers_group_connected">Connected providers</string>
+    <plurals name="providers_model_count">
+        <item quantity="one">%d model</item>
+        <item quantity="other">%d models</item>
+    </plurals>
+    <string name="providers_empty">No connected providers yet.</string>
+    <string name="providers_stale">Couldn\'t reach your desktop. Showing the last known providers.</string>
+    <string name="providers_add">Add provider</string>
+    <string name="providers_add_supporting">Connect an OpenAI- or Anthropic-compatible server</string>
+    <string name="providers_add_requirements">Adding a provider from your phone needs an updated desktop app and permission to manage workspaces.</string>
+    <string name="providers_group_connection">Connection</string>
+    <string name="providers_field_name">Name</string>
+    <string name="providers_field_base_url">Base URL</string>
+    <string name="providers_field_api_key">API key</string>
+    <string name="providers_group_models">Models</string>
+    <string name="providers_field_model_ids">Model IDs, separated by commas</string>
+    <string name="providers_models_footer">Use exact server model IDs. The first model is the default. Saving doesn\'t contact the provider.</string>
+    <string name="providers_group_options">Options</string>
+    <string name="providers_options_footer">Turn on only what your server supports. Applies to every model above.</string>
+    <string name="providers_requires_key">Requires API key</string>
+    <string name="providers_vision">Vision</string>
+    <string name="providers_reasoning">Reasoning</string>
+    <string name="providers_group_format">API format</string>
+    <string name="providers_format_openai">OpenAI</string>
+    <string name="providers_format_anthropic">Anthropic</string>
+    <string name="providers_group_deployment">Deployment</string>
+    <string name="providers_deployment_hosted">Hosted</string>
+    <string name="providers_deployment_local">Local to desktop</string>
+    <string name="providers_save_failed">Couldn\'t save the provider. Check the details and try again.</string>
+
+    <!-- About -->
+    <string name="about_privacy_policy">Privacy Policy</string>
+    <string name="about_support">Support</string>
+    <string name="about_license">License</string>
+    <string name="about_license_value">MIT</string>
+    <string name="about_version">Version</string>
+
+    <!-- Installations and pairing -->
+    <string name="installations_title">Paired desktops</string>
+    <string name="installations_group">Desktops</string>
+    <string name="installations_empty">No paired desktops yet.</string>
+    <string name="installations_active_endpoint">Active · %1$s</string>
+    <string name="installations_remove">Remove %1$s</string>
+    <string name="installations_remove_title">Remove %1$s?</string>
+    <string name="installations_remove_body">This removes the pairing credential and all cached chats, Bots, usage, drafts, settings, and workspace data for this desktop from this device.</string>
+    <string name="installations_pair">Pair a desktop</string>
+    <string name="installations_pair_supporting">Scan the code from Aiden Agent on your desktop</string>
+    <string name="pairing_title">Pair a desktop</string>
+    <string name="pairing_first_run_title">Connect your desktop</string>
+    <string name="pairing_steps_title">On your desktop</string>
+    <string name="pairing_step_open">Open Aiden Agent.</string>
+    <string name="pairing_step_settings">Go to Settings → Aiden On The Go → Connect a device.</string>
+    <string name="pairing_step_scan">Scan the code it shows, or enter its setup code.</string>
+    <string name="pairing_tab_scan">Scan QR</string>
+    <string name="pairing_tab_code">Setup code</string>
+    <string name="pairing_setup_code">20-character setup code</string>
+    <string name="pairing_desktop_address">Desktop address</string>
+    <string name="pairing_connect">Connect &amp; pair</string>
+    <string name="pairing_paste_details">Advanced: paste connection details</string>
+    <string name="pairing_back_to_scanning">Back to scanning</string>
+    <string name="pairing_paste_label">QR code payload JSON</string>
+    <string name="pairing_paste_placeholder">Paste the QR code JSON from Aiden Agent</string>
+    <string name="pairing_import">Import &amp; pair</string>
+    <string name="pairing_in_progress">Pairing with your desktop…</string>
+    <string name="pairing_in_progress_short">Pairing…</string>
+    <string name="pairing_failed">Couldn\'t pair with that desktop. Check the code and try again.</string>
+    <string name="camera_prompt_title">Scan the pairing code</string>
+    <string name="camera_prompt_body">Point your camera at the QR code Aiden Agent shows on your desktop.</string>
+    <string name="camera_prompt_blocked">Camera access is off for Aiden. Turn it on in Settings, or use the setup code instead.</string>
+    <string name="camera_enable">Enable camera</string>
+    <string name="camera_open_settings">Open settings</string>
 </resources>

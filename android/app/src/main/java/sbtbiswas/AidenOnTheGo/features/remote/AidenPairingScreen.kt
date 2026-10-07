@@ -1,360 +1,487 @@
 package sbtbiswas.AidenOnTheGo.features.remote
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Laptop
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsDefaults
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsGroup
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsListItem
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsMessageRow
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsNavigationRow
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsScaffold
+import sbtbiswas.AidenOnTheGo.models.AidenInstallation
+import sbtbiswas.AidenOnTheGo.models.AidenPairingPayload
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Paired desktops as one radio group of settings rows: tapping a row makes it active, the
+ * active one carries a check and "Active", and removal asks for confirmation first.
+ */
 @Composable
-fun AidenPairingScreen(
+fun AidenInstallationsScreen(
     coordinator: AidenRemoteCoordinator,
     installationStore: AidenInstallationStore,
+    onPairDesktop: () -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    val installations by installationStore.installations.collectAsStateWithLifecycle()
+    val activeId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
+    var pendingRemoval by remember { mutableStateOf<AidenInstallation?>(null) }
+
+    AidenSettingsScaffold(
+        title = stringResource(R.string.installations_title),
+        onNavigateBack = onNavigateBack
+    ) {
+        item(key = "desktops") {
+            AidenInstallationList(
+                installations = installations,
+                activeId = activeId,
+                onActivate = { installation ->
+                    if (installation.id != activeId) {
+                        installationStore.setActiveInstallation(installation.id)
+                        coordinator.refreshClient()
+                    }
+                },
+                onRemove = { pendingRemoval = it }
+            )
+        }
+        item(key = "pair") {
+            AidenSettingsGroup(title = null) {
+                row {
+                    AidenSettingsNavigationRow(
+                        headline = stringResource(R.string.installations_pair),
+                        supporting = stringResource(R.string.installations_pair_supporting),
+                        leadingIcon = Icons.Outlined.Add,
+                        onClick = onPairDesktop
+                    )
+                }
+            }
+        }
+    }
+
+    pendingRemoval?.let { installation ->
+        AidenRemoveInstallationDialog(
+            installation = installation,
+            onConfirm = {
+                coordinator.removeInstallation(installation.id)
+                pendingRemoval = null
+            },
+            onDismiss = { pendingRemoval = null }
+        )
+    }
+}
+
+@Composable
+internal fun AidenInstallationList(
+    installations: List<AidenInstallation>,
+    activeId: String?,
+    onActivate: (AidenInstallation) -> Unit,
+    onRemove: (AidenInstallation) -> Unit
+) {
+    val palette = AidenTheme.palette
+    AidenSettingsGroup(
+        title = stringResource(R.string.installations_group),
+        selectableGroup = true
+    ) {
+        if (installations.isEmpty()) {
+            row(dividerInset = AidenSettingsDefaults.DividerInset) {
+                AidenSettingsMessageRow(stringResource(R.string.installations_empty))
+            }
+        }
+        installations.forEach { installation ->
+            row {
+                val isActive = installation.id == activeId
+                val removeLabel = stringResource(R.string.installations_remove, installation.name)
+                AidenSettingsListItem(
+                    headline = installation.name,
+                    modifier = Modifier.selectable(
+                        selected = isActive,
+                        role = Role.RadioButton,
+                        onClick = { onActivate(installation) }
+                    ),
+                    supporting = {
+                        Text(
+                            if (isActive) stringResource(R.string.installations_active_endpoint, installation.endpoint)
+                            else installation.endpoint
+                        )
+                    },
+                    leading = {
+                        Icon(Icons.Outlined.Laptop, contentDescription = null, tint = if (isActive) palette.accent else palette.secondary)
+                    },
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isActive) Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent)
+                            IconButton(onClick = { onRemove(installation) }) {
+                                Icon(Icons.Outlined.DeleteOutline, contentDescription = removeLabel, tint = palette.danger)
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AidenRemoveInstallationDialog(
+    installation: AidenInstallation,
+    onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    val scope = rememberCoroutineScope()
-    val installations by installationStore.installations.collectAsStateWithLifecycle()
-    val activeId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.installations_remove_title, installation.name)) },
+        text = { Text(stringResource(R.string.installations_remove_body)) },
+        confirmButton = {
+            AidenDialogConfirmButton(text = stringResource(R.string.action_remove), destructive = true, onClick = onConfirm)
+        },
+        dismissButton = { AidenDialogDismissButton(text = stringResource(R.string.action_cancel), onClick = onDismiss) },
+        shape = AidenShape.Dialog,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        titleContentColor = palette.foreground,
+        textContentColor = palette.secondary
+    )
+}
 
-    var manualCode by remember { mutableStateOf("") }
-    var endpointUrl by remember { mutableStateOf("https://127.0.0.1:8765/api/aiden/v1") }
-    var qrJsonInput by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Scan QR, 1: Setup Code, 2: Paste JSON
+/**
+ * Pairs a desktop: short numbered steps, the camera first, a setup-code fallback, and an
+ * advanced paste option. The first-run variant has no back action because there is nowhere
+ * to go back to. Pairing never shows a spinner: the action disables and its label changes.
+ *
+ * When an [installationStore] is given and it still lists desktops (for example one whose
+ * credential is missing), they stay switchable and removable above the pairing steps.
+ */
+@Composable
+fun AidenPairDesktopScreen(
+    coordinator: AidenRemoteCoordinator,
+    firstRun: Boolean,
+    onPaired: () -> Unit,
+    onNavigateBack: (() -> Unit)?,
+    installationStore: AidenInstallationStore? = null
+) {
+    val installations = installationStore?.installations?.collectAsStateWithLifecycle()?.value.orEmpty()
+    val activeId = installationStore?.activeInstallationId?.collectAsStateWithLifecycle()?.value
+    var pendingRemoval by remember { mutableStateOf<AidenInstallation?>(null) }
+    val scope = rememberCoroutineScope()
     var isPairing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var installationPendingRemoval by remember { mutableStateOf<AidenInstallation?>(null) }
+    val fallbackError = stringResource(R.string.pairing_failed)
 
-    fun formatCrockfordCode(input: String): String {
-        val clean = input.uppercase().replace("-", "").filter { it in "0123456789ABCDEFGHJKMNPQRSTVWXYZIL" }.take(20)
-        val chunks = clean.chunked(4)
-        return chunks.joinToString("-")
-    }
-
-    fun handleScannedQRCode(scannedText: String) {
+    fun pair(block: suspend () -> Unit, onFailure: () -> Unit = {}) {
+        if (isPairing) return
+        isPairing = true
+        errorMessage = null
         scope.launch {
-            isPairing = true
-            errorMessage = null
             try {
-                val json = Json { ignoreUnknownKeys = true }
-                val payload = json.decodeFromString<AidenPairingPayload>(scannedText.trim())
-                coordinator.pairWithQRCode(payload)
-                onDismiss()
-            } catch (e: Exception) {
-                errorMessage = e.message ?: "Invalid QR Code payload format"
+                block()
+                onPaired()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                errorMessage = error.message ?: fallbackError
+                onFailure()
             } finally {
                 isPairing = false
             }
         }
     }
+    BackHandler(enabled = isPairing && onNavigateBack != null) {}
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Paired desktops", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
-                    }
+    AidenSettingsScaffold(
+        title = stringResource(if (firstRun) R.string.pairing_first_run_title else R.string.pairing_title),
+        onNavigateBack = onNavigateBack?.let { back -> { if (!isPairing) back() } }
+    ) {
+        if (installations.isNotEmpty() && installationStore != null) {
+            item(key = "desktops") {
+                AidenInstallationList(
+                    installations = installations,
+                    activeId = activeId,
+                    onActivate = { installation ->
+                        installationStore.setActiveInstallation(installation.id)
+                        coordinator.refreshClient()
+                    },
+                    onRemove = { pendingRemoval = it }
+                )
+            }
+        }
+        item(key = "steps") { AidenPairingSteps() }
+        item(key = "methods") {
+            AidenPairingMethods(
+                isPairing = isPairing,
+                errorMessage = errorMessage,
+                onScanned = { scanned, retry ->
+                    pair({
+                        val payload = pairingJson.decodeFromString<AidenPairingPayload>(scanned.trim())
+                        coordinator.pairWithQRCode(payload)
+                    }, onFailure = retry)
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = palette.canvas,
-                    titleContentColor = palette.foreground
-                )
+                onManualCode = { code, endpoint -> pair({ coordinator.pairWithManualCode(code, endpoint) }) }
             )
-        },
-        containerColor = palette.canvas
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
-            // Paired Macs List
-            if (installations.isNotEmpty()) {
-                Text(
-                    text = "Active Installations",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = palette.secondary
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                AidenConnectedColumn {
-                    installations.forEachIndexed { index, install ->
-                        val isActive = install.id == activeId
-                        AidenGroupCard(
-                            index = index,
-                            count = installations.size,
-                            selected = isActive,
-                            onClick = {
-                                installationStore.setActiveInstallation(install.id)
-                                coordinator.refreshClient()
-                            },
-                            contentPadding = PaddingValues(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Laptop,
-                                contentDescription = null,
-                                tint = if (isActive) palette.accent else palette.secondary
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = install.name,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = palette.foreground
-                                    )
-                                    if (isActive) {
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Surface(
-                                            color = palette.accent.copy(alpha = 0.14f),
-                                            shape = RoundedCornerShape(6.dp)
-                                        ) {
-                                            Text(
-                                                text = "ACTIVE",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = palette.accent,
-                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = install.endpoint,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.secondary
-                                )
-                            }
-                            IconButton(
-                                onClick = { installationPendingRemoval = install }
-                            ) {
-                                Icon(
-                                    Icons.Default.DeleteOutline,
-                                    contentDescription = "Remove ${install.name}",
-                                    tint = palette.danger
-                                )
-                            }
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(24.dp))
-            }
-
-            // Pair New Mac Section
-            Text(
-                text = "Connect your desktop",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = palette.secondary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "On your desktop, open Settings → Aiden On The Go → Connect a device. Then scan its code here. Read Aloud uses your desktop’s setup: enable it there. Pressing Play sends selected response text from your desktop to Google; charges may apply.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = palette.secondary
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // QR first, with a camera-free setup code fallback.
-            AidenPairingModeTabs(selectedTab = selectedTab, onSelectTab = { selectedTab = it })
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            TextButton(onClick = { selectedTab = if (selectedTab == 2) 0 else 2 }, shape = AidenShape.Button) {
-                Text(if (selectedTab == 2) "Back to scanning" else "Advanced: paste connection details")
-            }
-
-            errorMessage?.let { msg ->
-                Surface(
-                    color = palette.danger.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = msg,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.danger,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            when (selectedTab) {
-                0 -> {
-                    // Live Camera QR Code Scanner
-                    AidenQRCodeScanner(
-                        onCodeScanned = { scanned ->
-                            handleScannedQRCode(scanned)
-                        }
-                    )
-                    if (isPairing) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            CircularProgressIndicator(color = palette.accent, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Pairing with desktop...", style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                        }
-                    }
-                }
-                1 -> {
-                    // Manual 20-character Crockford code
-                    TextField(
-                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                        value = manualCode,
-                        onValueChange = { manualCode = formatCrockfordCode(it) },
-                        label = { Text("20-Character Setup Code") },
-                        placeholder = { Text("0123-4567-89AB-CDEF-GHJK") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace, letterSpacing = 2.sp),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    TextField(
-
-                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                        value = endpointUrl,
-                        onValueChange = { endpointUrl = it },
-                        label = { Text("Desktop address") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    AidenPairingActionButton(
-                        text = "Connect & Pair",
-                        busy = isPairing,
-                        enabled = manualCode.replace("-", "").length == 20 && !isPairing,
-                        onClick = {
-                            scope.launch {
-                                isPairing = true
-                                errorMessage = null
-                                try {
-                                    coordinator.pairWithManualCode(manualCode, endpointUrl)
-                                    onDismiss()
-                                } catch (e: Exception) {
-                                    errorMessage = e.message ?: "Failed to pair with setup code"
-                                } finally {
-                                    isPairing = false
-                                }
-                            }
-                        }
-                    )
-                }
-                2 -> {
-                    // QR Payload JSON Input Fallback
-                    TextField(
-                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                        value = qrJsonInput,
-                        onValueChange = { qrJsonInput = it },
-                        label = { Text("QR Code Payload JSON") },
-                        placeholder = { Text("Paste QR code JSON string from Aiden Agent") },
-                        minLines = 4,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    AidenPairingActionButton(
-                        text = "Import & Pair",
-                        busy = isPairing,
-                        enabled = qrJsonInput.trim().isNotEmpty() && !isPairing,
-                        onClick = { handleScannedQRCode(qrJsonInput) }
-                    )
-                }
-            }
         }
     }
 
-    installationPendingRemoval?.let { installation ->
-        AlertDialog(
-            onDismissRequest = { installationPendingRemoval = null },
-            title = { Text("Remove ${installation.name}?") },
-            text = {
-                Text("This removes the pairing credential and all cached chats, Bots, usage, drafts, and workspace data for this desktop from this device.")
+    pendingRemoval?.let { installation ->
+        AidenRemoveInstallationDialog(
+            installation = installation,
+            onConfirm = {
+                coordinator.removeInstallation(installation.id)
+                pendingRemoval = null
             },
-            confirmButton = {
-                AidenDialogConfirmButton(
-                    text = "Remove",
-                    destructive = true,
-                    onClick = {
-                        coordinator.removeInstallation(installation.id)
-                        installationPendingRemoval = null
-                    }
-                )
-            },
-            dismissButton = {
-                AidenDialogDismissButton(onClick = { installationPendingRemoval = null })
-            },
-            shape = AidenShape.Dialog,
-            containerColor = palette.raised,
-            titleContentColor = palette.foreground,
-            textContentColor = palette.secondary
+            onDismiss = { pendingRemoval = null }
         )
     }
 }
 
-internal val AidenPairingTabTitles = listOf("Scan QR", "Setup Code")
+private val pairingJson = Json { ignoreUnknownKeys = true }
+
+@Composable
+private fun AidenPairingSteps() {
+    val steps = listOf(
+        stringResource(R.string.pairing_step_open),
+        stringResource(R.string.pairing_step_settings),
+        stringResource(R.string.pairing_step_scan)
+    )
+    AidenSettingsGroup(title = stringResource(R.string.pairing_steps_title)) {
+        steps.forEachIndexed { index, step ->
+            row {
+                AidenSettingsListItem(
+                    headline = step,
+                    modifier = Modifier,
+                    supporting = null,
+                    leading = {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                        ) {
+                            Text(
+                                "${index + 1}",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    },
+                    trailing = null
+                )
+            }
+        }
+    }
+}
+
+/** Camera, setup code, or pasted details. [onScanned] gets a retry callback that re-arms the camera. */
+@Composable
+private fun AidenPairingMethods(
+    isPairing: Boolean,
+    errorMessage: String?,
+    onScanned: (String, () -> Unit) -> Unit,
+    onManualCode: (String, String) -> Unit
+) {
+    val palette = AidenTheme.palette
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0: Scan QR, 1: Setup code, 2: Paste
+    var manualCode by rememberSaveable { mutableStateOf("") }
+    var endpointUrl by rememberSaveable { mutableStateOf(DEFAULT_PAIRING_ENDPOINT) }
+    var qrJsonInput by rememberSaveable { mutableStateOf("") }
+    var scanAttempt by remember { mutableIntStateOf(0) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        AidenPairingModeTabs(selectedTab = selectedTab, onSelectTab = { selectedTab = it })
+
+        errorMessage?.let { AidenPairingError(it) }
+
+        when (selectedTab) {
+            0 -> {
+                key(scanAttempt) {
+                    AidenQRCodeScanner(
+                        onCodeScanned = { scanned -> onScanned(scanned) { scanAttempt += 1 } }
+                    )
+                }
+                if (isPairing) {
+                    Text(
+                        stringResource(R.string.pairing_in_progress),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.foreground,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { liveRegion = LiveRegionMode.Polite }
+                    )
+                }
+            }
+            1 -> {
+                TextField(
+                    colors = aidenTextFieldColors(),
+                    value = manualCode,
+                    onValueChange = { manualCode = formatCrockfordCode(it) },
+                    label = { Text(stringResource(R.string.pairing_setup_code)) },
+                    placeholder = { Text("0123-4567-89AB-CDEF-GHJK") },
+                    singleLine = true,
+                    enabled = !isPairing,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace, letterSpacing = 2.sp),
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                TextField(
+                    colors = aidenTextFieldColors(),
+                    value = endpointUrl,
+                    onValueChange = { endpointUrl = it },
+                    label = { Text(stringResource(R.string.pairing_desktop_address)) },
+                    singleLine = true,
+                    enabled = !isPairing,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                AidenPairingActionButton(
+                    text = stringResource(R.string.pairing_connect),
+                    busy = isPairing,
+                    enabled = manualCode.replace("-", "").length == 20,
+                    onClick = { onManualCode(manualCode, endpointUrl) }
+                )
+            }
+            2 -> {
+                TextField(
+                    colors = aidenTextFieldColors(),
+                    value = qrJsonInput,
+                    onValueChange = { qrJsonInput = it },
+                    label = { Text(stringResource(R.string.pairing_paste_label)) },
+                    placeholder = { Text(stringResource(R.string.pairing_paste_placeholder)) },
+                    minLines = 4,
+                    enabled = !isPairing,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                AidenPairingActionButton(
+                    text = stringResource(R.string.pairing_import),
+                    busy = isPairing,
+                    enabled = qrJsonInput.isNotBlank(),
+                    onClick = { onScanned(qrJsonInput) {} }
+                )
+            }
+        }
+
+        TextButton(
+            onClick = { selectedTab = if (selectedTab == 2) 0 else 2 },
+            shape = AidenShape.Button,
+            modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
+        ) {
+            Text(stringResource(if (selectedTab == 2) R.string.pairing_back_to_scanning else R.string.pairing_paste_details))
+        }
+    }
+}
+
+@Composable
+private fun AidenPairingError(message: String) {
+    val palette = AidenTheme.palette
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { liveRegion = LiveRegionMode.Polite }
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = palette.danger)
+            Text(message, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+internal const val DEFAULT_PAIRING_ENDPOINT = "https://127.0.0.1:8765/api/aiden/v1"
+
+/** Normalizes a typed setup code to Crockford base32 in dash-separated groups of four. */
+internal fun formatCrockfordCode(input: String): String =
+    input.uppercase()
+        .replace("-", "")
+        .filter { it in "0123456789ABCDEFGHJKMNPQRSTVWXYZIL" }
+        .take(20)
+        .chunked(4)
+        .joinToString("-")
+
+internal val AidenPairingTabTitles = listOf(R.string.pairing_tab_scan, R.string.pairing_tab_code)
 
 /** Tab the sliding indicator rests under, or null when the advanced paste flow is open. */
 internal fun aidenPairingIndicatorTab(selectedTab: Int): Int? =
@@ -386,10 +513,10 @@ internal fun AidenPairingModeTabs(
         animationSpec = AidenMotion.nonSpatial(reduceMotion),
         label = "pairing_tab_indicator_alpha"
     )
-    val tabShape = RoundedCornerShape(16.dp)
+    val tabShape = MaterialTheme.shapes.large
     Surface(
-        color = palette.raised,
-        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.extraLarge,
         modifier = modifier.fillMaxWidth()
     ) {
         Box(
@@ -413,10 +540,10 @@ internal fun AidenPairingModeTabs(
                     .fillMaxWidth()
                     .selectableGroup()
             ) {
-                AidenPairingTabTitles.forEachIndexed { index, title ->
+                AidenPairingTabTitles.forEachIndexed { index, titleRes ->
                     val selected = selectedTab == index
                     val ink by animateColorAsState(
-                        targetValue = if (selected) Color.White else palette.secondary,
+                        targetValue = if (selected) palette.onAccent else palette.secondary,
                         animationSpec = AidenMotion.nonSpatial(reduceMotion),
                         label = "pairing_tab_ink"
                     )
@@ -434,13 +561,13 @@ internal fun AidenPairingModeTabs(
                                 indication = ripple(),
                                 onClick = { onSelectTab(index) }
                             )
-                            .heightIn(min = 40.dp)
+                            .heightIn(min = AidenUi.MinimumTouchTarget)
                             .padding(vertical = 8.dp)
                     ) {
                         Text(
-                            text = title,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
+                            text = stringResource(titleRes),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
                             color = ink
                         )
                     }
@@ -450,31 +577,32 @@ internal fun AidenPairingModeTabs(
     }
 }
 
-/** Full-width squircle pairing action whose press compression shares the button's tap. */
+/**
+ * Full-width squircle pairing action whose press compression shares the button's tap.
+ * While [busy] it disables and reads [busyText] instead of spinning.
+ */
 @Composable
 internal fun AidenPairingActionButton(
     text: String,
     busy: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    busyText: String = stringResource(R.string.pairing_in_progress_short)
 ) {
     val palette = AidenTheme.palette
     val interaction = remember { MutableInteractionSource() }
     Button(
         onClick = onClick,
-        enabled = enabled,
+        enabled = enabled && !busy,
         interactionSource = interaction,
-        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+        colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
         shape = AidenShape.Button,
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = AidenUi.MinimumTouchTarget)
             .tactilePress(interaction)
     ) {
-        if (busy) {
-            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-        } else {
-            Text(text, color = Color.White, fontWeight = FontWeight.Bold)
-        }
+        Text(if (busy) busyText else text, fontWeight = FontWeight.SemiBold)
     }
 }

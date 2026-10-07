@@ -1,274 +1,305 @@
 package sbtbiswas.AidenOnTheGo.features.settings
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
-import sbtbiswas.AidenOnTheGo.models.*
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
-import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
+import sbtbiswas.AidenOnTheGo.models.AidenProviderCreation
+import sbtbiswas.AidenOnTheGo.models.AidenProviderCreationModel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
-import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
-import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import java.util.UUID
 
+/**
+ * Providers connected on the paired desktop. The list renders from cache and refreshes in
+ * the background; Add provider appears only when the desktop allows it, and otherwise the
+ * page explains what is needed instead of showing a disabled button.
+ */
 @Composable
-fun AidenProviderSettings(client: AidenRemoteClient?) {
-    key(client) { ProviderSettingsContent(client) }
-}
+fun AidenProviderSettingsScreen(
+    store: AidenSettingsStore,
+    onAddProvider: () -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    val state by store.state.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { store.refresh() }
+    val providers = state.providers
 
-@Composable
-private fun ProviderSettingsContent(client: AidenRemoteClient?) {
-    val palette = AidenTheme.palette
-    val scope = rememberCoroutineScope()
-    var catalog by remember { mutableStateOf<AidenModelCatalog?>(null) }
-    var canCreate by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var expanded by remember { mutableStateOf(false) }
-    var creating by remember { mutableStateOf(false) }
-    suspend fun refresh() {
-        if (client == null) return
-        try {
-            val server = client.server()
-            canCreate = "providers-create-v1" in server.features && AidenRemoteCapability.WORKSPACE_MANAGE in server.capabilities
-            catalog = client.modelCatalog(); error = null
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { error = "Providers are unavailable. Connect to an updated Mac and refresh." }
-    }
-    LaunchedEffect(client) { refresh() }
-    val providers = catalog?.providers.orEmpty()
-    val reduceMotion = aidenReduceMotion()
-    val chevronRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        animationSpec = AidenMotion.spatial(reduceMotion),
-        label = "providers_disclosure"
-    )
-    val rowCount = 1 + if (expanded) maxOf(providers.size, 1) else 0
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Providers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-        Text("Connections and API keys are stored on your paired Mac.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-        AidenConnectedColumn {
-            AidenGroupCard(
-                index = 0,
-                count = rowCount,
-                onClick = { expanded = !expanded },
-                modifier = Modifier.semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+    AidenSettingsScaffold(
+        title = stringResource(R.string.settings_providers),
+        onNavigateBack = onNavigateBack
+    ) {
+        item(key = "providers") {
+            AidenSettingsGroup(
+                title = stringResource(R.string.providers_group_connected),
+                footer = stringResource(R.string.settings_providers_footer),
+                error = if (state.providersFailure != null && providers != null) stringResource(R.string.providers_stale) else null
             ) {
-                Text(
-                    if (expanded) "Hide connected providers" else "Show connected providers",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.foreground,
-                    modifier = Modifier.weight(1f)
-                )
-                if (providers.isNotEmpty()) AidenProviderCountBadge("${providers.size}")
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = palette.secondary,
-                    modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
-                )
-            }
-            AnimatedVisibility(
-                visible = expanded,
-                enter = if (reduceMotion) EnterTransition.None else expandVertically(AidenMotion.spatialExpressiveSpring()) + fadeIn(AidenMotion.nonSpatialExpressiveSpring()),
-                exit = if (reduceMotion) ExitTransition.None else shrinkVertically(AidenMotion.spatialExpressiveSpring()) + fadeOut(AidenMotion.nonSpatialExpressiveSpring())
-            ) {
-                AidenConnectedColumn {
-                    if (providers.isEmpty()) {
-                        AidenGroupCard(index = 1, count = 2, role = null) {
-                            Text("No connected providers yet.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                when {
+                    providers != null && providers.isEmpty() -> row(dividerInset = AidenSettingsDefaults.DividerInset) {
+                        AidenSettingsMessageRow(stringResource(R.string.providers_empty))
+                    }
+                    providers != null -> providers.forEach { provider ->
+                        row {
+                            val models = pluralStringResource(R.plurals.providers_model_count, provider.modelCount, provider.modelCount)
+                            AidenSettingsListItem(
+                                headline = provider.label,
+                                modifier = Modifier.semantics(mergeDescendants = true) {},
+                                supporting = { Text(models) },
+                                leading = {
+                                    AidenProviderIcon(
+                                        providerId = provider.id,
+                                        providerLabel = provider.label,
+                                        artwork = provider.artwork,
+                                        size = 24.dp
+                                    )
+                                },
+                                trailing = null
+                            )
                         }
-                    } else {
-                        providers.forEachIndexed { index, provider ->
-                            AidenGroupCard(index = index + 1, count = providers.size + 1, role = null) {
-                                AidenProviderIcon(
-                                    providerId = provider.id,
-                                    providerLabel = provider.label,
-                                    artwork = provider.artwork,
-                                    size = 28.dp
-                                )
-                                Text(
-                                    provider.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = palette.foreground,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                AidenProviderCountBadge("${provider.models.size} models")
-                            }
-                        }
+                    }
+                    state.isLoadingProviders -> repeat(3) { row { AidenSettingsSkeletonRow() } }
+                    else -> row(dividerInset = AidenSettingsDefaults.DividerInset) {
+                        AidenSettingsMessageRow(
+                            stringResource(if (state.isConnected) R.string.settings_providers_unavailable else R.string.settings_connect_to_manage)
+                        )
                     }
                 }
             }
         }
-        if (error != null) Text(error!!, style = MaterialTheme.typography.bodySmall, color = palette.danger)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AidenPrimaryButton(text = "Add provider", onClick = { creating = true }, enabled = canCreate)
-            AidenTonalButton(text = "Refresh", onClick = { scope.launch { refresh() } }, enabled = client != null)
+        if (state.isConnected && providers != null) {
+            item(key = "add") {
+                if (state.canCreateProvider) {
+                    AidenSettingsGroup(title = null) {
+                        row {
+                            AidenSettingsNavigationRow(
+                                headline = stringResource(R.string.providers_add),
+                                supporting = stringResource(R.string.providers_add_supporting),
+                                leadingIcon = Icons.Outlined.Add,
+                                onClick = onAddProvider
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        stringResource(R.string.providers_add_requirements),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AidenTheme.palette.secondary,
+                        modifier = Modifier.padding(horizontal = AidenSettingsDefaults.Gutter)
+                    )
+                }
+            }
         }
-        if (!canCreate) Text("Requires an updated Mac and permission to manage workspaces.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-    }
-    if (creating && client != null) ProviderCreationDialog(client, onDismiss = { creating = false }, onSaved = {
-        creating = false; scope.launch { refresh() }
-    })
-}
-
-@Composable
-private fun AidenProviderCountBadge(text: String) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(8.dp)) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            color = AidenTheme.palette.secondary,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-        )
     }
 }
 
+/**
+ * Full-screen Add provider form. Save lives in the top app bar; the API key is never kept
+ * in saved state, and leaving is blocked only while a save is on its way to the desktop.
+ */
 @Composable
-private fun ProviderCreationDialog(client: AidenRemoteClient, onDismiss: () -> Unit, onSaved: () -> Unit) {
-    val palette = AidenTheme.palette
+fun AidenAddProviderScreen(
+    store: AidenSettingsStore,
+    onNavigateBack: () -> Unit
+) {
     val scope = rememberCoroutineScope()
-    var label by remember { mutableStateOf("") }
-    var baseUrl by remember { mutableStateOf("") }
-    var modelIds by remember { mutableStateOf("") }
+    var label by rememberSaveable { mutableStateOf("") }
+    var baseUrl by rememberSaveable { mutableStateOf("") }
+    var modelIds by rememberSaveable { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
-    var needsKey by remember { mutableStateOf(true) }
-    var kind by remember { mutableStateOf("openai") }
-    var deployment by remember { mutableStateOf("hosted") }
-    var vision by remember { mutableStateOf(false) }
-    var reasoning by remember { mutableStateOf(false) }
-    var options by remember { mutableStateOf(false) }
+    var needsKey by rememberSaveable { mutableStateOf(true) }
+    var kind by rememberSaveable { mutableStateOf("openai") }
+    var deployment by rememberSaveable { mutableStateOf("hosted") }
+    var vision by rememberSaveable { mutableStateOf(false) }
+    var reasoning by rememberSaveable { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var failed by remember { mutableStateOf(false) }
     var creationKey by remember { mutableStateOf(UUID.randomUUID()) }
     var submitted by remember { mutableStateOf<AidenProviderCreation?>(null) }
-    val draft = AidenProviderCreation(label.trim(), baseUrl.trim(), kind, deployment, needsKey,
+    val draft = AidenProviderCreation(
+        label = label.trim(),
+        baseUrl = baseUrl.trim(),
+        kind = kind,
+        deployment = deployment,
+        needsKey = needsKey,
         apiKey = if (needsKey) apiKey.trim() else null,
-        models = modelIds.split(',').map { AidenProviderCreationModel(it.trim(), vision, reasoning) })
-    AlertDialog(
-        onDismissRequest = { if (!saving) { apiKey = ""; onDismiss() } },
-        shape = AidenShape.Dialog,
-        containerColor = palette.raised,
-        titleContentColor = palette.foreground,
-        textContentColor = palette.secondary,
-        title = { Text("Add provider") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                TextField(label, { label = it }, colors = aidenTextFieldColors(), label = { Text("Name") }, singleLine = true, enabled = !saving)
-                TextField(baseUrl, { baseUrl = it }, colors = aidenTextFieldColors(), label = { Text("Base URL") }, singleLine = true, enabled = !saving)
-                if (needsKey) TextField(apiKey, { apiKey = it }, colors = aidenTextFieldColors(), label = { Text("API key") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), singleLine = true, enabled = !saving)
-                TextField(modelIds, { modelIds = it }, colors = aidenTextFieldColors(), label = { Text("Model IDs, separated by commas") }, enabled = !saving)
-                Text("Use exact server model IDs. The first model is the default. Saving does not contact the provider.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(onClick = { options = !options }, enabled = !saving, shape = AidenShape.Button) { Text(if (options) "Hide options" else "Connection and model options") }
-                if (options) {
-                    AidenConnectedColumn {
-                        ProviderOptionToggle("Requires API key", needsKey, !saving, index = 0, count = 3) { needsKey = it }
-                        ProviderOptionToggle("Vision", vision, !saving, index = 1, count = 3) { vision = it }
-                        ProviderOptionToggle("Reasoning", reasoning, !saving, index = 2, count = 3) { reasoning = it }
-                    }
-                    Text("Enable only features your server supports. Applies to every model entered above.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("API format", style = MaterialTheme.typography.labelLarge, color = palette.foreground)
-                    AidenSegmentedPillRow(
-                        options = listOf("openai", "anthropic"),
-                        selected = kind,
-                        onSelect = { kind = it },
-                        label = { if (it == "openai") "OpenAI" else "Anthropic" },
-                        enabled = !saving
-                    )
-                    Text("Deployment", style = MaterialTheme.typography.labelLarge, color = palette.foreground)
-                    AidenSegmentedPillRow(
-                        options = listOf("hosted", "local"),
-                        selected = deployment,
-                        onSelect = { deployment = it },
-                        label = { if (it == "hosted") "Hosted" else "Local to Mac" },
-                        enabled = !saving
-                    )
-                }
-                if (listOf(label, baseUrl, modelIds, apiKey).any { it.isNotEmpty() }) draft.validationMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                if (error != null) Text(error!!, color = palette.danger)
-            }
-        },
-        confirmButton = {
-            AidenDialogConfirmButton(
-                text = if (saving) "Saving…" else "Save",
-                enabled = !saving && draft.isValid,
-                onClick = {
-                    if (submitted != draft) { creationKey = UUID.randomUUID(); submitted = draft }
-                    saving = true; error = null
-                    scope.launch {
-                        try { client.createProvider(draft, creationKey); apiKey = ""; submitted = null; onSaved() }
-                        catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { error = "Couldn't save the provider. Check the details and try again." }
-                        finally { saving = false }
-                    }
-                }
-            )
-        },
-        dismissButton = { AidenTonalButton(text = "Cancel", onClick = { apiKey = ""; onDismiss() }, enabled = !saving) }
+        models = modelIds.split(',').map { AidenProviderCreationModel(it.trim(), vision, reasoning) }
     )
+    val touched = listOf(label, baseUrl, modelIds, apiKey).any { it.isNotEmpty() }
+    BackHandler(enabled = saving) {}
+
+    fun save() {
+        if (submitted != draft) {
+            creationKey = UUID.randomUUID()
+            submitted = draft
+        }
+        saving = true
+        failed = false
+        scope.launch {
+            try {
+                store.createProvider(draft, creationKey)
+                apiKey = ""
+                onNavigateBack()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                failed = true
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    AidenSettingsScaffold(
+        title = stringResource(R.string.providers_add),
+        onNavigateBack = { if (!saving) onNavigateBack() },
+        navigationIcon = Icons.Outlined.Close,
+        navigationContentDescription = stringResource(R.string.action_cancel),
+        actions = {
+            TextButton(onClick = ::save, enabled = !saving && draft.isValid, shape = AidenShape.Button) {
+                Text(stringResource(if (saving) R.string.action_saving else R.string.action_save))
+            }
+        }
+    ) {
+        item(key = "connection") {
+            AidenSettingsGroup(
+                title = stringResource(R.string.providers_group_connection),
+                error = when {
+                    failed -> stringResource(R.string.providers_save_failed)
+                    touched -> draft.validationMessage
+                    else -> null
+                }
+            ) {
+                row(dividerInset = 0.dp) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        AidenProviderField(label, { label = it }, stringResource(R.string.providers_field_name), !saving)
+                        AidenProviderField(
+                            baseUrl, { baseUrl = it }, stringResource(R.string.providers_field_base_url), !saving,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false, imeAction = ImeAction.Next)
+                        )
+                        if (needsKey) {
+                            AidenProviderField(
+                                apiKey, { apiKey = it }, stringResource(R.string.providers_field_api_key), !saving,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Next),
+                                secret = true
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        item(key = "models") {
+            AidenSettingsGroup(
+                title = stringResource(R.string.providers_group_models),
+                footer = stringResource(R.string.providers_models_footer)
+            ) {
+                row(dividerInset = 0.dp) {
+                    AidenProviderField(
+                        modelIds, { modelIds = it }, stringResource(R.string.providers_field_model_ids), !saving,
+                        singleLine = false,
+                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        }
+        item(key = "options") {
+            AidenSettingsGroup(
+                title = stringResource(R.string.providers_group_options),
+                footer = stringResource(R.string.providers_options_footer)
+            ) {
+                row {
+                    AidenSettingsSwitchRow(stringResource(R.string.providers_requires_key), needsKey, { needsKey = it }, enabled = !saving, leadingIcon = Icons.Outlined.Key)
+                }
+                row {
+                    AidenSettingsSwitchRow(stringResource(R.string.providers_vision), vision, { vision = it }, enabled = !saving, leadingIcon = Icons.Outlined.Visibility)
+                }
+                row {
+                    AidenSettingsSwitchRow(stringResource(R.string.providers_reasoning), reasoning, { reasoning = it }, enabled = !saving, leadingIcon = Icons.Outlined.Psychology)
+                }
+            }
+        }
+        item(key = "format") {
+            AidenSettingsGroup(title = stringResource(R.string.providers_group_format), selectableGroup = true) {
+                listOf("openai" to R.string.providers_format_openai, "anthropic" to R.string.providers_format_anthropic).forEach { (value, title) ->
+                    row {
+                        AidenSettingsRadioRow(stringResource(title), selected = kind == value, onClick = { if (!saving) kind = value })
+                    }
+                }
+            }
+        }
+        item(key = "deployment") {
+            AidenSettingsGroup(title = stringResource(R.string.providers_group_deployment), selectableGroup = true) {
+                listOf("hosted" to R.string.providers_deployment_hosted, "local" to R.string.providers_deployment_local).forEach { (value, title) ->
+                    row {
+                        AidenSettingsRadioRow(stringResource(title), selected = deployment == value, onClick = { if (!saving) deployment = value })
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun ProviderOptionToggle(
+private fun AidenProviderField(
+    value: String,
+    onValueChange: (String) -> Unit,
     label: String,
-    checked: Boolean,
     enabled: Boolean,
-    index: Int,
-    count: Int,
-    onChange: (Boolean) -> Unit
+    modifier: Modifier = Modifier,
+    singleLine: Boolean = true,
+    secret: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
 ) {
-    AidenGroupCard(
-        index = index,
-        count = count,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-        modifier = Modifier
-            .clip(aidenGroupItemShape(index, count))
-            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
-    ) {
-        Text(label, Modifier.weight(1f), color = AidenTheme.palette.foreground)
-        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
-    }
+    TextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        singleLine = singleLine,
+        minLines = if (singleLine) 1 else 2,
+        enabled = enabled,
+        colors = aidenTextFieldColors(),
+        shape = MaterialTheme.shapes.medium,
+        visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        keyboardOptions = keyboardOptions,
+        modifier = modifier.fillMaxWidth()
+    )
 }

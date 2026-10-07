@@ -3,7 +3,13 @@ package sbtbiswas.AidenOnTheGo.features.remote
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.foundation.layout.Spacer
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
@@ -13,9 +19,9 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,8 +39,18 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.app.ActivityCompat
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -51,8 +67,28 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.concurrent.Executors
 
+/** Whether the scanner can show the camera, ask for it, or must send the user to Settings. */
+enum class AidenCameraAccess { GRANTED, REQUESTABLE, BLOCKED }
+
 /**
- * High-fidelity CameraX and MLKit QR Code Scanner with Viewfinder Overlay.
+ * Camera access from the permission state. Once Aiden has asked and Android no longer
+ * offers a rationale, the request dialog will not appear again ("Don't allow" twice, or
+ * a policy block), so the only way forward is the app's system settings page.
+ */
+internal fun aidenCameraAccess(granted: Boolean, askedBefore: Boolean, showRationale: Boolean): AidenCameraAccess = when {
+    granted -> AidenCameraAccess.GRANTED
+    askedBefore && !showRationale -> AidenCameraAccess.BLOCKED
+    else -> AidenCameraAccess.REQUESTABLE
+}
+
+private fun Context.findActivity(): Activity? =
+    generateSequence(this) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+
+/**
+ * CameraX and ML Kit QR scanner with a viewfinder overlay. The viewfinder is roughly
+ * square, capped to a share of the screen height so the manual fallback stays in reach.
+ * Permission is re-checked whenever the app resumes, so returning from system settings
+ * shows the camera immediately.
  */
 @Composable
 fun AidenQRCodeScanner(
@@ -61,87 +97,120 @@ fun AidenQRCodeScanner(
 ) {
     val context = LocalContext.current
     val palette = AidenTheme.palette
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        )
+    fun isGranted() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    fun showsRationale() = context.findActivity()?.let {
+        ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.CAMERA)
+    } ?: false
+    var granted by remember { mutableStateOf(isGranted()) }
+    var showRationale by remember { mutableStateOf(showsRationale()) }
+    var askedBefore by rememberSaveable { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        granted = isGranted()
+        showRationale = showsRationale()
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasCameraPermission = granted
+    ) { result ->
+        askedBefore = true
+        granted = result
+        showRationale = showsRationale()
     }
 
-    if (!hasCameraPermission) {
-        AidenCameraPermissionPrompt(
+    when (aidenCameraAccess(granted, askedBefore, showRationale)) {
+        AidenCameraAccess.GRANTED -> BoxWithConstraints(modifier.fillMaxWidth()) {
+            val screenHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+            val side = minOf(maxWidth, screenHeight * 0.45f).coerceAtLeast(200.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(side)
+                    .clip(MaterialTheme.shapes.large)
+                    .background(Color.Black)
+            ) {
+                CameraPreview(onCodeScanned = onCodeScanned)
+                ScannerViewfinderOverlay(accentColor = palette.accent)
+            }
+        }
+        AidenCameraAccess.REQUESTABLE -> AidenCameraPermissionPrompt(
             onEnableCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
             modifier = modifier
         )
-    } else {
-        // In-App CameraX Live Viewfinder
-        Box(
+        AidenCameraAccess.BLOCKED -> AidenCameraPermissionPrompt(
+            onEnableCamera = {
+                context.startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            },
+            blocked = true,
             modifier = modifier
-                .fillMaxWidth()
-                .height(340.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color.Black)
-        ) {
-            CameraPreview(onCodeScanned = onCodeScanned)
-            ScannerViewfinderOverlay(accentColor = palette.accent)
-        }
+        )
     }
 }
 
-/** Camera permission explainer. [onEnableCamera] runs exactly once per tap. */
+/**
+ * Camera permission explainer. [onEnableCamera] runs exactly once per tap; when [blocked]
+ * the action opens Aiden's system settings page instead of the permission dialog.
+ */
 @Composable
 internal fun AidenCameraPermissionPrompt(
     onEnableCamera: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    blocked: Boolean = false
 ) {
     val palette = AidenTheme.palette
     val interaction = remember { MutableInteractionSource() }
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    Surface(
+        color = AidenSettingsDefaults.groupColor,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier.fillMaxWidth()
     ) {
-        Icon(
-            imageVector = Icons.Default.QrCodeScanner,
-            contentDescription = null,
-            tint = palette.accent,
-            modifier = Modifier.size(64.dp)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Scan Pairing QR Code",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = palette.foreground
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Point your camera at the QR code displayed in Aiden on your desktop to pair instantly.",
-            style = MaterialTheme.typography.bodySmall,
-            color = palette.secondary,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(
-            onClick = onEnableCamera,
-            interactionSource = interaction,
-            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-            shape = AidenShape.Button,
-            modifier = Modifier
-                .fillMaxWidth()
-                .tactilePress(interaction)
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Enable Camera", fontWeight = FontWeight.Bold, color = Color.White)
+            Icon(
+                imageVector = Icons.Default.QrCodeScanner,
+                contentDescription = null,
+                tint = palette.accent,
+                modifier = Modifier.size(48.dp)
+            )
+            Text(
+                text = stringResource(R.string.camera_prompt_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = palette.foreground,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = stringResource(if (blocked) R.string.camera_prompt_blocked else R.string.camera_prompt_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.secondary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = onEnableCamera,
+                interactionSource = interaction,
+                colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
+                shape = AidenShape.Button,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = AidenUi.MinimumTouchTarget)
+                    .tactilePress(interaction)
+            ) {
+                Icon(
+                    if (blocked) Icons.Default.Settings else Icons.Default.Videocam,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    stringResource(if (blocked) R.string.camera_open_settings else R.string.camera_enable),
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
     }
 }
@@ -164,6 +233,14 @@ private fun CameraPreview(
     }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    DisposableEffect(Unit) {
+        onDispose {
+            // Release the camera and the analyzer thread when the scanner leaves composition.
+            if (cameraProviderFuture.isDone) runCatching { cameraProviderFuture.get().unbindAll() }
+            scanner.close()
+            cameraExecutor.shutdown()
+        }
+    }
 
     AndroidView(
         factory = { ctx ->
