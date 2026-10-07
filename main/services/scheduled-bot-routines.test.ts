@@ -157,6 +157,9 @@ test("a firing routine submits to its Bot with a stable routine request id", asy
       botId: "bot-chef",
       requestId: `routine:${routine.id}:${due}`,
       text: "Plan this week's dinners.\n\nIf there is nothing new to report, reply exactly [SILENT].",
+      // A routine never dismisses a paused turn, and its turn carries the routine's name.
+      ifNotInterrupted: true,
+      label: "Weekly meal prep",
     },
   ]);
   const [run] = await h.store.runs(routine.id);

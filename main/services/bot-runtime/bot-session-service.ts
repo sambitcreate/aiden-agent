@@ -12,13 +12,15 @@
 // - `deleteBot` aborts the live run and erases the Bot's session before the
 //   caller-supplied cleanup steps run.
 
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
-import type {
-  Conversation,
+import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
+import type { AssistantMessage, ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
+import {
+  AssistantEntry,
+  type Conversation,
   HarnessInspection,
   HarnessSettings,
   ModelRef,
+  SubmissionId,
   SubmissionRecord,
   UserInput,
 } from "@earendil-works/pi-durable";
@@ -47,7 +49,16 @@ export type BotSessionState =
 /** A transcript notice entry; `data` of `aiden.bot-notice`. */
 export type BotNotice =
   | { notice: "interrupted"; submissionId: string }
-  | { notice: "session_reset"; movedTo: string };
+  | { notice: "session_reset"; movedTo: string }
+  /** Precedes a routine's input: the turn is labelled with the routine name. */
+  | { notice: "routine"; label: string; requestId: string }
+  /** The answer to this submission was `[SILENT]`: kept, but no bubble, preview or unread. */
+  | { notice: "silent"; submissionId: string };
+
+export type BotReplyOutcome =
+  | { kind: "completed"; text: string }
+  | { kind: "failed"; error: string }
+  | { kind: "interrupted" };
 
 export interface BotInputAttachment {
   type: "image";
@@ -61,6 +72,14 @@ export interface BotSendInput {
   attachments?: readonly BotInputAttachment[];
   requestId: string;
   whenBusy?: "steer" | "followUp";
+  /**
+   * Unattended senders (routines) set this: an interrupted Bot belongs to the
+   * person, so the send is refused with `bot_paused` instead of dismissing the
+   * paused turn first.
+   */
+  ifNotInterrupted?: boolean;
+  /** Label shown on the turn, such as the routine name. */
+  label?: string;
 }
 
 export type BotSessionErrorReason =
@@ -68,7 +87,8 @@ export type BotSessionErrorReason =
   | "unavailable"
   | "access_changed"
   | "bot_missing"
-  | "bot_deleted";
+  | "bot_deleted"
+  | "bot_paused";
 
 export class BotSessionError extends Error {
   constructor(readonly reason: BotSessionErrorReason, message?: string) {
@@ -88,6 +108,8 @@ function defaultMessage(reason: BotSessionErrorReason): string {
     case "bot_missing":
     case "bot_deleted":
       return "This Bot no longer exists.";
+    case "bot_paused":
+      return "I got interrupted while working on this.";
   }
 }
 
@@ -97,6 +119,14 @@ export interface BotSessionService {
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   state(botId: string): Promise<BotSessionState>;
   deleteBot(botId: string): Promise<void>;
+  /**
+   * Wait for a submission's answer. Never starts a paused Bot: a turn that is
+   * interrupted (or becomes so when the app quits) reports `interrupted`.
+   * Aborting `signal` stops waiting only.
+   */
+  awaitReply(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome>;
+  /** Keep the submission's answer for audit but hide it from the chat, preview and unread. */
+  markSilent(botId: string, submissionId: string): Promise<void>;
 }
 
 export interface BotSessionRuntime extends BotSessionService {
@@ -140,6 +170,14 @@ function userContent(input: BotSendInput): UserInput {
     parts.push({ type: "image", mimeType: attachment.mimeType, data: attachment.data });
   }
   return parts;
+}
+
+function assistantText(message: AssistantMessage | undefined): string {
+  if (message === undefined) return "";
+  return message.content
+    .filter((part): part is TextContent => part.type === "text")
+    .map((part) => part.text)
+    .join("");
 }
 
 function unfinishedInput(inspection: HarnessInspection): SubmissionRecord | undefined {
@@ -236,10 +274,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   }
 
   /** Bind the Bot's current model and reload its extension before anything runs. */
-  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
+  async function prepareToRun(
+    botId: string,
+    conversation: Conversation,
+    registry: BotRegistry,
+    requestId: string | undefined,
+  ): Promise<void> {
     const model = await deps.resolveModel(botId);
     if (model === null) throw new BotSessionError("needs_model");
-    await registry.refresh();
+    await registry.refresh(requestId === undefined ? {} : { requestId });
     const agent = await conversation.agent(ctx);
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
       await conversation.configure({ model }, ctx);
@@ -250,6 +293,11 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   async function dismissPaused(conversation: Conversation, submissionId: string): Promise<void> {
     await conversation.abort(ctx);
     await writeNotice(conversation, { notice: "interrupted", submissionId });
+  }
+
+  /** The request that started the paused turn, so its tools match a routine run. */
+  async function pausedRequestId(botId: string): Promise<string | undefined> {
+    return unfinishedInput(await requireHost().inspect(botId))?.requestId;
   }
 
   async function lookupRequest(conversation: Conversation, requestId: string) {
@@ -281,11 +329,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const existing = await lookupRequest(conversation, input.requestId);
         if (existing !== undefined) return { submissionId: String(existing.id), deduped: true };
 
-        await prepareToRun(botId, conversation, registry);
         const before = await currentState(botId);
+        if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
+        await prepareToRun(botId, conversation, registry, input.requestId);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
           blocked.delete(botId);
+        }
+        if (input.label !== undefined) {
+          await writeNotice(conversation, { notice: "routine", label: input.label, requestId: input.requestId });
         }
         const submission = await conversation.submit(
           {
@@ -317,7 +369,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         }
         blocked.delete(botId);
         const { conversation, registry } = await openBot(botId);
-        await prepareToRun(botId, conversation, registry);
+        await prepareToRun(botId, conversation, registry, await pausedRequestId(botId));
         const opened = await requireHost().open(botId);
         opened.harness.resume();
         requireHost().touch(botId);
@@ -334,7 +386,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind !== "interrupted") return remember(key, before);
         const { conversation, registry } = await openBot(botId);
         // Pending tool calls settle against the Bot's tools while aborting.
-        await registry.refresh().catch(() => undefined);
+        const requestId = await pausedRequestId(botId);
+        await registry.refresh(requestId === undefined ? {} : { requestId }).catch(() => undefined);
         await dismissPaused(conversation, before.submissionId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));
@@ -349,6 +402,43 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         registries.delete(botId);
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
       });
+    },
+
+    async awaitReply(botId, submissionId, signal) {
+      if (deleted.has(botId)) return { kind: "interrupted" };
+      const opened = await requireHost().open(botId);
+      const id = Number(submissionId) as SubmissionId;
+      const submission = await opened.harness.submission(id, ctx);
+      if (submission === undefined) return { kind: "failed", error: "This reply is no longer tracked." };
+      // `wait()` would start a paused scheduler, which is Resume's decision.
+      const inspection = await opened.harness.inspect(ctx);
+      if (inspection.scheduling === "paused" && inspection.submissions.some((record) => record.id === id)) {
+        return { kind: "interrupted" };
+      }
+      const { context, cancel } = withCancel(ctx);
+      const onAbort = () => cancel(signal.reason);
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+      let settled: Awaited<ReturnType<typeof submission.wait>>;
+      try {
+        settled = await submission.wait(context);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        return { kind: "interrupted" };
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+      if (settled.status === "done" && settled.type === "input") {
+        const answer = await opened.conversation.commit((tx) => tx.entry(AssistantEntry, settled.answer!), ctx);
+        return { kind: "completed", text: assistantText(answer?.model?.[0] as AssistantMessage | undefined) };
+      }
+      if (settled.reason === "aborted") return { kind: "interrupted" };
+      return { kind: "failed", error: settled.reason ?? "The reply failed." };
+    },
+
+    async markSilent(botId, submissionId) {
+      const { conversation } = await openBot(botId);
+      await writeNotice(conversation, { notice: "silent", submissionId });
     },
 
     async shutdown() {

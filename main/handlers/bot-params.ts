@@ -106,6 +106,26 @@ export function parseBotId(value: unknown): string {
   return value;
 }
 
+const BOT_SESSION_REQUEST_ID = /^[A-Za-z0-9._:-]{1,200}$/u;
+
+/** `{ botId, requestId }` for Resume and Dismiss; the request id makes retries idempotent. */
+export function parseBotSessionAction(
+  input: unknown,
+  action: "resume" | "dismiss",
+): { botId: string; requestId: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error(`Invalid bot ${action} fields.`);
+  }
+  const fields = input as Record<string, unknown>;
+  if (!Object.keys(fields).every((key) => key === "botId" || key === "requestId")) {
+    throw new Error(`Invalid bot ${action} fields.`);
+  }
+  if (typeof fields.requestId !== "string" || !BOT_SESSION_REQUEST_ID.test(fields.requestId)) {
+    throw new Error(`Invalid bot ${action} request id.`);
+  }
+  return { botId: parseBotId(fields.botId), requestId: fields.requestId };
+}
+
 export function parseBotChatCreate(value: unknown) {
   const record = exact(value, CHAT_KEYS, "bot chat creation fields");
   // Legacy desktop renderers still send the visible workspace selection. Bot

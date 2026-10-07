@@ -5,22 +5,10 @@ import { scheduleService } from "./schedule-service.js";
 import { scheduleStore, systemTimezone } from "./schedule-store.js";
 import { createBotRoutineService } from "./scheduled-bot-routines.js";
 
-let ports: BotRoutinePorts | undefined;
-
-/**
- * The Bot session the scheduler submits routines to.
- *
- * SHIM: until the per-Bot `BotSessionService` (Bots rework plan, Task 1.3)
- * merges, this resolves to the temporary adapter over the legacy Bot chat
- * send path. Swap the body for the real service (`send`/`state` plus the
- * routine reply port) and delete `bot-routines-legacy-session.ts`.
- */
+/** The durable Bot session the scheduler submits routines to. */
 export async function botRoutinePorts(): Promise<BotRoutinePorts> {
-  if (!ports) {
-    const { createLegacyBotRoutineSession } = await import("./bot-routines-legacy-session.js");
-    ports = createLegacyBotRoutineSession();
-  }
-  return ports;
+  const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+  return botSessionRuntime();
 }
 
 export const botRoutineService = createBotRoutineService({

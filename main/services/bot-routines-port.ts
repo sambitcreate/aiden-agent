@@ -1,28 +1,27 @@
 /**
- * Ports Bot routines use to reach a Bot's conversation.
+ * Ports Bot routines use to reach a Bot's conversation: the subset of the
+ * durable `BotSessionService` (`bot-runtime/bot-session-service.ts`) that
+ * routines need. `scheduled-bot-routines-main.ts` wires them to that service.
  *
- * `BotRoutineSessionPort` is exactly the `send`/`state` subset of the planned
- * `BotSessionService` (Bots rework plan, Task 1.3). Until that service lands,
- * `scheduled-bot-routines-main.ts` wires these ports to a temporary adapter
- * over the existing Bot chat send path (`bot-routines-legacy-session.ts`).
- *
- * `BotRoutineReplyPort` is the small addition routines need on top of that
- * subset: waiting for a routine submission's final reply, and marking a
- * `[SILENT]` reply as audit-only (stored, but no bubble, preview or unread).
+ * `BotRoutineReplyPort` waits for a routine submission's final reply and marks
+ * a `[SILENT]` reply as audit-only (stored, but no bubble, preview or unread).
  */
 
-/** Exact copy of `BotSessionState` from the Bots rework plan, Task 1.3. */
-export type BotSessionState =
-  | { kind: "idle" }
-  | { kind: "running"; submissionId: string }
-  | { kind: "interrupted"; submissionId: string }
-  | { kind: "needs_model" }
-  | { kind: "unavailable"; reason: "held_by_live_process" };
+import type { BotSessionState } from "./bot-runtime/bot-session-service.js";
+
+export type { BotSessionState };
 
 export interface BotRoutineSessionPort {
   send(
     botId: string,
-    input: { text: string; requestId: string },
+    input: {
+      text: string;
+      requestId: string;
+      /** Refuse with `bot_paused` instead of dismissing an interrupted turn. */
+      ifNotInterrupted?: boolean;
+      /** The routine name, shown on the turn. */
+      label?: string;
+    },
   ): Promise<{ submissionId: string; deduped: boolean }>;
   state(botId: string): Promise<BotSessionState>;
 }

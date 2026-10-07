@@ -7,6 +7,7 @@ import {
   parseBotChatCreate,
   parseBotCreate,
   parseBotCreateWithAccess,
+  parseBotSessionAction,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -163,4 +164,18 @@ test("bot access update envelope is exact, bounded, and shares the wire parser",
     () => parseBotAccessUpdateInput({ ...custom, access: { ...custom.access, custom: undefined } }),
     /Invalid Bot (access update|Custom access selection)/u,
   );
+});
+
+test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
+  assert.deepEqual(parseBotSessionAction({ botId: "bot:1", requestId: "desk-7f3a" }, "resume"), {
+    botId: "bot:1",
+    requestId: "desk-7f3a",
+  });
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1" }, "resume"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "" }, "dismiss"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "a b" }, "dismiss"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "x".repeat(201) }, "resume"), /request id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "../x", requestId: "r" }, "resume"), /bot id/u);
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", extra: true }, "resume"), /fields/u);
+  assert.throws(() => parseBotSessionAction(null, "dismiss"), /fields/u);
 });

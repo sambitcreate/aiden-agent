@@ -61,12 +61,18 @@ export interface BotToolEntry {
   mcp?: boolean;
 }
 
+/** What the next run is for: the request that started (or will start) it. */
+export interface BotTurnContext {
+  /** Routine runs (`routine:*`) get no routine-editing tools. */
+  requestId?: string;
+}
+
 export interface BotExtensionDeps {
   /** Re-read on every refresh. */
   loadBot(botId: string): Promise<BotDefinition>;
   /** Base, persona and authority sections, in this order. */
   systemSections(bot: BotDefinition): Promise<string[]>;
-  currentTools(bot: BotDefinition): Promise<BotToolEntry[]>;
+  currentTools(bot: BotDefinition, turn: BotTurnContext): Promise<BotToolEntry[]>;
   checkPolicy(botId: string, toolName: string): Promise<BotPolicyDecision>;
   requestApproval(request: BotApprovalRequest): Promise<"allow" | "deny">;
   readmit(botId: string): Promise<BotReadmission>;
@@ -85,7 +91,7 @@ export interface BotRegistry extends Registry {
    * Call before every submit and Resume; pending tool calls resolve against
    * the tools installed here.
    */
-  refresh(): Promise<void>;
+  refresh(turn?: BotTurnContext): Promise<void>;
   /** The readmission failure that stopped the latest request, if any. */
   admissionFailure(): BotReadmission | null;
   /**
@@ -180,9 +186,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   registry.install(build([]));
 
   return Object.assign(registry, {
-    async refresh() {
+    async refresh(turn: BotTurnContext = {}) {
       const bot = await deps.loadBot(botId);
-      const [nextSections, entries] = await Promise.all([deps.systemSections(bot), deps.currentTools(bot)]);
+      const [nextSections, entries] = await Promise.all([deps.systemSections(bot), deps.currentTools(bot, turn)]);
       sections = nextSections.slice(0, BOT_SECTION_KEYS.length);
       const tools = entries.map(({ tool, replay, mcp }) => adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay }));
       registry.install(build(tools));

@@ -108,7 +108,11 @@ export function isBotHarnessHostUnavailable(
 
 export function assertBotId(botId: string): void {
   // Bot ids look like `bot:<uuid>`; anything else must still be one printable token.
-  if (botId.length === 0 || botId.length > MAX_BOT_ID_LENGTH || /[\u0000-\u001f\u007f/\\]/u.test(botId)) {
+  const unsafe = [...botId].some((character) => {
+    const code = character.codePointAt(0)!;
+    return code < 0x20 || code === 0x7f || character === "/" || character === "\\";
+  });
+  if (botId.length === 0 || botId.length > MAX_BOT_ID_LENGTH || unsafe) {
     throw new Error(`Invalid Bot id: ${JSON.stringify(botId)}`);
   }
 }
