@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
@@ -52,6 +54,12 @@ async function withRouter<T, A = undefined>(
     { source: run.toString(), arg },
   ) as Promise<T>;
 }
+
+const pathExists = (target: string) =>
+  fs.access(target).then(
+    () => true,
+    () => false,
+  );
 
 const currentPath = (page: Page) => withRouter(page, (router) => router.state.location.pathname);
 const navigateTo = (page: Page, to: string) =>
@@ -113,6 +121,9 @@ test.describe("Studio foundation with both flags off", () => {
     // The home screen never requested the studio canvas or placeholder route chunks.
     expect(await studioChunkCount(page)).toBe(0);
 
+    // Startup never touched the studio asset store, so userData has no trace of it.
+    expect(await pathExists(path.join(aiden.userDataDir, "studio-assets"))).toBe(false);
+
     // Studio routes redirect to the home chat, whether or not they carry an id.
     for (const path of ["/design", "/design/project-1", "/images", "/images/workflow-1"]) {
       await navigateTo(page, "/scheduled");
@@ -133,6 +144,10 @@ test.describe("Studio foundation with both flags on", () => {
     await page.mouse.move(1, 1); // keep the onboarding toast from pausing over the toolbar
     await expectHomeChat(page);
     expect(await studioChunkCount(page)).toBe(0); // studio code stays lazy until a route opens
+
+    // Startup opens the asset store, creating its database under userData.
+    const assetDatabase = path.join(aiden.userDataDir, "studio-assets", "assets-v1.sqlite");
+    await expect.poll(() => pathExists(assetDatabase)).toBe(true);
 
     const tools = page.getByRole("complementary", { name: "Environment work surface" });
     if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
