@@ -91,6 +91,7 @@
         "main/services/generation-context.test.ts",
         "main/services/generation-emergency-outcome.test.ts",
         "main/services/generation-git-context.test.ts",
+        "main/services/generation-harness.test.ts",
         "main/services/generation-initialization-terminal.test.ts",
         "main/services/generation-messages.test.ts",
         "main/services/generation-profile.test.ts",
