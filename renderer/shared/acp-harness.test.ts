@@ -48,7 +48,38 @@ test("summaries describe sizes and progress in plain terms", () => {
     "Downloading 50 MB of 111 MB…",
   );
   assert.equal(harnessRuntimeSummary({ status: "installing", phase: "validating" }), "Starting it once to confirm it works…");
-  assert.equal(harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962 }), "Not installed. 111 MB download from Google.");
+  assert.equal(
+    harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962, downloadHost: "dl.google.com" }),
+    "Not installed. 111 MB download from dl.google.com.",
+  );
+  assert.equal(harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962 }), "Not installed. 111 MB download.");
+});
+
+test("the publisher and download host reach the renderer only as plain names", () => {
+  const parsed = parseAcpHarnessStatus({
+    providerId: "antigravity",
+    publisher: "Google",
+    runtime: projectRuntime({ status: "not_installed", version: "1.3.0", downloadBytes: 1, requiredBytes: 2 }, "dl.google.com"),
+    signedIn: false,
+    busy: false,
+  });
+  assert.equal(parsed?.publisher, "Google");
+  assert.equal(parsed?.runtime.downloadHost, "dl.google.com");
+  // Anything that is not a bare host name (a URL, a path, credentials) is dropped.
+  for (const downloadHost of ["https://dl.google.com/x.zip", "user@dl.google.com", "dl.google.com/agy", "", 42]) {
+    const rejected = parseAcpHarnessStatus({
+      providerId: "antigravity",
+      runtime: { status: "not_installed", downloadHost },
+      signedIn: false,
+      busy: false,
+    });
+    assert.equal(rejected?.runtime.downloadHost, undefined, String(downloadHost));
+  }
+  assert.equal(
+    parseAcpHarnessStatus({ providerId: "antigravity", publisher: "x".repeat(65), runtime: { status: "installed" }, signedIn: false, busy: false })
+      ?.publisher,
+    undefined,
+  );
 });
 
 test("unattended surfaces never inherit an agent-backed last-used provider", () => {

@@ -82,6 +82,16 @@ export class AcpRuntimeInstaller {
     this.asset = platform ? release.platforms[platform] : undefined;
   }
 
+  /** Host the pinned archive downloads from, disclosed before Install. */
+  get downloadHost(): string | undefined {
+    if (!this.asset) return undefined;
+    try {
+      return new URL(this.asset.url).host;
+    } catch {
+      return undefined;
+    }
+  }
+
   get platformDir(): string {
     return path.join(this.baseDir, this.platform ?? "unsupported");
   }

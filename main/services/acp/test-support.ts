@@ -107,6 +107,7 @@ export const FAKE_PRO = model("fake-pro", "Fake Pro", false);
 export const fakeDefinition: AcpHarnessDefinition = {
   id: "fake",
   label: "Fake Agent",
+  publisher: "Fake Labs",
   api: "fake-acp" as Api,
   agentName: "fake-acp",
   release: { version: "9.9.9", platforms: {} },

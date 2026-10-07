@@ -19,6 +19,8 @@ export type AcpHarnessInstallPhase = "downloading" | "verifying" | "extracting" 
 
 export interface AcpHarnessStatus {
   providerId: string;
+  /** Who ships the agent runtime ("Google"). */
+  publisher?: string;
   runtime: {
     status: AcpHarnessRuntimeStatus;
     version?: string;
@@ -29,6 +31,8 @@ export interface AcpHarnessStatus {
     receivedBytes?: number;
     totalBytes?: number;
     message?: string;
+    /** Host the runtime archive downloads from ("dl.google.com"). */
+    downloadHost?: string;
   };
   signedIn: boolean;
   /** A chat is currently running on this harness. */
@@ -57,6 +61,11 @@ function text(value: unknown, limit: number): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= limit ? value : undefined;
 }
 
+function hostname(value: unknown): string | undefined {
+  const host = text(value, 253);
+  return host && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/u.test(host) ? host : undefined;
+}
+
 export function parseAcpHarnessStatus(value: unknown): AcpHarnessStatus | undefined {
   const input = record(value);
   const runtime = record(input?.runtime);
@@ -74,9 +83,12 @@ export function parseAcpHarnessStatus(value: unknown): AcpHarnessStatus | undefi
     receivedBytes: count(runtime.receivedBytes),
     totalBytes: count(runtime.totalBytes),
     message: text(runtime.message, 400),
+    downloadHost: hostname(runtime.downloadHost),
   };
+  const publisher = text(input.publisher, 64);
   return {
     providerId,
+    ...(publisher ? { publisher } : {}),
     runtime: {
       status: runtime.status as AcpHarnessRuntimeStatus,
       ...Object.fromEntries(Object.entries(optional).filter(([, entry]) => entry !== undefined)),
@@ -114,7 +126,7 @@ export function harnessRuntimeSummary(status: AcpHarnessStatus["runtime"]): stri
       return status.message ?? "Not available for this computer.";
     case "not_installed":
       return status.downloadBytes
-        ? `Not installed. ${formatHarnessBytes(status.downloadBytes)} download from Google.`
+        ? `Not installed. ${formatHarnessBytes(status.downloadBytes)} download${status.downloadHost ? ` from ${status.downloadHost}` : ""}.`
         : "Not installed.";
     case "installing": {
       const phase = status.phase ? PHASE_COPY[status.phase] : "Installing";

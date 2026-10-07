@@ -53,6 +53,19 @@ export function useHarnessStatus(providerId: string | undefined): HarnessStatusS
   return { status, error, retry };
 }
 
+/** Who ships the runtime, where it comes from and how big it is, before Install. */
+export function installDisclosure(
+  label: string,
+  publisher: string | undefined,
+  runtime: AcpHarnessStatus["runtime"],
+): string {
+  const owner = publisher ? `${publisher}'s own agent runtime` : "its own agent runtime";
+  const size = runtime.downloadBytes ? ` ${formatHarnessBytes(runtime.downloadBytes)}` : " it";
+  const source = runtime.downloadHost ? ` from ${runtime.downloadHost}` : "";
+  const space = runtime.requiredBytes ? ` and needs about ${formatHarnessBytes(runtime.requiredBytes)} free` : "";
+  return `${label} runs on ${owner}. Installing downloads${size}${source}${space}. Nothing is downloaded until you choose Install.`;
+}
+
 function percent(status: AcpHarnessStatus["runtime"]): number | null {
   if (status.status !== "installing" || status.phase !== "downloading" || !status.totalBytes) return null;
   return Math.min(100, Math.floor(((status.receivedBytes ?? 0) / status.totalBytes) * 100));
@@ -222,10 +235,7 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
       </span>
       {canInstall ? (
         <Text variant="small" color="tertiary">
-          {label} runs on Google's own agent runtime.{" "}
-          {runtime.downloadBytes ? `Installing downloads ${formatHarnessBytes(runtime.downloadBytes)} from dl.google.com` : "Installing downloads it from dl.google.com"}
-          {runtime.requiredBytes ? ` and needs about ${formatHarnessBytes(runtime.requiredBytes)} free.` : "."} Nothing is
-          downloaded until you choose Install.
+          {installDisclosure(label, status.publisher, runtime)}
         </Text>
       ) : null}
       {runtime.status === "installing" ? (

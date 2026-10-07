@@ -211,7 +211,7 @@ export function BuiltinProviderEditor({
       title={`Set up ${provider.label}`}
       description={
         harness
-          ? `${provider.label} runs Google's agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
+          ? `${provider.label} runs ${harnessStatus?.publisher ? `${harnessStatus.publisher}'s` : "its own"} agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
           : "Pi owns this provider's endpoint, models, credentials, and request transport."
       }
       confirmLabel="Continue"

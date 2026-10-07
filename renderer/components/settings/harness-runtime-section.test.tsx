@@ -5,20 +5,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { AcpHarnessStatus } from "../../shared/acp-harness.js";
 import { HarnessRuntimeSection, runtimeFocusTarget } from "./harness-runtime-section.js";
 
-function render(runtime: AcpHarnessStatus["runtime"], busy = false): string {
+function render(runtime: AcpHarnessStatus["runtime"], busy = false, publisher: string | null = "Google"): string {
   return renderToStaticMarkup(
     <HarnessRuntimeSection
       providerId="antigravity"
       label="Google Antigravity"
-      status={{ providerId: "antigravity", runtime, signedIn: false, busy }}
+      status={{ providerId: "antigravity", ...(publisher ? { publisher } : {}), runtime, signedIn: false, busy }}
     />,
   );
 }
 
 test("before installing, the size, source and consent are stated next to Install", () => {
-  const html = render({ status: "not_installed", version: "1.3.0", downloadBytes: 111_456_962, requiredBytes: 900_000_000 });
-  assert.match(html, /downloads 111 MB from dl\.google\.com and needs about 900 MB free\./u);
-  assert.match(html, /Nothing is\s+downloaded until you choose Install\./u);
+  const html = render({ status: "not_installed", version: "1.3.0", downloadBytes: 111_456_962, requiredBytes: 900_000_000, downloadHost: "dl.google.com" });
+  assert.match(html, /runs on Google&#x27;s own agent runtime\. Installing downloads 111 MB from dl\.google\.com and needs about 900 MB free\./u);
+  assert.match(html, /Nothing is downloaded until you choose Install\./u);
   assert.match(html, />Install Google Antigravity</u);
   assert.doesNotMatch(html, /role="progressbar"/u);
 });
@@ -86,4 +86,14 @@ test("a status read that fails says so and offers a retry instead of checking fo
   assert.match(failed, /role="alert"[^>]*>Couldn&#x27;t check the Google Antigravity runtime\. The app is restarting\.</u);
   assert.match(failed, /<button[^>]*>.*Try again<\/button>/u);
   assert.doesNotMatch(failed, /Checking the/u);
+});
+
+test("the install disclosure names only the publisher and host the runtime reported", () => {
+  // Another agent harness gets its own publisher and host, never Google's.
+  const other = render({ status: "not_installed", downloadBytes: 50_000_000, requiredBytes: 200_000_000, downloadHost: "downloads.example.dev" }, false, "Example Labs");
+  assert.match(other, /runs on Example Labs&#x27;s own agent runtime\. Installing downloads 50 MB from downloads\.example\.dev and needs about 200 MB free\./u);
+  assert.doesNotMatch(other, /Google&#x27;s|dl\.google\.com|from Google/u);
+  // Without a reported source, the copy stays truthful instead of guessing one.
+  const unknown = render({ status: "not_installed" }, false, null);
+  assert.match(unknown, /runs on its own agent runtime\. Installing downloads it\. Nothing is downloaded until you choose Install\./u);
 });
