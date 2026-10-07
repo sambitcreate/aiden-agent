@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -29,6 +28,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
@@ -83,19 +83,10 @@ fun AidenLoadEarlierMessages(
                     },
                     label = "load_earlier_icon"
                 ) { loading ->
-                    if (loading && reduceMotion) {
-                        CircularProgressIndicator(
-                            progress = { 0.75f },
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = palette.secondary
-                        )
-                    } else if (loading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = palette.secondary
-                        )
+                    if (loading) {
+                        Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+                            AidenActivityDot(color = palette.secondary, size = 7.dp)
+                        }
                     } else {
                         Icon(
                             imageVector = Icons.Default.ArrowUpward,

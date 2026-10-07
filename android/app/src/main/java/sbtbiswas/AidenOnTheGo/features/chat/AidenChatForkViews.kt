@@ -35,6 +35,7 @@ import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.models.AidenChatForkSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatForkSummaryState
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
@@ -147,11 +148,8 @@ fun AidenForkSummaryCard(
             when (summary.state) {
                 AidenChatForkSummaryState.PENDING -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = palette.secondary
-                        )
+                        // The desktop is working on the summary; the label beside it says so.
+                        AidenActivityDot(color = palette.accent)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             SummaryTitle(palette)

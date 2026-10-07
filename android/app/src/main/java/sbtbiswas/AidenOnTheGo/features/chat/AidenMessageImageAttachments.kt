@@ -70,7 +70,9 @@ import sbtbiswas.AidenOnTheGo.models.AidenAttachmentImageValidation
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentKind
 import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
@@ -390,19 +392,23 @@ private fun AidenAttachmentImage(
     imageCornerRadius: Dp = 0.dp
 ) {
     var attempt by remember { mutableIntStateOf(0) }
-    var bitmap by remember(attachment.id, maximumPixelSize) { mutableStateOf<Bitmap?>(null) }
+    // An image already decoded this session renders on the first frame, so scrolling a
+    // transcript or reopening a chat never flashes its placeholder again.
+    var bitmap by remember(attachment.id, maximumPixelSize) {
+        mutableStateOf(AidenAttachmentBitmapCache.peek(attachment, maximumPixelSize))
+    }
     var failed by remember(attachment.id, maximumPixelSize) { mutableStateOf(false) }
 
     LaunchedEffect(attachment.id, maximumPixelSize, attempt) {
+        if (bitmap != null) return@LaunchedEffect
         // Pin the state writes to the UI thread. Loading and decoding hop to background
         // dispatchers, and an effect dispatcher that does not dispatch (the Compose test
         // rule's unconfined dispatcher) would otherwise resume here on a decode worker and
         // drive recomposition and layout off the main thread, racing the UI thread's draw.
         withContext(Dispatchers.Main.immediate) {
-            bitmap = null
             failed = false
             val bytes = loadData(attachment)
-            val decoded = bytes?.let { AidenAttachmentBitmapCache.decode(it, maximumPixelSize) }
+            val decoded = bytes?.let { AidenAttachmentBitmapCache.decode(it, maximumPixelSize, attachment) }
             if (decoded == null) failed = true else bitmap = decoded
         }
     }
@@ -439,7 +445,14 @@ private fun AidenAttachmentImage(
                 Spacer(Modifier.height(6.dp))
                 Text("Open to retry", style = MaterialTheme.typography.labelMedium)
             }
-            else -> CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            // The image's own box, shaped like the image, stands in until it decodes.
+            else -> AidenSkeletonBlock(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clearAndSetSemantics { contentDescription = "Loading ${attachment.name}" },
+                width = null,
+                shape = RoundedCornerShape(imageCornerRadius)
+            )
         }
     }
 }
@@ -554,7 +567,7 @@ private fun AidenAttachmentGallery(
                 }
                 Box {
                     AidenGalleryGlassButton(onClick = { saveMenu = true }, enabled = !saving) {
-                        if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Color.White)
+                        if (saving) AidenActivityDot(color = Color.White, size = 10.dp, contentDescription = "Saving images")
                         else Icon(Icons.Default.MoreVert, contentDescription = "Save images", tint = Color.White)
                     }
                     DropdownMenu(
@@ -621,14 +634,32 @@ private fun AidenAttachmentGallery(
 
 private object AidenAttachmentBitmapCache {
     private const val MAX_ENTRIES = 24
+    private const val MAX_ALIASES = 96
     private const val MAX_COST = 32 * 1_024 * 1_024L
     private val cache = LinkedHashMap<String, Bitmap>(MAX_ENTRIES, 0.75f, true)
+    // Attachment identity to content key, so a known image is found without reloading its bytes.
+    private val aliases = LinkedHashMap<String, String>(MAX_ALIASES, 0.75f, true)
     private var totalCost = 0L
 
-    suspend fun decode(data: ByteArray, maximumPixelSize: Int): Bitmap? = withContext(Dispatchers.Default) {
+    private fun alias(attachment: AidenMessageAttachment, maximumPixelSize: Int): String =
+        "$maximumPixelSize:${attachment.id}:${attachment.size}:${attachment.mimeType}"
+
+    /** The decoded image for [attachment] if this session already has it; never blocks on I/O. */
+    @Synchronized
+    fun peek(attachment: AidenMessageAttachment, maximumPixelSize: Int): Bitmap? =
+        aliases[alias(attachment, maximumPixelSize)]?.let { cache[it] }
+
+    suspend fun decode(
+        data: ByteArray,
+        maximumPixelSize: Int,
+        attachment: AidenMessageAttachment? = null
+    ): Bitmap? = withContext(Dispatchers.Default) {
         val key = aidenAttachmentThumbnailCacheKey(data, maximumPixelSize)
         synchronized(this@AidenAttachmentBitmapCache) {
-            cache[key]?.let { return@withContext it }
+            cache[key]?.let { cached ->
+                attachment?.let { rememberAlias(alias(it, maximumPixelSize), key) }
+                return@withContext cached
+            }
         }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
@@ -649,6 +680,7 @@ private object AidenAttachmentBitmapCache {
             ).also { if (it !== decoded) decoded.recycle() }
         } else decoded
         synchronized(this@AidenAttachmentBitmapCache) {
+            attachment?.let { rememberAlias(alias(it, maximumPixelSize), key) }
             cache.put(key, bitmap)?.let { totalCost -= it.allocationByteCount.toLong() }
             totalCost += bitmap.allocationByteCount.toLong()
             while (cache.size > MAX_ENTRIES || totalCost > MAX_COST) {
@@ -658,6 +690,14 @@ private object AidenAttachmentBitmapCache {
             }
         }
         bitmap
+    }
+
+    private fun rememberAlias(alias: String, key: String) {
+        aliases[alias] = key
+        while (aliases.size > MAX_ALIASES) {
+            val eldest = aliases.keys.firstOrNull() ?: break
+            aliases.remove(eldest)
+        }
     }
 }
 
