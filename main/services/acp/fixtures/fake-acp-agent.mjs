@@ -22,9 +22,12 @@
  * Environment: FAKE_AGENT_LOG (JSON lines of calls), FAKE_AGENT_STATE (session
  * persistence across restarts), FAKE_AGENT_NOISE=1 (print a non-JSON stdout line).
  */
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION, RequestError } from "@agentclientprotocol/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -97,6 +100,33 @@ const connection = new AgentSideConnection(
     },
     async authenticate(params) {
       log({ method: "authenticate", methodId: params.methodId });
+      if (!process.env.BROWSER || !process.env.GEMINI_HOME) return {};
+      // Behave like Antigravity: listen on loopback, hand BROWSER a Google URL,
+      // finish when the redirect arrives, and store a token in GEMINI_HOME.
+      const state = Math.random().toString(16).slice(2);
+      await new Promise((resolve, reject) => {
+        const server = createServer((request, response) => {
+          const url = new URL(request.url, "http://127.0.0.1");
+          response.end("ok");
+          server.close();
+          if (url.searchParams.get("state") !== state) reject(new Error("state mismatch"));
+          else if (url.searchParams.get("error")) {
+            reject(new RequestError(-32000, `Google sign-in failed: ${url.searchParams.get("error")}`));
+          }
+          else {
+            const dir = path.join(process.env.GEMINI_HOME, "antigravity-acp");
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(path.join(dir, "acp_token.json"), JSON.stringify({ refresh_token: "1//fake" }));
+            resolve();
+          }
+        });
+        server.listen(0, "127.0.0.1", () => {
+          const port = server.address().port;
+          const target = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=${state}&redirect_uri=${encodeURIComponent(`http://127.0.0.1:${port}/`)}`;
+          // Like Python's webbrowser: the browser command inherits stderr.
+          spawn(process.env.BROWSER, [target], { stdio: ["ignore", "ignore", "inherit"] });
+        });
+      });
       return {};
     },
     async newSession(params) {

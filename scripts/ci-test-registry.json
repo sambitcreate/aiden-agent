@@ -258,6 +258,9 @@
         "main/services/acp/prompt.test.ts",
         "main/services/acp/provider.test.ts",
         "main/services/acp/runtime.test.ts",
+        "main/services/acp/installer.test.ts",
+        "main/services/acp/launcher.test.ts",
+        "main/services/antigravity/auth.test.ts",
         "main/services/agents-instructions.test.ts",
         "main/services/antigravity/definition.test.ts",
         "main/services/aiden-remote-approved-roots.test.ts",
@@ -479,6 +482,8 @@
         "worktree-remover-build"
       ],
       "files": [
+        "renderer/components/settings/harness-runtime-section.test.tsx",
+        "renderer/shared/acp-harness.test.ts",
         "main/services/display-image-artifact-store.test.ts",
         "main/services/display-image-extension.test.ts",
         "main/services/generation-timeline.test.ts",
