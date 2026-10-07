@@ -486,6 +486,7 @@
       ],
       "files": [
         "renderer/components/settings/harness-runtime-section.test.tsx",
+        "renderer/components/agent-approval-card.test.tsx",
         "renderer/shared/acp-harness.test.ts",
         "main/services/display-image-artifact-store.test.ts",
         "main/services/display-image-extension.test.ts",

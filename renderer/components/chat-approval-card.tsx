@@ -32,12 +32,21 @@ const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
   run_command: "Run command",
   write_file: "Write file",
+  read_file: "Read file",
+  delete_file: "Delete file",
+  move_file: "Move file",
+  web_fetch: "Fetch web page",
+  agent_tool: "Agent tool",
   computer_use: "Computer Use",
   form_fill: "Form fill",
 };
 
+/** A tool's name as an approval heading: known labels, otherwise sentence case. */
 export function toolLabel(toolName: string): string {
-  return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, " ");
+  const known = TOOL_LABELS[toolName];
+  if (known) return known;
+  const words = toolName.replace(/[_-]+/gu, " ").trim();
+  return words ? `${words.charAt(0).toLocaleUpperCase()}${words.slice(1)}` : "Tool";
 }
 
 export interface ChatApprovalDecisionOptions {
