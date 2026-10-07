@@ -81,14 +81,23 @@ export class StudioAssetStore {
    * its blob to GC's unlink.
    */
   private blobWrites: Promise<unknown> = Promise.resolve();
+  /** In-flight open, shared so concurrent initialize() calls never leak a second handle. */
+  private opening: Promise<void> | null = null;
 
   constructor(private readonly options: StudioAssetStoreOptions) {
     this.now = options.now ?? Date.now;
     this.limits = { ...STUDIO_ASSET_LIMITS, ...options.limits };
   }
 
-  async initialize(): Promise<void> {
-    if (this.db) return;
+  initialize(): Promise<void> {
+    if (this.db) return Promise.resolve();
+    this.opening ??= this.open().finally(() => {
+      this.opening = null;
+    });
+    return this.opening;
+  }
+
+  private async open(): Promise<void> {
     const root = this.options.root();
     await fs.mkdir(path.join(root, "blobs"), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
@@ -118,9 +127,25 @@ export class StudioAssetStore {
     await this.collectGarbage();
   }
 
-  close(): void {
-    this.db?.close();
+  /**
+   * New operations fail with "unavailable" immediately. The handle itself is
+   * closed once queued blob work has drained, so an in-flight put or collection
+   * never hits node:sqlite's native "database is not open" error. A close during
+   * initialize() waits for the open to finish first.
+   */
+  close(): Promise<void> {
+    if (this.opening) {
+      return this.opening
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .then(() => this.close());
+    }
+    const db = this.db;
+    if (!db) return Promise.resolve();
     this.db = null;
+    return this.blobWrites.then(() => db.close());
   }
 
   get(assetId: string): StudioAssetRecord | undefined {
@@ -191,7 +216,7 @@ export class StudioAssetStore {
 
   async read(assetId: string): Promise<{ record: StudioAssetRecord; bytes: Uint8Array }> {
     const row = this.requireRow(assetId);
-    return { record: toRecord(row), bytes: await fs.readFile(this.blobPath(row.id)) };
+    return { record: toRecord(row), bytes: await this.readBlob(row.id) };
   }
 
   async thumbnail(
@@ -200,7 +225,7 @@ export class StudioAssetStore {
   ): Promise<{ bytes: Uint8Array; mediaType: StudioAssetMediaType }> {
     const row = this.requireRow(assetId);
     if (Math.max(Number(row.width), Number(row.height)) <= edge) {
-      return { bytes: await fs.readFile(this.blobPath(row.id)), mediaType: row.media_type };
+      return { bytes: await this.readBlob(row.id), mediaType: row.media_type };
     }
     const cached = this.thumbPath(row.id, edge);
     try {
@@ -208,7 +233,7 @@ export class StudioAssetStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    const original = await fs.readFile(this.blobPath(row.id));
+    const original = await this.readBlob(row.id);
     let rendered: { bytes: Uint8Array };
     try {
       rendered = await this.options.thumbnailer.render({
@@ -221,7 +246,9 @@ export class StudioAssetStore {
       // Linux). The original is within the validated pixel limit.
       return { bytes: original, mediaType: row.media_type };
     }
-    // The cache is regenerable; a failed write only costs a re-render.
+    // The cache is regenerable; a failed write only costs a re-render. If GC removed
+    // the asset mid-render this can leave an orphan thumbnail; it is harmless
+    // (content-addressed) and initialize() sweeps it on the next start.
     await writeFileAtomic(cached, rendered.bytes, { fsync: false, mode: 0o600 }).catch(
       () => undefined,
     );
@@ -352,7 +379,24 @@ export class StudioAssetStore {
       db.exec("COMMIT");
       return result;
     } catch (error) {
-      db.exec("ROLLBACK");
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // SQLite may already have rolled back (for example on a constraint abort);
+        // a failing ROLLBACK must not mask the original error.
+      }
+      throw error;
+    }
+  }
+
+  /** A blob GC unlinked after the row lookup reads as a missing asset, not a raw fs error. */
+  private async readBlob(id: string): Promise<Uint8Array> {
+    try {
+      return await fs.readFile(this.blobPath(id));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new StudioAssetError("not_found", "This studio asset is no longer available.");
+      }
       throw error;
     }
   }

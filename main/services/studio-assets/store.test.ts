@@ -4,6 +4,7 @@ import fsModule from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { StudioAssetError, type StudioAssetLimits } from "./contract.js";
 import { StudioAssetStore } from "./store.js";
@@ -82,7 +83,7 @@ test("only unheld assets past the grace period are collected, across a restart",
 
   assert.deepEqual(await f.store.collectGarbage(), { deletedAssets: 0, freedBytes: 0 });
   f.advance(2 * HOUR);
-  f.store.close();
+  await f.store.close();
   const restarted = await f.open(); // initialize() collects too
   assert.equal(restarted.get(loose.assetId), undefined);
   await assert.rejects(restarted.read(loose.assetId), code("not_found"));
@@ -145,7 +146,7 @@ test("a blob written without its row is swept on restart", async (t) => {
   await fs.writeFile(path.join(f.root, "blobs", "aa", orphanId), pngBytes(4, 4));
   await fs.writeFile(path.join(f.root, "blobs", "aa", `.${orphanId}.crash.tmp`), "partial");
   await fs.writeFile(path.join(f.root, "thumbs", `${orphanId}-256.png`), pngBytes(4, 4));
-  f.store.close();
+  await f.store.close();
   await f.open();
   assert.deepEqual(await f.blobFiles(), []);
   assert.deepEqual(await fs.readdir(path.join(f.root, "thumbs")), []);
@@ -276,4 +277,67 @@ test("a failed put does not block later queued operations", async (t) => {
   await assert.rejects(rejected, code("too_large"));
   assert.equal((await accepted).width, 10);
   assert.deepEqual(await f.store.collectGarbage(), { deletedAssets: 0, freedBytes: 0 });
+});
+
+test("a blob unlinked after its row was found reads as not_found", async (t) => {
+  const f = await fixture(t);
+  const large = await f.store.put({ bytes: pngBytes(2_000, 1_000, 1) });
+  const small = await f.store.put({ bytes: pngBytes(10, 10, 2) });
+  for (const asset of [large, small]) {
+    await fs.rm(path.join(f.root, "blobs", asset.assetId.slice(0, 2), asset.assetId));
+  }
+  await assert.rejects(f.store.read(large.assetId), code("not_found"));
+  await assert.rejects(f.store.thumbnail(large.assetId, 256), code("not_found"));
+  await assert.rejects(f.store.thumbnail(small.assetId, 256), code("not_found"));
+});
+
+test("close during an in-flight put never surfaces a native sqlite error", async (t) => {
+  const f = await fixture(t);
+  const putting = f.store.put({ bytes: pngBytes(10, 10, 3) });
+  await ioTurns(2); // let the put reach its blob write before closing
+  const closing = f.store.close();
+  await putting.then(
+    (record) => assert.match(record.assetId, /^[0-9a-f]{64}$/u),
+    (error: unknown) =>
+      assert.ok(error instanceof StudioAssetError && error.code === "unavailable", String(error)),
+  );
+  await closing;
+  await assert.rejects(f.store.put({ bytes: pngBytes(10, 10, 4) }), code("unavailable"));
+  assert.throws(() => f.store.usage(), code("unavailable"));
+  await f.store.close(); // closing twice is a no-op
+});
+
+test("a failing ROLLBACK does not mask the original transaction error", async (t) => {
+  const f = await fixture(t);
+  const a = await f.store.put({ bytes: pngBytes(10, 10, 1) });
+  // Make SQLite abort and roll back the transaction itself, so the store's own
+  // ROLLBACK then fails with "no transaction is active".
+  const side = new DatabaseSync(path.join(f.root, "assets-v1.sqlite"));
+  t.after(() => side.close());
+  side.exec(
+    "CREATE TRIGGER abort_holds BEFORE INSERT ON holds BEGIN SELECT RAISE(ROLLBACK, 'holds are frozen'); END;",
+  );
+  assert.throws(
+    () => f.store.retain({ kind: "design", id: "project-1" }, [a.assetId]),
+    /holds are frozen/u,
+  );
+});
+
+test("concurrent initialize calls share one open", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-studio-assets-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  let rootCalls = 0;
+  const store = new StudioAssetStore({
+    root: () => {
+      rootCalls += 1;
+      return root;
+    },
+    thumbnailer: fakeThumbnailer().thumbnailer,
+  });
+  await Promise.all([store.initialize(), store.initialize(), store.initialize()]);
+  assert.equal(rootCalls, 1);
+  const record = await store.put({ bytes: pngBytes(10, 10, 1) });
+  assert.equal((await store.read(record.assetId)).bytes.byteLength, record.bytes);
+  await store.close(); // one close is enough
+  assert.throws(() => store.usage(), code("unavailable"));
 });
