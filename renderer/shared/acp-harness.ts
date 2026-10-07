@@ -183,6 +183,23 @@ export function acpHarnessUnavailableReason(providerId: string | undefined | nul
   return `${label} runs only in chats you have open on this computer. Choose another model here.`;
 }
 
+/** Desktop chat surfaces where nobody is guaranteed to be answering an agent's approvals. */
+export type AcpHarnessBlockedSurface = "assistant" | "bot";
+
+/**
+ * Why an agent-backed model cannot answer in this desktop chat, shown before
+ * sending instead of failing the turn. Undefined when the model can run here.
+ */
+export function acpHarnessChatReason(
+  providerId: string | undefined | null,
+  providerLabel: string,
+  surface: AcpHarnessBlockedSurface | undefined,
+): string | undefined {
+  if (!surface || !providerId || !isAcpHarnessProvider(providerId)) return undefined;
+  const where = surface === "assistant" ? "Assistant chats" : "Bot chats";
+  return `${providerLabel} runs only in ordinary desktop chats, not in ${where}. Choose another model.`;
+}
+
 /**
  * The app's last-used selection, unless it is agent-backed. Unattended
  * surfaces (schedules, Telegram, dictation cleanup) fall back to it and must

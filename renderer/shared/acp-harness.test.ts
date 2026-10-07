@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { projectRuntime } from "../../main/services/acp/status.js";
 import {
+  acpHarnessChatReason,
   acpHarnessUnavailableReason,
   formatHarnessBytes,
   harnessSignInHint,
@@ -103,4 +104,19 @@ test("the sign-in hint tells the user what the runtime still needs, and only tha
   // Still loading, or ready: no hint.
   assert.equal(harnessSignInHint(null), undefined);
   assert.equal(harnessSignInHint({ status: "installed", version: "1.3.0" }), undefined);
+});
+
+test("Assistant and Bot chats explain up front that an agent-backed model cannot answer there", () => {
+  assert.equal(
+    acpHarnessChatReason("antigravity", "Google Antigravity", "assistant"),
+    "Google Antigravity runs only in ordinary desktop chats, not in Assistant chats. Choose another model.",
+  );
+  assert.equal(
+    acpHarnessChatReason("antigravity", "Google Antigravity", "bot"),
+    "Google Antigravity runs only in ordinary desktop chats, not in Bot chats. Choose another model.",
+  );
+  // Ordinary chats, and every other provider, are unaffected.
+  assert.equal(acpHarnessChatReason("antigravity", "Google Antigravity", undefined), undefined);
+  assert.equal(acpHarnessChatReason("openai", "OpenAI", "assistant"), undefined);
+  assert.equal(acpHarnessChatReason(undefined, "", "bot"), undefined);
 });
