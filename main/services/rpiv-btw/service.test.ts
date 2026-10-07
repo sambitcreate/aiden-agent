@@ -5,6 +5,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { BtwOperationRegistry } from "./operation-registry.js";
 import { BtwService, type BtwOwner, type BtwServiceDependencies } from "./service-core.js";
 import type { BtwEventV1 } from "../../../renderer/shared/btw.js";
+import type { Chat } from "../types.js";
 
 const response: AssistantMessage = {
   role: "assistant",
@@ -24,7 +25,7 @@ const response: AssistantMessage = {
   timestamp: Date.now(),
 };
 
-function fixture(options: { busy?: boolean; streamDelayMs?: number } = {}) {
+function fixture(options: { busy?: boolean; streamDelayMs?: number; chat?: Partial<Chat> } = {}) {
   const events: BtwEventV1[] = [];
   const usage: Array<{ source?: string; status?: string }> = [];
   let invalidation: (() => void) | undefined;
@@ -61,6 +62,7 @@ function fixture(options: { busy?: boolean; streamDelayMs?: number } = {}) {
         { id: "user-a", role: "user", content: "Main question", createdAt: 1 },
         { id: "assistant-a", role: "assistant", content: "Main answer", createdAt: 2 },
       ],
+      ...options.chat,
     }),
     resolveRuntime: async () => ({
       provider: {
@@ -151,4 +153,14 @@ test("detached deletion ignores late provider events after the abort grace", asy
   assert.equal(await app.registry.cancelAndSettle("chat-a", 5), false);
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.deepEqual(app.events.map((event) => event.type), ["started"]);
+});
+
+test("BTW refuses feature-owned chats before provider dispatch", async () => {
+  const app = fixture({ chat: { owner: { kind: "design-project", projectId: "project-1" } } });
+  await assert.rejects(
+    app.service.start("chat-a", "Question", app.owner),
+    /only in ordinary desktop chats/u,
+  );
+  assert.deepEqual(app.events, []);
+  assert.deepEqual(app.usage, []);
 });

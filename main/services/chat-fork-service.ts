@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import type { ChatForkPosition } from "../../renderer/shared/chat-copy-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { selectedHtmlArtifactMediaIds } from "./chat-copy-artifacts.js";
@@ -117,6 +118,13 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
         caller.assertSource?.(source);
         const blocked = await deps.blockedReason?.(request.chatId);
         if (blocked) throw new ChatForkError("unavailable", blocked);
+
+        if (chatSurface(source) === "feature") {
+          throw new ChatForkError(
+            "ineligible",
+            "This chat belongs to another Aiden feature and cannot be copied.",
+          );
+        }
 
         if (source.botId) {
           if (!caller.copyBotChat) {
