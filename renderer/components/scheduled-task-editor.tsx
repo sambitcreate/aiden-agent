@@ -612,9 +612,7 @@ export function ScheduledTaskEditor({
                 className="mt-2 flex items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-1.5 text-small text-status-warning"
                 role="status"
               >
-                <span>
-                  No provider pinned. If no app default is available, this task cannot run.
-                </span>
+                <span>{providerGuardrail}</span>
               </div>
             ) : null}
           </Field>

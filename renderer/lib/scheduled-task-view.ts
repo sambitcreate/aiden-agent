@@ -241,16 +241,24 @@ export function scheduledTaskProviderModelOptions(
   return { models: visibleModels, model };
 }
 
-/** Warn when an LLM task pins no provider and no usable app default provider exists. */
+/**
+ * The warning for an LLM task that pins no provider when no usable app default
+ * provider exists, or undefined when the task can run.
+ */
 export function scheduledTaskProviderGuardrail(
   mode: ScheduledTaskMode,
   providerId: string | undefined,
   appDefaultProviderId: string | undefined,
   providers: Provider[] | undefined,
-): boolean {
-  if (mode !== "llm" || providerId) return false;
-  if (!appDefaultProviderId || isAcpHarnessProvider(appDefaultProviderId)) return true;
-  return !providers?.some(
-    (provider) => provider.id === appDefaultProviderId && isUsable(provider),
-  );
+): string | undefined {
+  if (mode !== "llm" || providerId) return undefined;
+  if (appDefaultProviderId && isAcpHarnessProvider(appDefaultProviderId)) {
+    // The default exists and works in chats, so "no app default" would be wrong; say why it can't run here.
+    const label = providers?.find((provider) => provider.id === appDefaultProviderId)?.label ?? "an agent-backed model";
+    return `No provider pinned, and the app default (${label}) runs only in chats you have open on this computer. Pin a provider so this task can run.`;
+  }
+  const usableDefault =
+    appDefaultProviderId !== undefined &&
+    providers?.some((provider) => provider.id === appDefaultProviderId && isUsable(provider));
+  return usableDefault ? undefined : "No provider pinned. If no app default is available, this task cannot run.";
 }

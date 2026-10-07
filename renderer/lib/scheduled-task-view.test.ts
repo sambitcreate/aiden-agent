@@ -229,21 +229,22 @@ test("editor model options keep a pinned hidden model selected and selectable un
 });
 
 test("provider guardrail warns only for LLM tasks without a provider or usable app default", () => {
-  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, undefined, [provider()]), true);
-  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, "openai", [provider()]), false);
+  const noDefault = "No provider pinned. If no app default is available, this task cannot run.";
+  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, undefined, [provider()]), noDefault);
+  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, "openai", [provider()]), undefined);
   assert.equal(
     scheduledTaskProviderGuardrail("llm", undefined, "openai", [provider({ hasKey: false })]),
-    true,
+    noDefault,
     "an app default whose provider is no longer usable cannot run",
   );
   assert.equal(
     scheduledTaskProviderGuardrail("llm", undefined, "anthropic", [provider()]),
-    true,
+    noDefault,
     "an app default provider missing from the list cannot run",
   );
-  assert.equal(scheduledTaskProviderGuardrail("llm", "openai", undefined, [provider()]), false);
-  assert.equal(scheduledTaskProviderGuardrail("script", undefined, undefined, [provider()]), false);
-  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, undefined, undefined), true);
+  assert.equal(scheduledTaskProviderGuardrail("llm", "openai", undefined, [provider()]), undefined);
+  assert.equal(scheduledTaskProviderGuardrail("script", undefined, undefined, [provider()]), undefined);
+  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, undefined, undefined), noDefault);
 });
 
 test("scheduled tasks never pin, or silently fall back to, an agent-backed provider", () => {
@@ -252,5 +253,9 @@ test("scheduled tasks never pin, or silently fall back to, an agent-backed provi
     scheduledTaskProviderPin([antigravity], { providerId: "antigravity", model: "gemini-3.8-flash" }, undefined),
     undefined,
   );
-  assert.equal(scheduledTaskProviderGuardrail("llm", undefined, "antigravity", [antigravity]), true);
+  // The agent-backed default is configured and works in chats; the warning says why it can't run a schedule.
+  assert.equal(
+    scheduledTaskProviderGuardrail("llm", undefined, "antigravity", [{ ...antigravity, label: "Google Antigravity" }]),
+    "No provider pinned, and the app default (Google Antigravity) runs only in chats you have open on this computer. Pin a provider so this task can run.",
+  );
 });
