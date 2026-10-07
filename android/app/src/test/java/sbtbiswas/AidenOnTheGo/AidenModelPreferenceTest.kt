@@ -175,6 +175,35 @@ class AidenModelPreferenceTest {
     }
 
     @Test
+    fun storeKeepsRecentRoutesNewestFirstPerHostAndPurgesThemWithThePairing() {
+        val store = AidenModelPreferenceStore(tempFolder.root)
+        store.remember("mac-a", AidenChatModelSelection("openai", "gpt-5.6", "max"))
+        store.remember("mac-a", AidenChatModelSelection("deepseek", "deepseek-v3", null))
+        // A thinking change on the same route does not add a second entry.
+        store.remember("mac-a", AidenChatModelSelection("deepseek", "deepseek-v3", "high"))
+        // The same model through another provider is a separate route.
+        store.remember("mac-a", AidenChatModelSelection("opencode-go", "deepseek-v3", null))
+        store.remember("mac-a", AidenChatModelSelection("openai", "gpt-5.6", null))
+        store.remember("mac-b", AidenChatModelSelection("google", "gemini-flash", null))
+
+        val relaunched = AidenModelPreferenceStore(tempFolder.root)
+        assertEquals(
+            listOf("openai/gpt-5.6", "opencode-go/deepseek-v3", "deepseek/deepseek-v3"),
+            relaunched.recentRoutes("mac-a").map { "${it.providerId}/${it.modelId}" }
+        )
+        assertEquals(listOf("google/gemini-flash"), relaunched.recentRoutes("mac-b").map { "${it.providerId}/${it.modelId}" })
+
+        (1..8).forEach { relaunched.remember("mac-b", AidenChatModelSelection("p", "m$it", null)) }
+        assertEquals(
+            listOf("m8", "m7", "m6", "m5", "m4"),
+            AidenModelPreferenceStore(tempFolder.root).recentRoutes("mac-b").map { it.modelId }
+        )
+
+        relaunched.purge("mac-a")
+        assertEquals(emptyList<AidenChatModelSelection>(), AidenModelPreferenceStore(tempFolder.root).recentRoutes("mac-a"))
+    }
+
+    @Test
     fun storeNeverPersistsASnapshotPastItsReadLimit() {
         val store = AidenModelPreferenceStore(tempFolder.root)
         val selection = AidenChatModelSelection("p".repeat(256), "m".repeat(256), null)

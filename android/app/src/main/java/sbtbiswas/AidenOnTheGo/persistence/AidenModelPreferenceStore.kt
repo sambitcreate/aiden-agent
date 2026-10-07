@@ -8,9 +8,11 @@ import java.io.File
 
 /**
  * Device-local memory of the last provider, model and thinking level the user
- * explicitly chose in a Workspace chat composer, kept separately for each
- * paired Mac. Only opaque catalog identifiers are stored — never prompts,
- * credentials or chat content — and the entry is removed with the pairing.
+ * explicitly chose in a Workspace chat composer, plus the last few distinct
+ * provider/model routes chosen (the model picker's Recent section), kept
+ * separately for each paired Mac. Only opaque catalog identifiers are stored —
+ * never prompts, credentials or chat content — and both are removed with the
+ * pairing.
  *
  * The stored choice is a preference, not an authority: callers validate it
  * against the host's current model inventory before using it.
@@ -24,9 +26,13 @@ class AidenModelPreferenceStore(private val storageDir: File) {
     )
 
     @Serializable
+    private data class Route(val providerId: String, val modelId: String)
+
+    @Serializable
     private data class Snapshot(
         val version: Int = VERSION,
-        val selections: Map<String, Entry> = emptyMap()
+        val selections: Map<String, Entry> = emptyMap(),
+        val recents: Map<String, List<Route>> = emptyMap()
     )
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -44,6 +50,13 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         return AidenChatModelSelection(entry.providerId, entry.modelId, entry.thinkingLevel)
     }
 
+    /** Distinct provider/model routes explicitly chosen on [instanceId], newest first. */
+    @Synchronized
+    fun recentRoutes(instanceId: String): List<AidenChatModelSelection> {
+        if (!isSafeId(instanceId)) return emptyList()
+        return snapshot.recents[instanceId].orEmpty().map { AidenChatModelSelection(it.providerId, it.modelId, null) }
+    }
+
     @Synchronized
     fun remember(instanceId: String, selection: AidenChatModelSelection) {
         if (!isSafeId(instanceId)) return
@@ -51,14 +64,22 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         val modelId = selection.modelId?.takeIf(::isSafeId) ?: return
         val thinkingLevel = selection.thinkingLevel?.takeIf(::isSafeId)
         val entry = Entry(providerId, modelId, thinkingLevel)
-        if (snapshot.selections[instanceId] == entry) return
-        save(snapshot.copy(selections = snapshot.selections + (instanceId to entry)))
+        val route = Route(providerId, modelId)
+        val existing = snapshot.recents[instanceId].orEmpty()
+        val recents = (listOf(route) + existing.filter { it != route }).take(MAXIMUM_RECENTS)
+        if (snapshot.selections[instanceId] == entry && existing == recents) return
+        save(
+            snapshot.copy(
+                selections = snapshot.selections + (instanceId to entry),
+                recents = snapshot.recents + (instanceId to recents)
+            )
+        )
     }
 
     @Synchronized
     fun purge(instanceId: String) {
-        if (!snapshot.selections.containsKey(instanceId)) return
-        save(snapshot.copy(selections = snapshot.selections - instanceId))
+        if (!snapshot.selections.containsKey(instanceId) && !snapshot.recents.containsKey(instanceId)) return
+        save(snapshot.copy(selections = snapshot.selections - instanceId, recents = snapshot.recents - instanceId))
     }
 
     private fun load() {
@@ -73,7 +94,13 @@ class AidenModelPreferenceStore(private val storageDir: File) {
             selections = decoded.selections.filter { (instanceId, entry) ->
                 isSafeId(instanceId) && isSafeId(entry.providerId) && isSafeId(entry.modelId) &&
                     (entry.thinkingLevel == null || isSafeId(entry.thinkingLevel))
-            }
+            },
+            recents = decoded.recents
+                .filterKeys(::isSafeId)
+                .mapValues { (_, routes) ->
+                    routes.filter { isSafeId(it.providerId) && isSafeId(it.modelId) }.distinct().take(MAXIMUM_RECENTS)
+                }
+                .filterValues { it.isNotEmpty() }
         )
     }
 
@@ -100,5 +127,6 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         const val FILE_NAME = "model_preferences.json"
         const val MAXIMUM_ID_LENGTH = 256
         const val MAXIMUM_BYTES = 256L * 1024L
+        const val MAXIMUM_RECENTS = 5
     }
 }
