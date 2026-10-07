@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
 import android.app.Activity
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -8,9 +9,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -64,8 +67,8 @@ fun AidenTheme(
         AidenAppearanceMode.DARK -> true
     }
 
-    val basePalette = AidenThemeCatalog.palette(config.preset, isDark)
-    val palette = basePalette.applyingContrast(config.contrast)
+    val basePalette = aidenPresetPalette(config.preset, isDark)
+    val palette = remember(basePalette, config.contrast) { basePalette.applyingContrast(config.contrast) }
 
     val view = LocalView.current
     if (!view.isInEditMode) {
@@ -99,6 +102,45 @@ fun AidenTheme(
             CompositionLocalProvider(LocalContentColor provides palette.foreground, content = content)
         }
     }
+}
+
+/**
+ * Palette for [preset]. The dynamic preset derives one from the device's Material You
+ * scheme on Android 12+; below that (or in previews) it falls back to the Aiden palette.
+ */
+@Composable
+fun aidenPresetPalette(preset: AidenThemePresetID, isDark: Boolean): AidenPalette {
+    if (!preset.isDynamic || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        return AidenThemeCatalog.palette(preset, isDark)
+    }
+    val context = LocalContext.current
+    return remember(context, isDark) {
+        val scheme = if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        aidenDynamicPalette(scheme, isDark)
+    }
+}
+
+/**
+ * Maps a Material You [scheme] onto Aiden's palette slots so every screen follows it:
+ * the canvas is the base surface, the sidebar and raised cards step through the container
+ * tones the same way Aiden's own palettes do, and accent and danger take the primary and
+ * error roles. Material has no success or warning roles, so those keep Aiden's semantic
+ * colors for the mode.
+ */
+fun aidenDynamicPalette(scheme: ColorScheme, isDark: Boolean): AidenPalette {
+    val semantic = AidenThemeCatalog.palette(AidenThemePresetID.AIDEN, isDark)
+    fun hex(color: Color) = String.format("#%06X", color.toArgb() and 0xFFFFFF)
+    return AidenPalette(
+        canvasHex = hex(scheme.surface),
+        sidebarHex = hex(if (isDark) scheme.surfaceContainerLow else scheme.surfaceContainer),
+        raisedHex = hex(if (isDark) scheme.surfaceContainer else scheme.surfaceContainerLowest),
+        foregroundHex = hex(scheme.onSurface),
+        secondaryHex = hex(scheme.onSurfaceVariant),
+        accentHex = hex(scheme.primary),
+        successHex = semantic.successHex,
+        warningHex = semantic.warningHex,
+        dangerHex = hex(scheme.error)
+    )
 }
 
 /**

@@ -24,7 +24,20 @@ enum class AidenThemePresetID(val title: String) {
     CALM("Calm"),
     GRAPHITE("Graphite"),
     DUSK("Dusk"),
-    MIDNIGHT("Midnight")
+    MIDNIGHT("Midnight"),
+
+    /** Material You: the palette follows the device wallpaper colors (Android 12+). */
+    DYNAMIC("System");
+
+    val isDynamic: Boolean get() = this == DYNAMIC
+
+    companion object {
+        const val DYNAMIC_MIN_SDK = 31
+
+        /** Presets offered on a device running [sdkInt]; dynamic color needs Android 12. */
+        fun available(sdkInt: Int): List<AidenThemePresetID> =
+            entries.filter { !it.isDynamic || sdkInt >= DYNAMIC_MIN_SDK }
+    }
 }
 
 @Serializable

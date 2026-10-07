@@ -35,9 +35,37 @@ class AidenPairingControlsUiTest {
             AidenTheme { AidenCameraPermissionPrompt(onEnableCamera = { launches++ }) }
         }
 
-        compose.onNodeWithText("Enable Camera").performClick()
+        compose.onNodeWithText("Enable camera").performClick()
 
         compose.runOnIdle { assertEquals(1, launches) }
+    }
+
+    @Test
+    fun aBlockedCameraOffersSystemSettingsOncePerTap() {
+        var opens = 0
+        compose.setContent {
+            AidenTheme { AidenCameraPermissionPrompt(onEnableCamera = { opens++ }, blocked = true) }
+        }
+
+        compose.onNodeWithText("Enable camera").assertDoesNotExist()
+        compose.onNodeWithText("Open settings").performClick()
+
+        compose.runOnIdle { assertEquals(1, opens) }
+    }
+
+    @Test
+    fun aBusyPairingActionSaysSoAndIgnoresTaps() {
+        var attempts = 0
+        compose.setContent {
+            AidenTheme {
+                AidenPairingActionButton(text = "Connect & pair", busy = true, enabled = true, onClick = { attempts++ })
+            }
+        }
+
+        compose.onNodeWithText("Connect & pair").assertDoesNotExist()
+        compose.onNodeWithText("Pairing…").assertIsNotEnabled().performClick()
+
+        compose.runOnIdle { assertEquals(0, attempts) }
     }
 
     @Test
@@ -79,11 +107,11 @@ class AidenPairingControlsUiTest {
         }
 
         compose.onNodeWithText("Scan QR").assert(isTab).assertIsSelected()
-        compose.onNodeWithText("Setup Code").assert(isTab).assertIsNotSelected()
+        compose.onNodeWithText("Setup code").assert(isTab).assertIsNotSelected()
 
-        compose.onNodeWithText("Setup Code").performClick()
+        compose.onNodeWithText("Setup code").performClick()
 
-        compose.onNodeWithText("Setup Code").assertIsSelected()
+        compose.onNodeWithText("Setup code").assertIsSelected()
         compose.onNodeWithText("Scan QR").assertIsNotSelected()
         compose.runOnIdle { assertEquals(listOf(1), selections) }
     }
@@ -95,6 +123,6 @@ class AidenPairingControlsUiTest {
         }
 
         compose.onNodeWithText("Scan QR").assertIsNotSelected()
-        compose.onNodeWithText("Setup Code").assertIsNotSelected()
+        compose.onNodeWithText("Setup code").assertIsNotSelected()
     }
 }

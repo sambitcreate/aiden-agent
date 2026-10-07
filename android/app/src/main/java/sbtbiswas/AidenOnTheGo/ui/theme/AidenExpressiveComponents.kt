@@ -239,7 +239,7 @@ fun <T> AidenSegmentedPillRow(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .heightIn(min = 44.dp)
+                    .heightIn(min = AidenUi.MinimumTouchTarget)
                     .tactilePress(interaction)
                     .selectable(
                         selected = isSelected,
