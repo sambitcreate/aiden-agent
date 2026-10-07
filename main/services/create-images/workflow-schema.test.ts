@@ -50,6 +50,30 @@ test("the parser rejects legacy fields, unknown keys and out-of-range values", (
     ["negative revision", (doc) => (doc.revision = 0)],
     ["empty title", (doc) => (doc.title = "   ")],
     ["model with extra key", (doc) => (doc.nodes[1].data.model.label = "x")],
+    ["duplicate edge id", (doc) => (doc.edges[1].id = doc.edges[0].id)],
+    ["edge id that collides with a node id", (doc) => (doc.edges[0].id = doc.nodes[0].id)],
+    ["edge id with a path separator", (doc) => (doc.edges[0].id = "../edge")],
+    ["empty edge id", (doc) => (doc.edges[0].id = "")],
+    ["edge port with uppercase letters", (doc) => (doc.edges[0].sourcePort = "Image")],
+    ["edge port with a path separator", (doc) => (doc.edges[0].targetPort = "a/b")],
+    ["edge port over 32 characters", (doc) => (doc.edges[0].targetPort = "a".repeat(33))],
+    ["non-string edge port", (doc) => (doc.edges[0].sourcePort = 3)],
+    ["node width below the minimum", (doc) => (doc.nodes[0].dimensions = { width: 119, height: 200 })],
+    ["node height above the maximum", (doc) => (doc.nodes[0].dimensions = { width: 200, height: 1_601 })],
+    ["non-finite node width", (doc) => (doc.nodes[0].dimensions = { width: Number.NaN, height: 200 })],
+    ["node dimensions with an extra key", (doc) => (doc.nodes[0].dimensions = { width: 200, height: 200, depth: 1 })],
+    ["viewport zoom below the minimum", (doc) => (doc.viewport = { x: 0, y: 0, zoom: 0.05 })],
+    ["viewport zoom above the maximum", (doc) => (doc.viewport = { x: 0, y: 0, zoom: 4.5 })],
+    ["viewport position out of range", (doc) => (doc.viewport = { x: 1_000_001, y: 0, zoom: 1 })],
+    ["viewport missing zoom", (doc) => (doc.viewport = { x: 0, y: 0 })],
+    ["viewport with an extra key", (doc) => (doc.viewport = { x: 0, y: 0, zoom: 1, rotation: 90 })],
+    ["viewport that is not an object", (doc) => (doc.viewport = "1,1,1")],
+    ["control character in the workflow title", (doc) => (doc.title = "Bike\u0007s")],
+    ["NUL in the workflow title", (doc) => (doc.title = "A\u0000B")],
+    ["control character in a node title", (doc) => (doc.nodes[0].title = "Line\u001b[31m")],
+    ["control character in an Image Input label", (doc) => doc.nodes.push({ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { label: "a\u007fb" } })],
+    ["control character in an Output label", (doc) => (doc.nodes[2].data.label = "x\u0001")],
+    ["title over 120 characters", (doc) => (doc.title = "t".repeat(121))],
   ];
   for (const [label, mutate] of mutations) {
     const doc = structuredClone(starter()) as any;
@@ -69,4 +93,28 @@ test("the parser enforces node, edge and document size caps", () => {
   const result = parseWorkflowDocV1(doc);
   assert.equal(result.ok, false);
   assert.match(result.ok ? "" : result.issues.join(" "), /2 MiB/u);
+});
+
+test("the parser caps connections at 2,000", () => {
+  const doc = starter() as any;
+  const edge = (index: number) => ({ id: `e${index}`, source: doc.nodes[0].id, sourcePort: "text", target: doc.nodes[1].id, targetPort: "prompt" });
+  doc.edges = Array.from({ length: 2_000 }, (_, index) => edge(index));
+  assert.equal(parseWorkflowDocV1(doc).ok, true, "2,000 connections is the allowed maximum");
+  doc.edges.push(edge(2_000));
+  const result = parseWorkflowDocV1(doc);
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? "" : result.issues.join(" "), /2,000 connections/u);
+});
+
+test("the parser rejects input that is not a document object", () => {
+  for (const [label, input] of [
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 7],
+    ["a string", JSON.stringify(starter())],
+    ["an array", [starter()]],
+    ["an empty object", {}],
+  ] as const) {
+    assert.equal(parseWorkflowDocV1(input).ok, false, label);
+  }
 });
