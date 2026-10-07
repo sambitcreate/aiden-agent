@@ -535,7 +535,7 @@ fun AidenComposerView(
                                 Icon(
                                     imageVector = Icons.Default.ArrowUpward,
                                     contentDescription = "Send message",
-                                    tint = if (canSend) Color.White else palette.secondary.copy(alpha = 0.4f),
+                                    tint = if (canSend) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -687,7 +687,7 @@ private fun AidenRunInputSplitButton(
                         text = label,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
+                        color = palette.onAccent,
                         maxLines = 1,
                         // The segment announces its action instead.
                         modifier = Modifier.clearAndSetSemantics {}
@@ -715,7 +715,7 @@ private fun AidenRunInputSplitButton(
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = palette.onAccent,
                         modifier = Modifier
                             .size(18.dp)
                             .graphicsLayer { rotationZ = chevronRotation }

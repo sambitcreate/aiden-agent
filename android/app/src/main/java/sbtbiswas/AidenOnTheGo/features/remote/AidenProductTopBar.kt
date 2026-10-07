@@ -154,7 +154,7 @@ internal fun AidenProductTopBarPrimaryAction(
             .tactilePress(interaction)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = contentDescription, tint = Color.White, modifier = Modifier.size(22.dp))
+            Icon(icon, contentDescription = contentDescription, tint = AidenTheme.palette.onAccent, modifier = Modifier.size(22.dp))
         }
     }
 }

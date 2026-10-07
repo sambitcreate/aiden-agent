@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
+import sbtbiswas.AidenOnTheGo.config.AidenPalette
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -295,7 +297,7 @@ fun AidenSplitButton(
     leadingIcon: ImageVector? = null,
     enabled: Boolean = true,
     containerColor: Color = AidenTheme.palette.accent,
-    contentColor: Color = Color.White,
+    contentColor: Color = AidenTheme.palette.onAccent,
     height: Dp = 40.dp,
     menuContent: @Composable ColumnScope.() -> Unit
 ) {
@@ -392,7 +394,7 @@ fun AidenPrimaryButton(
         interactionSource = interaction,
         colors = ButtonDefaults.buttonColors(
             containerColor = if (destructive) palette.danger else palette.accent,
-            contentColor = Color.White
+            contentColor = if (destructive) AidenPalette.readableOn(palette.danger) else palette.onAccent
         ),
         modifier = modifier
             .heightIn(min = 40.dp)
@@ -402,7 +404,7 @@ fun AidenPrimaryButton(
             Icon(leadingIcon, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
         }
-        Text(text, style = MaterialTheme.typography.labelLarge, color = Color.White)
+        Text(text, style = MaterialTheme.typography.labelLarge)
     }
 }
 

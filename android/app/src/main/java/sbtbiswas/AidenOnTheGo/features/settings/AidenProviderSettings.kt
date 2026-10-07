@@ -200,7 +200,7 @@ private fun ProviderCreationDialog(client: AidenRemoteClient, onDismiss: () -> U
                 TextField(baseUrl, { baseUrl = it }, colors = aidenTextFieldColors(), label = { Text("Base URL") }, singleLine = true, enabled = !saving)
                 if (needsKey) TextField(apiKey, { apiKey = it }, colors = aidenTextFieldColors(), label = { Text("API key") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), singleLine = true, enabled = !saving)
                 TextField(modelIds, { modelIds = it }, colors = aidenTextFieldColors(), label = { Text("Model IDs, separated by commas") }, enabled = !saving)
-                Text("Use exact server model IDs. The first model is the default. Saving does not contact the provider.", style = MaterialTheme.typography.bodySmall)
+                Text("Use exact server model IDs. The first model is the default. Saving does not contact the provider.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton(onClick = { options = !options }, enabled = !saving, shape = AidenShape.Button) { Text(if (options) "Hide options" else "Connection and model options") }
                 if (options) {
                     AidenConnectedColumn {
@@ -208,7 +208,7 @@ private fun ProviderCreationDialog(client: AidenRemoteClient, onDismiss: () -> U
                         ProviderOptionToggle("Vision", vision, !saving, index = 1, count = 3) { vision = it }
                         ProviderOptionToggle("Reasoning", reasoning, !saving, index = 2, count = 3) { reasoning = it }
                     }
-                    Text("Enable only features your server supports. Applies to every model entered above.", style = MaterialTheme.typography.bodySmall)
+                    Text("Enable only features your server supports. Applies to every model entered above.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("API format", style = MaterialTheme.typography.labelLarge, color = palette.foreground)
                     AidenSegmentedPillRow(
                         options = listOf("openai", "anthropic"),
@@ -226,7 +226,7 @@ private fun ProviderCreationDialog(client: AidenRemoteClient, onDismiss: () -> U
                         enabled = !saving
                     )
                 }
-                if (listOf(label, baseUrl, modelIds, apiKey).any { it.isNotEmpty() }) draft.validationMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                if (listOf(label, baseUrl, modelIds, apiKey).any { it.isNotEmpty() }) draft.validationMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (error != null) Text(error!!, color = palette.danger)
             }
         },

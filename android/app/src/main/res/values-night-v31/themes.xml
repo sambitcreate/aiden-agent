@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Launch surfaces match Aiden's default canvas so cold start never flashes the wrong mode. -->
-    <style name="Theme.AidenOnTheGo" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.AidenOnTheGo" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/aiden_launch_canvas</item>
         <item name="android:colorBackground">@color/aiden_launch_canvas</item>
+        <item name="android:windowSplashScreenBackground">@color/aiden_launch_canvas</item>
     </style>
 </resources>
