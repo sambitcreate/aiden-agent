@@ -517,6 +517,7 @@
         "main/services/tts/service.test.ts",
         "main/services/tts/source.test.ts",
         "main/services/tts/speech-text.test.ts",
+        "renderer/canvas/canvas-controls.test.tsx",
         "renderer/canvas/canvas-keymap-core.test.ts",
         "renderer/components/activity-feed.test.tsx",
         "renderer/components/ask-user-question-composer.test.ts",
