@@ -29,12 +29,16 @@ val LocalAidenAppearanceConfig = staticCompositionLocalOf {
     AidenAppearanceConfig()
 }
 
+/**
+ * Material 3 corner scale. Screens take radii from `MaterialTheme.shapes` (or the
+ * `AidenShape` component tokens built on it) instead of literal `RoundedCornerShape`s.
+ */
 val AidenShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(24.dp),
-    extraLarge = RoundedCornerShape(32.dp)
+    extraSmall = RoundedCornerShape(4.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(28.dp)
 )
 
 object AidenTheme {
