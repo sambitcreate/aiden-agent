@@ -278,14 +278,16 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle(
     "chats:rename",
     async (_event, id: unknown, title: unknown) => {
-      await chatApplicationService.rename(asString(id, "id"), asString(title, "title"));
+      await chatApplicationService.rename(asString(id, "id"), asString(title, "title"), {
+        rejectFeatureOwned: true,
+      });
     },
   );
 
   ipcMain.handle(
     "chats:renameWithFoundationModels",
     async (_event, id: unknown) =>
-      chatTitleService.renameWithFoundationModels(asString(id, "id")),
+      chatTitleService.renameWithFoundationModels(asString(id, "id"), { rejectFeatureOwned: true }),
   );
 
   ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
@@ -485,7 +487,7 @@ export function registerChatHistoryHandlers(): void {
     const chat = await chatStore.get(chatId);
     const result = chat?.botId && hostPlatformCapabilities().bots
       ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
-      : await chatApplicationService.remove(chatId);
+      : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
     if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
     closeDeviceSessionsForChat(chatId);
     void chatReadMarkers.remove(chatId).catch(() => undefined);
@@ -611,6 +613,7 @@ export function registerChatHistoryHandlers(): void {
                     autoTitle,
                     expectedWorkspaceId: workspaceId,
                     isCurrent,
+                    rejectFeatureOwned: true,
                   },
                 ),
               recover: () => chatStore.get(chatId),

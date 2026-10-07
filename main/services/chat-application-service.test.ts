@@ -359,3 +359,53 @@ test("all chat deletion paths fence uploads and clear them only at durable roll-
     }
   }
 });
+
+test("renderer rename and delete refuse feature-owned chats when asked to", async () => {
+  const designChat: Chat = {
+    ...chat("design-chat"),
+    owner: { kind: "design-project", projectId: "project-1" },
+  } as Chat;
+  const events: string[] = [];
+  const application = fixture({
+    chatStore: {
+      get: async () => designChat,
+      rename: async (_id: string, _title: string, assertCurrent: (chat: Chat) => Promise<void>) => {
+        await assertCurrent(designChat);
+        events.push("renamed");
+        return designChat;
+      },
+      remove: async (_id: string, assertCurrent: (chat: Chat) => Promise<void>) => {
+        await assertCurrent(designChat);
+        events.push("removed");
+      },
+    } as unknown as ChatApplicationDependencies["chatStore"],
+    llmClient: {
+      isChatOwnedByInactiveRenderer: () => false,
+      isChatBusy: () => false,
+      waitForChatIdle: async () => true,
+      requiresAppendReconciliation: () => false,
+      markAppendReconciliationRequired: () => undefined,
+      clearAppendReconciliationRequired: () => undefined,
+      beginChatWorkspaceChange: () => () => undefined,
+      beginChatDeletion: () => () => undefined,
+      cancelChat: async (id: string) => {
+        events.push(`cancelled:${id}`);
+      },
+    } as unknown as ChatApplicationDependencies["llmClient"],
+  });
+
+  await assert.rejects(
+    application.service.rename("design-chat", "Renamed", { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  await assert.rejects(
+    application.service.remove("design-chat", { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  // A refused delete never cancels the owning run or reaches the store.
+  assert.deepEqual(events, []);
+
+  // Without the option the shared service keeps its existing behavior.
+  await application.service.rename("design-chat", "Renamed");
+  assert.deepEqual(events, ["renamed"]);
+});
