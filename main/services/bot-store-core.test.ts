@@ -98,7 +98,7 @@ test("legacy archived records are hidden and reported for erase until deleted", 
 
     assert.deepEqual((await reopened.list()).map(({ id }) => id), [live.id]);
     assert.equal(await reopened.get("bot:archived-legacy"), null);
-    assert.equal((await reopened.list())[0]?.archivedAt, undefined);
+    assert.equal("archivedAt" in ((await reopened.list())[0] ?? {}), false);
     assert.deepEqual(await reopened.legacyArchivedIds(), ["bot:archived-legacy"]);
     assert.deepEqual((await reopened.storedIds()).sort(), [live.id, "bot:archived-legacy"].sort());
 

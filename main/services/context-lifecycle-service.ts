@@ -55,7 +55,6 @@ export interface ContextLifecycleServiceDeps {
   skillsEnabled?(): Promise<boolean>;
   getChat(chatId: string): Promise<Chat | null>;
   listChatsByBot(botId: string): Promise<readonly ChatMeta[]>;
-  isBotArchived(botId: string): Promise<boolean>;
   beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null;
   /**
    * Opens the durable Pi journal for the chat. Rollout-ineligible chats resolve
@@ -145,9 +144,6 @@ export class ContextLifecycleService {
         return { compacted: false, reason: "context_metadata_invalid" };
       }
       if (chat.botId) {
-        if (await this.deps.isBotArchived(chat.botId)) {
-          return { compacted: false, reason: "archived" };
-        }
         const canonical = selectCanonicalBotChat(await this.deps.listChatsByBot(chat.botId));
         if (canonical?.id !== chat.id) {
           return { compacted: false, reason: "not_canonical" };

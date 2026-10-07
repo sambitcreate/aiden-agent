@@ -1,4 +1,4 @@
-import type { BotAvatarAppearance, BotDefinition } from "./bots";
+import type { BotAvatarAppearance } from "./bots";
 
 export interface BotEditorIdentityDraft {
   name: string;
@@ -28,16 +28,6 @@ function sameAvatar(left: BotAvatarAppearance, right: BotAvatarAppearance): bool
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id) => right.includes(id));
-}
-
-export function botEditorIdentityDiffers(
-  draft: BotEditorIdentityDraft,
-  baseline: BotEditorIdentityDraft,
-): boolean {
-  return draft.name.trim() !== baseline.name.trim()
-    || draft.description.trim() !== baseline.description.trim()
-    || draft.instructions.trim() !== baseline.instructions.trim()
-    || !sameAvatar(draft.avatar, baseline.avatar);
 }
 
 /** Keep only fields the person changed; adopt unrelated authoritative edits. */
@@ -100,17 +90,5 @@ export function rebaseBotEditorAccessDraft(
     otherCapabilityIds: sameIds(draft.otherCapabilityIds, baseline.otherCapabilityIds)
       ? authoritative.otherCapabilityIds
       : draft.otherCapabilityIds,
-  };
-}
-
-export function botEditorIdentityDraftFromDefinition(
-  bot: BotDefinition,
-  resolveAvatar: (avatar: BotDefinition["avatar"]) => BotAvatarAppearance,
-): BotEditorIdentityDraft {
-  return {
-    name: bot.name,
-    description: bot.description ?? "",
-    instructions: bot.instructions,
-    avatar: resolveAvatar(bot.avatar),
   };
 }

@@ -741,14 +741,6 @@ test("active narrowing and archive fail closed before the next effect", async ()
   narrowed.narrowPolicy();
   await expectFailure(narrowingAdmission.revalidateBeforeEffect(), "capability_changed");
 
-  const archived = fixture();
-  const archiveAdmission = await archived.resolver.admit({
-    audienceId: "device-a",
-    botId: "bot-a",
-    chatId: "chat-a",
-  });
-  archived.archive();
-  await expectFailure(archiveAdmission.revalidateBeforeEffect(), "bot_unavailable");
 });
 
 test("a concurrent narrowing that races policy reads is caught by the final lease fence", async () => {

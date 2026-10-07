@@ -10,17 +10,27 @@ import { botFixture, catalogFixture } from "./test-fixtures";
 
 afterEach(cleanup);
 
-async function createBot(name: string, help: string) {
+async function fillNameStep(name: string, help: string) {
   fireEvent.click(await screen.findByRole("button", { name: "New Bot" }));
   const dialog = await screen.findByRole("dialog", { name: "New Bot" });
   fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: name } });
   fireEvent.change(within(dialog).getByRole("textbox", { name: "What should it help with?" }), {
     target: { value: help },
   });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Next" }));
+  return dialog;
 }
 
-test("a name and what it helps with are enough to create a Bot and open its chat", async () => {
+const liveSnapshot = (botId: string, state: { kind: string }) => ({
+  botId,
+  epoch: "e1",
+  seq: 0,
+  entries: [],
+  partial: null,
+  state,
+});
+
+test("name and what it helps with create a Bot, offer connections, and open its chat", async () => {
   let created: { bot: BotCreateInput; access: BotAccessUpdate } | undefined;
   const calls = installBotTestIpc({
     "bots:list": () => (created ? [botFixture({ id: "bot-9", name: "Meal Planner" })] : []),
@@ -29,19 +39,23 @@ test("a name and what it helps with are enough to create a Bot and open its chat
       created = input as typeof created;
       return botFixture({ id: "bot-9", name: "Meal Planner", description: created!.bot.description });
     },
-    "bots:sessionState": () => ({ kind: "idle" }),
-    "bots:openChat": () => ({ chatId: "chat-9", title: "New chat", updatedAt: 2 }),
+    "bots:introduce": () => true,
+    "bots:get": () => botFixture({ id: "bot-9", name: "Meal Planner" }),
+    "bots:live:summary": () => ({ botId: "bot-9", preview: null, updatedAt: null, state: { kind: "idle" } }),
+    "bots:live:subscribe": () => liveSnapshot("bot-9", { kind: "idle" }),
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  await createBot("Meal Planner", "Plan my meals every week");
+  const dialog = await fillNameStep("Meal Planner", "Plan my meals and email the grocery list");
 
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-9/chat/chat-9"));
+  // Step two offers chips ranked from the answer; Gmail is one of them.
+  const chips = within(dialog).getByRole("group", { name: "Suggested connections" });
+  assert.ok(within(chips).getByRole("button", { name: "Connect Gmail" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-9/chat"));
   assert.ok(created);
   assert.equal(created.bot.name, "Meal Planner");
-  assert.equal(created.bot.description, "Plan my meals every week");
-  assert.match(created.bot.instructions, /Plan my meals every week/u);
-  // The recommended model is the first one set up; it reads text only, so the
-  // first model that reads images handles photos.
+  assert.equal(created.bot.description, "Plan my meals and email the grocery list");
   assert.deepEqual(created.access, {
     accessMode: "full",
     catalogRevision: "catalog-1",
@@ -50,10 +64,11 @@ test("a name and what it helps with are enough to create a Bot and open its chat
     modelId: "model-text",
     visionModel: { providerId: "prov-vision", modelId: "model-vision" },
   });
-  assert.equal(calls.some((call) => call.channel === "bots:acknowledgeAccessNotice"), false);
+  const introduced = calls.filter((call) => call.channel === "bots:introduce");
+  assert.deepEqual(introduced.map((call) => call.args[0]), ["bot-9"]);
 });
 
-test("with no AI model the Bot is still created and its chat asks for one", async () => {
+test("with no AI model the Bot is still created and its chat asks for one, with no self-intro", async () => {
   let created = false;
   const calls = installBotTestIpc({
     "bots:list": () => (created ? [botFixture({ id: "bot-2", name: "Researcher" })] : []),
@@ -63,43 +78,17 @@ test("with no AI model the Bot is still created and its chat asks for one", asyn
       created = true;
       return botFixture({ id: "bot-2", name: "Researcher" });
     },
-    "bots:sessionState": () => ({ kind: "needs_model" }),
+    "bots:get": () => botFixture({ id: "bot-2", name: "Researcher" }),
+    "bots:live:summary": () => ({ botId: "bot-2", preview: null, updatedAt: null, state: { kind: "needs_model" } }),
+    "bots:live:subscribe": () => liveSnapshot("bot-2", { kind: "needs_model" }),
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  await createBot("Researcher", "");
+  const dialog = await fillNameStep("Researcher", "");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Skip" }));
 
-  const status = await screen.findByRole("status");
-  assert.ok(within(status).getByText("Needs an AI model"));
-  assert.equal(calls.some((call) => call.channel === "bots:openChat"), false);
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
+  assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
   const access = calls.find((call) => call.channel === "bots:create")?.args[0] as { access: BotAccessUpdate };
   assert.equal("providerId" in access.access, false);
-
-  fireEvent.click(within(status).getByRole("button", { name: "Set up" }));
-  await waitFor(() => assert.equal(router.state.location.pathname, "/settings"));
-  assert.deepEqual({ ...router.state.location.search }, { section: "providers" });
-});
-
-test("a Bot that needs a model asks for one instead of opening its chat", async () => {
-  const calls = installBotTestIpc({
-    "bots:list": () => [botFixture()],
-    "bots:sessionState": () => ({ kind: "needs_model" }),
-  });
-  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  const row = await screen.findByRole("button", { name: /Planner/u });
-  await waitFor(() => assert.ok(within(row).getByText("Needs an AI model")));
-  fireEvent.click(row);
-  assert.ok(await screen.findByRole("button", { name: "Set up" }));
-  assert.equal(calls.some((call) => call.channel === "bots:openChat"), false);
-});
-
-test("an interrupted Bot's row reads Paused", async () => {
-  installBotTestIpc({
-    "bots:list": () => [botFixture()],
-    "bots:sessionState": () => ({ kind: "interrupted", submissionId: "s-1" }),
-    "bots:openChat": () => ({ chatId: "chat-1", title: "Lisbon", updatedAt: 1 }),
-  });
-  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  const row = await screen.findByRole("button", { name: /Planner/u });
-  await waitFor(() => assert.ok(within(row).getByText("Paused — tap to resume")));
 });

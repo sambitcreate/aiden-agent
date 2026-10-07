@@ -116,7 +116,7 @@ function fixture(options: {
   const chats = new Map<string, Chat>();
   const policies = new Map<string, BotAccessView>();
   const authorityStatuses = new Map<string, "active" | "archived">(
-    bots.map((entry) => [entry.id, entry.archivedAt === undefined ? "active" : "archived"]),
+    bots.map((entry) => [entry.id, (entry as { archivedAt?: number }).archivedAt === undefined ? "active" : "archived"]),
   );
   const chatPolicies = new Map<string, BotChatAccessView>();
   const botBindings = new Map<string, unknown>();
@@ -222,16 +222,16 @@ function fixture(options: {
   const deps = {
     botStore: {
       async list() {
-        return bots.filter((entry) => entry.archivedAt === undefined);
+        return bots.filter((entry) => (entry as { archivedAt?: number }).archivedAt === undefined);
       },
       async get(id: string) {
-        return bots.find((entry) => entry.id === id && entry.archivedAt === undefined) ?? null;
+        return bots.find((entry) => entry.id === id && (entry as { archivedAt?: number }).archivedAt === undefined) ?? null;
       },
       async storedIds() {
         return bots.map(({ id }) => id);
       },
       async legacyArchivedIds() {
-        return bots.filter((entry) => entry.archivedAt !== undefined).map(({ id }) => id);
+        return bots.filter((entry) => (entry as { archivedAt?: number }).archivedAt !== undefined).map(({ id }) => id);
       },
       async delete(id: string) {
         const index = bots.findIndex((entry) => entry.id === id);
@@ -709,7 +709,7 @@ test("initialization migrates legacy Bots to explicit Full and gives each exactl
 
 test("identity updates require a live Bot, exact revision, managed home, and policy", async () => {
   const active = bot("bot:update");
-  const archived = bot("bot:archived-update", { archivedAt: 2 });
+  const archived = bot("bot:archived-update", { archivedAt: 2 } as never);
   const app = fixture({ bots: [active, archived] });
   await app.service.initialize();
   app.events.length = 0;
@@ -1251,7 +1251,7 @@ test("startup rolls a pending Bot delete forward", async () => {
 });
 
 test("archived Bots left by an older release are erased at startup", async () => {
-  const archived = bot("bot:archived-legacy", { archivedAt: 2 });
+  const archived = bot("bot:archived-legacy", { archivedAt: 2 } as never);
   const live = bot("bot:live");
   const app = fixture({ bots: [archived, live] });
   app.policies.set(archived.id, {

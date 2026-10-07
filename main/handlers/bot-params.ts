@@ -74,6 +74,30 @@ export function parseBotCreateWithAccess(value: unknown): {
   };
 }
 
+const FROM_PRESET_KEYS = new Set(["access", "presetId"]);
+const PRESET_ID = /^[a-z0-9][a-z0-9-]{0,63}$/u;
+
+/** `bots:createFromPreset`: a starter Bot id and, optionally, the access the person confirmed. */
+export function parseBotCreateFromPreset(value: unknown): { presetId: string; access?: BotAccessUpdate } {
+  const record = value as Record<string, unknown> | null;
+  if (!record || typeof record !== "object" || Array.isArray(record) || !Object.keys(record).every((key) => FROM_PRESET_KEYS.has(key))) {
+    throw new Error("Invalid starter Bot fields.");
+  }
+  if (typeof record.presetId !== "string" || !PRESET_ID.test(record.presetId)) {
+    throw new Error("Invalid starter Bot id.");
+  }
+  return {
+    presetId: record.presetId,
+    ...(record.access === undefined ? {} : { access: parseBotAccessUpdate(record.access) }),
+  };
+}
+
+/** A catalog plugin id, as stored by connection dismissals. */
+export function parseConnectionPluginId(value: unknown): string {
+  if (typeof value !== "string" || !PRESET_ID.test(value)) throw new Error("Invalid connection id.");
+  return value;
+}
+
 export function parseBotUpdate(value: unknown): BotUpdateInput {
   const record = exact(value, UPDATE_KEYS, "bot update fields");
   return {

@@ -439,7 +439,6 @@ function sameIdentity(
 ): boolean {
   return Boolean(
     bot &&
-    !bot.archivedAt &&
     bot.id === expected.botId &&
     chat &&
     chat.id === expected.chatId &&
@@ -470,7 +469,7 @@ async function resolveIdentities(
   chatId: string,
 ): Promise<{ bot: BotDefinition; chat: Chat }> {
   const [bot, chat] = await Promise.all([deps.botStore.get(botId), deps.chatStore.get(chatId)]);
-  if (!bot || bot.archivedAt) fail("bot_unavailable");
+  if (!bot) fail("bot_unavailable");
   if (!chat || chat.botId !== botId) fail("chat_unavailable");
   return { bot, chat };
 }

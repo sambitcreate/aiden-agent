@@ -81,6 +81,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:changed",
   /** A paired phone asked to finish connecting an app for a Bot: `{botId, pluginId}`. */
   "bots:connection-request",
+  "bots:live:event",
+  "bots:connections:setup",
   "bots:approval",
   "bots:approval-settled",
   "browser:event",

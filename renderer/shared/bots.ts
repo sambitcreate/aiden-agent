@@ -87,7 +87,6 @@ export interface BotDefinition {
   avatar: BotAvatar;
   createdAt: number;
   updatedAt: number;
-  archivedAt?: number;
 }
 
 /** Bounded canonical PNG bytes projected by main without exposing its private asset path. */

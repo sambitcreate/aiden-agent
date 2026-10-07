@@ -302,7 +302,7 @@ function RootContent() {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
         queryClient.invalidateQueries({ queryKey: ["bot"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-live-summary"] }),
         queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
       ]);

@@ -738,29 +738,6 @@ test("chat classification reads only main-owned metadata before payload access",
   assert.equal(payloadReads, 1);
 });
 
-test("Bot chat mutation rechecks authoritative archive state inside the lifecycle gate", async () => {
-  const app = fixture(chat({ botId: "bot-1" }), {
-    retainedBotChatAuthorizer: () => true,
-  });
-  const classification = await app.service.classify("chat-1");
-  let mutated = false;
-
-  app.setBotArchived(true);
-  await assert.rejects(
-    app.service.runMutation("device-1", "chat-1", classification, async () => {
-      mutated = true;
-    }),
-    (error: unknown) =>
-      (error as { code?: string; status?: number }).code === "bot_archived" &&
-      (error as { status?: number }).status === 409,
-  );
-  assert.equal(mutated, false);
-  assert.deepEqual(await app.service.classify("chat-1"), {
-    botId: "bot-1",
-    botArchived: true,
-  });
-});
-
 test("retained Bot chat authorization is absent-by-default and fails closed", async () => {
   const denied = fixture(chat({ botId: "bot-1" }));
   assert.equal(await denied.service.authorizeRetainedBotChat({

@@ -112,7 +112,7 @@ import { scheduledTaskApplicationService } from "./scheduled-task-application-se
 import { botStore } from "./bot-store.js";
 import { createBotPresetCreatorFor } from "./bot-preset-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
-import { raiseBotConnectionRequest } from "./bot-connection-requests-main.js";
+import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
 import { systemTimezone } from "./schedule-store.js";
 import {
@@ -868,7 +868,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                     return { botId: result.bot.id, created: result.created };
                   },
                 },
-                connectionRequested: raiseBotConnectionRequest,
+                connectionRequested: async ({ pluginId }) => {
+                  if (!openConnectionSetup(pluginId)) {
+                    throw new AidenRemoteServiceError("not_found", "Aiden can't connect that app.", 404);
+                  }
+                },
                 defaultTimezone: systemTimezone,
                 notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
               })

@@ -92,10 +92,19 @@ export interface BotTestIpcCall {
  * recorded in order and answered by `handlers[channel]`; an unhandled channel
  * rejects the way Electron does for a missing `ipcMain.handle`.
  */
+type NotificationListener = (payload: unknown) => void;
+const notificationListeners = new Map<string, Set<NotificationListener>>();
+
+/** Pushes a main-to-renderer notification (for example `bots:live:event`) to the mounted tree. */
+export function emitBotTestNotification(channel: string, payload: unknown): void {
+  for (const listener of notificationListeners.get(channel) ?? []) listener(payload);
+}
+
 export function installBotTestIpc(
   handlers: Record<string, (...args: unknown[]) => unknown> = {},
 ): BotTestIpcCall[] {
   const calls: BotTestIpcCall[] = [];
+  notificationListeners.clear();
   (window as unknown as { aidenAPI: unknown }).aidenAPI = {
     ipc: {
       invoke: async (channel: string, ...args: unknown[]) => {
@@ -108,7 +117,14 @@ export function installBotTestIpc(
         }
         return handler(...args);
       },
-      onNotification: () => () => undefined,
+      onNotification: (channel: string, listener: NotificationListener) => {
+        const set = notificationListeners.get(channel) ?? new Set<NotificationListener>();
+        set.add(listener);
+        notificationListeners.set(channel, set);
+        return () => {
+          set.delete(listener);
+        };
+      },
     },
   };
   return calls;

@@ -130,12 +130,12 @@ const botRoute = createRoute({
 
 const botChatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
-  path: "/bots/$botId/chat/$chatId",
+  path: "/bots/$botId/chat",
   component: preloadsWith(function BotChatRoute() {
-    const { botId, chatId } = botChatRoute.useParams();
+    const { botId } = botChatRoute.useParams();
     return (
       <BotsCapabilityRoute>
-        <BotChatRouteView botId={botId} chatId={chatId} />
+        <BotChatRouteView botId={botId} />
       </BotsCapabilityRoute>
     );
   }, BotChatRouteView),

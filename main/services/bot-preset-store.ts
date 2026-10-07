@@ -49,7 +49,7 @@ export function createBotPresetStore(dependencies: BotPresetStoreDependencies): 
       const botId = normalize(await store.load()).creations[key];
       if (!botId) return null;
       const bot = await dependencies.getBot(botId);
-      return bot && bot.archivedAt === undefined ? bot : null;
+      return bot;
     },
     async createBot(input, key) {
       const bot = await dependencies.createBot(input);

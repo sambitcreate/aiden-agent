@@ -431,11 +431,10 @@ test("batch output is exact, bounded to requested ids, and must include authorit
   );
 });
 
-test("favorite projection preserves order and excludes archived, unknown, duplicate, and excess ids", () => {
+test("projection keeps order and excludes unknown, duplicate, and excess ids", () => {
   const bots = [
     bot("one"),
     bot("two"),
-    bot("archived", { archivedAt: 10 }),
     ...Array.from({ length: 30 }, (_, index) => bot(`extra-${index}`)),
   ];
   const projected = projectBotFavoriteOrder(
