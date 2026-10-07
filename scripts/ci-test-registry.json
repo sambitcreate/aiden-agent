@@ -183,6 +183,8 @@
         "main/services/skills-discovery.test.ts",
         "main/services/studio-assets/delivery-core.test.ts",
         "main/services/studio-assets/image-validation-core.test.ts",
+        "main/services/studio-assets/request-handler.test.ts",
+        "main/services/studio-assets/startup-core.test.ts",
         "main/services/studio-assets/store.test.ts",
         "main/services/studio/feature-flags.test.ts",
         "main/services/terminal-history.test.ts",

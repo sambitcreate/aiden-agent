@@ -99,6 +99,9 @@ import { generativeUiArtifactStore } from "./services/generative-ui-artifact-sto
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
+import { startStudioAssets } from "./services/studio-assets/startup-core.js";
+import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
@@ -421,6 +424,14 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         await subagentRunStore.close();
       })(),
       terminalService.flushHistory(),
+      // Bounded so a wedged queue cannot hold quit; a store that was never
+      // opened (flags off) resolves at once.
+      Promise.race([
+        studioAssetStore.close(),
+        new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref()),
+      ]).catch((error) =>
+        logger.warn("studio", "Studio asset store did not close cleanly.", error),
+      ),
       browserService.shutdown(),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
@@ -1757,6 +1768,18 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      await startStudioAssets({
+        enabled: studioAssetsEnabled(),
+        store: studioAssetStore,
+        grants: studioAssetGrants,
+        registerProtocol: registerStudioAssetProtocol,
+        onError: (error) =>
+          logger.warn(
+            "studio",
+            "Studio assets are unavailable; Design and Images will report a storage error.",
+            error,
+          ),
+      });
       const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
       if (quarantinedImageArtifactPath) {
         logger.warn(

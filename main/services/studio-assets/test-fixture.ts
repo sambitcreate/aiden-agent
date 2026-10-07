@@ -26,7 +26,7 @@ export function pngBytes(width: number, height: number, seed = 0): Uint8Array {
 
 /** Minimal JPEG: SOI, one baseline SOF0 frame header, EOI. */
 export function jpegBytes(width: number, height: number): Uint8Array {
-  const frame = Buffer.alloc(13);
+  const frame = Buffer.alloc(11);
   frame.writeUInt16BE(11, 0); // segment length, including these two bytes
   frame[2] = 8; // sample precision
   frame.writeUInt16BE(height, 3);
