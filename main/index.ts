@@ -96,10 +96,9 @@ import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
-import {
-  registerGenerativeUiProtocol,
-  registerGenerativeUiScheme,
-} from "./services/generative-ui-protocol.js";
+import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { registerCustomSchemes } from "./services/custom-schemes.js";
+import { studioAssetsEnabled } from "./services/studio/feature-flags.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
@@ -159,7 +158,7 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
 
-registerGenerativeUiScheme();
+registerCustomSchemes({ studioAssets: studioAssetsEnabled() });
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
