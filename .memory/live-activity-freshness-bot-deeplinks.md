@@ -34,3 +34,10 @@ Status (2026-10-01): merged in PR #276 (on main after 0.51.0); plan moved to `do
   - Every other stale status keeps "Latest status shown" with no action; fresh or final runs return `nil`.
 - Stale styling (dot, keyline, freshness chip, trailing "Latest") is unchanged; only the copy differs.
 - Branch `fix/la-stale-keeps-waiting`; adapted from the Hermex stale-Bot fix, without Bot-specific copy.
+
+## ActivityKit end-state race in integration tests (2026-10-07)
+
+- `Activity.activities` returns a separate instance per call. The manager's `endAll`/`finish` ends its own instance, and ActivityKit propagates `.ended`/`.dismissed` to the instance a test holds asynchronously, the same way content echoes are delayed (see `deliveredContent`, PR #308).
+- Reading `activity.activityState` right after `await manager.endAll(...)` was flaky on loaded CI simulators (run 37530293739 attempt 2, line 480, `XCTAssertTrue failed`, 0.13 s).
+- Tests now `await assertDeliveredEnd(of:)`, which subscribes to `activityStateUpdates` before reading the current state and uses the same failure-only 30 s ceiling. `deliveredContent` and `assertDeliveredEnd` share the generic `AidenDeliveryRace`.
+- Branch `fix/ios-activitykit-end-state-race`.
