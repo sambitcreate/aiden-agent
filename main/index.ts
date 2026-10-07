@@ -100,7 +100,7 @@ import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
-import { imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
+import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
 import { startStudioAssets } from "./services/studio-assets/startup-core.js";
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
@@ -187,8 +187,8 @@ let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
-/** The last-window close already asked about in-flight image requests; the quit it triggers must not ask again. */
-let imageQuitConfirmedByWindowClose = false;
+/** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
+const imageQuitCoverage = new ImageQuitCoverage();
 let installUpdateOnQuit = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
@@ -555,13 +555,20 @@ async function armRendererUnload(
  * Honest quit copy while paid image requests are on the wire (ADR-CI §2.2). Every path that will quit
  * the app asks through here, with or without a window to attach the dialog to.
  */
-function confirmImageRequestsBeforeQuit(window?: BrowserWindow | null): boolean {
-  return imageRunsAllowQuit(createImagesRuntime.inFlightRequests(), (prompt) => {
-    const options = { type: "warning", noLink: true, ...prompt } as const;
-    return window && !window.isDestroyed()
-      ? dialog.showMessageBoxSync(window, options)
-      : dialog.showMessageBoxSync(options);
-  });
+function confirmImageRequestsBeforeQuit(
+  window?: BrowserWindow | null,
+  alreadyConfirmedRequests = 0,
+): boolean {
+  return imageRunsAllowQuit(
+    createImagesRuntime.inFlightRequests(),
+    (prompt) => {
+      const options = { type: "warning", noLink: true, ...prompt } as const;
+      return window && !window.isDestroyed()
+        ? dialog.showMessageBoxSync(window, options)
+        : dialog.showMessageBoxSync(options);
+    },
+    alreadyConfirmedRequests,
+  );
 }
 
 async function authorizeProtectedAction(
@@ -607,10 +614,12 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
     // Closing the last window quits on Linux and Windows. On macOS it does not, and runs continue.
     // Asked before the renderer unload is armed, so "Keep Aiden Open" leaves no approved revision behind.
     const closeQuitsApp = shouldQuitAfterAllWindowsClose(process.platform, aidenRemoteServiceKeepsApplicationAlive());
+    // Any earlier confirmation belonged to a close that did not complete.
+    imageQuitCoverage.clear();
     if (closeQuitsApp && !confirmImageRequestsBeforeQuit(window)) return;
-    imageQuitConfirmedByWindowClose = closeQuitsApp;
+    imageQuitCoverage.recordWindowCloseConfirmation(closeQuitsApp, createImagesRuntime.inFlightRequests());
     if (!(await authorizeProtectedAction(window, "close"))) {
-      imageQuitConfirmedByWindowClose = false;
+      imageQuitCoverage.clear();
       return;
     }
     await persistMainWindowState(window);
@@ -1138,7 +1147,7 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
-  imageQuitConfirmedByWindowClose = false;
+  imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
     level: "info",
@@ -1358,6 +1367,8 @@ async function createMainWindow(
     // retried against a fresh guard revision instead.
     const interruptedAction = protectedAction;
     protectedAction = null;
+    // The renderer vetoed the unload: the close that was confirmed is retried and asks again.
+    imageQuitCoverage.clear();
     if (interruptedAction === "onboarding-reset") {
       setImmediate(() => void requestOnboardingReset(createdWindow));
     } else if (interruptedAction === "quit") {
@@ -1671,10 +1682,13 @@ if (!ownsSingleInstanceLock) {
     if (forceAppQuit) return;
     event.preventDefault();
     if (shutdownStarted || lifecycleCheckInFlight) return;
+    // The quit a last-window close confirmed takes its coverage here, once.
+    const confirmedByWindowClose = imageQuitCoverage.consume();
     if (mainWindow && !mainWindow.isDestroyed()) {
       void requestApplicationQuit(mainWindow);
-    } else if (imageQuitConfirmedByWindowClose || confirmImageRequestsBeforeQuit(null)) {
-      // No window (macOS keeps running after the last one closes): runs may still be on the wire.
+    } else if (confirmImageRequestsBeforeQuit(null, confirmedByWindowClose)) {
+      // No window (macOS keeps running after the last one closes): runs may still be on the wire,
+      // and any beyond what the close confirmed are asked about now.
       void shutdownAndQuit();
     }
   });

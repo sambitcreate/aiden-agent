@@ -226,7 +226,7 @@ export class ImageRunCoordinator {
     try {
       // History first: if the ledger fails, nothing was removed and the workflow is intact. If the
       // document delete then fails, the workflow remains with an empty history, which holds nothing.
-      for (const runId of this.deps.ledger.deleteWorkflowRuns(workflowId)) this.release(runId);
+      this.releaseRuns(this.deps.ledger.deleteWorkflowRuns(workflowId), `deleting workflow ${workflowId}`);
       try {
         return (await this.deps.workflows.delete(workflowId)) ? "deleted" : "not-found";
       } catch (error) {
@@ -350,15 +350,23 @@ export class ImageRunCoordinator {
 
   private prune(): void {
     try {
-      for (const runId of this.deps.ledger.pruneRuns(this.deps.retainRuns ?? RUN_RETENTION)) this.release(runId);
+      this.releaseRuns(this.deps.ledger.pruneRuns(this.deps.retainRuns ?? RUN_RETENTION), "pruning old runs");
     } catch (error) {
       this.deps.reportIssue?.("Could not prune old image runs.", error);
     }
   }
 
-  private release(runId: string): void {
-    this.deps.assets.releaseAllForHolder({ kind: "images-run", id: runId });
-    this.versions.delete(runId);
+  /** Releases every run's holds. One failing release is reported and never strands the runs after it. */
+  private releaseRuns(runIds: readonly string[], context: string): void {
+    for (const runId of runIds) {
+      try {
+        this.deps.assets.releaseAllForHolder({ kind: "images-run", id: runId });
+      } catch (error) {
+        this.deps.reportIssue?.(`Could not release the images held by run ${runId} while ${context}.`, error);
+      } finally {
+        this.versions.delete(runId);
+      }
+    }
   }
 
   private requireOpen(): void {

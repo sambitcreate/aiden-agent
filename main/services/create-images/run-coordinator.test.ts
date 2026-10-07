@@ -640,6 +640,34 @@ test("deleting runs first: a ledger failure leaves the workflow and its holds in
   assert.deepEqual(env.assets.holders(output.assetId), []);
 });
 
+test("a release that throws is reported and the remaining runs are still released", async (t) => {
+  const env = await fixture(t);
+  const doc = await saveWorkflow(env.workflows, generateChains(1));
+  const runIds: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
+    assert.ok("runId" in started);
+    await env.coordinator.whenIdle();
+    runIds.push(started.runId);
+  }
+  const heldBy = (runId: string) =>
+    env.assets.holders(env.coordinator.getRun({ runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!.assetId);
+  const outputs = runIds.map((runId) => env.coordinator.getRun({ runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!.assetId);
+  assert.ok(heldBy(runIds[0]!).length >= 1);
+  const release = env.assets.releaseAllForHolder.bind(env.assets);
+  env.assets.releaseAllForHolder = (holder) => {
+    if (holder.id === runIds[1]) throw new Error("holder write failed");
+    return release(holder);
+  };
+  assert.equal(await env.coordinator.deleteWorkflow(doc.id), "deleted");
+  assert.equal(env.issues.length, 1, "exactly the failing release is reported");
+  assert.match(env.issues[0]!, new RegExp(runIds[1]!, "u"));
+  assert.deepEqual(env.assets.holders(outputs[0]!), []);
+  assert.deepEqual(env.assets.holders(outputs[1]!), [{ kind: "images-run", id: runIds[1]! }], "only the failed release is left holding");
+  assert.deepEqual(env.assets.holders(outputs[2]!), []);
+  assert.equal(await env.workflows.get(doc.id), null);
+});
+
 test("a document delete that fails after the runs are gone is reported and leaves no stranded holds", async (t) => {
   const env = await fixture(t, {
     beforeDelete: async () => {
