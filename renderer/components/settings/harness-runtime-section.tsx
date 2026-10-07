@@ -6,6 +6,7 @@ import { Button, Text, toast } from "../ui";
 import { harnessApi } from "../../lib/ipc";
 import {
   formatHarnessBytes,
+  harnessPhaseLabel,
   harnessRuntimeSummary,
   type AcpHarnessStatus,
 } from "../../shared/acp-harness";
@@ -231,7 +232,7 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
       </Text>
       {/* Announce state and phase changes only; the progress bar carries the value. */}
       <span className="sr-only" aria-live="polite">
-        {runtime.status === "installing" ? `${label}: ${runtime.phase ?? "installing"}` : harnessRuntimeSummary(runtime)}
+        {runtime.status === "installing" ? `${label}: ${harnessPhaseLabel(runtime.phase)}` : harnessRuntimeSummary(runtime)}
       </span>
       {canInstall ? (
         <Text variant="small" color="tertiary">

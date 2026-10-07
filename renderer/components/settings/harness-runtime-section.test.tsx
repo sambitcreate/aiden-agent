@@ -108,3 +108,16 @@ test("phases without a percentage name the phase instead of drawing a bar that l
   // A download that has not reported its size yet has no bar either.
   assert.doesNotMatch(render({ status: "installing", phase: "downloading" }), /role="progressbar"/u);
 });
+
+test("screen readers hear each install phase in the same words the summary shows", () => {
+  const announced = (phase?: "downloading" | "verifying" | "extracting" | "validating" | "activating") =>
+    render({ status: "installing", ...(phase ? { phase } : {}), receivedBytes: 1, totalBytes: 2 }).match(
+      /<span class="sr-only" aria-live="polite">([^<]*)<\/span>/u,
+    )?.[1];
+  assert.equal(announced("verifying"), "Google Antigravity: Checking the download");
+  assert.equal(announced("validating"), "Google Antigravity: Starting it once to confirm it works");
+  assert.equal(announced("activating"), "Google Antigravity: Finishing");
+  assert.equal(announced(), "Google Antigravity: Installing");
+  // Byte counts change many times a second; the announcement does not.
+  assert.equal(announced("downloading"), "Google Antigravity: Downloading");
+});

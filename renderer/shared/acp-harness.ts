@@ -119,6 +119,11 @@ const PHASE_COPY: Record<AcpHarnessInstallPhase, string> = {
   activating: "Finishing",
 };
 
+/** The install phase in plain words; "Installing" before the first phase is known. */
+export function harnessPhaseLabel(phase: AcpHarnessInstallPhase | undefined): string {
+  return phase ? PHASE_COPY[phase] : "Installing";
+}
+
 /** One line describing the runtime, for settings rows and screen readers. */
 export function harnessRuntimeSummary(status: AcpHarnessStatus["runtime"]): string {
   switch (status.status) {
@@ -129,7 +134,7 @@ export function harnessRuntimeSummary(status: AcpHarnessStatus["runtime"]): stri
         ? `Not installed. ${formatHarnessBytes(status.downloadBytes)} download${status.downloadHost ? ` from ${status.downloadHost}` : ""}.`
         : "Not installed.";
     case "installing": {
-      const phase = status.phase ? PHASE_COPY[status.phase] : "Installing";
+      const phase = harnessPhaseLabel(status.phase);
       if (status.phase === "downloading" && status.totalBytes) {
         return `${phase} ${formatHarnessBytes(status.receivedBytes ?? 0)} of ${formatHarnessBytes(status.totalBytes)}…`;
       }
