@@ -550,6 +550,7 @@
         "renderer/components/settings/web-search-key-pool.test.tsx",
         "renderer/components/settings/web-search-settings.test.tsx",
         "renderer/components/sidebar-organize-menu.test.tsx",
+        "renderer/components/sidebar-primary-nav.test.tsx",
         "renderer/components/sidebar-remote.test.tsx",
         "renderer/components/subagent-shell-approval.test.tsx",
         "renderer/components/subagents-panel.test.tsx",
