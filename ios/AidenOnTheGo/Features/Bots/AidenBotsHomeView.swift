@@ -28,71 +28,6 @@ struct AidenBotsHomeLoadPlan: Equatable {
     }
 }
 
-struct AidenBotsFavoriteMutation: Equatable {
-    let id: UUID
-    let scope: AidenBotsHomeScope
-    let botID: String
-}
-
-struct AidenBotsFavoriteMutationFinish: Equatable {
-    let favoriteOverride: [String]?
-    let favoriteError: String?
-}
-
-func aidenBotsFinishFavoriteMutation(
-    current: AidenBotsFavoriteMutation?,
-    finishing mutation: AidenBotsFavoriteMutation,
-    restoring override: [String]?,
-    error: String? = nil
-) -> AidenBotsFavoriteMutationFinish? {
-    guard current == mutation else { return nil }
-    return AidenBotsFavoriteMutationFinish(
-        favoriteOverride: override,
-        favoriteError: error
-    )
-}
-
-struct AidenBotContactSectionIDs: Equatable {
-    let favorites: [String]
-    let others: [String]
-}
-
-/// Produces the one-contact-per-Bot projection used by the inbox. Favorites
-/// are a placement, not a duplicate copy, and search intentionally collapses
-/// the screen into one ordered result list.
-func aidenBotContactSectionIDs(
-    matchingBotIDs: [String],
-    activeBotIDs: [String],
-    favoriteIDs: [String],
-    isSearching: Bool
-) -> AidenBotContactSectionIDs {
-    guard !isSearching else {
-        return AidenBotContactSectionIDs(favorites: [], others: matchingBotIDs)
-    }
-
-    let activeSet = Set(activeBotIDs)
-    var seenFavorites = Set<String>()
-    let visibleFavorites = favoriteIDs.filter { id in
-        activeSet.contains(id) && seenFavorites.insert(id).inserted
-    }
-    let favoriteSet = Set(visibleFavorites)
-    return AidenBotContactSectionIDs(
-        favorites: visibleFavorites,
-        others: matchingBotIDs.filter { !favoriteSet.contains($0) }
-    )
-}
-
-private enum AidenBotsHomeSheet: Identifiable {
-    case editor(AidenBotEditorMode)
-    case profile(AidenBotSummary)
-
-    var id: String {
-        switch self {
-        case let .editor(mode): "editor-\(mode.id)"
-        case let .profile(bot): "profile-\(bot.id)"
-        }
-    }
-}
 
 enum AidenBotsHomeContentState: Equatable {
     case loading
@@ -168,73 +103,8 @@ func aidenResolvedBotDeepLink(
     return .openChat(chat.chatId)
 }
 
-/// A single layout-shaped placeholder shared by the Bot favorites, Bot list,
-/// and chat list during a true cold load. Warm refreshes keep the last-good UI
-/// in place and never show this view.
-private struct AidenBotHomeSkeletonView: View {
-    let reduceMotion: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            AidenBotSkeletonBlock(width: 74, height: 16, radius: 8, reduceMotion: reduceMotion)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 12)
-
-            ViewThatFits(in: .horizontal) {
-                favoritePlaceholders(diameter: 72, spacing: 18)
-                favoritePlaceholders(diameter: 56, spacing: 12)
-            }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 22)
-
-            AidenBotSkeletonBlock(width: 38, height: 16, radius: 8, reduceMotion: reduceMotion)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 8)
-
-            ForEach(0..<3, id: \.self) { index in
-                HStack(spacing: 14) {
-                    AidenBotSkeletonBlock(width: 52, height: 52, radius: 26, reduceMotion: reduceMotion)
-                    VStack(alignment: .leading, spacing: 8) {
-                        AidenBotSkeletonBlock(
-                            width: index == 1 ? 126 : 104,
-                            height: 15,
-                            radius: 7.5,
-                            reduceMotion: reduceMotion
-                        )
-                        AidenBotSkeletonBlock(
-                            width: index == 2 ? 160 : 180,
-                            height: 12,
-                            radius: 6,
-                            reduceMotion: reduceMotion
-                        )
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 11)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Loading Bots")
-    }
-
-    private func favoritePlaceholders(diameter: CGFloat, spacing: CGFloat) -> some View {
-        HStack(spacing: spacing) {
-            ForEach(0..<4, id: \.self) { _ in
-                VStack(spacing: 8) {
-                    AidenBotSkeletonBlock(
-                        width: diameter,
-                        height: diameter,
-                        radius: diameter / 2,
-                        reduceMotion: reduceMotion
-                    )
-                    AidenBotSkeletonBlock(width: 48, height: 10, radius: 5, reduceMotion: reduceMotion)
-                }
-            }
-        }
-    }
-}
-
+/// A shimmering placeholder block for cold loads. Warm refreshes keep the
+/// last-good UI in place and never show it.
 struct AidenBotSkeletonBlock: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenLowPowerMode) private var lowPowerMode
@@ -278,28 +148,90 @@ struct AidenBotSkeletonBlock: View {
     }
 }
 
-func aidenBotCanStartNewChat(health: AidenBotHealth, canWrite: Bool) -> Bool {
-    canWrite && health == .ready
+/// One row per Bot on the Bots home.
+struct AidenBotHomeRow: Equatable, Identifiable {
+    let bot: AidenBotSummary
+    let conversation: AidenBotConversationItem?
+
+    var id: String { bot.id }
+
+    /// The last message, or the Bot's subtitle before its first chat.
+    var preview: String {
+        let text = (conversation?.preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "Say hello" : text
+    }
+
+    /// Shows the small activity dot on the avatar while the Bot is working.
+    var isWorking: Bool {
+        guard let conversation else { return false }
+        return conversation.activityState != .idle
+    }
+
+    var lastActivity: Date { conversation?.updatedAt ?? bot.updatedAt }
 }
 
-struct AidenBotInboxActivityStatus: Equatable {
-    let label: String
-    let symbol: String
+/// Builds the Bots home list: archived Bots are hidden, the most recent
+/// conversation comes first, and search matches names, subtitles, previews,
+/// and server-side message matches.
+func aidenBotHomeRows(
+    bots: [AidenBotSummary],
+    conversations: [AidenBotConversationItem],
+    query: String,
+    remoteMatchBotIDs: Set<String> = []
+) -> [AidenBotHomeRow] {
+    let canonical = aidenCanonicalBotConversations(conversations)
+    let conversationByBotID = Dictionary(canonical.map { ($0.botId, $0) }, uniquingKeysWith: { first, _ in first })
+    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    return bots
+        .filter { $0.health != .archived }
+        .map { AidenBotHomeRow(bot: $0, conversation: conversationByBotID[$0.id]) }
+        .filter { row in
+            guard !needle.isEmpty else { return true }
+            return row.bot.name.localizedCaseInsensitiveContains(needle)
+                || row.bot.purpose.localizedCaseInsensitiveContains(needle)
+                || (row.conversation?.preview?.localizedCaseInsensitiveContains(needle) == true)
+                || remoteMatchBotIDs.contains(row.bot.id)
+        }
+        .sorted { lhs, rhs in
+            if lhs.lastActivity != rhs.lastActivity { return lhs.lastActivity > rhs.lastActivity }
+            let nameOrder = lhs.bot.name.localizedStandardCompare(rhs.bot.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.bot.id < rhs.bot.id
+        }
 }
 
-func aidenBotInboxActivityStatus(
-    state: AidenBotConversationActivityState,
-    canRespondToApproval: Bool
-) -> AidenBotInboxActivityStatus? {
-    switch state {
-    case .idle: nil
-    case .queued: .init(label: "Queued", symbol: "clock")
-    case .running: .init(label: "Working", symbol: "waveform")
-    case .waitingForApproval:
-        canRespondToApproval
-            ? .init(label: "Approval needed", symbol: "checkmark.shield")
-            : .init(label: "Waiting for desktop approval", symbol: "desktopcomputer")
-    case .reconciling: .init(label: "Updating", symbol: "arrow.triangle.2.circlepath")
+private enum AidenBotsHomeSheet: Identifiable {
+    case create
+    case profile(AidenBotSummary)
+
+    var id: String {
+        switch self {
+        case .create: "create"
+        case let .profile(bot): "profile-\(bot.id)"
+        }
+    }
+}
+
+private struct AidenBotHomeSkeletonView: View {
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<4, id: \.self) { index in
+                HStack(spacing: 14) {
+                    AidenBotSkeletonBlock(width: 52, height: 52, radius: 26, reduceMotion: reduceMotion)
+                    VStack(alignment: .leading, spacing: 8) {
+                        AidenBotSkeletonBlock(width: index == 1 ? 126 : 104, height: 15, radius: 7.5, reduceMotion: reduceMotion)
+                        AidenBotSkeletonBlock(width: index == 2 ? 160 : 200, height: 12, radius: 6, reduceMotion: reduceMotion)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Bots")
     }
 }
 
@@ -319,35 +251,24 @@ struct AidenBotsHomeView: View {
     @State private var snapshot: AidenBotCacheSnapshot?
     @State private var snapshotScope: AidenBotsHomeScope?
     @State private var query = ""
+    @State private var isSearching = false
     @State private var remoteSearchResults: [AidenBotConversationItem]?
     @State private var isLoading = false
-    @State private var isChoosingBot = false
     @State private var isCreatingConversation = false
-    @State private var favoriteOverride: [String]?
-    @State private var favoriteMutation: AidenBotsFavoriteMutation?
     @State private var presentedSheet: AidenBotsHomeSheet?
+    @State private var pendingDelete: AidenBotSummary?
+    @State private var deleteError: String?
     @State private var loadError: String?
-    @State private var favoriteError: String?
     @State private var loadGeneration: UInt = 0
+    @FocusState private var searchIsFocused: Bool
 
     private var loadID: AidenBotsHomeLoadID {
         AidenBotsHomeLoadID(
             instanceID: coordinator.activeInstanceId,
             deviceID: coordinator.installationStore.activeInstallation?.deviceId,
             connectionState: coordinator.connectionState,
-            isBotSurfaceActive: aidenBotSurfaceIsActive(
-                area: area,
-                availability: availability
-            )
+            isBotSurfaceActive: aidenBotSurfaceIsActive(area: area, availability: availability)
         )
-    }
-
-    private var activeBots: [AidenBotSummary] {
-        allBots.filter { $0.health != .archived }
-    }
-
-    private var chatReadyBots: [AidenBotSummary] {
-        activeBots.filter { $0.health == .ready }
     }
 
     private var selectedBot: AidenBotSummary? {
@@ -361,17 +282,11 @@ struct AidenBotsHomeView: View {
         }
         nonmutating set {
             let installation = coordinator.installationStore.activeInstallation
-            navigationStore.setSelectedBot(
-                newValue?.id,
-                for: installation?.id,
-                deviceID: installation?.deviceId
-            )
+            navigationStore.setSelectedBot(newValue?.id, for: installation?.id, deviceID: installation?.deviceId)
         }
     }
 
-    private var allBots: [AidenBotSummary] {
-        snapshot?.list?.bots ?? []
-    }
+    private var allBots: [AidenBotSummary] { snapshot?.list?.bots ?? [] }
 
     private var normalizedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -381,71 +296,40 @@ struct AidenBotsHomeView: View {
         aidenCanonicalBotConversations(snapshot?.conversations?.conversations ?? [])
     }
 
-    private var conversationByBotID: [String: AidenBotConversationItem] {
-        Dictionary(uniqueKeysWithValues: allConversations.map { ($0.botId, $0) })
-    }
-
     private var searchID: AidenBotsSearchID {
         AidenBotsSearchID(loadID: loadID, query: normalizedQuery)
     }
 
-    private var favoriteIDs: [String] {
-        favoriteOverride ?? snapshot?.list?.favorites.botIds ?? []
+    private var allRows: [AidenBotHomeRow] {
+        aidenBotHomeRows(bots: allBots, conversations: allConversations, query: "")
     }
 
-    private var favoriteIDSet: Set<String> { Set(favoriteIDs) }
-
-    private var matchingBots: [AidenBotSummary] {
-        let remoteConversationBotIDs = Set(remoteSearchResults?.map(\.botId) ?? [])
-        let candidates = allBots.filter { bot in
-            guard !normalizedQuery.isEmpty else { return true }
-            let conversation = conversationByBotID[bot.id]
-            return bot.name.localizedCaseInsensitiveContains(normalizedQuery)
-                || bot.purpose.localizedCaseInsensitiveContains(normalizedQuery)
-                || (conversation?.title.localizedCaseInsensitiveContains(normalizedQuery) == true)
-                || (conversation?.preview?.localizedCaseInsensitiveContains(normalizedQuery) == true)
-                || remoteConversationBotIDs.contains(bot.id)
-        }
-        return candidates.sorted { lhs, rhs in
-            let leftDate = conversationByBotID[lhs.id]?.updatedAt ?? lhs.updatedAt
-            let rightDate = conversationByBotID[rhs.id]?.updatedAt ?? rhs.updatedAt
-            if leftDate != rightDate { return leftDate > rightDate }
-            let nameOrder = lhs.name.localizedStandardCompare(rhs.name)
-            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
-            return lhs.id < rhs.id
-        }
-    }
-
-    private var contactSectionIDs: AidenBotContactSectionIDs {
-        aidenBotContactSectionIDs(
-            matchingBotIDs: matchingBots.map(\.id),
-            activeBotIDs: activeBots.map(\.id),
-            favoriteIDs: favoriteIDs,
-            isSearching: !normalizedQuery.isEmpty
+    private var rows: [AidenBotHomeRow] {
+        aidenBotHomeRows(
+            bots: allBots,
+            conversations: allConversations,
+            query: normalizedQuery,
+            remoteMatchBotIDs: Set(remoteSearchResults?.map(\.botId) ?? [])
         )
-    }
-
-    private var favoriteBots: [AidenBotSummary] {
-        let activeByID = Dictionary(uniqueKeysWithValues: activeBots.map { ($0.id, $0) })
-        return contactSectionIDs.favorites.compactMap { activeByID[$0] }
-    }
-
-    private var otherBots: [AidenBotSummary] {
-        let matchingByID = Dictionary(uniqueKeysWithValues: matchingBots.map { ($0.id, $0) })
-        return contactSectionIDs.others.compactMap { matchingByID[$0] }
     }
 
     private var contentState: AidenBotsHomeContentState {
         aidenBotsHomeContentState(
             hasSnapshot: snapshot != nil,
             isLoading: isLoading,
-            totalBotCount: allBots.count,
-            activeBotCount: activeBots.count,
-            conversationCount: allConversations.count,
+            totalBotCount: allRows.count,
+            activeBotCount: allRows.count,
+            conversationCount: 0,
             hasQuery: !normalizedQuery.isEmpty,
-            filteredBotCount: matchingBots.count,
+            filteredBotCount: rows.count,
             filteredConversationCount: 0
         )
+    }
+
+    private var canCreateBot: Bool {
+        availability.canWrite
+            && coordinator.connectionState == .connected
+            && coordinator.installationStore.activeInstallation?.canWriteBots == true
     }
 
     var body: some View {
@@ -453,24 +337,22 @@ struct AidenBotsHomeView: View {
             if horizontalSizeClass == .regular {
                 NavigationSplitView {
                     homeScroll
-                        .navigationTitle("Bots")
-                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar(.hidden, for: .navigationBar)
                 } detail: {
                     if let selectedBot {
                         AidenBotProfileView(
                             coordinator: coordinator,
                             initialSummary: selectedBot,
-                            onOpenConversation: onOpenConversation,
-                            onCreateConversation: onCreateConversation,
                             onChanged: { Task { await load() } },
+                            onDeleted: { self.selectedBot = nil },
                             showsDismissButton: false
                         )
                         .id("\(loadID.instanceID ?? "none")-\(loadID.deviceID ?? "none")-\(selectedBot.id)")
                     } else {
                         ContentUnavailableView(
-                            "Choose a Bot",
-                            systemImage: "person.crop.circle.badge.checkmark",
-                            description: Text("Select a Bot to view its profile and recent chats.")
+                            "Pick a Bot",
+                            systemImage: "bubble.left.and.bubble.right",
+                            description: Text("Tap a Bot to chat with it.")
                         )
                     }
                 }
@@ -480,19 +362,40 @@ struct AidenBotsHomeView: View {
         }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
-            case let .editor(mode):
-                AidenBotEditorView(coordinator: coordinator, mode: mode) { _ in
-                    Task { await load() }
+            case .create:
+                AidenBotCreateView(coordinator: coordinator) { created in
+                    Task {
+                        await load()
+                        openChat(for: AidenBotSummary(detail: created))
+                    }
                 }
             case let .profile(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
                     initialSummary: bot,
-                    onOpenConversation: onOpenConversation,
-                    onCreateConversation: onCreateConversation,
                     onChanged: { Task { await load() } }
                 )
             }
+        }
+        .aidenBotDeleteConfirmation(
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            botName: pendingDelete?.name ?? ""
+        ) {
+            if let bot = pendingDelete { Task { await delete(bot) } }
+        }
+        .alert(
+            "Couldn’t Delete",
+            isPresented: Binding(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "Please try again.")
         }
         .task(id: loadID) {
             await load()
@@ -500,20 +403,15 @@ struct AidenBotsHomeView: View {
         .task(id: searchID) {
             await searchConversations()
         }
-        .alert("Couldn’t Update Favorites", isPresented: Binding(
-            get: { favoriteError != nil },
-            set: { if !$0 { favoriteError = nil } }
-        )) {
-            Button("OK", role: .cancel) { favoriteError = nil }
-        } message: {
-            Text(favoriteError ?? "The operation could not be completed.")
-        }
     }
 
     private var homeScroll: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
+                if isSearching {
+                    searchField
+                }
                 if let loadError {
                     statusBanner(loadError)
                 }
@@ -523,23 +421,10 @@ struct AidenBotsHomeView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background(palette.canvas.ignoresSafeArea())
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomDock
-        }
-        .confirmationDialog("Choose a Bot", isPresented: $isChoosingBot, titleVisibility: .visible) {
-            ForEach(chatReadyBots) { bot in
-                Button(bot.name) {
-                    openOrCreateConversation(for: bot)
-                }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Open this Bot’s chat. Aiden starts it the first time if needed.")
-        }
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             AidenProductSwitcherButton(
                 area: area,
                 botsAvailability: availability,
@@ -552,354 +437,215 @@ struct AidenBotsHomeView: View {
                 .font(.largeTitle.bold())
                 .foregroundStyle(palette.foreground)
             Spacer()
-            Button {
-                presentedSheet = .editor(.create(defaultAccess: .recommended))
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+            headerButton(systemImage: "magnifyingglass", label: isSearching ? "Close search" : "Search") {
+                isSearching.toggle()
+                if isSearching {
+                    searchIsFocused = true
+                } else {
+                    query = ""
+                }
             }
-            .buttonStyle(.plain)
+            .disabled(allRows.isEmpty && !isSearching)
+            headerButton(systemImage: "plus", label: "New Bot") {
+                presentedSheet = .create
+            }
             .disabled(!canCreateBot)
-            .accessibilityLabel("New Bot")
-            .accessibilityHint("Opens the Bot editor. Nothing is created until you save.")
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
-        .padding(.bottom, 14)
+        .padding(.bottom, 10)
+    }
+
+    private func headerButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(palette.foreground)
+                .frame(width: 44, height: 44)
+                .background(palette.raised, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(palette.secondary)
+                .accessibilityHidden(true)
+            TextField("Search Bots", text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($searchIsFocused)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(palette.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 44)
+        .background(palette.raised, in: Capsule())
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
     }
 
     @ViewBuilder
     private var content: some View {
-        if contentState == .loading {
+        switch contentState {
+        case .loading:
             AidenBotHomeSkeletonView(reduceMotion: reduceMotion)
-        } else if contentState == .empty {
+        case .empty:
             ContentUnavailableView {
                 Label(
                     coordinator.connectionState == .connected ? "Make your first Bot" : "No saved Bots",
-                    systemImage: "message"
+                    systemImage: "bubble.left.and.bubble.right"
                 )
             } description: {
                 Text(
                     coordinator.connectionState == .connected
-                        ? "Create a Bot to give a familiar helper one persistent conversation and its own capabilities."
-                        : "Reconnect to your paired desktop to load Bots."
+                        ? "A Bot is a helper you can chat with anytime."
+                        : "Connect to your Mac to see your Bots."
                 )
             } actions: {
                 if coordinator.connectionState == .connected {
-                    Button("New Bot") {
-                        presentedSheet = .editor(.create(defaultAccess: .recommended))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(palette.accent)
-                    .foregroundStyle(palette.onAccent)
-                    .disabled(!canCreateBot)
+                    Button("New Bot") { presentedSheet = .create }
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(palette.accent)
+                        .foregroundStyle(palette.onAccent)
+                        .disabled(!canCreateBot)
                 }
             }
             .padding(.top, 54)
-        } else if contentState == .noResults {
+        case .noResults:
             ContentUnavailableView.search(text: normalizedQuery)
                 .padding(.top, 54)
-        } else {
-            if !favoriteBots.isEmpty {
-                Text("Favorites")
-                    .font(.headline)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 18) {
-                        ForEach(favoriteBots) { bot in
-                            Button {
-                                openOrCreateConversation(for: bot)
-                            } label: {
-                                VStack(spacing: 8) {
-                                    botAvatar(bot, diameter: 72)
-                                    Text(bot.name)
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(palette.foreground)
-                                        .lineLimit(1)
-                                        .frame(width: 76)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu { botContextMenu(bot) }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityLabel("\(bot.name), favorite")
-                            .accessibilityHint(openHint(for: bot))
-                            .accessibilityActions {
-                                if canUpdateFavorite(bot, adding: false) {
-                                    Button("Unpin from Favorites") {
-                                        updateFavoriteFromAccessibility(bot, move: .remove)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
+        case .content:
+            ForEach(rows) { row in
+                Button {
+                    openChat(for: row.bot)
+                } label: {
+                    botRow(row)
                 }
-                .padding(.bottom, 18)
-            }
-
-            if !otherBots.isEmpty {
-                Text("Bots")
-                    .font(.headline)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                ForEach(otherBots) { bot in
-                    Button {
-                        openOrCreateConversation(for: bot)
-                    } label: {
-                        botContactRow(bot)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu { botContextMenu(bot) }
-                    .accessibilityHint(openHint(for: bot))
-                    .accessibilityActions {
-                        let isFavorite = favoriteIDSet.contains(bot.id)
-                        if canUpdateFavorite(bot, adding: !isFavorite) {
-                            Button(isFavorite ? "Unpin from Favorites" : "Pin to Favorites") {
-                                updateFavoriteFromAccessibility(
-                                    bot,
-                                    move: isFavorite ? .remove : .add
-                                )
-                            }
-                        }
-                    }
-                }
+                .buttonStyle(.plain)
+                .contextMenu { botContextMenu(row.bot) }
+                .disabled(isCreatingConversation)
             }
         }
     }
 
-    private var bottomDock: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(palette.foreground)
-                    .accessibilityHidden(true)
-                TextField("Search", text: $query)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .accessibilityLabel("Search Bots")
-                if !query.isEmpty {
-                    Button { query = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
+    private func botRow(_ row: AidenBotHomeRow) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            AidenBotCanonicalAvatarView(
+                coordinator: coordinator,
+                botID: row.bot.id,
+                avatar: row.bot.avatar,
+                name: row.bot.name,
+                size: 52
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if row.isWorking {
+                    Circle()
+                        .fill(palette.success)
+                        .frame(width: 14, height: 14)
+                        .padding(2)
+                        .background(palette.canvas, in: Circle())
+                        .accessibilityHidden(true)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(row.bot.name)
+                        .font(.headline)
+                        .foregroundStyle(palette.foreground)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    if !row.bot.purpose.isEmpty {
+                        Text(row.bot.purpose)
+                            .font(.subheadline)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(palette.raised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    Spacer(minLength: 4)
+                    if let conversation = row.conversation {
+                        AidenRelativeTimestampView(date: conversation.updatedAt)
+                            .font(.subheadline)
                             .foregroundStyle(palette.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
                 }
+                Text(row.preview)
+                    .font(.body)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 17)
-            .frame(minHeight: 54)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay { Capsule().stroke(palette.foreground.opacity(0.12), lineWidth: 0.5) }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(rowAccessibilityLabel(row))
+        .accessibilityHint("Opens the chat")
+    }
 
-            Button { isChoosingBot = true } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(palette.foreground)
-                    .frame(width: 54, height: 54)
-                    .contentShape(Circle())
+    private func rowAccessibilityLabel(_ row: AidenBotHomeRow) -> String {
+        var parts = [row.bot.name]
+        if !row.bot.purpose.isEmpty { parts.append(row.bot.purpose) }
+        if row.isWorking { parts.append("Working") }
+        parts.append(row.preview)
+        return parts.joined(separator: ", ")
+    }
+
+    @ViewBuilder
+    private func botContextMenu(_ bot: AidenBotSummary) -> some View {
+        Button("Profile", systemImage: "person.crop.circle") {
+            presentProfile(bot)
+        }
+        if AidenBotDeletion.isAvailable(coordinator: coordinator) {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                pendingDelete = bot
             }
-            .buttonStyle(.plain)
-            .disabled(
-                !availability.canWrite
-                    || coordinator.connectionState != .connected
-                    || chatReadyBots.isEmpty
-                    || isCreatingConversation
-            )
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay { Circle().stroke(palette.foreground.opacity(0.12), lineWidth: 0.5) }
-            .accessibilityLabel("Open Bot Chat")
-            .accessibilityHint("Choose a Bot to open its chat.")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
     }
 
-    private var canCreateBot: Bool {
-        availability.canWrite
-            && coordinator.connectionState == .connected
-            && coordinator.installationStore.activeInstallation?.canWriteBots == true
+    private func statusBanner(_ message: String) -> some View {
+        Label(message, systemImage: coordinator.connectionState == .connected ? "exclamationmark.triangle" : "wifi.slash")
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
     }
 
-    private func canOpen(_ bot: AidenBotSummary) -> Bool {
-        guard coordinator.connectionState == .connected else { return false }
-        if conversationByBotID[bot.id] != nil { return true }
-        return bot.health == .ready && canCreateBot
-    }
-
-    private func openHint(for bot: AidenBotSummary) -> String {
-        guard coordinator.connectionState == .connected else {
-            return "Reconnect to open this Bot’s saved conversation."
-        }
-        if conversationByBotID[bot.id] != nil {
-            return "Opens this Bot’s conversation."
-        }
-        if bot.health == .ready, canCreateBot {
-            return "Starts this Bot’s conversation."
-        }
-        return "Open Bot Details to review why this Bot cannot start a conversation."
-    }
-
-    private func canUpdateFavorite(_ bot: AidenBotSummary, adding: Bool) -> Bool {
-        guard bot.health != .archived,
-              favoriteMutation == nil,
-              canCreateBot else { return false }
-        return !adding || favoriteIDs.count < AidenBotFavorites.maximumCount
-    }
-
-    private func updateFavoriteFromAccessibility(
-        _ bot: AidenBotSummary,
-        move: AidenBotFavoriteOrderMove
-    ) {
-        let adding = move == .add
-        guard canUpdateFavorite(bot, adding: adding) else { return }
-        Task { await updateFavorite(bot, move: move) }
-    }
-
+    /// Opens the Bot's one chat, starting it the first time if needed.
     @MainActor
-    private func updateFavorite(
-        _ bot: AidenBotSummary,
-        move: AidenBotFavoriteOrderMove
-    ) async {
-        let adding = move == .add
-        guard canUpdateFavorite(bot, adding: adding),
-              let installation = coordinator.installationStore.activeInstallation,
-              let list = snapshot?.list else { return }
-        let scope = AidenBotsHomeScope(
-            instanceID: installation.id,
-            deviceID: installation.deviceId
-        )
-        let mutation = AidenBotsFavoriteMutation(id: UUID(), scope: scope, botID: bot.id)
-        let currentFavorites = list.favorites
-        let nextIDs = aidenBotFavoriteOrder(favoriteIDs, moving: bot.id, move)
-        guard nextIDs != favoriteIDs else { return }
-
-        var capturedContext: AidenRemoteRequestContext?
-        let previousOverride = favoriteOverride
-        favoriteMutation = mutation
-        favoriteOverride = nextIDs
-        favoriteError = nil
-
-        do {
-            let context = try coordinator.requestContext()
-            capturedContext = context
-            let request = try AidenBotFavoritesUpdateRequest(botIds: nextIDs)
-            let updated = try await coordinator.remoteClient(for: context).updateBotFavorites(
-                request,
-                revision: currentFavorites.revision
-            )
-            guard coordinator.isCurrent(context),
-                  coordinator.installationStore.activeInstallation?.id == installation.id,
-                  coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId else {
-                finishFavoriteMutation(mutation, restoring: nil)
-                return
-            }
-            try await publishFavorites(updated, list: list, context: context)
-            finishFavoriteMutation(mutation, restoring: nil)
-        } catch is CancellationError {
-            finishFavoriteMutation(mutation, restoring: previousOverride)
-        } catch {
-            if let context = capturedContext,
-               await coordinator.handleCredentialRevocation(error, context: context) {
-                finishFavoriteMutation(mutation, restoring: previousOverride)
-                return
-            }
-            guard let context = capturedContext, coordinator.isCurrent(context) else {
-                finishFavoriteMutation(mutation, restoring: nil)
-                return
-            }
-            do {
-                let authoritative = try await coordinator.remoteClient(for: context).botFavorites()
-                guard coordinator.isCurrent(context) else {
-                    finishFavoriteMutation(mutation, restoring: nil)
-                    return
-                }
-                try await publishFavorites(authoritative, list: list, context: context)
-                finishFavoriteMutation(
-                    mutation,
-                    restoring: nil,
-                    error: "Aiden refreshed the latest Favorites. Try your change again."
-                )
-            } catch {
-                finishFavoriteMutation(
-                    mutation,
-                    restoring: previousOverride,
-                    error: "Aiden couldn’t update Favorites. Reconnect and try again."
-                )
-            }
-        }
-    }
-
-    private func finishFavoriteMutation(
-        _ mutation: AidenBotsFavoriteMutation,
-        restoring override: [String]?,
-        error: String? = nil
-    ) {
-        guard let finish = aidenBotsFinishFavoriteMutation(
-            current: favoriteMutation,
-            finishing: mutation,
-            restoring: override,
-            error: error
-        ) else { return }
-        favoriteMutation = nil
-        favoriteOverride = finish.favoriteOverride
-        favoriteError = finish.favoriteError
-    }
-
-    private func resetFavoriteMutationState() {
-        favoriteMutation = nil
-        favoriteOverride = nil
-        favoriteError = nil
-    }
-
-    @MainActor
-    private func publishFavorites(
-        _ favorites: AidenBotFavorites,
-        list: AidenBotList,
-        context: AidenRemoteRequestContext
-    ) async throws {
-        // Keep any Bot-list refresh that completed while this mutation was in
-        // flight; only the revisioned Favorites projection is replaced.
-        let updatedList = try (snapshot?.list ?? list).replacingFavorites(favorites)
-        guard coordinator.isCurrent(context) else { return }
-        let savedAt = Date()
-        var updatedSnapshot = snapshot ?? AidenBotCacheSnapshot(savedAt: savedAt)
-        updatedSnapshot.list = updatedList
-        updatedSnapshot.savedAt = savedAt
-        snapshot = updatedSnapshot
-        let retained = await coordinator.withRetainedInstallationData(for: context) {
-            _ = try? await AidenBotCache.shared.mergeAndStore(
-                AidenBotCacheSegments(list: updatedList),
-                savedAt: savedAt,
-                instanceId: context.instanceId,
-                deviceId: context.deviceId
-            )
-        }
-        guard retained, coordinator.isCurrent(context) else { return }
-    }
-
-    @MainActor
-    private func openOrCreateConversation(for bot: AidenBotSummary) {
+    private func openChat(for bot: AidenBotSummary) {
         guard !isCreatingConversation else { return }
-        guard canOpen(bot) else {
+        if let conversation = allConversations.first(where: { $0.botId == bot.id }) {
+            isCreatingConversation = true
+            Task {
+                defer { isCreatingConversation = false }
+                await onOpenConversation(conversation)
+            }
+            return
+        }
+        guard bot.health == .ready, canCreateBot else {
             presentProfile(bot)
             return
         }
         isCreatingConversation = true
         Task {
             defer { isCreatingConversation = false }
-            if let conversation = allConversations.first(where: { $0.botId == bot.id }) {
-                await onOpenConversation(conversation)
-            } else {
-                await onCreateConversation(bot)
-                await load()
-            }
+            await onCreateConversation(bot)
+            await load()
         }
     }
 
@@ -911,109 +657,19 @@ struct AidenBotsHomeView: View {
         }
     }
 
-    private func botContactRow(_ bot: AidenBotSummary) -> some View {
-        let conversation = conversationByBotID[bot.id]
-        let preview = botContactPreview(bot, conversation: conversation)
-        return HStack(spacing: 14) {
-            botAvatar(bot, diameter: 52)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(bot.name)
-                        .font(.headline)
-                        .foregroundStyle(palette.foreground)
-                    Spacer()
-                    if let conversation {
-                        AidenRelativeTimestampView(date: conversation.updatedAt)
-                            .font(.subheadline)
-                            .foregroundStyle(palette.secondary)
-                    }
-                }
-                Text(preview)
-                    .font(.body)
-                    .foregroundStyle(palette.secondary)
-                    .lineLimit(2)
-                if let conversation,
-                   let status = aidenBotInboxActivityStatus(
-                       state: conversation.activityState,
-                       canRespondToApproval: conversation.canRespondToApproval
-                   ) {
-                    Label(status.label, systemImage: status.symbol)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(palette.accent)
-                }
-            }
+    @MainActor
+    private func delete(_ bot: AidenBotSummary) async {
+        pendingDelete = nil
+        do {
+            let detail = try await coordinator.remoteClient(for: try coordinator.requestContext()).bot(id: bot.id)
+            try await AidenBotDeletion.delete(botID: detail.id, revision: detail.revision, coordinator: coordinator)
+            if selectedBot?.id == bot.id { selectedBot = nil }
+            await load()
+        } catch is CancellationError {
+            return
+        } catch {
+            deleteError = "\(bot.name) wasn’t deleted. Please try again."
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(botContactAccessibilityLabel(bot, conversation: conversation, preview: preview))
-    }
-
-    private func botContactPreview(
-        _ bot: AidenBotSummary,
-        conversation: AidenBotConversationItem?
-    ) -> String {
-        let base = conversation?.preview ?? conversation?.title ?? bot.purpose
-        let fallback = base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Start a conversation"
-            : base
-        return bot.health == .archived ? "Archived · \(fallback)" : fallback
-    }
-
-    private func botContactAccessibilityLabel(
-        _ bot: AidenBotSummary,
-        conversation: AidenBotConversationItem?,
-        preview: String
-    ) -> String {
-        var parts = [bot.name, preview]
-        if let conversation,
-           let status = aidenBotInboxActivityStatus(
-               state: conversation.activityState,
-               canRespondToApproval: conversation.canRespondToApproval
-           ) {
-            parts.append(status.label)
-        }
-        return parts.joined(separator: ", ")
-    }
-
-    @ViewBuilder
-    private func botContextMenu(_ bot: AidenBotSummary) -> some View {
-        let isFavorite = favoriteIDSet.contains(bot.id)
-        Button {
-            Task { await updateFavorite(bot, move: isFavorite ? .remove : .add) }
-        } label: {
-            Label(
-                isFavorite ? "Unpin from Favorites" : "Pin to Favorites",
-                systemImage: isFavorite ? "pin.slash" : "pin"
-            )
-        }
-        .disabled(!canUpdateFavorite(bot, adding: !isFavorite))
-
-        Button {
-            presentProfile(bot)
-        } label: {
-            Label("Bot Details", systemImage: "info.circle")
-        }
-    }
-
-    private func botAvatar(_ bot: AidenBotSummary, diameter: CGFloat) -> some View {
-        AidenBotCanonicalAvatarView(
-            coordinator: coordinator,
-            botID: bot.id,
-            avatar: bot.avatar,
-            name: bot.name,
-            size: diameter
-        )
-    }
-
-    private func statusBanner(_ message: String) -> some View {
-        Label(message, systemImage: coordinator.connectionState == .connected ? "exclamationmark.triangle" : "wifi.slash")
-            .font(.footnote)
-            .foregroundStyle(palette.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
     }
 
     @MainActor
@@ -1030,9 +686,8 @@ struct AidenBotsHomeView: View {
             snapshotScope = nil
             remoteSearchResults = nil
             presentedSheet = nil
-            isChoosingBot = false
+            pendingDelete = nil
             isCreatingConversation = false
-            resetFavoriteMutationState()
             loadError = nil
             isLoading = false
             return
@@ -1040,7 +695,6 @@ struct AidenBotsHomeView: View {
         guard let installation = coordinator.installationStore.activeInstallation else {
             snapshot = nil
             snapshotScope = nil
-            resetFavoriteMutationState()
             isLoading = false
             return
         }
@@ -1052,7 +706,6 @@ struct AidenBotsHomeView: View {
             snapshot = nil
             snapshotScope = scope
             remoteSearchResults = nil
-            resetFavoriteMutationState()
         }
         loadError = nil
         isLoading = coordinator.connectionState == .connected
@@ -1091,12 +744,11 @@ struct AidenBotsHomeView: View {
             capturedContext = context
             let client = try coordinator.remoteClient(for: context)
             let plan = AidenBotsHomeLoadPlan(installation: installation)
-            // Archived Bots remain the identity owner of their readable chat history.
-            // Keep them in the projection/cache, then filter them only from creation
-            // and favorites controls. Bot identity and chat history are separately
-            // granted, so one denied segment must not erase the other.
+            // Bot identity and chat history are separately granted, so one
+            // denied segment must not erase the other. Archived Bots are no
+            // longer a phone concept and are not requested.
             async let listRequest = aidenLoadBotsHomeSegment(enabled: plan.loadsList) {
-                try await client.bots(includeArchived: true)
+                try await client.bots()
             }
             async let conversationRequest = aidenLoadBotsHomeSegment(
                 enabled: plan.loadsConversations

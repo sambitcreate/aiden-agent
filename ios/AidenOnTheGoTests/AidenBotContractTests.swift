@@ -2048,25 +2048,6 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
-    func testCustomAccessDirtyStateUsesLoadedOrReconciledBaseline() throws {
-        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
-        let fixture = try AidenRemoteJSONDecoder.decode(
-            AidenRemoteContractFixture.self,
-            from: Data(contentsOf: fixtureURL)
-        )
-        let clean = try XCTUnwrap(
-            AidenBotCustomAccessDraft(
-                access: fixture.botPolicyUpdate.response,
-                catalog: fixture.botCapabilityCatalog
-            )
-        )
-        XCTAssertFalse(aidenBotCustomAccessIsDirty(draft: clean, cleanDraft: clean))
-        var changed = clean
-        changed.shellEnabled.toggle()
-        XCTAssertTrue(aidenBotCustomAccessIsDirty(draft: changed, cleanDraft: clean))
-        XCTAssertFalse(aidenBotCustomAccessIsDirty(draft: changed, cleanDraft: changed))
-    }
-
     func testCustomAccessOnlyShowsAvailableOptionsAndSelectedTombstones() throws {
         let available = try AidenRemoteJSONDecoder.decode(
             AidenBotCapabilityOption.self,
@@ -2104,86 +2085,7 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
-    func testCustomAccessOnlyRebasesExpectedRevisionConflicts() throws {
-        let conflictEnvelope = try AidenRemoteJSONDecoder.decode(
-            AidenRemoteErrorEnvelope.self,
-            from: data(for: [
-                "error": [
-                    "code": "operation_stale",
-                    "message": "The capability catalog changed.",
-                    "requestId": "request_test",
-                    "retryable": false,
-                ],
-            ])
-        )
-        XCTAssertEqual(
-            aidenBotAccessSaveFailureKind(
-                AidenRemoteClientError.server(statusCode: 409, body: conflictEnvelope.error)
-            ),
-            .conflict
-        )
-        XCTAssertEqual(
-            aidenBotAccessSaveFailureKind(
-                AidenRemoteClientError.server(statusCode: 500, body: conflictEnvelope.error)
-            ),
-            .retryable
-        )
-        XCTAssertEqual(
-            aidenBotAccessSaveFailureKind(AidenRemoteClientError.invalidResponse),
-            .retryable
-        )
-    }
-
-    func testFavoriteOrderSupportsMembershipAndStableReordering() {
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b"], moving: "c", .add), ["a", "b", "c"])
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .earlier), ["b", "a", "c"])
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .later), ["a", "c", "b"])
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .remove), ["a", "c"])
-    }
-
-    func testConversationDeletionRequiresIdleActiveWritableBot() throws {
-        var fixture = try sharedFixtureObject()
-        var conversation = try XCTUnwrap(fixture["botConversation"] as? [String: Any])
-        conversation["activityState"] = "idle"
-        conversation["canRespondToApproval"] = false
-        fixture["botConversation"] = conversation
-        let item = try AidenRemoteJSONDecoder.decode(
-            AidenBotConversationItem.self,
-            from: data(for: conversation)
-        )
-
-        XCTAssertTrue(aidenBotConversationCanDelete(item, botHealth: .ready, canWrite: true))
-        XCTAssertFalse(aidenBotConversationCanDelete(item, botHealth: .archived, canWrite: true))
-        XCTAssertFalse(aidenBotConversationCanDelete(item, botHealth: .ready, canWrite: false))
-    }
-
-    func testConversationSelectionAccessibilityExposesSelectedAndArchivedReadOnlyState() {
-        let selected = aidenBotConversationSelectionAccessibility(
-            isSelecting: true,
-            isSelected: true,
-            canDelete: true,
-            botHealth: .ready,
-            canWrite: true,
-            activityState: .idle
-        )
-        XCTAssertEqual(selected.value, "Selected")
-        XCTAssertTrue(selected.isSelected)
-        XCTAssertEqual(selected.hint, "Selects this chat for deletion.")
-
-        let archived = aidenBotConversationSelectionAccessibility(
-            isSelecting: true,
-            isSelected: false,
-            canDelete: false,
-            botHealth: .archived,
-            canWrite: true,
-            activityState: .idle
-        )
-        XCTAssertEqual(archived.value, "Not selected")
-        XCTAssertFalse(archived.isSelected)
-        XCTAssertEqual(archived.hint, "Archived Bot chats are read-only.")
-    }
-
-    func testSemanticAvatarPresentationPreservesRecipeAndMapsLegacyIdentity() {
+    func testSemanticAvatarPresentationUsesColourAndShapeAndMapsLegacyLikeDesktop() {
         let recipe = AidenBotAvatarRecipe(
             shape: .hex,
             color: .coral,
@@ -2192,21 +2094,11 @@ final class AidenBotContractTests: XCTestCase {
         )
         XCTAssertEqual(
             aidenBotAvatarPresentation(.recipe(recipe)),
-            AidenBotAvatarPresentation(
-                shape: .hex,
-                color: .coral,
-                eyes: .wink,
-                detail: .antenna
-            )
+            AidenBotAvatarPresentation(shape: .hex, color: .coral)
         )
         XCTAssertEqual(
             aidenBotAvatarPresentation(.legacy(.orbit)),
-            AidenBotAvatarPresentation(
-                shape: .orb,
-                color: .lilac,
-                eyes: .focus,
-                detail: .orbit
-            )
+            AidenBotAvatarPresentation(shape: .orb, color: .sky)
         )
     }
 }
