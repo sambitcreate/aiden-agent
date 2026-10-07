@@ -224,6 +224,9 @@ export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSe
   if (state.kind === "interrupted") {
     return { state: "interrupted", interrupted: true, ...(state.blocked ? { blocked: state.blocked } : {}) };
   }
+  // A model that exists but cannot run right now is `unavailable` on the wire;
+  // its message stays on the Mac.
+  if (state.kind === "model_error") return { state: "unavailable", interrupted: false };
   return { state: state.kind as AidenRemoteBotSessionStateKind, interrupted: false };
 }
 

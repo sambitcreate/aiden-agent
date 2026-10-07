@@ -56,14 +56,14 @@ test("bot store persists create and edit, and delete erases the record and its a
     const shaped = await store.create({
       name: "Shaped",
       instructions: "Keep a full appearance.",
-      avatar: { version: 1, shape: "orb", color: "aqua", eyes: "focus", detail: "orbit" },
+      avatar: { version: 1, shape: "orb", color: "aqua" },
     });
     assert.equal(await store.delete(shaped.id), true);
     assert.equal(await store.get(shaped.id), null);
     const appearances = JSON.parse(
       await readFile(join(root, "bot-avatar-appearances.json"), "utf8"),
     ) as { appearances: Array<{ botId: string }> };
-    assert.deepEqual(appearances.appearances.map(({ botId }) => botId), []);
+    assert.equal(appearances.appearances.some(({ botId }) => botId === shaped.id), false);
     // Idempotent: a second delete finds nothing and changes nothing.
     assert.equal(await store.delete(shaped.id), false);
     assert.deepEqual((await store.list()).map(({ id }) => id), [created.id]);
@@ -79,7 +79,7 @@ test("bot store persists create and edit, and delete erases the record and its a
 test("legacy archived records are hidden and reported for erase until deleted", async () => {
   const { root, store } = await fixture();
   try {
-    const live = await store.create({ name: "Live", instructions: "Stay.", avatar: "spark" });
+    const live = await store.create({ name: "Live", instructions: "Stay.", avatar: { version: 1, shape: "orb", color: "sky" } });
     const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
       version: number;
       bots: Array<Record<string, unknown>>;
@@ -506,7 +506,7 @@ test("an older-release primary rewrite cannot publish a newer uncommitted compan
 
     const restarted = createBotStore({ root: () => root });
     const restored = await restarted.get(created.id);
-    assert.equal(restored?.avatar, "spark");
+    assert.deepEqual(restored?.avatar, { version: 1, shape: "wisp", color: "lilac" });
     assert.notDeepEqual(restored?.avatar, uncommitted);
   } finally {
     await rm(root, { recursive: true, force: true });

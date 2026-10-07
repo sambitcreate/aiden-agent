@@ -2076,8 +2076,8 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
-      const botControlMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/(resume|dismiss|stop)$/u.exec(path);
-      if (botControlMatch && request.method === "POST") {
+      const botResumeMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/resume$/u.exec(path);
+      if (botResumeMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botSession";
         const body = await readJsonBody(request);
@@ -2085,14 +2085,31 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        const sessions = botSessionsOrNotFound(dependencies);
-        const [botId, action] = [botControlMatch[1]!, botControlMatch[2]!];
-        const view = action === "resume"
-          ? await sessions.resume(device.id, botId, key, body)
-          : action === "dismiss"
-            ? await sessions.dismiss(device.id, botId, key, body)
-            : await sessions.stop(device.id, botId, key, body);
-        writeJson(response, 200, view);
+        writeJson(response, 200, await botSessionsOrNotFound(dependencies).resume(device.id, botResumeMatch[1]!, key, body));
+        return;
+      }
+      const botDismissMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/dismiss$/u.exec(path);
+      if (botDismissMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botSession";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read"]);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(response, 200, await botSessionsOrNotFound(dependencies).dismiss(device.id, botDismissMatch[1]!, key, body));
+        return;
+      }
+      const botStopMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/stop$/u.exec(path);
+      if (botStopMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botSession";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read"]);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(response, 200, await botSessionsOrNotFound(dependencies).stop(device.id, botStopMatch[1]!, key, body));
         return;
       }
       const botRoutinesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routines$/u.exec(path);
@@ -2261,6 +2278,9 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
+        if (!dependencies.bots.delete) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
         await dependencies.bots.delete(botMatch[1]!, revision);
         response.writeHead(204, responseHeaders());
         response.end();

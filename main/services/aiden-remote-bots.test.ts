@@ -5,7 +5,6 @@ import {
   type BotAccessUpdate,
   type BotAccessView,
   type BotCapabilityCatalog,
-  type BotChatAccessUpdate,
   type BotChatAccessView,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotCreateInput, BotDefinition, BotUpdateInput } from "../../renderer/shared/bots.js";
@@ -13,11 +12,8 @@ import { BotCapabilityRevisionConflictError } from "./bot-capability-store-core.
 import { BotIdentityRevisionConflictError } from "./bot-store-core.js";
 import {
   AidenRemoteBotService,
-  EMPTY_AIDEN_REMOTE_BOT_FAVORITES,
-  normalizeAidenRemoteBotFavoritesSnapshot,
   projectAidenRemoteBotSummary,
   type AidenRemoteBotServiceOptions,
-  type AidenRemoteBotFavoritesSnapshot,
 } from "./aiden-remote-bots.js";
 import {
   AidenIdempotencyLedger,
@@ -77,7 +73,7 @@ function bot(id: string, overrides: Partial<BotDefinition> = {}): BotDefinition 
     description: "Keeps projects moving",
     instructions: "Help plan projects.",
     openingGreeting: "What should we plan?",
-    avatar: "spark",
+    avatar: { version: 1, shape: "orb", color: "sky" },
     createdAt: 1_000,
     updatedAt: 2_000,
     ...overrides,
@@ -95,10 +91,6 @@ function fixture(
     withBotMutation?: NonNullable<
       AidenRemoteBotServiceOptions["application"]["withBotMutation"]
     >;
-    withFavoritesMutation?: AidenRemoteBotServiceOptions["withFavoritesMutation"];
-    beforeSaveFavorites?: (
-      snapshot: AidenRemoteBotFavoritesSnapshot,
-    ) => Promise<void>;
     updateBotAccessError?: unknown;
     capabilityCatalog?: (
       audienceId: string,
@@ -110,19 +102,16 @@ function fixture(
   const policies = new Map(bots.map(({ id }) => [id, fullAccess(id)]));
   const chats = new Map<string, Chat>();
   const chatPolicies = new Map<string, BotChatAccessView>();
-  let favorites: AidenRemoteBotFavoritesSnapshot = structuredClone(
-    EMPTY_AIDEN_REMOTE_BOT_FAVORITES,
-  );
+  const deletedBots: string[] = [];
   let botSequence = bots.length;
   let chatSequence = 0;
   let createCalls = 0;
-  let savedFavorites = 0;
   const resolvedSelections: unknown[] = [];
   const notifications: string[] = [];
 
   const application = {
-    async list(includeArchived = false) {
-      return structuredClone(bots.filter((entry) => includeArchived || entry.archivedAt === undefined));
+    async list() {
+      return structuredClone(bots);
     },
     async get(botId: string) {
       return structuredClone(bots.find(({ id }) => id === botId) ?? null);
@@ -248,42 +237,6 @@ function fixture(
       policies.set(input.botId, updated);
       return structuredClone(updated);
     },
-    async getChatAccess(chatId: string) {
-      const policy = chatPolicies.get(chatId);
-      if (!policy) throw new Error("missing");
-      return structuredClone(policy);
-    },
-    async updateChatAccess(input: {
-      botId: string;
-      chatId: string;
-      expectedRevision: string;
-      access: BotChatAccessUpdate;
-    }) {
-      const current = chatPolicies.get(input.chatId)!;
-      if (current.revision !== input.expectedRevision) {
-        throw new BotCapabilityRevisionConflictError(current.revision);
-      }
-      const updated: BotChatAccessView = input.access.mode === "inherit"
-        ? {
-            chatId: input.chatId,
-            botId: input.botId,
-            mode: "inherit",
-            revision: `${current.revision}_next`,
-            botPolicyRevision: input.access.expectedBotPolicyRevision,
-            summary: "Full",
-          }
-        : {
-            chatId: input.chatId,
-            botId: input.botId,
-            mode: "custom",
-            revision: `${current.revision}_next`,
-            botPolicyRevision: input.access.expectedBotPolicyRevision,
-            summary: "Custom",
-            custom: structuredClone(input.access.custom),
-          };
-      chatPolicies.set(input.chatId, updated);
-      return structuredClone(updated);
-    },
     async withBotMutation<Result>(
       botId: string,
       action: () => Promise<Result>,
@@ -297,13 +250,9 @@ function fixture(
   const service = new AidenRemoteBotService({
     application,
     chatStore: { get: async (chatId) => structuredClone(chats.get(chatId) ?? null) },
-    favorites: {
-      load: async () => structuredClone(favorites),
-      save: async (snapshot) => {
-        await options.beforeSaveFavorites?.(structuredClone(snapshot));
-        favorites = structuredClone(snapshot);
-        savedFavorites += 1;
-      },
+    deleteBot: async (botId: string) => {
+      deletedBots.push(botId);
+      bots = bots.filter(({ id }) => id !== botId);
     },
     resolveProviderModel: async (selection) => {
       resolvedSelections.push(structuredClone(selection));
@@ -319,8 +268,7 @@ function fixture(
   return {
     service,
     createCalls: () => createCalls,
-    savedFavorites: () => savedFavorites,
-    favoriteSnapshot: () => structuredClone(favorites),
+    deletedBots: () => [...deletedBots],
     resolvedSelections,
     notifications,
     chats,
@@ -330,13 +278,6 @@ function fixture(
     /** A Bot deleted on the Mac: its record is gone. */
     deleteBotUnsafe(botId: string) {
       bots = bots.filter(({ id }) => id !== botId);
-    },
-    pruneFavoriteUnsafe(botId: string) {
-      favorites = {
-        version: 1,
-        botIds: favorites.botIds.filter((candidate) => candidate !== botId),
-      };
-      savedFavorites += 1;
     },
   };
 }
@@ -481,7 +422,7 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
     purpose: "Finds useful context",
     instructions: "Research carefully.",
     openingGreeting: "What should I research?",
-    avatar: "orbit",
+    avatar: { version: 1, shape: "orb", color: "lilac" },
     access: {
       accessMode: "full",
       catalogRevision: CATALOG_REVISION,
@@ -532,40 +473,21 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
     { providerId: PROVIDER_ID, modelId: MODEL_ID },
   );
 
-  const subset = await app.service.getChatAccess(chat.id);
-  const narrowed = await app.service.updateChatAccess(
-    "device_1",
-    chat.id,
-    subset.revision,
-    {
-      mode: "custom",
-      catalogRevision: CATALOG_REVISION,
-      expectedBotPolicyRevision: subset.botPolicyRevision,
-      custom: {
-        providerId: PROVIDER_ID,
-        modelId: MODEL_ID,
-        fileScopeIds: ["scope_bot_home"],
-        shellEnabled: false,
-        connectionIds: [],
-        skillIds: [],
-        otherCapabilityIds: [],
-      },
-    },
-  );
-  assert.equal(narrowed.mode, "custom");
-  assert.equal(narrowed.custom.shellEnabled, false);
-
-  // Archive and restore were removed; the routes refuse without changing the Bot.
-  const retired = (error: unknown) => (error as { code?: string }).code === "invalid_request";
-  await assert.rejects(app.service.archive(created.id, updated.revision), retired);
+  // Chat-scoped access routes are gone: a Bot's access changes only on the Bot.
+  // Deleting erases the Bot; a stale If-Match is refused and changes nothing.
   await assert.rejects(
-    app.service.restore("device_1", created.id, updated.revision, "bot-restore-key-001"),
-    retired,
+    app.service.delete(created.id, "stale_revision"),
+    (error: unknown) => (error as { code?: string }).code === "revision_conflict",
   );
-  assert.equal((await app.service.get(created.id)).health, "ready");
   assert.equal((await app.service.get(created.id)).revision, updated.revision);
   assert.ok(app.notifications.includes(`bot:${created.id}`));
   assert.ok(app.notifications.includes(`chat:${chat.id}`));
+  await app.service.delete(created.id, updated.revision);
+  assert.deepEqual(app.deletedBots(), [created.id]);
+  await assert.rejects(
+    app.service.get(created.id),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
 });
 
 test("a durable legacy chat replay reconciles to the current canonical Bot chat", async () => {
@@ -700,7 +622,7 @@ test("an omitted first-chat pair inherits Bot authority without resolving a new 
   assert.equal(app.resolvedSelections.length, 0);
 });
 
-test("stale identity, policy, and favorites revisions return authoritative conflicts", async () => {
+test("stale identity and policy revisions return authoritative conflicts", async () => {
   const app = fixture();
   const detail = await app.service.get("bot_1");
   await assert.rejects(
@@ -719,12 +641,6 @@ test("stale identity, policy, and favorites revisions return authoritative confl
       (error as { code?: string }).code === "revision_conflict" &&
       (error as { details?: { currentRevision?: string } }).details?.currentRevision ===
         "policy_revision_1",
-  );
-  const favorites = await app.service.favorites();
-  await app.service.updateFavorites(favorites.revision, { botIds: ["bot_1"] });
-  await assert.rejects(
-    app.service.updateFavorites(favorites.revision, { botIds: [] }),
-    (error: unknown) => (error as { code?: string }).code === "revision_conflict",
   );
 });
 
@@ -750,22 +666,6 @@ test("stale capability validation maps to a retryable operation conflict", async
   );
 });
 
-test("favorites preserve order, reject duplicates, and prune deleted Bots", async () => {
-  const app = fixture([bot("bot_1"), bot("bot_2")]);
-  const empty = await app.service.favorites();
-  const ordered = await app.service.updateFavorites(empty.revision, {
-    botIds: ["bot_2", "bot_1"],
-  });
-  assert.deepEqual(ordered.botIds, ["bot_2", "bot_1"]);
-  await assert.rejects(
-    app.service.updateFavorites(ordered.revision, { botIds: ["bot_1", "bot_1"] }),
-    (error: unknown) => (error as { code?: string }).code === "invalid_request",
-  );
-  app.deleteBotUnsafe("bot_2");
-  assert.deepEqual((await app.service.favorites()).botIds, ["bot_1"]);
-  assert.ok(app.savedFavorites() >= 2);
-});
-
 test("unknown fields and private capability material fail before application effects", async () => {
   const app = fixture([]);
   await assert.rejects(
@@ -773,7 +673,7 @@ test("unknown fields and private capability material fail before application eff
       name: "Unsafe",
       purpose: "",
       instructions: "No",
-      avatar: "spark",
+      avatar: { version: 1, shape: "orb", color: "sky" },
       access: {
         accessMode: "full",
         catalogRevision: CATALOG_REVISION,
@@ -807,7 +707,7 @@ test("durable Bot idempotency publishes in-flight admission before mutation and 
     name: "Durable",
     purpose: "Persists",
     instructions: "Persist safely.",
-    avatar: "spark",
+    avatar: { version: 1, shape: "orb", color: "sky" },
     access: {
       accessMode: "full",
       catalogRevision: CATALOG_REVISION,
@@ -826,19 +726,6 @@ test("durable Bot idempotency publishes in-flight admission before mutation and 
   assert.deepEqual(replay, created);
   assert.equal(restarted.createCalls(), 0);
 });
-
-test("favorites storage rejects corrupt, duplicate, and oversized snapshots", () => {
-  assert.deepEqual(
-    normalizeAidenRemoteBotFavoritesSnapshot({ version: 1, botIds: ["bot_1"] }),
-    { version: 1, botIds: ["bot_1"] },
-  );
-  assert.throws(() => normalizeAidenRemoteBotFavoritesSnapshot({
-    version: 1,
-    botIds: ["bot_1", "bot_1"],
-  }));
-  assert.throws(() => normalizeAidenRemoteBotFavoritesSnapshot({ version: 2, botIds: [] }));
-});
-
 
 test("Remote catalog preserves the strict optional global Skills gate", () => {
   const saved = { ...catalog(), skills: [{ id: "skill:saved", label: "Saved skill", available: false }] };

@@ -133,7 +133,6 @@ import {
 import {
   botCapabilityCatalog,
   botCapabilityStore,
-  botManagedWorkspace,
   resolveBotRuntimeSkills,
 } from "./bot-capability-services-main.js";
 import {
