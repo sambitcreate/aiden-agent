@@ -135,6 +135,7 @@ export interface SignInDependencies {
 
 export async function signInWithGoogle(interaction: AuthInteraction, dependencies: SignInDependencies): Promise<void> {
   const signal = interaction.signal ?? new AbortController().signal;
+  if (signal.aborted) throw new AcpHarnessError("aborted", "Sign-in was cancelled.");
   let pending: PendingAuthorization | undefined;
   let announce: ((value: PendingAuthorization) => void) | undefined;
   const announced = new Promise<PendingAuthorization>((resolve) => {

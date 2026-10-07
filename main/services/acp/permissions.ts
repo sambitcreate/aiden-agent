@@ -82,6 +82,7 @@ export async function answerPermission(
   classification: AcpPermissionClassification,
   host: AcpTurnHost,
   signal: AbortSignal,
+  activityId?: string,
 ): Promise<RequestPermissionResponse> {
   if (signal.aborted) return CANCELLED;
   if (classification.kind === "question") {
@@ -110,6 +111,7 @@ export async function answerPermission(
     outcome = await host.requestApproval(
       {
         toolCallId: String(request.toolCall.toolCallId),
+        ...(activityId ? { activityId } : {}),
         kind: approvalKind(kind),
         title: cleanTitle(request.toolCall.title) || "The agent wants to make a change.",
         paths,

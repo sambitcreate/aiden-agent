@@ -89,6 +89,8 @@ interface Turn {
   completion: Promise<void>;
   controller: AbortController;
   abortRequested: boolean;
+  /** Messages sent mid-turn that the agent must answer before the turn ends. */
+  followUp: { context: TranscriptContext; boundary: number; count: number; fingerprint: string } | undefined;
   /** Absolute paths the user approved writing to during this turn (Ask mode). */
   writeGrants: Set<string>;
   /** Approved edits whose request named no path; each allows one write. */
@@ -112,6 +114,8 @@ interface Binding {
   pendingContextCount: number;
   pendingContextFingerprint: string;
   writer: PiEventWriter | undefined;
+  /** The most recent stream of this turn, kept after it ends with toolUse. */
+  lastWriter: PiEventWriter | undefined;
   host: AcpTurnHost | undefined;
   buffered: Array<{ kind: "text" | "thinking"; delta: string }>;
   pendingTools: Map<string, PendingTool>;
@@ -207,6 +211,11 @@ export class AcpHarnessRuntime {
   async reset(): Promise<void> {
     await this.closeAll();
     this.sessions.clear();
+  }
+
+  /** Close every session but stay usable; saved bindings are kept for resume. */
+  async closeSessions(): Promise<void> {
+    await this.closeAll();
   }
 
   async close(): Promise<void> {
@@ -324,23 +333,46 @@ export class AcpHarnessRuntime {
         }),
         controller: new AbortController(),
         abortRequested: false,
+        followUp: undefined,
         writeGrants: new Set(),
         unscopedWriteGrants: 0,
       };
       binding.turn = turn;
-      binding.buffered = [];
+      // Text the previous turn produced after its last stream ended is shown
+      // first, instead of being dropped.
       binding.tracker.clear();
       binding.startedActivities.clear();
       binding.lastPlan = undefined;
       this.attachWriter(binding, writer, host, conversation);
       this.linkAbort(binding, turn, signal);
 
-      const response = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: built.prompt });
-      const active = binding.writer ?? writer;
+      let response = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: built.prompt });
+      while (turn.followUp && !turn.abortRequested && response.stopReason === "end_turn") {
+        const follow: NonNullable<Turn["followUp"]> = turn.followUp;
+        turn.followUp = undefined;
+        const next = buildPrompt({
+          context: follow.context,
+          fresh: false,
+          unseenStart: follow.boundary,
+          capabilities: {
+            image: capabilities?.image === true,
+            embeddedContext: capabilities?.embeddedContext === true,
+          },
+        });
+        binding.pendingContextCount = follow.count;
+        binding.pendingContextFingerprint = follow.fingerprint;
+        const followed = await binding.connection.prompt({ sessionId: binding.sessionId, prompt: next.prompt });
+        response = { ...followed, usage: addUsage(response.usage, followed.usage) };
+      }
+      // With no stream attached (the last one ended with toolUse), the reply
+      // belongs to the last stream Pi recorded; never touch a delivered message.
+      const active = binding.writer ?? binding.lastWriter ?? writer;
       this.flushBuffered(binding);
       // The agent saw this turn's input whether it finished or was stopped.
-      active.message.usage = usageFromPrompt(response as PromptResponse);
-      active.message.rawStopReason = response.stopReason;
+      if (!active.finished) {
+        active.message.usage = usageFromPrompt(response as PromptResponse);
+        active.message.rawStopReason = response.stopReason;
+      }
       binding.messageCount = binding.pendingContextCount || built.messageCount;
       binding.historyFingerprint = binding.pendingContextFingerprint;
       binding.expectedAssistantFingerprint = messageFingerprint(active.message as Message);
@@ -364,8 +396,8 @@ export class AcpHarnessRuntime {
       completeTurn?.();
       if (binding.turn === turn) binding.turn = undefined;
       binding.writer = undefined;
+      binding.lastWriter = undefined;
       binding.host = undefined;
-      binding.buffered = [];
       release();
       this.scheduleIdle(binding);
     }
@@ -401,11 +433,28 @@ export class AcpHarnessRuntime {
       return false;
     }
     // Messages after the last tool result (for example, a message the user
-    // sent mid-turn) stay unseen and go out with the next prompt.
+    // sent mid-turn) are sent as a follow-up prompt once the agent finishes
+    // the current one, so they are answered within this same turn.
     const boundary = Math.max(...results.map((result) => result.index)) + 1;
+    if (conversation.slice(boundary).some((message) => message.role === "user")) {
+      turn.followUp = {
+        context,
+        boundary,
+        count: conversation.length,
+        fingerprint: messagesFingerprint(conversation),
+      };
+    }
     this.attachWriter(binding, writer, host, conversation.slice(0, boundary));
     this.linkAbort(binding, turn, signal);
-    await this.syncMode(binding, host, signal).catch(() => undefined);
+    try {
+      await this.syncMode(binding, host, signal);
+    } catch (error) {
+      // Never resume a turn in a native mode broader than the folder now allows.
+      writer.fail(error);
+      cancelTools(binding, "The folder's permission changed.");
+      this.requestCancel(binding, turn);
+      return true;
+    }
     for (const { pending, index } of results) {
       clearTimeout(pending.timer);
       binding.pendingTools.delete(pending.invocation.id);
@@ -419,6 +468,7 @@ export class AcpHarnessRuntime {
 
   private attachWriter(binding: Binding, writer: PiEventWriter, host: AcpTurnHost, seen: readonly Message[]): void {
     binding.writer = writer;
+    binding.lastWriter = writer;
     binding.host = host;
     binding.lastUsed = Date.now();
     binding.pendingContextCount = seen.length;
@@ -581,6 +631,7 @@ export class AcpHarnessRuntime {
         pendingContextCount: 0,
         pendingContextFingerprint: messagesFingerprint([]),
         writer: undefined,
+        lastWriter: undefined,
         host: undefined,
         buffered: [],
         pendingTools: new Map(),
@@ -753,7 +804,7 @@ export class AcpHarnessRuntime {
       host.activity.started(id, step.toolName, step.args);
     }
     const turn = binding.turn;
-    const response = await answerPermission(request, classification, host, turn.controller.signal);
+    const response = await answerPermission(request, classification, host, turn.controller.signal, step ? id : undefined);
     const chosen =
       response.outcome.outcome === "selected"
         ? request.options.find((candidate) => candidate.optionId === (response.outcome as { optionId: string }).optionId)
@@ -761,7 +812,8 @@ export class AcpHarnessRuntime {
     if (chosen?.kind.startsWith("allow") && classification.kind === "approval" && isMutation(request.toolCall.kind)) {
       if (chosen.kind === "allow_always") binding.sessionWriteGrant = true;
       const paths = (request.toolCall.locations ?? []).map((location) => path.resolve(location.path));
-      if (paths.length === 0) turn.unscopedWriteGrants += 1;
+      // Only a path-less edit may write an unnamed file; deletes and moves never do.
+      if (paths.length === 0 && request.toolCall.kind === "edit") turn.unscopedWriteGrants += 1;
       for (const target of paths) turn.writeGrants.add(target);
     }
     if (step && (!chosen || chosen.kind.startsWith("reject"))) {
@@ -877,6 +929,22 @@ export class AcpHarnessRuntime {
   }
 }
 
+function addUsage(
+  left: PromptResponse["usage"],
+  right: PromptResponse["usage"],
+): PromptResponse["usage"] {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    totalTokens: left.totalTokens + right.totalTokens,
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    thoughtTokens: (left.thoughtTokens ?? 0) + (right.thoughtTokens ?? 0),
+    cachedReadTokens: (left.cachedReadTokens ?? 0) + (right.cachedReadTokens ?? 0),
+    cachedWriteTokens: (left.cachedWriteTokens ?? 0) + (right.cachedWriteTokens ?? 0),
+  };
+}
+
 function isMutation(kind: string | null | undefined): boolean {
   return kind === "edit" || kind === "delete" || kind === "move";
 }
@@ -890,7 +958,9 @@ function writeAllowed(binding: Binding, turn: Turn, host: AcpTurnHost, requested
   const permission = host.permission();
   if (permission === "full") return true;
   if (permission !== "ask") return false;
-  if (binding.sessionWriteGrant || turn.writeGrants.has(path.resolve(requested))) return true;
+  if (binding.sessionWriteGrant) return true;
+  // An "allow once" covers one write to that path.
+  if (turn.writeGrants.delete(path.resolve(requested))) return true;
   if (turn.unscopedWriteGrants > 0) {
     turn.unscopedWriteGrants -= 1;
     return true;

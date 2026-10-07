@@ -52,6 +52,11 @@ export interface HarnessRuntimeSectionProps {
 export function HarnessRuntimeSection({ providerId, label, status }: HarnessRuntimeSectionProps) {
   const [acting, setActing] = React.useState(false);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
+  const keepRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    // The Remove button unmounts when confirming; keep focus in the dialog.
+    if (confirmRemove) keepRef.current?.focus();
+  }, [confirmRemove]);
   if (!status) {
     return (
       <Text variant="small" color="tertiary" aria-live="polite">
@@ -85,9 +90,13 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
   return (
     <div className="grid gap-2" role="group" aria-label={`${label} runtime`}>
       <Text variant="small-strong">Runtime</Text>
-      <Text variant="small" color="secondary" aria-live="polite">
+      <Text variant="small" color="secondary">
         {harnessRuntimeSummary(runtime)}
       </Text>
+      {/* Announce state and phase changes only; the progress bar carries the value. */}
+      <span className="sr-only" aria-live="polite">
+        {runtime.status === "installing" ? `${label}: ${runtime.phase ?? "installing"}` : harnessRuntimeSummary(runtime)}
+      </span>
       {canInstall ? (
         <Text variant="small" color="tertiary">
           {label} runs on Google's own agent runtime.{" "}
@@ -101,7 +110,7 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
           <div
             className="h-1 w-full max-w-64 overflow-hidden rounded-full bg-control"
             role="progressbar"
-            aria-label={`${label} download progress`}
+            aria-label={`${label} installation progress`}
             aria-valuemin={0}
             aria-valuemax={100}
             {...(progress !== null ? { "aria-valuenow": progress } : {})}
@@ -156,7 +165,7 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
             >
               Remove
             </Button>
-            <Button size="small" variant="muted" onClick={() => setConfirmRemove(false)}>
+            <Button ref={keepRef} size="small" variant="muted" onClick={() => setConfirmRemove(false)}>
               Keep
             </Button>
           </div>

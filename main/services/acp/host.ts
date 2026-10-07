@@ -17,6 +17,8 @@ export type AcpApprovalOutcome = "allow_once" | "allow_always" | "reject" | "can
 export interface AcpApprovalRequest {
   /** Stable id of the agent's tool call this approval is for. */
   toolCallId: string;
+  /** Id of the activity row already started for this call, when there is one. */
+  activityId?: string;
   kind: "command" | "file_change" | "file_read" | "fetch" | "other";
   title: string;
   /** Workspace-relative paths, when known. */

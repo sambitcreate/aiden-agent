@@ -95,7 +95,11 @@ const connection = new AgentSideConnection(
           auth: { logout: {} },
         },
         authMethods: [{ id: "oauth-personal", name: "Log in with Google" }],
-        agentInfo: { name: "fake-acp", title: "Fake", version: process.env.FAKE_AGENT_VERSION ?? "9.9.9" },
+        agentInfo: {
+          name: process.env.FAKE_AGENT_NAME ?? "fake-acp",
+          title: "Fake",
+          version: process.env.FAKE_AGENT_VERSION ?? "9.9.9",
+        },
       };
     },
     async authenticate(params) {

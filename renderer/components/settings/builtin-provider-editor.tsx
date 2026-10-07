@@ -210,7 +210,7 @@ export function BuiltinProviderEditor({
       title={`Set up ${provider.label}`}
       description={
         harness
-          ? `${provider.label} runs Google's agent on this computer. Its file edits go through Aiden and stay in the chat's folder; its shell commands follow the folder's permission setting.`
+          ? `${provider.label} runs Google's agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
           : "Pi owns this provider's endpoint, models, credentials, and request transport."
       }
       confirmLabel="Continue"

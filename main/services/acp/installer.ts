@@ -70,6 +70,7 @@ export class AcpRuntimeInstaller {
   private failure: string | undefined;
   private active: ActivePointer | undefined;
   private leases = 0;
+  private removing = false;
   private readonly listeners = new Set<(state: AcpRuntimeState) => void>();
 
   constructor(
@@ -96,6 +97,19 @@ export class AcpRuntimeInstaller {
   /** Load the active pointer from disk. Safe to call repeatedly. */
   async load(): Promise<AcpRuntimeState> {
     this.active = await this.readPointer();
+    // Interrupted installs (a crash or quit mid-download) leave staging trees.
+    if (!this.installing) {
+      try {
+        const entries = await readdir(this.platformDir);
+        await Promise.all(
+          entries
+            .filter((entry) => entry.startsWith("staging-"))
+            .map((entry) => rm(path.join(this.platformDir, entry), { recursive: true, force: true })),
+        );
+      } catch {
+        // Nothing installed yet.
+      }
+    }
     return this.state();
   }
 
@@ -133,8 +147,13 @@ export class AcpRuntimeInstaller {
   /** Hold the pinned runtime for one process. Throws when it is not installed. */
   acquire(): AcpRuntimeLease {
     const asset = this.asset;
-    if (!asset || this.active?.sha256 !== asset.sha256) {
-      throw new AcpHarnessError("install", "The runtime is not installed. Install it in Settings → Providers.");
+    if (!asset || this.removing || this.active?.sha256 !== asset.sha256) {
+      throw new AcpHarnessError(
+        "install",
+        this.active && !this.removing
+          ? "This version of Aiden needs a newer runtime. Update it in Settings → Providers."
+          : "The runtime is not installed. Install it in Settings → Providers.",
+      );
     }
     this.leases += 1;
     let released = false;
@@ -153,7 +172,8 @@ export class AcpRuntimeInstaller {
   /** Single-flight install of the pinned release. */
   install(): Promise<void> {
     const asset = this.asset;
-    if (!asset) return Promise.reject(new AcpHarnessError("install", this.state().status === "unsupported" ? "This computer is not supported." : "Unavailable."));
+    if (!asset) return Promise.reject(new AcpHarnessError("install", "This computer is not supported."));
+    if (this.removing) return Promise.reject(new AcpHarnessError("install", "Wait for the removal to finish first."));
     if (this.installing) return this.installing.promise;
     if (this.active?.sha256 === asset.sha256) return Promise.resolve();
     const controller = new AbortController();
@@ -188,10 +208,16 @@ export class AcpRuntimeInstaller {
     if (this.leases > 0) {
       throw new AcpHarnessError("install", "Stop running chats that use this runtime before removing it.");
     }
-    await rm(this.platformDir, { recursive: true, force: true });
+    // Stop new leases before the files go away.
+    this.removing = true;
     this.active = undefined;
-    this.failure = undefined;
-    this.emit();
+    try {
+      await rm(this.platformDir, { recursive: true, force: true });
+    } finally {
+      this.removing = false;
+      this.failure = undefined;
+      this.emit();
+    }
   }
 
   private emit(): void {

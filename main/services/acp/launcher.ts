@@ -32,15 +32,18 @@ export interface AcpLaunchObservers {
   onStderrLine?(line: string): void;
 }
 
-/** A path Python's `webbrowser` accepts as BROWSER: it splits on the path separator. */
-function hookDirectory(stateDir: string): string {
+/**
+ * A directory Python's `webbrowser` accepts in BROWSER: it splits the value
+ * on the path separator and may split commands on whitespace, so the hook
+ * lives on a path with neither (macOS userData contains spaces).
+ */
+export function hookDirectory(stateDir: string, temporary: string = tmpdir()): string {
   const preferred = path.join(stateDir, "hooks");
-  return preferred.includes(path.delimiter) ? path.join(tmpdir(), "aiden-acp-hooks") : preferred;
+  if (!/[\s:;]/u.test(preferred)) return preferred;
+  return path.join(temporary, `aiden-acp-hooks-${process.getuid?.() ?? "user"}`);
 }
 
 export class AcpRuntimeLauncher implements AcpProcessLauncher {
-  private hook: Promise<string | undefined> | undefined;
-
   constructor(private readonly options: AcpLauncherOptions) {}
 
   launch(purpose: AcpLaunchPurpose, cwd: string, observers: AcpLaunchObservers = {}): Promise<AcpLaunchedProcess> {
@@ -115,10 +118,14 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
     );
   }
 
-  private browserHook(): Promise<string | undefined> {
+  /**
+   * Written before every launch: a temporary directory may be cleaned while
+   * Aiden runs, and a missing hook would let the agent open a browser itself.
+   */
+  private async browserHook(): Promise<string | undefined> {
     const marker = this.options.browserUrlMarker;
-    if (!marker || process.platform === "win32") return Promise.resolve(undefined);
-    this.hook ??= (async () => {
+    if (!marker || process.platform === "win32") return undefined;
+    try {
       const directory = hookDirectory(this.options.stateDir);
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const file = path.join(directory, "capture-browser-url.sh");
@@ -126,7 +133,8 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
       await writeFile(file, `#!/bin/sh\nprintf '%s%s\\n' '${marker}' "$1" >&2\nexit 0\n`, { mode: 0o700 });
       await chmod(file, 0o700);
       return file;
-    })().catch(() => undefined);
-    return this.hook;
+    } catch {
+      return undefined;
+    }
   }
 }

@@ -8,12 +8,12 @@ import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { currentPlatformKey, type AcpHarnessDefinition, type AcpPlatformAsset } from "../acp/harness.js";
+import { currentPlatformKey, type AcpHarnessDefinition, type AcpPlatformAsset, type AcpRelease } from "../acp/harness.js";
 import { acpHosts } from "../acp/hosts.js";
 import { AcpRuntimeInstaller, type AcpRuntimeState } from "../acp/installer.js";
 import { AcpRuntimeLauncher } from "../acp/launcher.js";
 import { AcpPidLedger } from "../acp/pid-ledger.js";
-import { AcpHarnessRuntime } from "../acp/runtime.js";
+import { AcpHarnessRuntime, type AcpProcessLauncher } from "../acp/runtime.js";
 import { AcpSessionStore } from "../acp/session-store.js";
 import { statfsAvailableBytes } from "../managed-worktree-capacity.js";
 import { hasAntigravitySignIn, signInWithGoogle, signOutOfGoogle } from "./auth.js";
@@ -34,6 +34,8 @@ export interface AntigravityStatus {
 
 export interface AntigravityServiceOptions {
   baseDir: string;
+  /** Test seam: the pinned release table. */
+  release?: AcpRelease;
   fetch?: typeof fetch;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -47,15 +49,18 @@ export class AntigravityService {
   private readonly stateDir: string;
   private readonly listeners = new Set<() => void>();
   private loaded: Promise<void> | undefined;
+  private readonly release: AcpRelease;
 
   constructor(options: AntigravityServiceOptions) {
     this.stateDir = path.join(options.baseDir, "state");
+    this.release = options.release ?? ANTIGRAVITY_RELEASE;
     this.definition = {
       ...createAntigravityDefinition({ hasSignIn: () => hasAntigravitySignIn(this.stateDir) }),
+      release: this.release,
       detectSignInPrompt: (line) => authorizationUrlFromStderr(line) !== undefined,
     };
     this.installer = new AcpRuntimeInstaller(
-      ANTIGRAVITY_RELEASE,
+      this.release,
       currentPlatformKey(options.platform, options.arch),
       path.join(options.baseDir, "runtime"),
       {
@@ -79,9 +84,17 @@ export class AntigravityService {
       ledger: new AcpPidLedger(path.join(options.baseDir, "processes.json")),
       browserUrlMarker: AUTH_URL_MARKER,
     });
+    // Chats can start before anything else asked for status, so every launch
+    // first loads install state (and sweeps crash leftovers) once.
+    const readyLauncher: AcpProcessLauncher = {
+      launch: async (purpose, cwd, observers) => {
+        await this.ready();
+        return this.launcher.launch(purpose, cwd, observers);
+      },
+    };
     this.runtime = new AcpHarnessRuntime(
       this.definition,
-      this.launcher,
+      readyLauncher,
       acpHosts,
       new AcpSessionStore(path.join(options.baseDir, "sessions.json")),
     );
@@ -134,7 +147,7 @@ export class AntigravityService {
   async removeRuntime(): Promise<void> {
     await this.ready();
     if (this.runtime.busy) throw new Error("Stop running Antigravity chats before removing the runtime.");
-    await this.runtime.close().catch(() => undefined);
+    await this.runtime.closeSessions();
     await this.installer.remove();
   }
 
@@ -166,6 +179,7 @@ export class AntigravityService {
   }
 
   async shutdown(): Promise<void> {
+    this.installer.cancel();
     await this.runtime.close();
   }
 
@@ -181,7 +195,7 @@ export class AntigravityService {
     });
     try {
       const initialize = await new AcpConnection(launched.process).initialize(signal);
-      const reason = this.definition.validateInitialize(initialize, ANTIGRAVITY_RELEASE.version);
+      const reason = this.definition.validateInitialize(initialize, this.release.version);
       if (reason) throw new Error(reason);
     } finally {
       await launched.dispose();

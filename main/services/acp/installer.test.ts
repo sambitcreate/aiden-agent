@@ -221,3 +221,12 @@ test("a pin newer than the installed runtime offers an update", async () => {
   assert.equal(state.status, "update_available");
   if (state.status === "update_available") assert.equal(state.installedVersion, "2.0.0");
 });
+
+test("loading after an interrupted install removes its staging files", async () => {
+  const { installer, dir } = setup();
+  const { mkdirSync, writeFileSync, readdirSync } = await import("node:fs");
+  mkdirSync(path.join(dir, "darwin-arm64", "staging-left-behind"), { recursive: true });
+  writeFileSync(path.join(dir, "darwin-arm64", "staging-left-behind", "runtime.zip"), "partial");
+  await installer.load();
+  assert.deepEqual(readdirSync(path.join(dir, "darwin-arm64")), []);
+});

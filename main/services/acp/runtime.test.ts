@@ -130,6 +130,8 @@ test("native edits go through Aiden's file callback, after Aiden's approval in A
   assert.deepEqual(host.approvals[0]?.paths, ["notes.txt"]);
   assert.equal(host.approvals[0]?.warning, "Prompt injection risk");
   assert.equal(host.approvals[0]?.offersAlways, true);
+  // The approval names the activity row it belongs to.
+  assert.equal(host.approvals[0]?.activityId, host.activities.find((activity) => activity.event === "started")?.id);
   assert.equal(host.writes.length, 1);
   const started = host.activities.find((activity) => activity.event === "started");
   assert.equal(started?.toolName, "edit_file");
@@ -293,21 +295,50 @@ function toolResultFor(message: AssistantMessage, textValue: string): ToolResult
 
 const lookupTools = [{ name: "lookup", description: "Look something up", parameters: Type.Object({ value: Type.String() }) }];
 
-test("a message sent mid-turn is not lost: it reaches the agent with the next prompt", async () => {
+test("a message sent mid-turn is answered in the same turn, then not repeated", async () => {
   const h = harness();
   h.hosts.register(new RecordingHost("chat-1", h.dir));
   const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools: lookupTools });
   const result = toolResultFor(first, "found it");
   const steer = userMessage("echo:steer this way");
   const second = await turn(h, [userMessage("bridge:aiden_lookup"), first, result, steer], { tools: lookupTools });
-  assert.equal(text(second), "bridge:found it");
+  assert.equal(text(second), "bridge:found itsteer this way");
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "prompt").length, 2);
   const third = await turn(
     h,
     [userMessage("bridge:aiden_lookup"), first, result, steer, second, userMessage("prompt-dump")],
     { tools: lookupTools },
   );
-  assert.match(text(third), /steer this way/u);
+  assert.doesNotMatch(text(third), /steer this way/u, "the agent already answered it; nothing is replayed");
   await h.runtime.close();
+});
+
+test("a continuation stops when the folder's permission can no longer be enforced natively", async () => {
+  const dir = tempDir();
+  const env = fakeAgentEnv(dir);
+  const hosts = new AcpHostRegistry();
+  const definition = {
+    ...fakeDefinition,
+    // An agent whose only approval mode Aiden cannot select.
+    nativeModeFor: (permission: string) => (permission === "full" ? "yolo" : "unsupported-mode"),
+  };
+  const runtime = new AcpHarnessRuntime(definition, new FakeLauncher(env), hosts, new AcpSessionStore(path.join(dir, "s.json")));
+  const host = new RecordingHost("chat-1", dir);
+  host.currentPermission = "full";
+  hosts.register(host);
+  const h = { runtime, hosts, launcher: new FakeLauncher(env), env, store: new AcpSessionStore(path.join(dir, "x.json")), dir };
+  const first = await turn(h, [userMessage("bridge:aiden_lookup")], { tools: lookupTools });
+  assert.equal(first.stopReason, "toolUse");
+  host.currentPermission = "ask";
+  const second = await turn(h, [userMessage("bridge:aiden_lookup"), first, toolResultFor(first, "x")], { tools: lookupTools });
+  assert.equal(second.stopReason, "error");
+  assert.match(second.errorMessage ?? "", /approval mode/u);
+  // session/cancel is a notification; give it a moment to reach the agent.
+  for (let attempt = 0; attempt < 50 && !readAgentLog(env).some((entry) => entry.method === "cancel"); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(readAgentLog(env).some((entry) => entry.method === "cancel"));
+  await runtime.close();
 });
 
 test("a bridged call that arrives after the stream ended is shown on the next stream", async () => {

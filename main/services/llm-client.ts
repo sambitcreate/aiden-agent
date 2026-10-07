@@ -23,8 +23,9 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
-import { access } from "node:fs/promises";
-import { ipcMain, logger } from "../platform.js";
+import { access, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { app, ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
 import {
   BROWSER_MUTATION_TOOL_NAMES,
@@ -214,6 +215,9 @@ import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
+import { canHostAcpHarness, createAcpGenerationHost } from "./acp/generation-host.js";
+import { acpHosts } from "./acp/hosts.js";
+import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
@@ -1707,6 +1711,14 @@ async function prepareGeneration(
   };
 }
 
+/** Working directory for an agent turn in a chat without a folder. It grants no file access. */
+async function acpScratchDir(chatId: string): Promise<string> {
+  const safe = chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
+  const directory = join(app.getPath("userData"), "acp", "scratch", safe);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  return directory;
+}
+
 export const llmClient = {
   async start(
     streamId: string,
@@ -2037,6 +2049,9 @@ export const llmClient = {
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
     const { model } = runtime;
+    // Agent-backed providers (ACP harnesses) own their conversation context:
+    // Aiden neither trims nor compacts the transcript they receive.
+    const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
     const approvalModelSelection = {
       providerId: runtime.provider.id,
       providerName: runtime.provider.label,
@@ -2558,7 +2573,7 @@ export const llmClient = {
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
           ...compactionBudget,
-          enabled: piUpgradeCompactionEnabled,
+          enabled: piUpgradeCompactionEnabled && !harnessProvider,
         },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
@@ -2740,19 +2755,23 @@ export const llmClient = {
               }),
             }
           : {}),
-        transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
-          logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
-            model: model.id,
-            estimatedTokensBefore: result.estimatedTokensBefore,
-            estimatedTokensAfter: result.estimatedTokensAfter,
-            inputBudgetTokens: result.inputBudgetTokens,
-            truncatedToolResults: result.truncatedToolResults,
-            compactedToolResults: result.compactedToolResults,
-            removedHistoryMessages: result.removedHistoryMessages,
-            removedCurrentTurnMessages: result.removedCurrentTurnMessages,
-            usedContextFallback: result.usedContextFallback,
-          });
-        }),
+        ...(harnessProvider
+          ? {}
+          : {
+              transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
+                logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
+                  model: model.id,
+                  estimatedTokensBefore: result.estimatedTokensBefore,
+                  estimatedTokensAfter: result.estimatedTokensAfter,
+                  inputBudgetTokens: result.inputBudgetTokens,
+                  truncatedToolResults: result.truncatedToolResults,
+                  compactedToolResults: result.compactedToolResults,
+                  removedHistoryMessages: result.removedHistoryMessages,
+                  removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+                  usedContextFallback: result.usedContextFallback,
+                });
+              }),
+            }),
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
@@ -3794,6 +3813,33 @@ export const llmClient = {
     };
     const withUndeliveredGuidance = <T extends object>(payload: T) =>
       undeliveredGuidance.length > 0 ? { ...payload, undeliveredGuidance } : payload;
+    const unregisterAcpHost =
+      harnessProvider &&
+      canHostAcpHarness({
+        rendererOwner: owner.id !== 0,
+        remoteOwner: owner.kind === "remote",
+        bot: preparedBotContext !== undefined,
+        assistant: authoritativeMode !== undefined,
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+      })
+        ? acpHosts.register(
+            createAcpGenerationHost({
+              chatId: params.chatId,
+              streamId,
+              label: runtime.provider.label,
+              folderPath,
+              scratchDir: await acpScratchDir(params.chatId),
+              permission: () => permission,
+              timeline,
+              requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
+              takeApprovalScope: (approvalStreamId, toolCallId) =>
+                approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
+              requestQuestion: (toolCallId, questions, questionSignal) =>
+                questionnaires.request({ streamId, toolCallId, questions }, owner.documentId, questionSignal),
+            }),
+          )
+        : undefined;
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -3971,6 +4017,7 @@ export const llmClient = {
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
+          unregisterAcpHost?.();
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);

@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { buildChildEnvironment } from "./environment.js";
-import { AcpRuntimeLauncher } from "./launcher.js";
+import { AcpRuntimeLauncher, hookDirectory } from "./launcher.js";
 import { AcpPidLedger } from "./pid-ledger.js";
 import { FAKE_AGENT, fakeDefinition, tempDir } from "./test-support.js";
 
@@ -70,4 +70,10 @@ test("sweep removes temp directories a crashed run left behind", async () => {
   mkdirSync(path.join(stateDir, "tmp", "keep-me"), { recursive: true });
   await launcher(stateDir, ledger, { count: 0 }).sweep();
   assert.deepEqual(readdirSync(path.join(stateDir, "tmp")), ["keep-me"]);
+});
+
+test("the hook lives on a path BROWSER parsing cannot split", () => {
+  assert.equal(hookDirectory("/state/aiden", "/tmp"), "/state/aiden/hooks");
+  assert.match(hookDirectory("/Users/me/Library/Application Support/Aiden Agent/acp", "/tmp"), /^\/tmp\/aiden-acp-hooks-/u);
+  assert.match(hookDirectory("/odd:path", "/tmp"), /^\/tmp\//u);
 });

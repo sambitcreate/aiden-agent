@@ -233,9 +233,14 @@ export class ProviderRegistry {
    * the agent's own profile, which is cleared too.
    */
   private async deleteCredential(providerId: string): Promise<void> {
-    await this.credentials.delete(providerId);
-    if (providerId === ANTIGRAVITY_PROVIDER_ID && antigravityEnabled()) {
-      await antigravityService().signOut();
+    try {
+      if (providerId === ANTIGRAVITY_PROVIDER_ID && antigravityEnabled()) {
+        await antigravityService().signOut();
+      }
+    } finally {
+      // Pi's marker always goes, so a failed agent sign-out cannot leave the
+      // provider looking signed in.
+      await this.credentials.delete(providerId);
     }
   }
 
