@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -470,11 +471,21 @@ fun AidenBotEditorScreen(
         val currentDraft = draft
         val currentCat = catalog
 
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = palette.accent)
+        if (currentDraft == null || currentCat == null) {
+            if (!isLoading && saveError != null) {
+                AidenEmptyState(
+                    icon = Icons.Default.CloudOff,
+                    title = if (isCreating) "Can't start a new Bot" else "Can't load this Bot",
+                    body = saveError ?: "",
+                    modifier = Modifier.fillMaxSize().padding(padding)
+                )
+            } else {
+                AidenBotFormSkeleton(
+                    loadingDescription = if (isCreating) "Loading Bot options" else "Loading Bot",
+                    modifier = Modifier.padding(padding)
+                )
             }
-        } else if (currentDraft != null && currentCat != null) {
+        } else {
             Column(
                 modifier = Modifier
                     .fillMaxSize()

@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,7 +97,12 @@ fun AidenBotCustomAccessFlowScreen(
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
 
-    var bots by remember { mutableStateOf<List<AidenBotSummary>>(emptyList()) }
+    // The Bot switcher renders from the saved list while the desktop's list arrives.
+    var bots by remember {
+        mutableStateOf(
+            coordinator.botCache.botList.value?.bots.orEmpty().filter { it.health != AidenBotHealth.ARCHIVED }
+        )
+    }
     var selectedBotId by remember { mutableStateOf(botId) }
     var selectedBotDetail by remember { mutableStateOf<AidenBotDetail?>(null) }
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
@@ -104,6 +110,7 @@ fun AidenBotCustomAccessFlowScreen(
     var cleanDraft by remember { mutableStateOf<AidenBotCustomAccessDraft?>(null) }
 
     var isLoading by remember { mutableStateOf(true) }
+    var isLoadingBot by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
     var isConfirmingDiscard by remember { mutableStateOf(false) }
@@ -113,6 +120,7 @@ fun AidenBotCustomAccessFlowScreen(
 
     fun loadBot(targetBotId: String) {
         val cl = client ?: return
+        isLoadingBot = true
         scope.launch {
             try {
                 val bot = cl.bot(targetBotId)
@@ -124,6 +132,8 @@ fun AidenBotCustomAccessFlowScreen(
                 cleanDraft = d?.copy()
             } catch (e: Exception) {
                 saveError = e.message
+            } finally {
+                isLoadingBot = false
             }
         }
     }
@@ -213,11 +223,18 @@ fun AidenBotCustomAccessFlowScreen(
         val curDraft = draft
         val cat = catalog
 
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = palette.accent)
+        if (curDraft == null || cat == null) {
+            if (!isLoading && !isLoadingBot && (saveError != null || bots.isEmpty())) {
+                AidenEmptyState(
+                    icon = Icons.Default.CloudOff,
+                    title = if (bots.isEmpty() && saveError == null) "No Bots to configure" else "Can't load access",
+                    body = saveError ?: "Create a Bot first, then choose what it can use.",
+                    modifier = Modifier.fillMaxSize().padding(padding)
+                )
+            } else {
+                AidenBotFormSkeleton(loadingDescription = "Loading access", modifier = Modifier.padding(padding))
             }
-        } else if (curDraft != null && cat != null) {
+        } else {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -232,7 +249,7 @@ fun AidenBotCustomAccessFlowScreen(
                         Text("Select Bot", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(bots) { b ->
+                            items(bots, key = { it.id }) { b ->
                                 FilterChip(
                                     border = null,
                                     selected = selectedBotId == b.id,
