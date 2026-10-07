@@ -40,7 +40,9 @@ test("timeline steps use workspace-relative targets and never expose raw command
   assert.equal(step?.toolName, "run_command");
   const descriptor = safeToolDescriptor(step!.toolName, step!.args);
   assert.equal(descriptor.label, "Run command");
-  assert.equal(descriptor.detail, undefined);
+  // The row reads "Ran a command"; the command line itself is never persisted.
+  assert.equal(descriptor.detail, "a command");
+  assert.doesNotMatch(JSON.stringify(step), /rm -rf/u);
 
   const read = tracker.apply({ toolCallId: "4", title: "Read", kind: "read", locations: [{ path: `${root}/src/a.ts` }] });
   const readStep = timelineStepFor(read, [root]);

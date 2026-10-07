@@ -380,3 +380,22 @@ test("active thinking and named tool helpers match live timeline steps", () => {
   assert.equal(hasActiveToolStep(rendering, "read_file"), false);
   assert.equal(isToolStep(rendering.steps[0]!), true);
 });
+
+test("agent-run activity changes tense like Aiden's own tools, with the same lines as both phone apps", () => {
+  // Persisted labels as Google Antigravity steps record them; the expected lines
+  // are mirrored in the iOS and Android presentation tests.
+  const expected: Array<[string, string, "running" | "completed", string | undefined, string | undefined, string]> = [
+    ["delete_file", "Delete file", "running", "old.ts", undefined, "Deleting old.ts"],
+    ["delete_file", "Delete file", "completed", "old.ts", undefined, "Deleted old.ts"],
+    ["move_file", "Move file", "completed", "src/a.ts", undefined, "Moved src/a.ts"],
+    ["web_fetch", "Fetch web page", "completed", undefined, undefined, "Fetched web page"],
+    ["agent_subagents", "Run subagents", "completed", undefined, undefined, "Ran subagents"],
+    ["agent_tool", "Use agent tool", "running", undefined, undefined, "Using an agent tool"],
+    ["agent_context_rebuilt", "Started a fresh agent session from this chat", "completed", undefined, undefined, "Started a fresh agent session"],
+    ["run_command", "Run command", "completed", undefined, "a command", "Ran a command"],
+  ];
+  for (const [toolName, label, status, target, detail, line] of expected) {
+    const row = { ...step(toolName, 0, toolName, status), label, ...(target ? { target } : {}), ...(detail ? { detail } : {}) };
+    assert.equal(activityLineText(row), line);
+  }
+});

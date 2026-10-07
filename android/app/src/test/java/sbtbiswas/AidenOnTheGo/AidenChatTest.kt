@@ -1638,6 +1638,48 @@ class AidenChatTest {
     }
 
     @Test
+    fun testAgentRunActivityMatchesMacPresentationLanguage() {
+        // Persisted labels as Google Antigravity steps record them; the Mac and
+        // iOS presentation tests expect the same lines.
+        data class Case(
+            val toolName: String,
+            val label: String,
+            val status: AidenAgentStepStatus,
+            val target: String?,
+            val detail: String?,
+            val line: String
+        )
+        val expected = listOf(
+            Case("delete_file", "Delete file", AidenAgentStepStatus.RUNNING, "old.ts", null, "Deleting old.ts"),
+            Case("delete_file", "Delete file", AidenAgentStepStatus.COMPLETED, "old.ts", null, "Deleted old.ts"),
+            Case("move_file", "Move file", AidenAgentStepStatus.COMPLETED, "src/a.ts", null, "Moved src/a.ts"),
+            Case("web_fetch", "Fetch web page", AidenAgentStepStatus.COMPLETED, null, null, "Fetched web page"),
+            Case("agent_subagents", "Run subagents", AidenAgentStepStatus.COMPLETED, null, null, "Ran subagents"),
+            Case("agent_tool", "Use agent tool", AidenAgentStepStatus.RUNNING, null, null, "Using an agent tool"),
+            Case("agent_context_rebuilt", "Started a fresh agent session from this chat", AidenAgentStepStatus.COMPLETED, null, null, "Started a fresh agent session"),
+            Case("run_command", "Run command", AidenAgentStepStatus.COMPLETED, null, "a command", "Ran a command")
+        )
+        expected.forEachIndexed { index, case ->
+            val step = AidenAgentStep(
+                id = "tool-$index",
+                order = index,
+                kind = AidenAgentStep.Kind.TOOL,
+                toolCallId = "call-$index",
+                toolName = case.toolName,
+                label = case.label,
+                status = case.status,
+                startedAt = 1000.0,
+                updatedAt = 2000.0,
+                finishedAt = if (case.status == AidenAgentStepStatus.COMPLETED) 2000.0 else null,
+                contentOffset = 0,
+                target = case.target,
+                detail = case.detail
+            )
+            assertEquals(case.toolName, case.line, AidenAgentActivityPresentation.line(step))
+        }
+    }
+
+    @Test
     fun testAgentActivityPresentation() {
         val readStep = AidenAgentStep(
             id = "tool-1",

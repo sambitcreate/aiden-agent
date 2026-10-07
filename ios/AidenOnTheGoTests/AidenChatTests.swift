@@ -4233,6 +4233,30 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testAgentRunActivityMatchesMacPresentationLanguage() throws {
+        // Persisted labels as Google Antigravity steps record them; the Mac and
+        // Android presentation tests expect the same lines.
+        let expected: [(String, String, AidenAgentStepStatus, String?, String?, String)] = [
+            ("delete_file", "Delete file", .running, "old.ts", nil, "Deleting old.ts"),
+            ("delete_file", "Delete file", .completed, "old.ts", nil, "Deleted old.ts"),
+            ("move_file", "Move file", .completed, "src/a.ts", nil, "Moved src/a.ts"),
+            ("web_fetch", "Fetch web page", .completed, nil, nil, "Fetched web page"),
+            ("agent_subagents", "Run subagents", .completed, nil, nil, "Ran subagents"),
+            ("agent_tool", "Use agent tool", .running, nil, nil, "Using an agent tool"),
+            ("agent_context_rebuilt", "Started a fresh agent session from this chat", .completed, nil, nil, "Started a fresh agent session"),
+            ("run_command", "Run command", .completed, nil, "a command", "Ran a command")
+        ]
+        for (index, (toolName, label, status, target, detail, line)) in expected.enumerated() {
+            let step = AidenAgentStep(
+                id: "tool-\(index)", order: index, kind: .tool, toolName: toolName,
+                label: label, status: status, startedAt: 1_000, updatedAt: 2_000,
+                finishedAt: status == .completed ? 2_000 : nil, contentOffset: 0, durationMs: nil,
+                target: target, detail: detail, lineChanges: nil
+            )
+            XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), line, toolName)
+        }
+    }
+
     func testModelCatalogHidesPresentationOnlyModelsWithoutDroppingTheirIdentity() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,

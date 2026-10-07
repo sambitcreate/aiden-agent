@@ -481,7 +481,14 @@ object AidenAgentActivityPresentation {
         "browser_recording_start" to Pair("Starting browser recording", "Started browser recording"),
         "browser_recording_stop" to Pair("Stopping browser recording", "Stopped browser recording"),
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
-        "compact_context" to Pair("Compacting context", "Compacted context")
+        "compact_context" to Pair("Compacting context", "Compacted context"),
+        // Activity an ACP agent (for example, Google Antigravity) ran itself.
+        "delete_file" to Pair("Deleting", "Deleted"),
+        "move_file" to Pair("Moving", "Moved"),
+        "web_fetch" to Pair("Fetching web page", "Fetched web page"),
+        "agent_subagents" to Pair("Running subagents", "Ran subagents"),
+        "agent_tool" to Pair("Using an agent tool", "Used an agent tool"),
+        "agent_context_rebuilt" to Pair("Starting a fresh agent session", "Started a fresh agent session")
     )
 
     /** Exactly one compaction: its line carries every metric. Repeated compactions
