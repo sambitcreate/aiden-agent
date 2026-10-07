@@ -12,6 +12,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Transcript-shaped placeholders for a chat opened with nothing saved on this phone:
@@ -20,12 +22,13 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
  */
 @Composable
 fun AidenTranscriptSkeleton(modifier: Modifier = Modifier) {
+    val loadingDescription = stringResource(R.string.chat_loading_conversation)
     Column(
         verticalArrangement = Arrangement.spacedBy(24.dp),
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .clearAndSetSemantics { contentDescription = "Loading conversation" }
+            .clearAndSetSemantics { contentDescription = loadingDescription }
     ) {
         repeat(2) {
             AidenSkeletonBlock(

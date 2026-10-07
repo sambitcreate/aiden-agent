@@ -34,6 +34,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.LocalResources
 
 fun aidenBotCustomAccessIsDirty(
     draft: AidenBotCustomAccessDraft?,
@@ -70,23 +71,26 @@ fun aidenBotVisibleFileScopeOptions(
     return options.filter { it.available || selectedIDs.contains(it.id) }
 }
 
+@Composable
 fun aidenBotCapabilityOptionTitle(
     option: AidenBotCapabilityOption,
     isSelected: Boolean
 ): String {
     if (option.available) return option.label
+    // "Invalid skill" is the desktop's placeholder label for a removed skill.
     if (isSelected && option.label == "Invalid skill") {
-        return "Previously selected skill — unavailable"
+        return stringResource(R.string.bot_access_previous_skill_unavailable)
     }
-    return "${option.label} — Unavailable"
+    return stringResource(R.string.bot_access_option_unavailable, option.label)
 }
 
+@Composable
 fun aidenBotFileScopeOptionTitle(
     option: AidenBotFileScopeOption,
     isSelected: Boolean
 ): String {
     if (option.available) return option.label
-    return "${option.label} — Unavailable"
+    return stringResource(R.string.bot_access_option_unavailable, option.label)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,6 +102,7 @@ fun AidenBotCustomAccessFlowScreen(
     onAccessSaved: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
 
@@ -163,7 +168,7 @@ fun AidenBotCustomAccessFlowScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Custom Access", fontWeight = FontWeight.Bold) },
+                title = { Text(stringResource(R.string.bot_access_title), fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (isDirty) {
@@ -173,7 +178,7 @@ fun AidenBotCustomAccessFlowScreen(
                             onNavigateBack()
                         }
                     }) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = palette.foreground)
                     }
                 },
                 actions = {
@@ -202,12 +207,12 @@ fun AidenBotCustomAccessFlowScreen(
                                             val freshCat = cl.botCapabilityCatalog(detail.id)
                                             selectedBotDetail = fresh
                                             catalog = freshCat
-                                            saveError = "Access policy was changed on your paired desktop. Review the latest policy and try again."
+                                            saveError = resources.getString(R.string.bot_access_conflict)
                                         } catch (_: Exception) {
-                                            saveError = e.message ?: "Conflict updating access"
+                                            saveError = e.message ?: resources.getString(R.string.bot_access_conflict_fallback)
                                         }
                                     } else {
-                                        saveError = e.message ?: "Failed to save access policy"
+                                        saveError = e.message ?: resources.getString(R.string.bot_access_save_failed)
                                     }
                                 } finally {
                                     isSaving = false
@@ -216,7 +221,7 @@ fun AidenBotCustomAccessFlowScreen(
                         },
                         enabled = draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true && !isSaving
                     ) {
-                        Text(if (isSaving) "Saving…" else "Save", color = if (draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true) palette.accent else palette.secondary, fontWeight = FontWeight.Bold)
+                        Text(if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save), color = if (draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true) palette.accent else palette.secondary, fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.canvas, titleContentColor = palette.foreground)
@@ -231,12 +236,12 @@ fun AidenBotCustomAccessFlowScreen(
             if (!isLoading && !isLoadingBot && (saveError != null || bots.isEmpty())) {
                 AidenEmptyState(
                     icon = Icons.Default.CloudOff,
-                    title = if (bots.isEmpty() && saveError == null) "No Bots to configure" else "Can't load access",
-                    body = saveError ?: "Create a Bot first, then choose what it can use.",
+                    title = if (bots.isEmpty() && saveError == null) stringResource(R.string.bot_access_no_bots_title) else stringResource(R.string.bot_access_load_failed_title),
+                    body = saveError ?: stringResource(R.string.bot_access_no_bots_body),
                     modifier = Modifier.fillMaxSize().padding(padding)
                 )
             } else {
-                AidenBotFormSkeleton(loadingDescription = "Loading access", modifier = Modifier.padding(padding))
+                AidenBotFormSkeleton(loadingDescription = stringResource(R.string.bot_access_loading), modifier = Modifier.padding(padding))
             }
         } else {
             LazyColumn(
@@ -250,7 +255,7 @@ fun AidenBotCustomAccessFlowScreen(
                 // Bot Switcher Picker Row
                 if (bots.size > 1) {
                     item {
-                        Text("Select Bot", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_access_select_bot), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(bots, key = { it.id }) { b ->
@@ -277,7 +282,7 @@ fun AidenBotCustomAccessFlowScreen(
 
                 // AI Model Provider / Model section
                 item {
-                    Text("AI Model", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                    Text(stringResource(R.string.model_picker_bot_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
                     val pickerProviders = remember(cat.providers) { cat.providers.map { it.toModelPickerProvider() } }
                     AidenModelPickerField(
@@ -293,7 +298,7 @@ fun AidenBotCustomAccessFlowScreen(
 
                 // File Scopes Section
                 item {
-                    Text("Desktop Files", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                    Text(stringResource(R.string.bot_access_desktop_files), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -345,7 +350,7 @@ fun AidenBotCustomAccessFlowScreen(
 
                 // Terminal Shell section
                 item {
-                    Text("Terminal & Shell", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                    Text(stringResource(R.string.bot_access_terminal_shell), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -357,8 +362,8 @@ fun AidenBotCustomAccessFlowScreen(
                             modifier = Modifier.padding(16.dp)
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Execute Shell Commands", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                Text("Allows bot to run terminal commands on the paired desktop", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                                Text(stringResource(R.string.bot_access_shell_title), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                                Text(stringResource(R.string.bot_access_shell_body), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                             }
                             Switch(
                                 checked = curDraft.shellEnabled,
@@ -373,7 +378,7 @@ fun AidenBotCustomAccessFlowScreen(
                 // MCP Connections section
                 if (cat.connections.isNotEmpty()) {
                     item {
-                        Text("MCP Connections", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_editor_mcp_connections), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -421,7 +426,7 @@ fun AidenBotCustomAccessFlowScreen(
                 // Skills section
                 if (cat.skills.isNotEmpty()) {
                     item {
-                        Text("Skills", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_access_skills), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -469,7 +474,7 @@ fun AidenBotCustomAccessFlowScreen(
                 // Other capabilities section
                 if (cat.otherCapabilities.isNotEmpty()) {
                     item {
-                        Text("Other Capabilities", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_access_other), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -526,11 +531,11 @@ fun AidenBotCustomAccessFlowScreen(
     if (isConfirmingDiscard) {
         AlertDialog(
             onDismissRequest = { isConfirmingDiscard = false },
-            title = { Text("Discard access changes?") },
-            text = { Text("Your unsaved Custom Access changes will be lost.") },
+            title = { Text(stringResource(R.string.bot_access_discard_title)) },
+            text = { Text(stringResource(R.string.bot_access_discard_body)) },
             confirmButton = {
                 AidenDialogConfirmButton(
-                    text = "Discard Changes",
+                    text = stringResource(R.string.bot_access_discard_confirm),
                     destructive = true,
                     onClick = {
                         isConfirmingDiscard = false
@@ -545,7 +550,7 @@ fun AidenBotCustomAccessFlowScreen(
                 )
             },
             dismissButton = {
-                AidenDialogDismissButton(text = "Keep Editing", onClick = { isConfirmingDiscard = false })
+                AidenDialogDismissButton(text = stringResource(R.string.files_keep_editing), onClick = { isConfirmingDiscard = false })
             },
             shape = AidenShape.Dialog,
             containerColor = palette.raised

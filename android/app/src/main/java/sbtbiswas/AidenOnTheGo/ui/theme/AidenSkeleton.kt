@@ -30,6 +30,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Placeholder block for content that is still arriving. Aiden never shows a spinner for
@@ -104,7 +106,7 @@ fun AidenSkeletonList(
     modifier: Modifier = Modifier,
     leading: Boolean = true,
     supporting: Boolean = true,
-    loadingDescription: String = "Loading"
+    loadingDescription: String = stringResource(R.string.state_loading)
 ) {
     Column(modifier = modifier.clearAndSetSemantics { contentDescription = loadingDescription }) {
         repeat(count) { AidenSkeletonListRow(leading = leading, supporting = supporting) }

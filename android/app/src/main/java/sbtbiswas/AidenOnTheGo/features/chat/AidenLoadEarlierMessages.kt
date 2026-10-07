@@ -33,6 +33,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Elevated tonal capsule at the top of a windowed transcript that pages back
@@ -47,7 +49,8 @@ fun AidenLoadEarlierMessages(
 ) {
     val palette = AidenTheme.palette
     val reduceMotion = aidenReduceMotion()
-    val label = if (isLoading) "Loading earlier messages" else "Load earlier messages"
+    val label = if (isLoading) stringResource(R.string.chat_load_earlier_loading) else stringResource(R.string.chat_load_earlier)
+    val loadingState = stringResource(R.string.state_loading)
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
@@ -68,7 +71,7 @@ fun AidenLoadEarlierMessages(
                 .tactilePress(interaction)
                 .semantics {
                     role = Role.Button
-                    if (isLoading) stateDescription = "Loading"
+                    if (isLoading) stateDescription = loadingState
                 }
         ) {
             Row(

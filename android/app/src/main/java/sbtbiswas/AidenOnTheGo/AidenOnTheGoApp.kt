@@ -45,8 +45,8 @@ class AidenOnTheGoApp : Application() {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Aiden Agent Tasks"
-            val descriptionText = "Live progress and notifications for running AI agents and bots"
+            val name = getString(R.string.notification_channel_agent_runs)
+            val descriptionText = getString(R.string.notification_channel_agent_runs_description)
             val importance = NotificationManager.IMPORTANCE_LOW
             val channel = NotificationChannel(AGENT_RUN_CHANNEL_ID, name, importance).apply {
                 description = descriptionText
@@ -54,8 +54,8 @@ class AidenOnTheGoApp : Application() {
             val notificationManager: NotificationManager =
                 getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
-            val scheduledChannel = NotificationChannel(SCHEDULED_RUNS_CHANNEL_ID, "Aiden Scheduled Runs", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = "Completed scheduled-task runs from the paired Aiden instance"
+            val scheduledChannel = NotificationChannel(SCHEDULED_RUNS_CHANNEL_ID, getString(R.string.notification_channel_scheduled_runs), NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = getString(R.string.notification_channel_scheduled_runs_description)
             }
             notificationManager.createNotificationChannel(scheduledChannel)
         }

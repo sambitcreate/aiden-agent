@@ -36,16 +36,21 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /** Shared height of the Bots and Workspaces top chrome, below the status bar. */
 internal val AidenProductTopBarHeight = 64.dp
 
-internal fun aidenConnectionLabel(state: AidenConnectionState): String = when (state) {
-    AidenConnectionState.CONNECTED -> "Connected"
-    AidenConnectionState.CONNECTING -> "Connecting"
-    AidenConnectionState.OFFLINE -> "Offline"
-    AidenConnectionState.NEEDS_PAIRING -> "Needs pairing"
-}
+@Composable
+internal fun aidenConnectionLabel(state: AidenConnectionState): String = stringResource(
+    when (state) {
+        AidenConnectionState.CONNECTED -> R.string.shell_connection_connected
+        AidenConnectionState.CONNECTING -> R.string.shell_connection_connecting
+        AidenConnectionState.OFFLINE -> R.string.shell_connection_offline
+        AidenConnectionState.NEEDS_PAIRING -> R.string.shell_connection_needs_pairing
+    }
+)
 
 /**
  * Top chrome shared by the Bots and Workspaces areas: product switcher, area title with a

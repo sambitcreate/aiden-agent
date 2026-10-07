@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Aiden On The Go</string>
 
     <!-- BEGIN model picker strings (features/shared/AidenModelPicker.kt) -->
@@ -36,6 +36,31 @@
     <string name="action_remove">Remove</string>
     <string name="action_save">Save</string>
     <string name="action_saving">Saving…</string>
+    <string name="state_loading">Loading</string>
+    <string name="action_share">Share</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_expand">Expand</string>
+    <string name="action_collapse">Collapse</string>
+    <string name="action_options">Options</string>
+    <string name="action_done">Done</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_discard">Discard</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_retry">Retry</string>
+    <string name="state_expanded">Expanded</string>
+    <string name="state_collapsed">Collapsed</string>
+    <string name="state_selected">Selected</string>
+    <string name="action_close">Close</string>
+    <string name="action_create">Create</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_try_again">Try Again</string>
+    <string name="action_load_more">Load More</string>
+    <string name="action_search">Search</string>
+    <string name="action_clear_search">Clear search</string>
+    <string name="action_more_actions">More actions</string>
+    <string name="state_in_progress">In progress</string>
 
     <!-- Settings root -->
     <string name="settings_title">Settings</string>
@@ -177,4 +202,676 @@
     <string name="camera_prompt_blocked">Camera access is off for Aiden. Turn it on in Settings, or use the setup code instead.</string>
     <string name="camera_enable">Enable camera</string>
     <string name="camera_open_settings">Open settings</string>
+
+    <!-- Workspaces: directory -->
+    <string name="workspace_start_chat_failed">Aiden couldn\'t start a chat.</string>
+    <string name="workspace_create_failed">Aiden couldn\'t create the workspace.</string>
+    <string name="workspace_rename_failed">Aiden couldn\'t rename \"%1$s\".</string>
+    <string name="workspace_delete_worktree_failed">Aiden couldn\'t delete the worktree.</string>
+    <string name="workspace_remove_failed">Aiden couldn\'t remove \"%1$s\".</string>
+    <string name="workspace_opening_new_chat">Opening new chat</string>
+    <string name="workspace_new_chat">New Chat</string>
+    <string name="workspace_back_to_workspaces">Back to Workspaces</string>
+    <string name="workspace_permission_label">Permission: %1$s</string>
+    <string name="workspace_settings">Workspace Settings</string>
+    <string name="workspace_back_to_home">Back to Workspace home</string>
+    <string name="workspace_directory_title">Workspaces</string>
+    <string name="workspace_search_placeholder" tools:ignore="TypographyEllipsis">Search workspaces...</string>
+    <string name="workspace_creating">Creating workspace</string>
+    <string name="workspace_add">Add Workspace</string>
+    <string name="workspace_menu_new">New Workspace</string>
+    <string name="workspace_menu_new_scratch">New Managed Scratch</string>
+    <string name="workspace_menu_add_folder" tools:ignore="TypographyEllipsis">Add Desktop Folder...</string>
+    <string name="workspace_tab_active">Active (%1$d)</string>
+    <string name="workspace_tab_archived">Archived (%1$d)</string>
+    <string name="workspace_empty_active_title">No active workspaces</string>
+    <string name="workspace_empty_archived_title">No archived workspaces</string>
+    <string name="workspace_empty_active_body">Create a workspace or add an approved folder from your desktop.</string>
+    <string name="workspace_empty_archived_body">Workspaces archived on this device will appear here.</string>
+    <string name="workspace_worktree_badge">Worktree</string>
+    <string name="workspace_deleting">Deleting…</string>
+    <string name="workspace_removing">Removing…</string>
+    <plurals name="workspace_uncommitted_count">
+        <item quantity="one">+%1$d uncommitted</item>
+        <item quantity="other">+%1$d uncommitted</item>
+    </plurals>
+    <string name="workspace_menu_archive">Archive on this device</string>
+    <string name="workspace_menu_unarchive">Unarchive</string>
+    <string name="workspace_menu_delete_worktree">Delete Managed Worktree</string>
+    <string name="workspace_menu_remove">Remove from Aiden</string>
+    <string name="workspace_new_dialog_body">Enter a name for the new folderless workspace:</string>
+    <string name="workspace_name_placeholder">Workspace name</string>
+    <string name="workspace_scratch_dialog_title">Create Managed Scratch?</string>
+    <string name="workspace_scratch_dialog_confirm">Create Scratch</string>
+    <string name="workspace_scratch_dialog_body">Aiden will create an isolated scratch workspace in an ephemeral location on your paired desktop.</string>
+    <string name="workspace_rename_dialog_title">Rename Workspace</string>
+    <string name="workspace_name_label">Workspace Name</string>
+    <string name="workspace_archive_dialog_title">Archive on this Device</string>
+    <string name="workspace_archive_dialog_confirm">Got it, Archive</string>
+    <string name="workspace_archive_dialog_body">Archiving a workspace hides it only on this device. Your paired desktop, files, and other devices remain completely unaffected.</string>
+    <string name="workspace_remove_dialog_title">Remove Workspace?</string>
+    <string name="workspace_remove_dialog_body">Are you sure you want to remove \"%1$s\" from Aiden? Local files on your paired desktop are preserved.</string>
+    <string name="workspace_delete_worktree_dialog_title">Delete Managed Worktree?</string>
+    <string name="workspace_delete_worktree_dialog_confirm">Delete Worktree</string>
+    <string name="workspace_delete_worktree_dialog_body">This will permanently remove the managed worktree folder and git worktree on your paired desktop.</string>
+
+    <!-- Workspaces: desktop folder browser -->
+    <string name="workspace_folders_title">Browse Desktop Folders</string>
+    <string name="workspace_folders_loading">Loading folders</string>
+    <string name="workspace_folder_add_failed">Aiden couldn\'t add this folder.</string>
+    <string name="workspace_folder_adding">Adding Folder…</string>
+    <string name="workspace_folder_add">Add This Folder as Workspace</string>
+
+    <!-- Workspaces: settings sheet -->
+    <string name="workspace_permission_level">Permission Level</string>
+    <string name="workspace_save_changes">Save Changes</string>
+    <string name="workspace_settings_save_failed">Aiden couldn\'t save these settings.</string>
+    <string name="workspace_remove">Remove Workspace</string>
+    <string name="workspace_delete_worktree_short_title">Delete Worktree?</string>
+    <string name="workspace_use_memory">Use memory</string>
+    <string name="workspace_use_memory_body">When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your Mac.</string>
+
+    <!-- Workspaces: chats -->
+    <string name="workspace_chats_loading">Loading chats</string>
+    <string name="workspace_chats_reconnect">Reconnect and try again.</string>
+    <string name="workspace_chats_empty">No chats in this workspace yet</string>
+    <string name="workspace_start_chat">Start a Chat</string>
+    <plurals name="workspace_message_count">
+        <item quantity="one">%1$d message</item>
+        <item quantity="other">%1$d messages</item>
+    </plurals>
+    <string name="workspace_action_files">Files</string>
+    <string name="workspace_action_git_review">Git Review</string>
+
+    <!-- Workspaces: home -->
+    <string name="workspace_home_opening_chat">Opening chat…</string>
+    <string name="workspace_home_chats_still_loading">Chats are still loading. Try again shortly.</string>
+    <string name="workspace_home_create_chat_failed">Aiden couldn\'t create the chat.</string>
+    <string name="workspace_home_new_chat_cd">New Workspace Chat</string>
+    <string name="workspace_home_connecting">Connecting to Aiden Agent…</string>
+    <string name="workspace_home_offline">Offline — showing saved chats</string>
+    <string name="workspace_home_scheduled_tasks">Scheduled Tasks</string>
+    <string name="workspace_home_usage">Usage</string>
+    <string name="workspace_home_usage_loading">Loading Usage from your paired desktop…</string>
+    <string name="workspace_home_manage">Manage Workspaces</string>
+    <string name="workspace_home_recents">Recents</string>
+    <string name="workspace_home_refresh_failed">Aiden couldn\'t refresh chats.</string>
+    <string name="workspace_home_empty_search_title">No Matches</string>
+    <string name="workspace_home_empty_workspaces_title">No Workspaces Yet</string>
+    <string name="workspace_home_empty_chats_title">No Chats Yet</string>
+    <string name="workspace_home_empty_search_body">Try a different search term.</string>
+    <string name="workspace_home_empty_workspaces_body">Add a workspace to begin.</string>
+    <string name="workspace_home_empty_chats_body">Start a new Workspace chat to begin.</string>
+    <string name="workspace_home_loading_more">Loading more chats</string>
+    <string name="workspace_home_load_more">Load more chats</string>
+    <string name="workspace_home_choice_existing">Existing Workspace</string>
+    <string name="workspace_home_choice_existing_detail">Choose a workspace and open a new chat</string>
+    <string name="workspace_home_choice_new_detail">Create a reusable workspace and its first chat</string>
+    <string name="workspace_home_choice_scratch">Managed Scratch Workspace</string>
+    <string name="workspace_home_choice_scratch_detail">Create an isolated scratch workspace and chat</string>
+    <string name="workspace_home_creating_workspace">Creating workspace…</string>
+    <string name="workspace_home_scratch_body">Create an isolated managed workspace and open its first chat?</string>
+    <string name="workspace_home_preparing_scratch">Preparing scratch workspace…</string>
+    <string name="workspace_home_create_scratch_failed">Aiden couldn\'t create the scratch workspace.</string>
+    <string name="workspace_home_chats_load_failed_title">Chats Couldn\'t Load</string>
+    <string name="workspace_home_search_cd">Search Workspace chats</string>
+    <string name="workspace_home_profile_cd">Profile and settings</string>
+    <string name="workspace_home_search_placeholder">Search chats</string>
+    <string name="workspace_home_close_search">Close search</string>
+    <string name="workspace_home_organize_by_workspace">By workspace</string>
+    <string name="workspace_home_organize_recent">Recent only</string>
+    <string name="workspace_home_organize_cd">Organize sidebar</string>
+    <string name="workspace_home_new_chat">New chat</string>
+    <plurals name="workspace_home_show_more">
+        <item quantity="one">Show %1$d more</item>
+        <item quantity="other">Show %1$d more</item>
+    </plurals>
+    <string name="workspace_home_forked_chat_cd">Forked chat</string>
+
+    <!-- Workspaces: Git review -->
+    <string name="git_review_title">Git Review</string>
+    <string name="git_diff_truncated">Diff truncated: payload limit exceeded</string>
+    <string name="git_loading_changes">Loading changes</string>
+    <string name="git_changes_unavailable">Changes unavailable</string>
+    <string name="git_changes_connect">Connect to your paired desktop to review this Workspace.</string>
+    <string name="git_changes_read_failed">Aiden couldn\'t read this Workspace\'s changes.</string>
+    <string name="git_branch_label">Branch: %1$s</string>
+    <plurals name="git_uncommitted_count">
+        <item quantity="one">%1$d uncommitted</item>
+        <item quantity="other">%1$d uncommitted</item>
+    </plurals>
+    <string name="git_clean">Clean</string>
+    <string name="git_checking_changes">Checking for changes…</string>
+    <string name="git_clean_title">Working tree is clean</string>
+    <string name="git_clean_body">No uncommitted changes in this workspace.</string>
+    <plurals name="git_commit_changes_count">
+        <item quantity="one">Commit Changes (%1$d file)</item>
+        <item quantity="other">Commit Changes (%1$d files)</item>
+    </plurals>
+    <string name="git_commit_changes">Commit Changes</string>
+    <string name="git_commit_message">Commit message</string>
+    <string name="git_commit_message_placeholder" tools:ignore="TypographyEllipsis">Describe your changes...</string>
+    <string name="git_stage_reviewed_only">Stage only reviewed changes</string>
+    <string name="git_review_and_commit">Review &amp; Commit</string>
+    <string name="git_confirm_commit">Confirm Commit</string>
+    <string name="git_commit">Commit</string>
+    <string name="git_committing">Committing…</string>
+    <string name="git_commit_confirm_body">Create a commit on branch \"%1$s\" with message:\n\n\"%2$s\"</string>
+    <string name="git_branches_title">Git Branches</string>
+    <string name="git_new_branch">New Branch</string>
+    <string name="git_loading_branches">Loading branches</string>
+    <string name="git_active_branch_cd">Active</string>
+    <string name="git_checkout_title">Checkout Branch?</string>
+    <string name="git_checkout">Checkout</string>
+    <string name="git_switching_to">Switching to %1$s…</string>
+    <string name="git_checkout_body">Switch working tree to branch \"%1$s\"?</string>
+    <string name="git_create_branch_title">Create New Branch</string>
+    <string name="git_creating_branch">Creating %1$s…</string>
+    <string name="git_branch_name">Branch name</string>
+    <string name="git_start_point">Start point (branch / commit)</string>
+    <string name="git_push_title">Push to Remote</string>
+    <string name="git_push">Push</string>
+    <string name="git_pushing">Pushing %1$s…</string>
+    <string name="git_push_not_allowed">Push is not allowed: %1$s</string>
+    <string name="git_permission_denied">Permission denied</string>
+    <string name="git_push_body">Push branch \"%1$s\" to remote \"%2$s\"?</string>
+    <string name="git_never_force_push">Aiden never force-pushes.</string>
+    <string name="git_compare_title">Compare Branches</string>
+    <string name="git_base_branch">Base branch</string>
+    <string name="git_comparing">Comparing…</string>
+    <string name="git_compare">Compare</string>
+    <string name="git_comparing_branches">Comparing branches</string>
+    <plurals name="git_compare_summary">
+        <item quantity="one">%1$d changed file between %2$s and %3$s:</item>
+        <item quantity="other">%1$d changed files between %2$s and %3$s:</item>
+    </plurals>
+    <string name="git_worktrees_title">Git Worktrees</string>
+    <string name="git_new_worktree">New Worktree</string>
+    <string name="git_loading_worktrees">Loading worktrees</string>
+    <string name="git_worktree_managed">Managed</string>
+    <string name="git_create_worktree_title">Create Managed Worktree</string>
+    <string name="git_creating_worktree">Creating worktree %1$s…</string>
+    <string name="git_worktree_name">Worktree name</string>
+    <string name="git_action_branch">Branch</string>
+    <string name="git_action_worktrees">Worktrees</string>
+
+    <!-- Workspaces: Usage sheet -->
+    <string name="usage_title">Usage</string>
+    <string name="usage_your_activity">Your Activity</string>
+    <string name="usage_requests">Requests</string>
+    <string name="usage_active_days">Active days</string>
+    <string name="usage_current_streak">Current streak</string>
+    <string name="usage_longest_streak">Longest streak</string>
+    <string name="usage_total_tokens_cd">%1$s total tokens</string>
+    <string name="usage_total_tokens">Total tokens</string>
+    <string name="usage_token_activity">Token activity</string>
+    <string name="usage_daily_totals">Daily totals</string>
+    <string name="usage_legend_less">Less</string>
+    <string name="usage_legend_more">More</string>
+    <string name="usage_activity_insights">Activity insights</string>
+    <string name="usage_completed_requests">Completed requests</string>
+    <string name="usage_local_model_share">Local model share</string>
+    <string name="usage_failed_requests">Failed requests</string>
+    <string name="usage_hosted_cost">Hosted cost</string>
+    <string name="usage_most_used_models">Most used models</string>
+    <string name="usage_provider_local">%1$s · Local</string>
+    <string name="usage_model_runs">%1$s runs</string>
+    <string name="usage_privacy_note">Privacy-safe aggregates are recorded by Aiden Agent on your paired desktop. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.</string>
+    <string name="usage_metric_cd">%1$s, %2$s</string>
+    <plurals name="usage_day_tokens_cd">
+        <item quantity="one">%1$s, %2$d token</item>
+        <item quantity="other">%1$s, %2$d tokens</item>
+    </plurals>
+    <plurals name="usage_day_count">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+
+    <!-- Workspaces: Files -->
+    <string name="files_tree_limit">The loaded tree reached 4,000 entries. Refresh Files to browse another folder.</string>
+    <string name="files_open_failed">This workspace file could not be opened. Browse Files to locate it.</string>
+    <string name="files_title">Workspace Files</string>
+    <string name="files_offline_banner">Showing offline snapshot. Editing is disabled.</string>
+    <plurals name="files_truncated_banner">
+        <item quantity="one">File list is truncated at %1$d entry.</item>
+        <item quantity="other">File list is truncated at %1$d entries.</item>
+    </plurals>
+    <string name="files_search_placeholder">Search loaded files…</string>
+    <string name="files_loading">Loading files</string>
+    <string name="files_no_matches">No matching files found</string>
+    <string name="files_load_more">Load more files</string>
+    <string name="files_load_more_in">Load more in %1$s</string>
+    <string name="files_discard_title">Discard Changes?</string>
+    <string name="files_keep_editing">Keep Editing</string>
+    <string name="files_discard_body">You have unsaved changes in this file. Are you sure you want to discard them?</string>
+    <string name="files_conflict_title">Conflict Detected</string>
+    <string name="files_conflict_reload">Reload from desktop</string>
+    <string name="files_conflict_body">This file on your paired desktop was modified since you opened it. Would you like to reload the latest version from your desktop?</string>
+    <string name="usage_token_input">Input</string>
+    <string name="usage_token_output">Output</string>
+    <string name="usage_token_reasoning">Reasoning</string>
+    <string name="usage_token_cache_read">Cache read</string>
+
+    <!-- Bots: home -->
+    <string name="bots_status_queued">Queued</string>
+    <string name="bots_status_working">Working</string>
+    <string name="bots_status_approval_needed">Approval needed</string>
+    <string name="bots_status_waiting_desktop">Waiting for desktop approval</string>
+    <string name="bots_status_updating">Updating</string>
+    <string name="bots_offline">Offline — showing saved Bots</string>
+    <string name="bots_load_failed_title">Bots couldn’t load</string>
+    <string name="bots_load_failed_body">Reconnect to your paired desktop and try again.</string>
+    <string name="bots_empty_title">Make your first Bot</string>
+    <string name="bots_empty_offline_title">No saved Bots</string>
+    <string name="bots_empty_body">Create a familiar helper with one persistent conversation and its own capabilities.</string>
+    <string name="bots_empty_offline_body">Reconnect to your paired desktop to load Bots.</string>
+    <string name="bots_new">New Bot</string>
+    <string name="bots_no_results">No Results for \"%1$s\"</string>
+    <string name="bots_section_favorites">Favorites</string>
+    <string name="bots_section_bots">Bots</string>
+    <string name="bots_start_conversation">Start a conversation</string>
+    <string name="bots_archived_preview">Archived · %1$s</string>
+    <string name="bots_open_details_cd">Open %1$s details</string>
+    <string name="bots_search_placeholder">Search Bots</string>
+    <string name="bots_open_chat_cd">Open Bot Chat</string>
+    <string name="bots_choose_title">Choose a Bot</string>
+    <string name="bots_choose_body">Open this Bot’s chat. Aiden starts it the first time if needed.</string>
+    <string name="bots_avatar_cd">%1$s avatar</string>
+    <string name="bots_avatar_default_cd">Bot Avatar</string>
+
+    <!-- Bots: profile -->
+    <string name="bot_profile_favorites_failed">Aiden couldn\'t update Favorites. Try again.</string>
+    <string name="bot_profile_update_failed">Aiden couldn\'t update this Bot.</string>
+    <string name="bot_profile_title">Bot Profile</string>
+    <string name="bot_profile_archive">Archive Bot</string>
+    <string name="bot_profile_restore">Restore Bot</string>
+    <string name="bot_profile_restoring">Restoring…</string>
+    <string name="bot_profile_archiving">Archiving…</string>
+    <string name="bot_profile_unavailable_title">Bot unavailable</string>
+    <string name="bot_profile_unavailable_connect">Connect to your paired desktop to see this Bot.</string>
+    <string name="bot_profile_unavailable_failed">Aiden couldn\'t load this Bot.</string>
+    <string name="bot_profile_archived_banner">Archived — chats are read-only</string>
+    <string name="bot_profile_action_chat">Chat</string>
+    <string name="bot_profile_open_chat_failed">Aiden couldn\'t open a chat with this Bot.</string>
+    <string name="bot_profile_action_access">Access</string>
+    <string name="bot_profile_action_unpin">Unpin</string>
+    <string name="bot_profile_action_pin">Pin</string>
+    <string name="bot_profile_favorite_order">Favorite Order</string>
+    <string name="bot_profile_favorite_position">%1$d of %2$d</string>
+    <string name="bot_profile_move_earlier">Move Earlier</string>
+    <string name="bot_profile_move_later">Move Later</string>
+    <string name="bot_profile_recent_chats">Recent Chats</string>
+    <string name="bot_profile_no_history">No conversation history yet.</string>
+    <string name="bot_profile_chat_fallback_title">Chat</string>
+    <string name="bot_profile_greeting">Greeting</string>
+    <string name="bot_profile_instructions">Instructions</string>
+    <string name="bot_profile_archive_title">Archive %1$s?</string>
+    <string name="bot_profile_bot_fallback">Bot</string>
+    <string name="bot_profile_archive_body">Its chats stay available to read. Restore the Bot later to edit it or start new work.</string>
+    <string name="bot_profile_loading">Loading Bot</string>
+
+    <!-- Bots: editor -->
+    <string name="bot_editor_new_title">New Bot</string>
+    <string name="bot_editor_edit_title">Edit Bot</string>
+    <string name="bot_editor_save_failed">Failed to save Bot</string>
+    <string name="bot_editor_cannot_start">Can\'t start a new Bot</string>
+    <string name="bot_editor_cannot_load">Can\'t load this Bot</string>
+    <string name="bot_editor_loading_options">Loading Bot options</string>
+    <string name="bot_editor_identity">Identity</string>
+    <string name="bot_editor_name">Name</string>
+    <string name="bot_editor_name_placeholder">e.g. Python Pro, Code Reviewer</string>
+    <string name="bot_editor_purpose">Purpose (Optional)</string>
+    <string name="bot_editor_purpose_placeholder">Briefly describe what this bot does</string>
+    <string name="bot_editor_greeting">Opening Greeting (Optional)</string>
+    <string name="bot_editor_greeting_placeholder">First message sent when starting a chat</string>
+    <string name="bot_editor_instructions_placeholder" tools:ignore="TypographyEllipsis">System instructions and behavior rules...</string>
+    <string name="bot_editor_avatar_studio">Avatar Studio</string>
+    <string name="bot_editor_avatar_shape">Shape</string>
+    <string name="bot_editor_avatar_color">Color</string>
+    <string name="bot_editor_avatar_eyes">Eyes</string>
+    <string name="bot_editor_avatar_accessory">Accessory</string>
+    <string name="bot_editor_image_studio">Create with Image Studio</string>
+    <string name="bot_editor_access_mode">Access Mode</string>
+    <string name="bot_editor_provider_model">AI Provider &amp; Model</string>
+    <string name="bot_editor_file_scopes">Desktop File Scopes</string>
+    <string name="bot_editor_terminal">Terminal Execution</string>
+    <string name="bot_editor_mcp_connections">MCP Connections</string>
+    <string name="bot_editor_discard_title">Discard changes?</string>
+    <string name="bot_editor_discard_body">You have unsaved changes to this Bot. If you leave now, your changes will be discarded.</string>
+    <string name="bot_editor_access_full">Full Access</string>
+    <string name="bot_editor_access_custom">Custom Access</string>
+
+    <!-- Bots: custom access -->
+    <string name="bot_access_previous_skill_unavailable">Previously selected skill — unavailable</string>
+    <string name="bot_access_option_unavailable">%1$s — Unavailable</string>
+    <string name="bot_access_title">Custom Access</string>
+    <string name="bot_access_conflict">Access policy was changed on your paired desktop. Review the latest policy and try again.</string>
+    <string name="bot_access_conflict_fallback">Conflict updating access</string>
+    <string name="bot_access_save_failed">Failed to save access policy</string>
+    <string name="bot_access_no_bots_title">No Bots to configure</string>
+    <string name="bot_access_load_failed_title">Can\'t load access</string>
+    <string name="bot_access_no_bots_body">Create a Bot first, then choose what it can use.</string>
+    <string name="bot_access_loading">Loading access</string>
+    <string name="bot_access_select_bot">Select Bot</string>
+    <string name="bot_access_desktop_files">Desktop Files</string>
+    <string name="bot_access_terminal_shell">Terminal &amp; Shell</string>
+    <string name="bot_access_shell_title">Execute Shell Commands</string>
+    <string name="bot_access_shell_body">Allows bot to run terminal commands on the paired desktop</string>
+    <string name="bot_access_skills">Skills</string>
+    <string name="bot_access_other">Other Capabilities</string>
+    <string name="bot_access_discard_title">Discard access changes?</string>
+    <string name="bot_access_discard_body">Your unsaved Custom Access changes will be lost.</string>
+    <string name="bot_access_discard_confirm">Discard Changes</string>
+
+    <!-- Bots: Image Studio -->
+    <string name="bot_image_default_prompt">A friendly AI assistant avatar named %1$s</string>
+    <string name="bot_image_generation">Image Generation</string>
+    <string name="bot_image_generation_body">Bot photos generated on a supported Apple device can be synchronized to Android. You can also customize your Bot with the built-in Semantic Avatar studio.</string>
+    <string name="bot_image_description">Avatar Description</string>
+    <string name="bot_image_description_placeholder" tools:ignore="TypographyEllipsis">Describe the appearance of your bot...</string>
+    <string name="bot_avatar_saving">Saving avatar…</string>
+    <string name="bot_avatar_restoring">Restoring avatar…</string>
+
+    <!-- Chat: task and agent progress -->
+    <string name="chat_progress_step">Step %1$d / %2$d</string>
+    <string name="chat_progress_steps_done" tools:ignore="PluralsCandidate">%1$d / %2$d steps</string>
+    <string name="chat_progress_open_tasks_cd">Open task progress</string>
+    <plurals name="chat_progress_agent_count">
+        <item quantity="one">%1$d agent</item>
+        <item quantity="other">%1$d agents</item>
+    </plurals>
+    <string name="chat_progress_earlier_agents">Earlier agents</string>
+    <string name="chat_progress_open_agents_cd">Open agent progress</string>
+    <string name="chat_progress_last_known">Last known</string>
+    <string name="chat_progress_all_complete">All task steps complete</string>
+    <string name="chat_progress_chip_cd">%1$s: %2$s</string>
+    <string name="chat_progress_chip_supporting_cd">%1$s: %2$s, %3$s</string>
+    <string name="chat_progress_task_title">Task progress</string>
+    <plurals name="chat_progress_steps_complete">
+        <item quantity="one">%1$d of %2$d step complete</item>
+        <item quantity="other">%1$d of %2$d steps complete</item>
+    </plurals>
+    <string name="chat_task_completed">Completed</string>
+    <string name="chat_task_in_progress">In progress</string>
+    <string name="chat_task_pending">Pending</string>
+    <string name="chat_task_deleted">Deleted</string>
+    <string name="chat_task_blocked_by">Blocked by %1$s</string>
+    <string name="chat_agents_title">Agents</string>
+    <string name="chat_agents_current">Current</string>
+    <string name="chat_agents_earlier_on">Earlier · %1$s</string>
+    <string name="chat_agents_earlier_session">Earlier session</string>
+    <string name="chat_agents_group_working">Working</string>
+    <string name="chat_agents_group_attention">Needs attention</string>
+    <string name="chat_agents_group_finished">Finished</string>
+    <string name="chat_agents_none_choose_earlier">No agents in this session. Choose an earlier session above.</string>
+    <string name="chat_agents_none">No agents in this session.</string>
+    <string name="chat_tasks_storage_off">Task tracking is off on the Mac</string>
+    <string name="chat_tasks_unavailable">Task progress is temporarily unavailable</string>
+    <string name="chat_agents_unavailable">Agent progress is temporarily unavailable</string>
+    <string name="chat_agent_row_cd">%1$s, %2$s</string>
+    <string name="chat_agent_open_parent_cd">Open parent agent %1$s</string>
+    <string name="chat_agent_started_by">Started by %1$s</string>
+    <plurals name="chat_agent_turns">
+        <item quantity="one">%1$d turn</item>
+        <item quantity="other">%1$d turns</item>
+    </plurals>
+    <plurals name="chat_agent_tools">
+        <item quantity="one">%1$d tool</item>
+        <item quantity="other">%1$d tools</item>
+    </plurals>
+    <plurals name="chat_agent_tokens">
+        <item quantity="one">%1$d token</item>
+        <item quantity="other">%1$d tokens</item>
+    </plurals>
+    <string name="chat_agent_updated">Updated %1$s</string>
+    <string name="chat_agent_privacy_hidden">Some details are hidden for privacy.</string>
+    <string name="chat_agent_sub_agents">Sub-agents</string>
+    <string name="chat_agent_stopping">Stopping…</string>
+    <string name="chat_agent_stop">Stop agent</string>
+    <string name="chat_agent_stop_note">The Mac stops only this agent. The main run and other agents keep going.</string>
+    <string name="chat_agent_stop_title">Stop %1$s?</string>
+    <string name="chat_agent_stop_body">The Mac stops this delegated agent. You cannot resume it from here.</string>
+    <string name="chat_agent_keep_running">Keep running</string>
+    <string name="chat_agent_role_scout">Scout</string>
+    <string name="chat_agent_role_planner">Planner</string>
+    <string name="chat_agent_role_reviewer">Reviewer</string>
+    <string name="chat_agent_role_implementer">Implementer</string>
+    <string name="chat_agent_state_queued">Queued</string>
+    <string name="chat_agent_state_starting">Starting</string>
+    <string name="chat_agent_state_working">Working</string>
+    <string name="chat_agent_state_needs_attention">Needs attention</string>
+    <string name="chat_agent_state_completed">Completed</string>
+    <string name="chat_agent_state_failed">Failed</string>
+    <string name="chat_agent_state_timed_out">Timed out</string>
+    <string name="chat_agent_state_interrupted">Interrupted</string>
+    <string name="chat_agent_state_stopped">Stopped</string>
+    <string name="chat_agent_state_unknown">Unknown</string>
+
+    <!-- Chat: forks -->
+    <string name="chat_fork_summary_title">What happened after this point</string>
+    <string name="chat_fork_from">Forked from %1$s</string>
+    <string name="chat_fork_untitled">Untitled chat</string>
+    <string name="chat_fork_from_deleted">Forked from a deleted chat</string>
+    <string name="chat_fork_from_other">Forked from another chat</string>
+    <string name="chat_fork_open_original">Open the original chat</string>
+    <string name="chat_fork_summarizing">Summarizing the original chat…</string>
+    <string name="chat_fork_summary_failed">%1$s Messages you send wait until you retry or continue without it.</string>
+    <string name="chat_fork_summary_failed_default">The summary could not be generated.</string>
+    <string name="chat_fork_continue_without">Continue without summary</string>
+    <string name="chat_fork_summary_note">The model sees this summary. None of it happened in this chat.</string>
+    <string name="chat_fork_focus">Focus: %1$s</string>
+    <string name="chat_fork_dialog_title">Fork with summary</string>
+    <string name="chat_fork_dialog_body">The new chat keeps the conversation up to this point. Aiden summarizes what happened after it in the original chat and gives that summary to the model.</string>
+    <string name="chat_fork_focus_label">Focus the summary on…</string>
+    <string name="chat_fork_focus_placeholder">For example: the decisions about the parser</string>
+    <string name="chat_fork_confirm">Fork</string>
+
+    <!-- Chat: transcript -->
+    <string name="chat_title_fallback">Chat</string>
+    <string name="chat_approval_review_only">This paired device can review approvals but cannot respond.</string>
+    <string name="chat_approval_schedule_write_required">Schedule write access is required to approve this task.</string>
+    <string name="chat_approval_confirm_on_desktop">Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.</string>
+    <string name="chat_composer_placeholder_bot">Message %1$s</string>
+    <string name="chat_composer_placeholder">Message Aiden</string>
+    <string name="chat_progress_hide">Hide progress</string>
+    <string name="chat_progress_show">Show progress</string>
+    <string name="chat_artifact_unsupported">Can\'t view on this device. View in Aiden Agent.</string>
+    <string name="chat_working" tools:ignore="TypographyEllipsis">Aiden is working...</string>
+    <string name="chat_waiting_network_cd">Aiden is waiting for the network to return</string>
+    <string name="chat_waiting_network">Waiting for network</string>
+    <string name="chat_reasoning_thinking">Thinking</string>
+    <string name="chat_reasoning_thought">Thought</string>
+    <string name="chat_reasoning_collapse">Collapse reasoning</string>
+    <string name="chat_reasoning_expand">Expand reasoning</string>
+    <string name="chat_timeline_file">File %1$s · %2$s</string>
+
+    <!-- Chat: message actions -->
+    <string name="chat_message_actions">Message actions</string>
+    <string name="chat_message_select_text_action">Select text</string>
+    <string name="chat_message_ask_about">Ask about this</string>
+    <string name="chat_message_fork_here">Fork from here</string>
+    <string name="chat_message_fork_summary_action">Fork with summary</string>
+    <string name="chat_message_edit_in_fork">Edit in fork</string>
+    <string name="chat_message_copy_text">Copy Text</string>
+    <string name="chat_message_select_text">Select Text</string>
+    <string name="chat_message_fork_summary_menu">Fork with summary…</string>
+
+    <!-- Chat: image attachments -->
+    <plurals name="chat_images_count_cd">
+        <item quantity="one">%1$d image attachment</item>
+        <item quantity="other">%1$d image attachments</item>
+    </plurals>
+    <string name="chat_images_photo_position">Photo %1$d of %2$d</string>
+    <string name="chat_images_next">Next photo</string>
+    <string name="chat_images_previous">Previous photo</string>
+    <string name="chat_images_open_to_retry">Open to retry</string>
+    <string name="chat_images_loading">Loading %1$s</string>
+    <string name="chat_images_save_failed">Images couldn\'t be saved</string>
+    <string name="chat_images_saved_one">Saved to Photos</string>
+    <plurals name="chat_images_saved">
+        <item quantity="one">Saved %1$d image to Photos</item>
+        <item quantity="other">Saved %1$d images to Photos</item>
+    </plurals>
+    <string name="chat_images_permission_needed">Photos access is needed to save images</string>
+    <string name="chat_images_close_viewer">Close image viewer</string>
+    <string name="chat_images_page_position">%1$d of %2$d</string>
+    <string name="chat_images_saving">Saving images</string>
+    <string name="chat_images_save_menu">Save images</string>
+    <string name="chat_images_save_one">Save Image</string>
+    <string name="chat_images_save_all">Save All Images</string>
+
+    <!-- Chat: composer -->
+    <string name="chat_composer_remove_attachment">Remove %1$s</string>
+    <string name="chat_composer_remove_skill">Remove skill %1$s</string>
+    <string name="chat_composer_add_attachment">Add attachment</string>
+    <string name="chat_composer_photo_library">Photo Library</string>
+    <string name="chat_composer_choose_file">Choose File</string>
+    <string name="chat_composer_stop_voice">Stop voice input</string>
+    <string name="chat_composer_start_voice">Start voice input</string>
+    <string name="chat_composer_stop_generation">Stop generation</string>
+    <string name="chat_composer_send">Send message</string>
+    <string name="chat_composer_mode_steer">Steer</string>
+    <string name="chat_composer_mode_steer_detail">Add guidance without stopping</string>
+    <string name="chat_composer_mode_steer_action">Steer response</string>
+    <string name="chat_composer_mode_queue">Queue</string>
+    <string name="chat_composer_mode_queue_detail">Run after this response</string>
+    <string name="chat_composer_mode_queue_action">Queue message</string>
+    <string name="chat_composer_choose_action">Choose message action</string>
+    <string name="chat_composer_suggest_skill">Skill %1$s</string>
+    <string name="chat_composer_suggest_skill_unavailable">Skill %1$s, unavailable</string>
+    <string name="chat_composer_suggest_agent">Mention agent %1$s</string>
+    <string name="chat_composer_suggest_file">Mention file %1$s</string>
+    <string name="chat_composer_suggest_agent_tag">agent</string>
+    <string name="chat_composer_suggest_file_tag">file</string>
+
+    <!-- Chat: message footer and select text -->
+    <string name="chat_message_worked_for">· %1$s</string>
+    <string name="chat_message_copy">Copy message</string>
+    <string name="chat_message_copy_response">Copy response</string>
+    <string name="chat_read_aloud_stop">Stop reading aloud</string>
+    <string name="chat_read_aloud_start">Read response aloud</string>
+    <string name="chat_select_text_title">Select text</string>
+    <string name="chat_select_text_ask_all">Ask about all</string>
+
+    <!-- Chat: question card -->
+    <string name="chat_question_title">Aiden needs your input</string>
+    <string name="chat_question_multi_hint">Answer what you can — unanswered questions are skipped.</string>
+    <string name="chat_question_single_hint">Choose an option or type your own answer.</string>
+    <string name="chat_question_select_all">Select all that apply</string>
+    <string name="chat_question_custom_answer_cd">Custom answer</string>
+    <string name="chat_question_custom_placeholder">Type your answer</string>
+    <string name="chat_question_type_something_cd">Type something. Shows a field for a custom answer</string>
+    <string name="chat_question_type_something">Type something.</string>
+    <string name="chat_question_cannot_respond">This paired device cannot respond to prompts.</string>
+    <string name="chat_question_skip">Skip</string>
+    <string name="chat_question_submit">Submit</string>
+
+    <!-- Chat: approvals, code, transcript chrome -->
+    <string name="chat_approval_approve_task">Approve task</string>
+    <string name="chat_approval_allow_once">Allow once</string>
+    <string name="chat_approval_deny">Deny</string>
+    <string name="chat_approval_more_options">More allow options</string>
+    <string name="chat_load_earlier_loading">Loading earlier messages</string>
+    <string name="chat_load_earlier">Load earlier messages</string>
+    <string name="chat_voice_listening" tools:ignore="TypographyEllipsis">Listening...</string>
+    <string name="chat_code_label">CODE</string>
+    <string name="chat_code_copied">Copied</string>
+    <string name="chat_code_copy_cd">Copy code</string>
+    <string name="chat_code_copy">Copy</string>
+    <string name="chat_jump_to_latest">Jump to latest</string>
+    <string name="chat_loading_conversation">Loading conversation</string>
+
+    <!-- Scheduled tasks -->
+    <string name="scheduled_load_failed">Aiden couldn\'t load scheduled tasks.</string>
+    <string name="scheduled_update_failed">Aiden couldn\'t update this scheduled task.</string>
+    <string name="scheduled_title">Scheduled Tasks</string>
+    <string name="scheduled_refresh_cd">Refresh scheduled tasks</string>
+    <string name="scheduled_access_unavailable_title">Scheduled task access unavailable</string>
+    <string name="scheduled_access_unavailable_body">This paired device doesn\'t have schedule read access.</string>
+    <string name="scheduled_starting">Starting…</string>
+    <string name="scheduled_start_failed">Aiden couldn\'t start this task.</string>
+    <string name="scheduled_delete_title">Delete %1$s?</string>
+    <string name="scheduled_delete_body">This removes the automation and its saved run history from Aiden.</string>
+    <string name="scheduled_deleting">Deleting…</string>
+    <string name="scheduled_delete_failed">Aiden couldn\'t delete this task.</string>
+    <string name="scheduled_intro">Ask Aiden in any chat to create or change an automation.</string>
+    <string name="scheduled_intro_review">Aiden shows a permission review before saving unattended work. If a proposal can\'t be fully reviewed here, Aiden asks you to confirm it on your paired desktop.</string>
+    <string name="scheduled_offline">Offline — showing the last saved task list.</string>
+    <string name="scheduled_loading">Loading scheduled tasks</string>
+    <string name="scheduled_empty_filtered_title">No matching tasks</string>
+    <string name="scheduled_empty_title">No scheduled tasks</string>
+    <string name="scheduled_empty_filtered_body">Try another search or status.</string>
+    <string name="scheduled_empty_body">Open any Aiden chat and ask it to schedule, remind, or monitor something.</string>
+    <string name="scheduled_filter_cd">%1$s scheduled tasks</string>
+    <string name="scheduled_search">Search scheduled tasks</string>
+    <string name="scheduled_running">Running</string>
+    <string name="scheduled_pause_cd">Pause %1$s</string>
+    <string name="scheduled_resume_cd">Resume %1$s</string>
+    <string name="scheduled_meta_status">Status</string>
+    <string name="scheduled_meta_schedule">Schedule</string>
+    <string name="scheduled_meta_timezone">Timezone</string>
+    <string name="scheduled_meta_access">Access</string>
+    <string name="scheduled_meta_type">Type</string>
+    <string name="scheduled_type_ask_aiden">Ask Aiden</string>
+    <string name="scheduled_meta_next_run">Next run</string>
+    <string name="scheduled_meta_last_run">Last run</string>
+    <string name="scheduled_section_instructions">Instructions</string>
+    <string name="scheduled_section_controls">Controls</string>
+    <string name="scheduled_run_now">Run now</string>
+    <string name="scheduled_pause">Pause</string>
+    <string name="scheduled_resume">Resume</string>
+    <string name="scheduled_delete_automation">Delete automation</string>
+    <string name="scheduled_connect_to_manage">Connect to your paired desktop to run or change this task.</string>
+    <string name="scheduled_read_only">This paired device has read-only scheduled task access.</string>
+    <string name="scheduled_section_recent_runs">Recent runs</string>
+    <string name="scheduled_loading_runs">Loading recent runs</string>
+    <string name="scheduled_no_runs">No runs yet.</string>
+
+    <!-- Product shell -->
+    <string name="shell_area_bots">Bots</string>
+    <string name="shell_area_workspaces">Workspaces</string>
+    <string name="shell_new_bot_cd">New Bot</string>
+    <string name="shell_installations_cd">Installations</string>
+    <string name="shell_switcher_cd">Aiden. Current area: %1$s. Choose Bots or Workspaces.</string>
+    <string name="shell_connection_connected">Connected</string>
+    <string name="shell_connection_connecting">Connecting</string>
+    <string name="shell_connection_offline">Offline</string>
+    <string name="shell_connection_needs_pairing">Needs pairing</string>
+
+    <!-- Bot chat tools -->
+    <string name="bot_tools_scope_bot">Bot defaults</string>
+    <string name="bot_tools_scope_chat">This chat</string>
+    <string name="bot_tools_mode_inherit">Inherit Bot</string>
+    <string name="bot_tools_mode_custom">Customize</string>
+    <string name="bot_tools_files">Files</string>
+    <string name="bot_tools_access">Access</string>
+    <string name="bot_tools_profile">Profile</string>
+    <string name="bot_tools_effective_access">Effective bot access</string>
+    <string name="bot_tools_mode">Mode</string>
+    <string name="bot_tools_run_commands">Run commands</string>
+
+    <!-- Shared components -->
+    <string name="model_picker_close_sheet">Close sheet</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_agent_runs">Aiden Agent Tasks</string>
+    <string name="notification_channel_agent_runs_description">Live progress and notifications for running AI agents and bots</string>
+    <string name="notification_channel_scheduled_runs">Aiden Scheduled Runs</string>
+    <string name="notification_channel_scheduled_runs_description">Completed scheduled-task runs from the paired Aiden instance</string>
+    <string name="notification_agent_status_line">%1$s: %2$s</string>
+    <string name="notification_agent_status_starting">Starting</string>
+    <string name="notification_agent_status_thinking">Thinking</string>
+    <string name="notification_agent_status_using_tool">Using tool</string>
+    <string name="notification_agent_status_searching_files">Searching files</string>
+    <string name="notification_agent_status_reading_files">Reading files</string>
+    <string name="notification_agent_status_running_command">Running command</string>
+    <string name="notification_agent_status_responding">Responding</string>
+    <string name="notification_agent_status_waiting_approval">Waiting for approval</string>
+    <string name="notification_agent_status_waiting_answer">Waiting for answer</string>
+    <string name="notification_agent_status_complete">Complete</string>
+    <string name="notification_agent_status_failed">Failed</string>
+    <string name="notification_agent_status_cancelled">Cancelled</string>
+    <string name="notification_scheduled_failed">Scheduled run failed (%1$s).</string>
+    <string name="notification_scheduled_failed_default_code">error</string>
+    <string name="notification_scheduled_completed">Scheduled run completed.</string>
 </resources>

@@ -43,6 +43,10 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +56,7 @@ fun AidenGitScreen(
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client = coordinator.client.collectAsStateWithLifecycle().value
 
@@ -145,7 +150,7 @@ fun AidenGitScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (selectedDiff != null) selectedDiff!!.displayPath else "Git Review", fontWeight = FontWeight.Bold) },
+                title = { Text(if (selectedDiff != null) selectedDiff!!.displayPath else stringResource(R.string.git_review_title), fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(
                         onClick = {
@@ -156,13 +161,13 @@ fun AidenGitScreen(
                             }
                         }
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
                     if (selectedDiff == null) {
                         IconButton(onClick = { refreshGit() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = palette.foreground)
+                            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.action_refresh), tint = palette.foreground)
                         }
                     }
                 },
@@ -193,7 +198,7 @@ fun AidenGitScreen(
                         ) {
                             Icon(Icons.Default.Warning, contentDescription = null, tint = palette.warning, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Diff truncated: payload limit exceeded", style = MaterialTheme.typography.bodySmall, color = palette.foreground)
+                            Text(stringResource(R.string.git_diff_truncated), style = MaterialTheme.typography.bodySmall, color = palette.foreground)
                         }
                     }
                 }
@@ -256,7 +261,7 @@ fun AidenGitScreen(
                                         lastFailedOperation?.invoke()
                                     }
                                 ) {
-                                    Text("Retry", color = palette.accent, fontWeight = FontWeight.Bold)
+                                    Text(stringResource(R.string.action_retry), color = palette.accent, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -265,15 +270,15 @@ fun AidenGitScreen(
 
                 if (review == null) {
                     if (isLoading || (!reviewLoadFailed && client != null)) {
-                        AidenSkeletonList(count = 6, loadingDescription = "Loading changes")
+                        AidenSkeletonList(count = 6, loadingDescription = stringResource(R.string.git_loading_changes))
                     } else {
                         AidenEmptyState(
                             icon = Icons.Default.CloudOff,
-                            title = "Changes unavailable",
-                            body = if (client == null) "Connect to your paired desktop to review this Workspace." else "Aiden couldn't read this Workspace's changes.",
+                            title = stringResource(R.string.git_changes_unavailable),
+                            body = if (client == null) stringResource(R.string.git_changes_connect) else stringResource(R.string.git_changes_read_failed),
                             modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
                             action = if (client != null) {
-                                { AidenTonalButton(text = "Try Again", onClick = { refreshGit() }) }
+                                { AidenTonalButton(text = stringResource(R.string.action_try_again), onClick = { refreshGit() }) }
                             } else null
                         )
                     }
@@ -292,7 +297,7 @@ fun AidenGitScreen(
                                 Icon(Icons.Default.ForkRight, contentDescription = null, tint = palette.accent)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Branch: ${review.branch}",
+                                    text = stringResource(R.string.git_branch_label, review.branch),
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = palette.foreground,
@@ -303,7 +308,7 @@ fun AidenGitScreen(
                                     shape = MaterialTheme.shapes.small
                                 ) {
                                     Text(
-                                        text = if (review.uncommitted > 0) "${review.uncommitted} uncommitted" else "Clean",
+                                        text = if (review.uncommitted > 0) pluralStringResource(R.plurals.git_uncommitted_count, review.uncommitted, review.uncommitted) else stringResource(R.string.git_clean),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = if (review.uncommitted > 0) palette.warning else palette.success,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -312,7 +317,7 @@ fun AidenGitScreen(
                                 }
                             }
 
-                            val status = pendingOperation ?: if (!reviewIsFresh && isLoading) "Checking for changes…" else null
+                            val status = pendingOperation ?: if (!reviewIsFresh && isLoading) stringResource(R.string.git_checking_changes) else null
                             if (status != null) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -367,9 +372,9 @@ fun AidenGitScreen(
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(Icons.Default.CheckCircle, contentDescription = null, tint = palette.success, modifier = Modifier.size(56.dp))
                                 Spacer(modifier = Modifier.height(12.dp))
-                                Text("Working tree is clean", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+                                Text(stringResource(R.string.git_clean_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text("No uncommitted changes in this workspace.", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                                Text(stringResource(R.string.git_clean_body), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                             }
                         }
                     } else {
@@ -448,7 +453,7 @@ fun AidenGitScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             AidenPrimaryButton(
-                                text = pendingOperation ?: "Commit Changes (${review.files.size} files)",
+                                text = pendingOperation ?: pluralStringResource(R.plurals.git_commit_changes_count, review.files.size, review.files.size),
                                 onClick = { showCommitSheet = true },
                                 enabled = reviewIsFresh && pendingOperation == null,
                                 leadingIcon = Icons.Default.Check,
@@ -479,7 +484,7 @@ fun AidenGitScreen(
                     .padding(20.dp)
             ) {
                 Text(
-                    text = "Commit Changes",
+                    text = stringResource(R.string.git_commit_changes),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = palette.foreground
@@ -491,8 +496,8 @@ fun AidenGitScreen(
                     colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                     value = commitMessage,
                     onValueChange = { commitMessage = it },
-                    label = { Text("Commit message") },
-                    placeholder = { Text("Describe your changes...") },
+                    label = { Text(stringResource(R.string.git_commit_message)) },
+                    placeholder = { Text(stringResource(R.string.git_commit_message_placeholder)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(120.dp),
@@ -515,7 +520,7 @@ fun AidenGitScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Stage only reviewed changes",
+                        text = stringResource(R.string.git_stage_reviewed_only),
                         style = MaterialTheme.typography.bodyMedium,
                         color = palette.foreground
                     )
@@ -524,7 +529,7 @@ fun AidenGitScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 AidenPrimaryButton(
-                    text = "Review & Commit",
+                    text = stringResource(R.string.git_review_and_commit),
                     onClick = {
                         if (commitMessage.trim().isNotEmpty()) {
                             showConfirmDialog = true
@@ -537,9 +542,9 @@ fun AidenGitScreen(
 
             if (showConfirmDialog) {
                 AidenWorkspaceAlertDialog(
-                    title = "Confirm Commit",
+                    title = stringResource(R.string.git_confirm_commit),
                     onDismissRequest = { showConfirmDialog = false },
-                    confirmText = "Commit",
+                    confirmText = stringResource(R.string.git_commit),
                     onConfirm = confirm@{
                         showConfirmDialog = false
                         showCommitSheet = false
@@ -552,7 +557,7 @@ fun AidenGitScreen(
                             if (client != null) {
                                 isOperating = true
                                 runGitOperation(
-                                    label = "Committing…",
+                                    label = resources.getString(R.string.git_committing),
                                     onFailure = { lastFailedOperation = op }
                                 ) {
                                     try {
@@ -573,7 +578,7 @@ fun AidenGitScreen(
                         op.invoke()
                     }
                 ) {
-                    Text("Create a commit on branch \"${review?.branch}\" with message:\n\n\"${commitMessage.trim()}\"")
+                    Text(stringResource(R.string.git_commit_confirm_body, review?.branch.orEmpty(), commitMessage.trim()))
                 }
             }
         }
@@ -620,7 +625,7 @@ fun AidenGitScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Git Branches",
+                        text = stringResource(R.string.git_branches_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = palette.foreground,
@@ -629,7 +634,7 @@ fun AidenGitScreen(
                     TextButton(onClick = { showNewBranchDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = null, tint = palette.accent)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("New Branch", color = palette.accent, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.git_new_branch), color = palette.accent, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -639,7 +644,7 @@ fun AidenGitScreen(
                 val current = branchesResult?.current ?: review?.branch ?: ""
 
                 if (branchesResult == null && client != null) {
-                    AidenSkeletonList(count = 4, loadingDescription = "Loading branches")
+                    AidenSkeletonList(count = 4, loadingDescription = stringResource(R.string.git_loading_branches))
                 }
                 LazyColumn(
                     modifier = Modifier
@@ -680,7 +685,7 @@ fun AidenGitScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 if (branch == current) {
-                                    Icon(Icons.Default.Check, contentDescription = "Active", tint = palette.accent)
+                                    Icon(Icons.Default.Check, contentDescription = stringResource(R.string.git_active_branch_cd), tint = palette.accent)
                                 }
                             }
                         }
@@ -692,22 +697,22 @@ fun AidenGitScreen(
             if (branchToCheckout != null) {
                 val targetBranch = branchToCheckout!!
                 AidenWorkspaceAlertDialog(
-                    title = "Checkout Branch?",
+                    title = stringResource(R.string.git_checkout_title),
                     onDismissRequest = { branchToCheckout = null },
-                    confirmText = "Checkout",
+                    confirmText = stringResource(R.string.git_checkout),
                     onConfirm = {
                         val branch = targetBranch
                         branchToCheckout = null
                         showBranchSheet = false
                         val snapshotId = gitReviewResult?.snapshotId ?: ""
                         if (client != null) {
-                            runGitOperation("Switching to $branch…") {
+                            runGitOperation(resources.getString(R.string.git_switching_to, branch)) {
                                 client.checkoutGitBranch(workspaceId, branch, snapshotId)
                             }
                         }
                     }
                 ) {
-                    Text("Switch working tree to branch \"$targetBranch\"?")
+                    Text(stringResource(R.string.git_checkout_body, targetBranch))
                 }
             }
 
@@ -717,9 +722,9 @@ fun AidenGitScreen(
                 var startPoint by remember { mutableStateOf(review?.branch ?: "main") }
 
                 AidenWorkspaceAlertDialog(
-                    title = "Create New Branch",
+                    title = stringResource(R.string.git_create_branch_title),
                     onDismissRequest = { showNewBranchDialog = false },
-                    confirmText = "Create",
+                    confirmText = stringResource(R.string.action_create),
                     onConfirm = {
                         val name = newBranchName.trim()
                         val start = startPoint.trim()
@@ -727,7 +732,7 @@ fun AidenGitScreen(
                             showNewBranchDialog = false
                             showBranchSheet = false
                             if (client != null) {
-                                runGitOperation("Creating $name…") {
+                                runGitOperation(resources.getString(R.string.git_creating_branch, name)) {
                                     client.createGitBranch(workspaceId, name, start)
                                 }
                             }
@@ -739,7 +744,7 @@ fun AidenGitScreen(
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = newBranchName,
                             onValueChange = { newBranchName = it },
-                            label = { Text("Branch name") },
+                            label = { Text(stringResource(R.string.git_branch_name)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -748,7 +753,7 @@ fun AidenGitScreen(
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = startPoint,
                             onValueChange = { startPoint = it },
-                            label = { Text("Start point (branch / commit)") },
+                            label = { Text(stringResource(R.string.git_start_point)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -762,14 +767,14 @@ fun AidenGitScreen(
     if (showPushDialog) {
         val cap = pushCapability
         AidenWorkspaceAlertDialog(
-            title = "Push to Remote",
+            title = stringResource(R.string.git_push_title),
             onDismissRequest = { showPushDialog = false },
-            confirmText = if (cap?.allowed != false) "Push" else null,
+            confirmText = if (cap?.allowed != false) stringResource(R.string.git_push) else null,
             onConfirm = {
                 showPushDialog = false
                 val snapshotId = gitReviewResult?.snapshotId ?: ""
                 if (client != null) {
-                    runGitOperation("Pushing $pushBranch…") {
+                    runGitOperation(resources.getString(R.string.git_pushing, pushBranch)) {
                         client.pushGit(workspaceId, snapshotId, pushRemote, pushBranch)
                     }
                 }
@@ -778,14 +783,14 @@ fun AidenGitScreen(
             Column {
                 if (cap?.allowed == false) {
                     Text(
-                        text = "Push is not allowed: ${cap.reason ?: "Permission denied"}",
+                        text = stringResource(R.string.git_push_not_allowed, cap.reason ?: stringResource(R.string.git_permission_denied)),
                         color = palette.danger
                     )
                 } else {
-                    Text("Push branch \"$pushBranch\" to remote \"$pushRemote\"?")
+                    Text(stringResource(R.string.git_push_body, pushBranch, pushRemote))
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Aiden never force-pushes.",
+                        text = stringResource(R.string.git_never_force_push),
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary
                     )
@@ -812,7 +817,7 @@ fun AidenGitScreen(
                     .fillMaxWidth()
                     .padding(20.dp)
             ) {
-                Text("Compare Branches", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = palette.foreground)
+                Text(stringResource(R.string.git_compare_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = palette.foreground)
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -820,7 +825,7 @@ fun AidenGitScreen(
                         colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                         value = baseRef,
                         onValueChange = { baseRef = it },
-                        label = { Text("Base branch") },
+                        label = { Text(stringResource(R.string.git_base_branch)) },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -850,7 +855,7 @@ fun AidenGitScreen(
                         ),
                         shape = AidenShape.Button
                     ) {
-                        Text(if (isComparing) "Comparing…" else "Compare")
+                        Text(if (isComparing) stringResource(R.string.git_comparing) else stringResource(R.string.git_compare))
                     }
                 }
 
@@ -858,11 +863,11 @@ fun AidenGitScreen(
 
                 // A comparison is a read: its result previews as rows, not a spinner.
                 if (isComparing && comparisonResult == null) {
-                    AidenSkeletonList(count = 4, leading = false, loadingDescription = "Comparing branches")
+                    AidenSkeletonList(count = 4, leading = false, loadingDescription = stringResource(R.string.git_comparing_branches))
                 }
                 comparisonResult?.let { comp ->
                     Text(
-                        text = "${comp.files.size} changed files between ${comp.base} and ${comp.head}:",
+                        text = pluralStringResource(R.plurals.git_compare_summary, comp.files.size, comp.files.size, comp.base, comp.head),
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                         color = palette.secondary
@@ -946,7 +951,7 @@ fun AidenGitScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Git Worktrees",
+                        text = stringResource(R.string.git_worktrees_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = palette.foreground,
@@ -955,14 +960,14 @@ fun AidenGitScreen(
                     TextButton(onClick = { showNewWorktreeDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = null, tint = palette.accent)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("New Worktree", color = palette.accent, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.git_new_worktree), color = palette.accent, fontWeight = FontWeight.Bold)
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
                 if (worktreesList == null && client != null) {
-                    AidenSkeletonList(count = 3, loadingDescription = "Loading worktrees")
+                    AidenSkeletonList(count = 3, loadingDescription = stringResource(R.string.git_loading_worktrees))
                 }
                 LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
                     items(worktreesList.orEmpty(), key = { it.id }) { wt ->
@@ -987,7 +992,7 @@ fun AidenGitScreen(
                                         color = palette.foreground
                                     )
                                     Text(
-                                        text = "Branch: ${wt.branch}",
+                                        text = stringResource(R.string.git_branch_label, wt.branch),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
@@ -998,7 +1003,7 @@ fun AidenGitScreen(
                                         shape = MaterialTheme.shapes.extraSmall
                                     ) {
                                         Text(
-                                            text = "Managed",
+                                            text = stringResource(R.string.git_worktree_managed),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = palette.accent,
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1016,9 +1021,9 @@ fun AidenGitScreen(
                 var wtName by remember { mutableStateOf("") }
 
                 AidenWorkspaceAlertDialog(
-                    title = "Create Managed Worktree",
+                    title = stringResource(R.string.git_create_worktree_title),
                     onDismissRequest = { showNewWorktreeDialog = false },
-                    confirmText = "Create",
+                    confirmText = stringResource(R.string.action_create),
                     onConfirm = {
                         val branch = wtBranch.trim()
                         val name = wtName.trim()
@@ -1026,7 +1031,7 @@ fun AidenGitScreen(
                             showNewWorktreeDialog = false
                             showWorktreesSheet = false
                             if (client != null) {
-                                runGitOperation("Creating worktree $name…") {
+                                runGitOperation(resources.getString(R.string.git_creating_worktree, name)) {
                                     client.createGitWorktree(workspaceId, branch, name)
                                     coordinator.refreshWorkspaces()
                                 }
@@ -1039,7 +1044,7 @@ fun AidenGitScreen(
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = wtBranch,
                             onValueChange = { wtBranch = it },
-                            label = { Text("Branch name") },
+                            label = { Text(stringResource(R.string.git_branch_name)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -1048,7 +1053,7 @@ fun AidenGitScreen(
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = wtName,
                             onValueChange = { wtName = it },
-                            label = { Text("Worktree name") },
+                            label = { Text(stringResource(R.string.git_worktree_name)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -1072,11 +1077,12 @@ internal fun AidenGitActionBar(
     onWorktrees: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val pushLabel = stringResource(R.string.git_push)
     val actions = listOf(
-        Triple("Branch", Icons.Default.ForkRight, onBranch),
-        Triple("Push", Icons.Default.CloudUpload, onPush),
-        Triple("Compare", Icons.AutoMirrored.Filled.CompareArrows, onCompare),
-        Triple("Worktrees", Icons.Default.AccountTree, onWorktrees)
+        Triple(stringResource(R.string.git_action_branch), Icons.Default.ForkRight, onBranch),
+        Triple(pushLabel, Icons.Default.CloudUpload, onPush),
+        Triple(stringResource(R.string.git_compare), Icons.AutoMirrored.Filled.CompareArrows, onCompare),
+        Triple(stringResource(R.string.git_action_worktrees), Icons.Default.AccountTree, onWorktrees)
     )
     Row(
         modifier = modifier
@@ -1092,7 +1098,7 @@ internal fun AidenGitActionBar(
                 icon = icon,
                 onClick = action,
                 stacked = true,
-                loading = label == "Push" && pushInFlight,
+                loading = label == pushLabel && pushInFlight,
                 modifier = Modifier.weight(1f)
             )
         }

@@ -52,6 +52,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /** Shared Material 3 Expressive geometry for connected groups and squircle actions. */
 object AidenShape {
@@ -460,7 +462,7 @@ fun AidenDialogConfirmButton(
 /** Dismiss action slot for an `AlertDialog`. */
 @Composable
 fun AidenDialogDismissButton(
-    text: String = "Cancel",
+    text: String = stringResource(R.string.action_cancel),
     onClick: () -> Unit
 ) = AidenTonalButton(text = text, onClick = onClick)
 

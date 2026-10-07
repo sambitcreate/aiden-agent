@@ -82,6 +82,10 @@ import java.security.MessageDigest
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
 
 internal object AidenInlineCardDeckLayout {
     const val EDGE_RESISTANCE = 0.22f
@@ -229,6 +233,10 @@ private fun AidenInlineImageCardDeck(
         label = "image_deck_settle"
     )
     val density = LocalDensity.current
+    val deckDescription = pluralStringResource(R.plurals.chat_images_count_cd, attachments.size, attachments.size)
+    val deckPosition = stringResource(R.string.chat_images_photo_position, selection + 1, attachments.size)
+    val nextPhotoLabel = stringResource(R.string.chat_images_next)
+    val previousPhotoLabel = stringResource(R.string.chat_images_previous)
     val dragState = rememberDraggableState { delta ->
         rawDrag = AidenInlineCardDeckLayout.resistedTranslation(selection, attachments.size, rawDrag + delta)
     }
@@ -241,16 +249,16 @@ private fun AidenInlineImageCardDeck(
             .testTag("aiden_image_deck")
             .semantics {
                 role = Role.Button
-                contentDescription = "${attachments.size} image attachments"
-                stateDescription = "Photo ${selection + 1} of ${attachments.size}"
+                contentDescription = deckDescription
+                stateDescription = deckPosition
                 onClick { onOpen(); true }
                 customActions = listOf(
-                    CustomAccessibilityAction("Next photo") {
+                    CustomAccessibilityAction(nextPhotoLabel) {
                         val next = (selection + 1).coerceAtMost(attachments.lastIndex)
                         onSelectionChange(next)
                         true
                     },
-                    CustomAccessibilityAction("Previous photo") {
+                    CustomAccessibilityAction(previousPhotoLabel) {
                         val previous = (selection - 1).coerceAtLeast(0)
                         onSelectionChange(previous)
                         true
@@ -443,16 +451,19 @@ private fun AidenAttachmentImage(
             ) {
                 Icon(Icons.Default.Refresh, contentDescription = null)
                 Spacer(Modifier.height(6.dp))
-                Text("Open to retry", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.chat_images_open_to_retry), style = MaterialTheme.typography.labelMedium)
             }
             // The image's own box, shaped like the image, stands in until it decodes.
-            else -> AidenSkeletonBlock(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clearAndSetSemantics { contentDescription = "Loading ${attachment.name}" },
-                width = null,
-                shape = RoundedCornerShape(imageCornerRadius)
-            )
+            else -> {
+                val loadingDescription = stringResource(R.string.chat_images_loading, attachment.name)
+                AidenSkeletonBlock(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clearAndSetSemantics { contentDescription = loadingDescription },
+                    width = null,
+                    shape = RoundedCornerShape(imageCornerRadius)
+                )
+            }
         }
     }
 }
@@ -469,6 +480,7 @@ private fun AidenAttachmentGallery(
         pages.size
     }
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val reduceMotion = aidenReduceMotion()
     var saveMenu by remember { mutableStateOf(false) }
@@ -492,9 +504,9 @@ private fun AidenAttachmentGallery(
             Toast.makeText(
                 context,
                 when {
-                    count == null -> "Images couldn't be saved"
-                    count == 1 -> "Saved to Photos"
-                    else -> "Saved $count images to Photos"
+                    count == null -> resources.getString(R.string.chat_images_save_failed)
+                    count == 1 -> resources.getString(R.string.chat_images_saved_one)
+                    else -> resources.getQuantityString(R.plurals.chat_images_saved, count, count)
                 },
                 Toast.LENGTH_SHORT
             ).show()
@@ -507,7 +519,7 @@ private fun AidenAttachmentGallery(
         val requested = pendingLegacySave
         pendingLegacySave = null
         if (granted && requested != null) performSave(requested)
-        else if (!granted) Toast.makeText(context, "Photos access is needed to save images", Toast.LENGTH_SHORT).show()
+        else if (!granted) Toast.makeText(context, resources.getString(R.string.chat_images_permission_needed), Toast.LENGTH_SHORT).show()
     }
 
     fun requestSave(requested: List<AidenMessageAttachment>) {
@@ -555,11 +567,11 @@ private fun AidenAttachmentGallery(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AidenGalleryGlassButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close image viewer", tint = Color.White)
+                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.chat_images_close_viewer), tint = Color.White)
                 }
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     AidenGlassCountPill(
-                        text = if (pages.size == 1) pages.first().name else "${pagerState.currentPage + 1} of ${pages.size}",
+                        text = if (pages.size == 1) pages.first().name else stringResource(R.string.chat_images_page_position, pagerState.currentPage + 1, pages.size),
                         container = GalleryGlass,
                         content = Color.White,
                         modifier = Modifier.padding(horizontal = 8.dp)
@@ -567,8 +579,8 @@ private fun AidenAttachmentGallery(
                 }
                 Box {
                     AidenGalleryGlassButton(onClick = { saveMenu = true }, enabled = !saving) {
-                        if (saving) AidenActivityDot(color = Color.White, size = 10.dp, contentDescription = "Saving images")
-                        else Icon(Icons.Default.MoreVert, contentDescription = "Save images", tint = Color.White)
+                        if (saving) AidenActivityDot(color = Color.White, size = 10.dp, contentDescription = stringResource(R.string.chat_images_saving))
+                        else Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.chat_images_save_menu), tint = Color.White)
                     }
                     DropdownMenu(
                         expanded = saveMenu,
@@ -577,7 +589,7 @@ private fun AidenAttachmentGallery(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Save Image") },
+                            text = { Text(stringResource(R.string.chat_images_save_one)) },
                             leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
                             onClick = {
                                 saveMenu = false
@@ -586,7 +598,7 @@ private fun AidenAttachmentGallery(
                         )
                         if (pages.size > 1) {
                             DropdownMenuItem(
-                                text = { Text("Save All Images") },
+                                text = { Text(stringResource(R.string.chat_images_save_all)) },
                                 leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
                                 onClick = {
                                     saveMenu = false
