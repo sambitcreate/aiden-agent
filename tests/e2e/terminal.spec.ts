@@ -59,5 +59,5 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
 
   await hideTerminal.click();
   await expect(page.getByRole("button", { name: "Show terminal" })).toBeVisible();
-  await expect(page.locator(".terminal-drawer")).toHaveCount(0);
+  await expect(page.locator(".terminal-drawer")).toBeHidden();
 });

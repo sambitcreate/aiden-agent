@@ -1,0 +1,239 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import {
+  E2E_WORKSPACE_ID,
+  expect,
+  finishLmStudioOnboarding,
+  test,
+} from "./fixtures";
+
+test.use({ workspaceSeed: true });
+
+test("workspace launcher opens tools on demand and returns after closing the last tab", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const panel = page.getByRole("complementary", {
+    name: "Environment work surface",
+  });
+  await page.locator("[data-environment-toggle]").click();
+  await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(
+    panel.getByRole("tab", { name: "Files", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await panel.getByRole("button", { name: "New workspace tab" }).click();
+  await panel.getByRole("button", { name: "Context", exact: true }).click();
+  await expect(panel.getByRole("tabpanel", { name: "Context" })).toContainText(
+    "Send a message",
+  );
+  await panel.getByRole("button", { name: "New workspace tab" }).click();
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(
+    panel.getByRole("tab", { name: "Files", exact: true }),
+  ).toHaveCount(1);
+  await panel.getByRole("button", { name: "Close environment panel" }).click();
+  await page.locator("[data-environment-toggle]").click();
+  await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+  for (const width of [900, 1600]) {
+    await aiden.app.evaluate(
+      ({ BrowserWindow }, width) =>
+        BrowserWindow.getAllWindows()[0].setSize(width, 900),
+      width,
+    );
+    await expect(panel).toBeVisible();
+    expect(
+      await panel.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+  }
+  await expect(page.locator("[data-environment-surface-mode]")).toHaveAttribute(
+    "data-environment-surface-mode",
+    "tools-pinned",
+  );
+  await expect.poll(async () => {
+    const composer = await page.locator("textarea").boundingBox();
+    const tools = await panel.boundingBox();
+    return Boolean(composer && tools && composer.x + composer.width <= tools.x);
+  }).toBe(true);
+  await page.screenshot({ path: "/tmp/aiden-workspace-launcher.png", animations: "disabled" });
+  await panel.getByRole("button", { name: "Close Files tab" }).click();
+  await panel.getByRole("button", { name: "Close Context tab" }).click();
+  await expect(panel.getByRole("tab")).toHaveCount(1);
+  await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+});
+
+test("terminal docking retains the same live surface, screen state and shell", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page
+    .getByRole("button", { name: "Show terminal", exact: true })
+    .click();
+  const drawer = page.locator(".terminal-drawer");
+  const output = drawer.getByRole("log", { name: "Terminal output" });
+  await expect(output).toHaveText(/\S/u);
+  await expect(drawer.locator(".ghostty-input")).toBeFocused();
+  await page.keyboard.type(
+    "export AIDEN_DOCK_CHECK=314159; echo ready-$AIDEN_DOCK_CHECK",
+  );
+  await page.keyboard.press("Enter");
+  await expect(output).toContainText("ready-314159");
+  const canvas = await drawer.locator("canvas").elementHandle();
+  await drawer
+    .getByRole("button", { name: "Move terminal to side panel" })
+    .click();
+  await expect(drawer).toHaveAttribute("data-placement", "side");
+  const panel = page.getByRole("complementary", {
+    name: "Environment work surface",
+  });
+  await expect(panel.locator(".terminal-drawer")).toBeVisible();
+  expect(
+    await drawer
+      .locator("canvas")
+      .evaluate((node, original) => node === original, canvas),
+  ).toBe(true);
+  await panel.getByRole("button", { name: "New workspace tab" }).click();
+  await expect(drawer).toBeHidden();
+  await panel.getByRole("button", { name: /^Terminal/ }).click();
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole("button", { name: "Move terminal to bottom" }).click();
+  await expect(drawer).toHaveAttribute("data-placement", "bottom");
+  expect(
+    await drawer
+      .locator("canvas")
+      .evaluate((node, original) => node === original, canvas),
+  ).toBe(true);
+  await drawer.locator(".ghostty-input").focus();
+  await page.keyboard.type("echo still-$AIDEN_DOCK_CHECK");
+  await page.keyboard.press("Enter");
+  await expect(output).toContainText("still-314159");
+  await drawer
+    .getByRole("button", { name: "Split terminal horizontally" })
+    .click();
+  await expect(drawer.locator("canvas")).toHaveCount(2);
+  await drawer
+    .getByRole("button", { name: "Move terminal to side panel" })
+    .click();
+  await expect(panel.locator(".terminal-drawer canvas")).toHaveCount(2);
+  await panel.getByRole("button", { name: "Close Terminal tab" }).click();
+  await expect(drawer).toBeHidden();
+  await panel.getByRole("button", { name: "New workspace tab" }).click();
+  await panel.getByRole("button", { name: /^Terminal/ }).click();
+  await expect(drawer.locator("canvas")).toHaveCount(2);
+});
+
+test("context is available with the composer meter hidden and preference survives restart", async ({
+  aiden,
+}) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  await page.locator("textarea").fill("Context inspector test");
+  await page.locator("textarea").press("Enter");
+  await expect(
+    page.getByRole("button", { name: /^Context usage,/ }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Appearance", exact: true })
+    .click();
+  const preference = page.getByRole("switch", {
+    name: "Show context usage in composer",
+  });
+  await expect(preference).toBeChecked();
+  await preference.click();
+  await expect(preference).not.toBeChecked();
+  await page.getByRole("button", { name: "Back to app" }).click();
+  await expect(
+    page.getByRole("button", { name: /^Context usage,/ }),
+  ).toHaveCount(0);
+  await page.locator("[data-environment-toggle]").click();
+  await page.getByRole("button", { name: "Context", exact: true }).click();
+  await expect(page.getByRole("tabpanel", { name: "Context" })).toContainText(
+    "Recorded usage",
+  );
+  page = await aiden.relaunch();
+  await expect(
+    page.getByRole("button", { name: /^Context usage,/ }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Appearance", exact: true })
+    .click();
+  await expect(
+    page.getByRole("switch", { name: "Show context usage in composer" }),
+  ).not.toBeChecked();
+});
+
+test("browser pages share the tool tab strip and the launcher hides the native page", async ({
+  aiden,
+}) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<title>Panel fixture</title><h1>Local browser page</h1>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+    await page.locator("[data-environment-toggle]").click();
+    const panel = page.getByRole("complementary", {
+      name: "Environment work surface",
+    });
+    await panel
+      .getByRole("textbox", { name: "Open a URL" })
+      .fill(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    await panel.getByRole("textbox", { name: "Open a URL" }).press("Enter");
+    await expect(
+      panel.getByRole("tab", { name: "Panel fixture", exact: true }),
+    ).toBeVisible();
+    await expect(
+      panel.getByRole("tablist", { name: "Browser tabs" }),
+    ).toBeHidden();
+    await panel.getByRole("button", { name: "New workspace tab" }).click();
+    await expect(
+      panel.getByRole("textbox", { name: "Open a URL" }),
+    ).toBeVisible();
+    await expect(panel.locator("#environment-browser-panel")).toBeHidden();
+    await expect
+      .poll(() =>
+        page.evaluate(async (workspaceId) => {
+          const api = (
+            window as unknown as {
+              aidenAPI: {
+                ipc: {
+                  invoke: (
+                    channel: string,
+                    id: string,
+                  ) => Promise<{ tabs: Array<{ visible?: boolean }> }>;
+                };
+              };
+            }
+          ).aidenAPI;
+          return (
+            await api.ipc.invoke("browser:get-state", workspaceId)
+          ).tabs.some((tab) => tab.visible);
+        }, E2E_WORKSPACE_ID),
+      )
+      .toBe(false);
+    await panel.getByRole("button", { name: "Context", exact: true }).click();
+    await panel
+      .getByRole("tab", { name: "Panel fixture", exact: true })
+      .click();
+    await expect(panel.locator("#environment-browser-panel")).toBeVisible();
+    await panel
+      .getByRole("button", { name: "Close Panel fixture tab" })
+      .click();
+    await expect(
+      panel.getByRole("tab", { name: "Panel fixture", exact: true }),
+    ).toHaveCount(0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
