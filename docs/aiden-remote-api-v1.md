@@ -635,9 +635,14 @@ reachability, and clients verify the route before use. Clients retain previously
 validated omitted routes within their two-route bound; a new observation replaces
 trust for the same endpoint. Explicit removal/suppression remains authoritative.
 A connected LAN client with this feature, no known Tailscale route, and no suppressed
-routes performs one authenticated follow-up after 25 seconds to collect deferred
-observations. It retains its feed, cancels the timer when the connection changes,
-and does not poll repeatedly while idle.
+routes performs at most two authenticated follow-ups, after 25 and 100 seconds,
+to collect deferred observations. The second is skipped once a Tailscale route is
+known or routes are suppressed. The final delay covers the aggregate discovery
+budget: three attempts with two sequential 15-second CLI reads each, two 75ms retry
+pauses, and a 5-second TLS check (95.15 seconds). Each follow-up has its own 5-second
+deadline. It retains its feed, cancels both timers when the connection changes,
+and does not poll repeatedly while idle. Failed discovery may leave no alternate;
+these bounded reads do not guarantee a route that becomes available later.
 
 The existing authenticated, identity-verified channel delivers each alternate
 route's trust material. A client verifies CA/system trust, hostname and SPKI before

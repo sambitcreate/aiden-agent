@@ -101,6 +101,7 @@ interface Supervisor {
   stableTimer: unknown;
   routeTimer?: unknown;
   discoveryTimer?: unknown;
+  finalDiscoveryTimer?: unknown;
   probing?: boolean;
   lastSyncedAt?: number;
   failure?: PeerHostStatus["failure"];
@@ -535,10 +536,12 @@ export class PeerHostManager {
     if (sup.stableTimer !== undefined) this.timers.clear(sup.stableTimer);
     if (sup.routeTimer !== undefined) this.timers.clear(sup.routeTimer);
     if (sup.discoveryTimer !== undefined) this.timers.clear(sup.discoveryTimer);
+    if (sup.finalDiscoveryTimer !== undefined) this.timers.clear(sup.finalDiscoveryTimer);
     sup.retryTimer = undefined;
     sup.stableTimer = undefined;
     sup.routeTimer = undefined;
     sup.discoveryTimer = undefined;
+    sup.finalDiscoveryTimer = undefined;
   }
 
   private start(sup: Supervisor): void {
@@ -581,17 +584,26 @@ export class PeerHostManager {
     if (!this.options.registry.probe || sup.view.activeRouteKind !== "lan" || sup.view.hasSuppressedRoutes
       || !sup.view.features.includes("peer-routes-v1")
       || sup.view.routes?.some((route) => route.kind === "tailscale")) return;
-    // Optional host discovery takes at most 15s ownership + 5s TLS. One
-    // follow-up per connection learns its result without replacing live feeds
-    // or adding an idle polling loop; the read itself keeps the 5s probe bound.
-    sup.discoveryTimer = this.timers.set(() => {
-      sup.discoveryTimer = undefined;
+    // Ownership inspection retries three times: two sequential 15s CLI reads
+    // per attempt plus two 75ms pauses, then a 5s TLS check (95.15s total).
+    // Collect once early and once after that bound, without an idle polling
+    // loop. Each authenticated read retains the independent 5s probe deadline.
+    // A failed lookup may remain unavailable; these reads do not promise a route.
+    const collect = () => {
       if (!this.current(sup, generation) || sup.view.hasSuppressedRoutes
         || sup.view.routes?.some((route) => route.kind === "tailscale")) return;
       void this.options.registry.probe!(sup.hostId, sup.controller.signal).catch((error: unknown) => {
         if (this.current(sup, generation)) this.fail(sup, generation, error);
       });
+    };
+    sup.discoveryTimer = this.timers.set(() => {
+      sup.discoveryTimer = undefined;
+      collect();
     }, 25_000);
+    sup.finalDiscoveryTimer = this.timers.set(() => {
+      sup.finalDiscoveryTimer = undefined;
+      collect();
+    }, 100_000);
   }
 
   private scheduleRouteCheck(sup: Supervisor, generation: number): void {

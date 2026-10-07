@@ -1070,8 +1070,8 @@ for (const hostCount of [1, 5, 10]) {
   });
 }
 
-for (const delayed of [false, true]) {
-  test(`cold LAN automatically learns its alternate without replacing the feed${delayed ? " after a delayed timer" : ""}`, async () => {
+for (const timing of ["early", "delayed", "slow"] as const) {
+  test(`cold LAN automatically learns its alternate without replacing the feed (${timing} discovery)`, async () => {
     const host = new FakeHost("host_discovery", "Cold discovery");
     const record = { ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" };
     const alternate = { endpoint: "https://studio.tail123.ts.net/api/aiden/v1", serverSpkiSha256: record.serverSpkiSha256 };
@@ -1096,14 +1096,26 @@ for (const delayed of [false, true]) {
       assert.equal(harness.status(host.id).feed, "live");
       await harness.advance(24_999);
       assert.equal(host.calls.filter((call) => call === "GET /server").length, 1);
-      discovered = true;
-      await harness.advance(delayed ? 40_000 : 1);
+      if (timing === "slow") {
+        await harness.advance(1);
+        assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), false);
+        assert.equal(host.calls.filter((call) => call === "GET /server").length, 2);
+        await harness.advance(5_000);
+        discovered = true;
+        await harness.advance(69_999);
+        assert.equal(host.calls.filter((call) => call === "GET /server").length, 2);
+        await harness.advance(1);
+      } else {
+        discovered = true;
+        await harness.advance(timing === "delayed" ? 40_000 : 1);
+      }
+      const expectedReads = timing === "slow" ? 3 : 2;
       assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), true);
       assert.equal(harness.status(host.id).generation, generation);
       assert.equal(host.streams("/host/events")[0], stream);
-      assert.equal(host.calls.filter((call) => call === "GET /server").length, 2);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, expectedReads);
       await harness.advance(300_000);
-      assert.equal(host.calls.filter((call) => call === "GET /server").length, 2, "discovery never becomes idle polling");
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, expectedReads, "discovery never becomes idle polling");
       lanDown = true;
       stream.drop();
       await settle();
@@ -1116,7 +1128,7 @@ for (const delayed of [false, true]) {
   });
 }
 
-test("disabling a cold LAN connection cancels its one-time discovery read", async () => {
+for (const disableAt of [0, 25_000]) test(`disabling a cold LAN connection at ${disableAt} cancels remaining discovery reads`, async () => {
   const host = new FakeHost("host_disabled_discovery", "Disabled discovery");
   host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
     features: [...FEATURES, "peer-routes-v1"], peerRoutes: [] });
@@ -1125,9 +1137,28 @@ test("disabling a cold LAN connection cancels its one-time discovery read", asyn
     await harness.manager.whenReady();
     await settle();
     assert.equal(harness.status(host.id).state.kind, "connected");
+    await harness.advance(disableAt);
     await harness.manager.setEnabled(host.id, false);
-    await harness.advance(60_000);
-    assert.equal(host.calls.filter((call) => call === "GET /server").length, 1);
+    await harness.advance(120_000);
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, disableAt ? 2 : 1);
     assert.equal(harness.status(host.id).state.kind, "disabled");
+  } finally { harness.close(); }
+});
+
+test("unavailable alternate discovery stops after its two bounded collection reads", async () => {
+  const host = new FakeHost("host_no_alternate", "No alternate");
+  host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
+    features: [...FEATURES, "peer-routes-v1"], peerRoutes: [] });
+  const harness = setup([host], [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    await harness.advance(25_000);
+    await harness.advance(75_000);
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, 3);
+    await harness.advance(600_000);
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, 3);
+    assert.equal(harness.status(host.id).feed, "live");
+    assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), false);
   } finally { harness.close(); }
 });
