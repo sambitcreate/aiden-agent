@@ -1,6 +1,7 @@
+import { remoteDeviceTypeLabel } from "../lib/remote-connection-status";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Smartphone } from "lucide-react";
+import { ChevronDown, Smartphone, Laptop, Tablet } from "lucide-react";
 import {
   Button,
   Popover,
@@ -28,13 +29,14 @@ function relativeSeen(timestamp: number, now = Date.now()): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
-function DeviceRow({
+export function DeviceRow({
   device,
   state,
 }: {
   device: AidenRemoteDeviceView;
   state: keyof RemoteDeviceGroups;
 }) {
+  const Icon = device.type === "mac" || device.type === "linux" ? Laptop : device.type === "ipad" ? Tablet : Smartphone;
   const timestamp = state === "previous" ? (device.revokedAt ?? device.lastSeenAt) : device.lastSeenAt;
   const detail = state === "previous"
     ? `Removed ${relativeSeen(timestamp)}`
@@ -44,7 +46,7 @@ function DeviceRow({
 
   return (
     <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-3 py-1.5">
-      <Smartphone className="size-4 shrink-0 text-secondary" />
+      <Icon className="size-4 shrink-0 text-secondary" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <Text variant="small-strong" truncate className="block">{device.name}</Text>
         <Text
@@ -54,7 +56,7 @@ function DeviceRow({
           className="block"
           title={state === "pending" ? "Waiting for the first authenticated connection" : new Date(timestamp).toLocaleString()}
         >
-          {device.type === "mac" ? "Mac" : device.type === "linux" ? "Linux" : device.type === "ipad" ? "iPad" : "iPhone"} · {detail}
+          {remoteDeviceTypeLabel(device.type)} · {detail}
         </Text>
       </div>
       <span
@@ -133,8 +135,8 @@ export function RemoteConnectionPopover({
           iconOnly
           size="large"
           variant="transparent"
-          aria-label={`Mobile connections · ${summary}`}
-          title="Mobile connections"
+          aria-label={`Device connections · ${summary}`}
+          title="Device connections"
           className="relative size-9"
         >
           <Smartphone />
@@ -154,7 +156,7 @@ export function RemoteConnectionPopover({
         <div className="border-b border-separator px-5 py-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <Text variant="strong">Aiden On The Go</Text>
+              <Text variant="strong">Device connections</Text>
               <Text as="p" variant="small" color="secondary" className="mt-0.5">{summary}</Text>
             </div>
             <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${statusTone}`} aria-hidden="true" />
@@ -168,14 +170,14 @@ export function RemoteConnectionPopover({
 
         <div className="max-h-72 overflow-y-auto px-2 py-2">
           {settings.isLoading ? (
-            <p className="px-3 py-3 text-small text-secondary">Checking mobile connections…</p>
+            <p className="px-3 py-3 text-small text-secondary">Checking device connections…</p>
           ) : !snapshot ? (
             <p className="px-3 py-3 text-small text-secondary">Connection status is unavailable.</p>
           ) : snapshot.devices.length === 0 ? (
             <p className="px-3 py-3 text-small text-secondary">No devices have been paired with this desktop.</p>
           ) : (
             <>
-              <DeviceGroup label="Active" devices={groups.active} state="active" />
+              <DeviceGroup label="Recently active" devices={groups.active} state="active" />
               <DeviceGroup label="Finishing" devices={groups.pending} state="pending" />
               <DeviceGroup label="Inactive" devices={groups.inactive} state="inactive" />
               {groups.previous.length > 0 ? (

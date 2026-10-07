@@ -360,12 +360,15 @@ export class RemoteNewChatControl {
         kind: "send",
         idempotencyKey: key,
         text,
+        request: { kind: "send", input: firstTurnInput(text, key, attachmentIds) },
         ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
         replay: (adapter, idempotencyKey) => adapter.send(chatId, firstTurnInput(text, idempotencyKey, attachmentIds)),
       };
       this.ledger.begin(ref, intent);
       try {
-        const receipt = await this.host.send(chatId, firstTurnInput(text, key, attachmentIds));
+        await this.ledger.persist(ref, intent);
+        const receipt = await this.host.send(chatId, { ...firstTurnInput(text, key, attachmentIds), savedIntent: this.ledger.durable });
+        await this.ledger.forgetSaved(ref, key).catch(() => {});
         this.ledger.settle(ref, key, "known");
         settle();
         return { chatId, receipt };
@@ -375,6 +378,7 @@ export class RemoteNewChatControl {
           settle();
           this.memory.setFirstTurn(this.host.hostId, { chatId, key, signature });
         } else {
+          await this.ledger.forgetSaved(ref, key).catch(() => {});
           this.ledger.settle(ref, key, "known");
           releaseAttachments(this.host, chatId, attachmentIds);
         }
@@ -401,16 +405,21 @@ export class RemoteNewChatControl {
     this.guard("send");
     const ref = this.ref(turn.chatId);
     const { intent } = recorded;
+    if (!this.ledger.retryAllowed(intent)) throw new HostChatControlError({ code: "retry_expired", message: "The safe retry window has ended. Open the conversation on the host to review delivery before dismissing this request." });
     this.ledger.retrying(ref, turn.key, true);
     try {
-      await this.host.send(turn.chatId, firstTurnInput(intent.text ?? "", turn.key, intent.attachmentIds ?? []));
+      await this.ledger.validateRetry(ref, intent);
+      this.guard("send");
+      await this.host.send(turn.chatId, { ...firstTurnInput(intent.text ?? "", turn.key, intent.attachmentIds ?? []), savedIntent: this.ledger.durable });
+      await this.ledger.forgetSaved(ref, turn.key);
       this.ledger.resolve(ref, turn.key);
       return turn.chatId;
     } catch (error) {
-      if (isOutcomeUnknown(error)) {
+      if (isOutcomeUnknown(error) || !(error instanceof HostChatControlError)) {
         this.ledger.retrying(ref, turn.key, false);
       } else {
         // The host refused the turn: it never used the uploads, and the empty chat is reused by the next send.
+        await this.ledger.forgetSaved(ref, turn.key);
         this.ledger.resolve(ref, turn.key);
         releaseAttachments(this.host, turn.chatId, intent.attachmentIds ?? []);
         this.state.pending = { signature: turn.signature, key: mintPeerIdempotencyKey(), chatId: turn.chatId };
@@ -423,12 +432,13 @@ export class RemoteNewChatControl {
    * Forgets the unresolved first message without resending it, releasing its
    * uploads (a no-op if the host did start that turn and used them).
    */
-  dismissUnresolved(): RemoteNewChatUnresolved | null {
+  async dismissUnresolved(): Promise<RemoteNewChatUnresolved | null> {
     const unresolved = this.firstTurn();
     const turn = this.state.firstTurn;
     if (!unresolved || !turn) return null;
     const ref = this.ref(turn.chatId);
     const recorded = this.ledger.unresolved(ref);
+    await this.ledger.forgetSaved(ref, turn.key);
     this.ledger.resolve(ref, turn.key);
     releaseAttachments(this.host, turn.chatId, recorded?.intent.attachmentIds ?? []);
     return unresolved;

@@ -55,6 +55,127 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenChatTest {
     @Test
+    fun repeatedFailedRetryKeepsTheOriginalAndLaterDraftExactlyOnce() {
+        assertEquals("First\n\nLater", AidenDraftSendReconciliation.failedDraft("First", "First\n\nLater"))
+        assertEquals("First", AidenDraftSendReconciliation.failedDraft("First", "First"))
+        assertEquals("First\n\nLater", AidenDraftSendReconciliation.failedDraft("First", "Later"))
+    }
+
+    @Test
+    fun restoredRunInputRetryKeepsOriginalStreamAndLaterDraft() = assertSwitchedRunInputSettlement(false)
+
+    @Test
+    fun heldRunInputReceiptCannotClearAnotherRequestAfterSwitch() = assertSwitchedRunInputSettlement(true)
+
+    private fun assertSwitchedRunInputSettlement(replacement: Boolean) {
+        val root = kotlin.io.path.createTempDirectory("aiden-input-retry").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val owners = ViewModelStore()
+        val server = MockWebServer()
+        val initial = sampleChat()
+        val requests = java.util.concurrent.CopyOnWriteArrayList<RecordedRequest>()
+        val arrived = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.method == "POST") {
+                    requests.add(request)
+                    arrived.countDown()
+                    check(release.await(8, TimeUnit.SECONDS))
+                    return MockResponse().setBody("""{"streamId":"stream-original","chatId":"${initial.id}","turnId":"turn-original","mode":"queue","status":"rejected","reason":"run_not_active","committed":false}""")
+                }
+                return if (request.path == "/api/aiden/v1/chats/${initial.id}") MockResponse().setBody(json.encodeToString(initial)) else MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(root, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(instanceId = "runinput", deviceId = "device-input", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)), null)
+                val drafts = AidenChatDraftStore(root)
+                val key = UUID.randomUUID().toString()
+                val session = drafts.beginSession("runinput", initial.id)
+                drafts.savePendingSend(AidenChatDraftStore.PendingSend("device-input", AidenTurnStart("Original guidance"), key,
+                    System.currentTimeMillis(), emptyList(), "stream-original", AidenStreamInputMode.QUEUE), session)
+                val cache = AidenChatCache(root)
+                val coordinator = AidenRemoteCoordinator(installations, root, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                owners.put("chat", model)
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Later draft")
+                assertFalse(model.canSend)
+                assertTrue(model.canRetrySend)
+                model.send(retry = true)
+                withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+                val replacementKey = UUID.randomUUID().toString()
+                if (replacement) {
+                    val newerSession = drafts.beginSession("runinput", initial.id)
+                    drafts.savePendingSend(null, newerSession)
+                    drafts.savePendingSend(AidenChatDraftStore.PendingSend("device-input", AidenTurnStart("Other request"), replacementKey, System.currentTimeMillis(), emptyList()), newerSession)
+                }
+                installations.setActiveInstallation(null)
+                coordinator.refreshClient()
+                release.countDown()
+                withTimeout(5_000) { model.isSubmittingRunInput.first { !it } }
+                assertEquals(1, requests.size)
+                assertEquals("/api/aiden/v1/streams/stream-original/inputs", requests.single().path)
+                assertEquals(key, requests.single().getHeader("Idempotency-Key"))
+                val payload = json.parseToJsonElement(requests.single().body.readUtf8()).jsonObject
+                assertEquals("Original guidance", payload["text"]!!.jsonPrimitive.content)
+                assertEquals("queue", payload["mode"]!!.jsonPrimitive.content)
+                assertEquals("Later draft", model.draft.value)
+                val reopened = AidenChatDraftStore(root)
+                assertEquals(if (replacement) replacementKey else null, reopened.loadPendingSend(reopened.beginSession("runinput", initial.id), "device-input")?.key)
+            }
+        } finally {
+            runBlocking(dispatcher) { owners.clearAndJoin() }
+            Dispatchers.resetMain(); dispatcher.close(); server.shutdown(); root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptPendingSendFailsClosedAndCannotOverwriteAnUnresolvedKey() {
+        val root = kotlin.io.path.createTempDirectory("aiden-corrupt-attempt").toFile()
+        try {
+            val store = AidenChatDraftStore(root = root)
+            val session = store.beginSession("mac", "chat")
+            val pending = AidenChatDraftStore.PendingSend("device", AidenTurnStart("Once"), UUID.randomUUID().toString(), 1000, emptyList())
+            store.savePendingSend(pending, session)
+            try { store.savePendingSend(pending.copy(key = UUID.randomUUID().toString()), session); fail("Must retain the unresolved key") } catch (_: IllegalStateException) { }
+            root.walkTopDown().first { it.name.endsWith(".attempt.json") }.writeText("broken")
+            try { store.loadPendingSend(session, "device"); fail("Corruption must not mean absent") } catch (_: kotlinx.serialization.SerializationException) { }
+            store.savePendingSend(null, session)
+            assertNull(store.loadPendingSend(session, "device"))
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
+    fun pendingSendSurvivesRelaunchExpiresAndIsPurgedWithPairing() {
+        val root = kotlin.io.path.createTempDirectory("aiden-attempt").toFile()
+        try {
+            val store = AidenChatDraftStore(root = root)
+            val session = store.beginSession("mac", "chat")
+            val attempt = AidenChatDraftStore.PendingSend("device", AidenTurnStart("Run once", "provider", "model"), UUID.randomUUID().toString(), 1000L, emptyList())
+            store.savePendingSend(attempt, session)
+            val reopened = AidenChatDraftStore(root = root)
+            val next = reopened.beginSession("mac", "chat")
+            val restored = reopened.loadPendingSend(next, "device")!!
+            assertEquals(attempt.key, restored.key)
+            assertEquals("Run once", restored.request.text)
+            assertTrue(restored.canRetry(86_400_999L))
+            assertFalse(restored.canRetry(86_401_000L))
+            assertFalse(restored.canRetry(999L))
+            assertNull(reopened.loadPendingSend(next, "replacement"))
+            reopened.purge("mac")
+            try { reopened.savePendingSend(attempt, next); fail("Retired pairing must not recreate an attempt") } catch (_: IllegalStateException) { }
+            assertNull(reopened.loadPendingSend(reopened.beginSession("mac", "chat"), "device"))
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
     fun workspaceCodemodeActivityKeepsParentAndNestedToolIdentitiesDistinct() {
         val payload = """{"version":3,"generationId":"generation-codemode","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"codemode","label":"Codemode","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"read_file","label":"Read file","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":0}]}"""
         val timeline = json.decodeFromString<AidenGenerationTimeline>(payload)
@@ -691,6 +812,11 @@ class AidenChatTest {
                         assertEquals("settled-assistant", other.chat.value!!.messages.last().id)
                         if (mode in listOf("newer_post", "ordered_posts")) {
                             other.updateDraft("Second")
+                            assertFalse("A second view must retain the unresolved original attempt", other.canSend)
+                            other.send()
+                            assertFalse(other.isStarting.value)
+                            other.discardPendingSend()
+                            withTimeout(5_000) { other.pendingSend.first { it == null } }
                             assertTrue(other.canSend)
                             other.send()
                             if (mode == "ordered_posts") {
@@ -720,6 +846,10 @@ class AidenChatTest {
                         }
                         release.countDown()
                         withTimeout(5_000) { sender.isStarting.first { !it } }
+                        if (mode == "switch") {
+                            val reopenedDrafts = AidenChatDraftStore(root)
+                            assertNull(reopenedDrafts.loadPendingSend(reopenedDrafts.beginSession("turn-instance", initial.id), "turn-device"))
+                        }
                         val reopened = AidenChatCache(root = File(root, "cache"))
                         if (mode == "ordered_posts") {
                             assertEquals(settled.messages + second, other.chat.value!!.messages)
@@ -810,6 +940,7 @@ class AidenChatTest {
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val turnArrived = CountDownLatch(1)
         val releaseTurn = CountDownLatch(1)
+        val sendKeys = java.util.concurrent.CopyOnWriteArrayList<String?>()
         val server = MockWebServer()
         val viewModels = ViewModelStore()
         val initialChat = AidenChat(
@@ -821,6 +952,7 @@ class AidenChatTest {
             override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
                 "/api/aiden/v1/chats/chat-draft/turns" -> {
                     assertEquals("POST", request.method)
+                    sendKeys.add(request.getHeader("Idempotency-Key"))
                     turnArrived.countDown()
                     check(releaseTurn.await(5, TimeUnit.SECONDS)) { "Send response was not released" }
                     MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-draft","retryable":true}}""")
@@ -932,12 +1064,26 @@ class AidenChatTest {
                 withTimeout(5_000) { model.isStarting.first { !it } }
                 val expected = if (newerText.isEmpty()) "Original unsent text" else "Original unsent text\n\n$newerText"
                 assertEquals(expected, model.draft.value)
-                assertEquals("Try again", model.presentedError.value)
+                assertNull(model.presentedError.value)
+                if (!purgeWhileSending) assertNotNull(model.pendingSend.value)
                 assertTrue(model.chat.value!!.messages.isEmpty())
                 viewModels.clearAndJoin()
                 // A fresh store is the process-restart read path, not the ViewModel's memory.
                 val reopened = AidenChatDraftStore(directory)
-                assertEquals(
+                if (!purgeWhileSending && !checkPreparation && newerText.isEmpty()) {
+                    val restored = AidenChatViewModel(initialChat.id, coordinator, cache, reopened, initialChat)
+                    viewModels.put("restored", restored)
+                    withTimeout(5_000) { restored.isLoading.first { !it } }
+                    restored.updateDraft("Later edit")
+                    restored.send()
+                    assertEquals(1, sendKeys.size)
+                    restored.send(retry = true)
+                    withTimeout(5_000) { restored.isStarting.first { !it } }
+                    assertEquals(2, sendKeys.size)
+                    assertEquals(sendKeys[0], sendKeys[1])
+                    assertTrue(restored.draft.value.contains("Later edit"))
+                }
+                if (purgeWhileSending || checkPreparation || newerText.isNotEmpty()) assertEquals(
                     if (purgeWhileSending) null else expected,
                     reopened.getDraft(installation.instanceId, initialChat.id)
                 )

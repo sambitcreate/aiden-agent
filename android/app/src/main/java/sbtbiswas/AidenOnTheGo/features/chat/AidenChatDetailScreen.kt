@@ -157,6 +157,10 @@ fun AidenChatDetailScreen(
     val selectedThinkingLevel by viewModel.selectedThinkingLevel.collectAsStateWithLifecycle()
     val composerSuggestions by viewModel.composerSuggestions.collectAsStateWithLifecycle()
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
+    val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
+    val sendRecoveryError by viewModel.sendRecoveryError.collectAsStateWithLifecycle()
+    val isStartingSend by viewModel.isStarting.collectAsStateWithLifecycle()
+    val isRetryingInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
     val isLoadingEarlierMessages by viewModel.isLoadingEarlierMessages.collectAsStateWithLifecycle()
     val voiceInputMode by voiceInputStore.mode.collectAsStateWithLifecycle()
@@ -567,6 +571,17 @@ fun AidenChatDetailScreen(
                     }
                 }
 
+                if ((pendingSend != null || sendRecoveryError != null) && !isStartingSend && !isRetryingInput) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        Text(sendRecoveryError ?: if (pendingSend?.canRetry() == true) "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
+                            else "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message.",
+                            style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                        Row {
+                            TextButton(onClick = { viewModel.send(retry = true) }, enabled = viewModel.canRetrySend) { Text("Retry message") }
+                            TextButton(onClick = { viewModel.discardPendingSend() }) { Text("I checked — dismiss") }
+                        }
+                    }
+                }
                 // Error Banner
                 AnimatedVisibility(
                     visible = presentedError != null || readAloud.error != null,

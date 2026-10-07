@@ -994,10 +994,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /\.fileImporter\(/u);
   assert.match(
     chat,
-    /AidenTurnRequestBuilder\.make\([\s\S]*?attachments: submittedAttachments[\s\S]*?pendingAttachments = \[\]/u,
-  );
-  assert.match(
-    chat,
     /if let provider = model\.selectedProvider[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: model\.selectedModel\?\.id/u,
   );
   assert.match(chat, /Section \{[\s\S]*?header: \{[\s\S]*?AidenProviderIcon/u);

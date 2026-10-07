@@ -42,6 +42,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenDebouncedDraftWriter
 import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.networking.AidenStreamNetworkRecovery
 import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
@@ -186,6 +187,24 @@ class AidenChatViewModel(
 
     private val draftWriteScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private var draftWriter: AidenDebouncedDraftWriter? = null
+    private var draftSession: AidenChatDraftStore.Session? = null
+    private val _pendingSend = MutableStateFlow<AidenChatDraftStore.PendingSend?>(null)
+    val pendingSend = _pendingSend.asStateFlow()
+    private val _sendRecoveryError = MutableStateFlow<String?>(null)
+    val sendRecoveryError = _sendRecoveryError.asStateFlow()
+    val canRetrySend: Boolean get() = _pendingSend.value?.canRetry() == true && isConnected && !_isStarting.value && !_isSubmittingRunInput.value && (_pendingSend.value?.streamId != null || (activeStreamId == null && (_streamState.value == null || _streamState.value!!.isTerminal)))
+    fun discardPendingSend() {
+        if (_isStarting.value || _isSubmittingRunInput.value) return
+        val session = draftSession ?: return
+        viewModelScope.launch {
+            try {
+                withContext(ioDispatcher) { draftStore.savePendingSend(null, session) }
+                _pendingSend.value = null
+                _sendRecoveryError.value = null
+                turnAttempts.reset()
+            } catch (error: Exception) { _presentedError.value = error.localizedMessage }
+        }
+    }
     private val _hasActiveStream = MutableStateFlow(false)
     val hasActiveStream: StateFlow<Boolean> = _hasActiveStream.asStateFlow()
     private var activeStreamId: String? = null
@@ -304,7 +323,7 @@ class AidenChatViewModel(
     }
 
     val canSend: Boolean
-        get() = !isReadOnlyPresentation && isConnected && !_isStarting.value && activeStreamId == null &&
+        get() = !isReadOnlyPresentation && _pendingSend.value == null && _sendRecoveryError.value == null && isConnected && !_isStarting.value && activeStreamId == null &&
                 _preparingAttachmentBatches.value == 0 && !_isUploadingAttachment.value &&
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 !isHeldByForkSummary &&
@@ -557,6 +576,9 @@ class AidenChatViewModel(
         val currentInstanceId = instanceId
         if (currentInstanceId.isNotEmpty()) {
             val session = draftStore.beginSession(currentInstanceId, chatId)
+            draftSession = session
+            try { _pendingSend.value = draftStore.loadPendingSend(session, deviceId) }
+            catch (_: Exception) { _sendRecoveryError.value = "The saved send could not be read. Check the conversation on your desktop before dismissing it and sending again." }
             draftWriter = AidenDebouncedDraftWriter(draftWriteScope) { text -> draftStore.save(text, session) }
             val savedText = draftStore.load(session)
             if (!savedText.isNullOrEmpty()) {
@@ -662,7 +684,9 @@ class AidenChatViewModel(
     }
 
     private suspend fun observeProgressUntilBackground(observationToken: Long) {
-        var retryAttempt = 0
+        val recovery = AidenStreamNetworkRecovery(networkAvailability)
+        var cursor = 0
+        var cursorEpoch: String? = null
         while (progressForeground && progressObservationToken == observationToken && coroutineContext.isActive) {
             val client = activeClient()
             if (client == null || (!canReadTaskProgress && !canReadAgentRoster)) {
@@ -674,8 +698,10 @@ class AidenChatViewModel(
                 return
             }
 
-            _progressConnectionState.value = ProgressConnectionState.CONNECTING
             try {
+                recovery.shouldProbeAfterStreamFailure { }
+                if (!isProgressContextCurrent(client, observationToken)) return
+                _progressConnectionState.value = ProgressConnectionState.CONNECTING
                 // Hydrate authoritative snapshots before opening the journal.
                 // The server sends a fresh snapshot on subscribe as well, so an
                 // update between these reads and the connection cannot be lost.
@@ -712,8 +738,7 @@ class AidenChatViewModel(
                     }
                 }
 
-                // Event sequence numbers are process-local on the Mac. A
-                // reconnect therefore starts a new subscription at zero.
+                // A warm cursor is scoped to the host epoch; a restart hydrates anew.
                 val canObserveTasks = canReadTaskProgress && taskCapabilityDeniedObservationToken != observationToken
                 val canObserveAgents = canReadAgentRoster && agentCapabilityDeniedObservationToken != observationToken
                 if (!canObserveTasks && !canObserveAgents) {
@@ -724,7 +749,11 @@ class AidenChatViewModel(
                     }
                     return
                 }
-                client.progressEvents(chatId, after = 0).collect { event ->
+                client.progressEvents(chatId, after = cursor, epoch = cursorEpoch, onOpen = { resumed ->
+                    if (resumed && isProgressContextCurrent(client, observationToken)) {
+                        _progressConnectionState.value = ProgressConnectionState.LIVE
+                    }
+                }).collect { event ->
                     if (!isProgressContextCurrent(client, observationToken) || event.streamId != chatId) return@collect
                     var accepted = false
                     when (event.type) {
@@ -747,17 +776,19 @@ class AidenChatViewModel(
                         else -> Unit
                     }
                     if (accepted) {
+                        cursor = event.sequence
+                        cursorEpoch = event.payload?.taskProgress?.epoch ?: event.payload?.agentRoster?.epoch
+                        recovery.recordHealthy()
                         _progressConnectionState.value = ProgressConnectionState.LIVE
                     }
                 }
-                retryAttempt = 0
                 if (progressForeground && progressObservationToken == observationToken) {
                     _progressConnectionState.value = if (_taskProgress.value != null || _agentRoster.value != null) {
                         ProgressConnectionState.LAST_KNOWN
                     } else {
                         ProgressConnectionState.UNAVAILABLE
                     }
-                    delay(progressRetryDelay(0))
+                    recovery.recoverAfterProbeFailure(onBackoff = {}, onWaiting = {})
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) return
@@ -777,8 +808,7 @@ class AidenChatViewModel(
                 } else {
                     ProgressConnectionState.UNAVAILABLE
                 }
-                delay(progressRetryDelay(retryAttempt))
-                retryAttempt = (retryAttempt + 1).coerceAtMost(5)
+                recovery.recoverAfterProbeFailure(onBackoff = {}, onWaiting = {})
             }
         }
     }
@@ -1208,13 +1238,15 @@ class AidenChatViewModel(
         startStreaming(activeStream.copy(lastSequence = 0))
     }
 
-    fun send() {
-        if (!canSend) return
+    fun send(retry: Boolean = false) {
+        if (retry && _pendingSend.value?.inputMode != null) { submitRunInput(_pendingSend.value!!.inputMode!!, retry = true); return }
+        if (if (retry) !canRetrySend else !canSend) return
+        val retryAttempt = if (retry) _pendingSend.value else null
         val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
 
-        val text = _draft.value.trim()
-        val submittedAttachments = _pendingAttachments.value
+        val text = retryAttempt?.request?.text ?: _draft.value.trim()
+        val submittedAttachments = retryAttempt?.attachments ?: _pendingAttachments.value
         val turnModel = AidenChatModelAuthority.turnSelection(
             chat = currentChat,
             selectedProviderId = _selectedProviderId.value,
@@ -1222,7 +1254,7 @@ class AidenChatViewModel(
             selectedThinkingLevel = _selectedThinkingLevel.value
         )
 
-        val request = AidenTurnRequestBuilder.make(
+        val request = retryAttempt?.request ?: AidenTurnRequestBuilder.make(
             text = text,
             providerId = turnModel.providerId,
             modelId = turnModel.modelId,
@@ -1255,23 +1287,28 @@ class AidenChatViewModel(
         titleRefreshJob = null
         _isStarting.value = true
         _presentedError.value = null
-        _draft.value = ""
-        val clearStoredDraft = draftWriter?.reserveWrite("")
-        _pendingAttachments.value = emptyList()
+        if (retryAttempt == null || _draft.value == text) _draft.value = ""
+        val clearStoredDraft = if (_draft.value.isEmpty()) draftWriter?.reserveWrite("") else null
+        _pendingAttachments.value = if (retryAttempt == null) emptyList() else _pendingAttachments.value.filter { attachment -> submittedAttachments.none { it.id == attachment.id } }
 
         val updatedMessages = currentChat.messages + optimisticMessage
         val updatedChat = currentChat.copy(messages = updatedMessages, updatedAt = now)
         _chat.value = updatedChat
         _streamState.value = AidenStreamState.QUEUED
 
-        val idempotencyKey = turnAttempts.key(request)
+        val attempt = retryAttempt ?: AidenChatDraftStore.PendingSend(deviceId, request, turnAttempts.key(request).toString(), System.currentTimeMillis(), submittedAttachments)
+        val idempotencyKey = UUID.fromString(attempt.key)
         val requestToken = chatCache.reserveChatWrite()
         val pairingCreatedAt = pairingCreatedAt()
 
         viewModelScope.launch {
             try {
+                val session = draftSession ?: error("The chat draft is not ready.")
+                withContext(ioDispatcher) { draftStore.savePendingSend(attempt, session) }
+                _pendingSend.value = attempt
                 // Clear the stored draft before the turn can reach the server.
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
+                check(attempt.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val response = client.startTurn(chatId, request, idempotencyKey)
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,
@@ -1280,14 +1317,13 @@ class AidenChatViewModel(
                     lastSequence = 0
                 )
 
-                turnAttempts.reset()
-                _selectedSkill.value = null
                 val retainedInstallation = pairingCreatedAt?.let(::isPairingRetained) == true
                 if (!retainedInstallation) {
                     _chat.value = withContext(ioDispatcher) { chatCache.admittedChat(instanceId, chatId) }
                     _streamState.value = null
                     return@launch
                 }
+                withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) }
                 val candidate = updatedChat.copy(messages = updatedChat.messages.filter { it.id != optimisticId })
                 val accepted = withContext(ioDispatcher) {
                     chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
@@ -1302,6 +1338,10 @@ class AidenChatViewModel(
                     _streamState.value = null
                     return@launch
                 }
+                _pendingSend.value = null
+                turnAttempts.reset()
+                if (retryAttempt == null) _selectedSkill.value = null
+                if (retryAttempt != null && (_draft.value == text || _draft.value.startsWith(text + "\n\n"))) consumeRunInputDraft(text)
                 _chat.value = accepted.chat
 
                 liveTranscript.reset()
@@ -1320,7 +1360,12 @@ class AidenChatViewModel(
                     draftWriter?.let { writer -> withContext(ioDispatcher) { writer.flush() } }
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
-                    _presentedError.value = e.localizedMessage
+                    if (e is AidenRemoteClientException.Server && e.statusCode in setOf(400, 401, 403, 404, 413, 422, 429)) {
+                        draftSession?.let { session -> withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) } }
+                        _pendingSend.value = null
+                        turnAttempts.reset()
+                    }
+                    if (_pendingSend.value == null) _presentedError.value = e.localizedMessage
                 }
             } finally {
                 _isStarting.value = false
@@ -1870,7 +1915,7 @@ class AidenChatViewModel(
 
     val canSubmitRunInput: Boolean
         get() = AidenRunInputPresentation.canSubmitRunInput(
-            offered = showsRunInputOptions,
+            offered = showsRunInputOptions && _pendingSend.value == null && _sendRecoveryError.value == null && _pendingAttachments.value.isEmpty() && _selectedSkill.value == null,
             hasDraft = _draft.value.trim().isNotEmpty(),
             isSubmitting = _isSubmittingRunInput.value,
             isStopping = _isStopping.value
@@ -1882,32 +1927,43 @@ class AidenChatViewModel(
         _runInputMode.value = mode
     }
 
-    fun submitRunInput(mode: AidenStreamInputMode) {
-        val text = _draft.value.trim()
-        if (!canSubmitRunInput || text.isEmpty()) return
+    fun submitRunInput(mode: AidenStreamInputMode, retry: Boolean = false) {
+        val saved = if (retry) _pendingSend.value else null
+        val text = saved?.request?.text ?: _draft.value.trim()
+        if ((if (retry) !canRetrySend else !canSubmitRunInput) || text.isEmpty()) return
         val client = activeClient() ?: return
-        val streamId = activeStreamId ?: return
-        val key = if (AidenRunInputPresentation.reusesIdempotencyKey(
+        val streamId = saved?.streamId ?: activeStreamId ?: return
+        val key = if (saved != null) UUID.fromString(saved.key) else if (AidenRunInputPresentation.reusesIdempotencyKey(
                 lastRunInputAttempt, streamId, mode, text
             )) lastRunInputAttempt!!.key else UUID.randomUUID()
         val attempt = AidenRunInputPresentation.Attempt(key, streamId, mode, text)
         lastRunInputAttempt = attempt
+        val pairingCreatedAt = pairingCreatedAt()
         _isSubmittingRunInput.value = true
         viewModelScope.launch {
             try {
+                val session = draftSession ?: error("The chat draft is not ready.")
+                val pending = saved ?: AidenChatDraftStore.PendingSend(deviceId, AidenTurnStart(text), key.toString(), System.currentTimeMillis(), emptyList(), streamId, mode)
+                withContext(ioDispatcher) { draftStore.savePendingSend(pending, session) }
+                _pendingSend.value = pending
+                check(pending.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val result = client.submitStreamInput(
                     id = streamId,
                     input = AidenStreamInputRequest(mode = mode, text = text),
                     idempotencyKey = key
                 )
-                if (activeClient() !== client) return@launch
                 // The response must bind to the stream that was displayed when
                 // the submission left; a mismatched receipt is never trusted.
-                if (result.streamId != streamId || result.chatId != chatId) {
+                if (result.streamId != streamId || result.chatId != chatId || result.mode != mode) {
+                    if (activeClient() !== client) return@launch
                     _presentedError.value =
                         "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
                     return@launch
                 }
+                if (pairingCreatedAt?.let(::isPairingRetained) != true) return@launch
+                withContext(ioDispatcher) { draftStore.settlePendingSend(key.toString(), session) }
+                if (activeClient() !== client) return@launch
+                _pendingSend.value = null
                 if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
                 if (AidenRunInputPresentation.consumesDraft(result)) {
                     consumeRunInputDraft(text)

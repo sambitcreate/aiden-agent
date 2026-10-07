@@ -14,18 +14,23 @@ export const MAX_PEER_LAN_ADDRESSES = 64;
  * address while TLS still checks the `.local` name, the private CA and the
  * SPKI pin, so a wrong or stale address can only fail.
  *
- * Addresses live in memory only. After a restart one is learned again the
- * next time discovery runs.
+ * This resolver book is memory-only. The encrypted paired-host registry can
+ * restore authenticated hints after restart; discovery also supplies hints.
  */
 export class PeerLanAddresses {
-  private readonly addresses = new Map<string, string>();
+  private readonly addresses = new Map<string, string[]>();
 
   constructor(private readonly resolve: LookupFunction = dns.lookup) {}
 
   remember(instanceId: string, address: string): void {
-    if (!isIPv4(address)) return;
+    this.rememberAll(instanceId, [address]);
+  }
+
+  rememberAll(instanceId: string, addresses: readonly string[]): void {
+    const valid = [...new Set(addresses.filter(isIPv4))].slice(0, 8);
+    if (valid.length === 0) return;
     this.addresses.delete(instanceId);
-    this.addresses.set(instanceId, address);
+    this.addresses.set(instanceId, valid);
     for (const oldest of this.addresses.keys()) {
       if (this.addresses.size <= MAX_PEER_LAN_ADDRESSES) break;
       this.addresses.delete(oldest);
@@ -33,7 +38,11 @@ export class PeerLanAddresses {
   }
 
   address(instanceId: string): string | undefined {
-    return this.addresses.get(instanceId);
+    return this.addresses.get(instanceId)?.[0];
+  }
+
+  forget(instanceId: string): void {
+    this.addresses.delete(instanceId);
   }
 
   /**
@@ -54,8 +63,8 @@ export class PeerLanAddresses {
           callback(error, address, family);
           return;
         }
-        if (options.all) callback(null, [{ address: remembered, family: 4 }]);
-        else callback(null, remembered, 4);
+        if (options.all) callback(null, remembered.map((address) => ({ address, family: 4 })));
+        else callback(null, remembered[0]!, 4);
       });
     };
   }

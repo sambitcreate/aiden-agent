@@ -1,3 +1,4 @@
+import { remoteDeviceTypeLabel } from "../../lib/remote-connection-status";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -229,7 +230,7 @@ function SettingsDeviceRow({
       <div className="min-w-0 flex-1">
         <Text variant="small-strong" truncate className="block">{device.name}</Text>
         <Text variant="small" color="secondary" className="block">
-          {device.type === "mac" ? "Mac" : device.type === "linux" ? "Linux" : device.type === "ipad" ? "iPad" : "iPhone"} · {state === "pending"
+          {remoteDeviceTypeLabel(device.type)} · {state === "pending"
             ? "Finishing connection"
             : `${state === "previous" ? "Removed" : "Last seen"} ${friendlyDate(timestamp)}`}
         </Text>

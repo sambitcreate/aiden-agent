@@ -31,7 +31,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 24 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 25 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -5415,6 +5415,17 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (value.chatFork !== undefined) {
     if (contractRevision < 21) throw new Error("Chat fork fixtures require contract revision 21.");
     parseChatForkFixture(value.chatFork);
+  }
+  if (value.peerRouteAdvertisement !== undefined) {
+    if (contractRevision < 25 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 25.");
+    const advertisement = value.peerRouteAdvertisement;
+    if (advertisement.feature !== "peer-routes-v1" || !Array.isArray(advertisement.routes) || advertisement.routes.length > 2) throw new Error("Invalid peer route advertisement.");
+    for (const route of advertisement.routes) {
+      if (!isRecord(route)) throw new Error("Invalid peer route.");
+      const endpoint = requiredString(route, "endpoint");
+      assertAidenRemoteEndpoint(endpoint);
+      if (!new URL(endpoint).hostname.endsWith(".ts.net") || !/^sha256\/[A-Za-z0-9+/]{43}=$/u.test(requiredString(route, "serverSpkiSha256"))) throw new Error("Invalid synthetic peer route trust.");
+    }
   }
   assertNoForbiddenWireKeys(value);
   return {

@@ -15,6 +15,20 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 class AidenRemoteCoordinatorClientTest {
+    @Test
+    fun recoveryExplainsNetworkTrustAndProtocolFailuresWithoutOfferingTrustBypass() {
+        val classify = sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionIssue.Companion
+        val network = classify.classify(java.net.UnknownHostException("private-host-name"))
+        org.junit.Assert.assertEquals("Check the network", network.title)
+        org.junit.Assert.assertTrue(network.canRetry)
+        val trust = classify.classify(javax.net.ssl.SSLPeerUnverifiedException("private certificate details"))
+        org.junit.Assert.assertEquals("Verify this computer", trust.title)
+        org.junit.Assert.assertFalse(trust.canRetry)
+        org.junit.Assert.assertFalse(trust.message.contains("private certificate"))
+        val protocol = classify.classify(sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException.InvalidProtocolVersion)
+        org.junit.Assert.assertEquals("Update required", protocol.title)
+    }
+
     @get:Rule
     val tempFolder = TemporaryFolder()
 

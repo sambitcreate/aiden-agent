@@ -59,5 +59,17 @@ export function remoteConnectionSummary(input: {
   if (!input.enabled) return "Off";
   if (input.error || !input.running) return "Needs attention";
   if (input.activeDeviceCount === 0) return "Ready for a device";
-  return `${input.activeDeviceCount} active`;
+  return `${input.activeDeviceCount} recently active`;
+}
+
+/** Older paired phones use legacy wire types until re-paired. */
+export function remoteDeviceTypeLabel(type: string): string {
+  switch (type) {
+    case "mac": return "Mac";
+    case "linux": return "Linux";
+    case "android": return "Android device";
+    case "ipad": return "iPad";
+    case "iphone": return "iPhone";
+    default: return "Device";
+  }
 }

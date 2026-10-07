@@ -200,7 +200,7 @@ export function parseAidenRemotePairingExchangeInput(
     typeof record.secret !== "string" ||
     !/^[A-Za-z0-9_-]{43}$/u.test(record.secret) ||
     !bounded(record.deviceName, 80) ||
-    (record.deviceType !== "iphone" && record.deviceType !== "ipad" && record.deviceType !== "mac" && record.deviceType !== "linux") ||
+    (record.deviceType !== "iphone" && record.deviceType !== "ipad" && record.deviceType !== "android" && record.deviceType !== "mac" && record.deviceType !== "linux") ||
     !bounded(record.clientVersion, 40) ||
     (record.acceptsDisplayName !== undefined && typeof record.acceptsDisplayName !== "boolean") ||
     (record.acceptsBotCapabilities !== undefined && typeof record.acceptsBotCapabilities !== "boolean") ||

@@ -484,3 +484,12 @@ test("pairing DTOs are exact and per-source attempts are rate limited", async ()
       error instanceof AidenRemoteServiceError && error.code === "rate_limited",
   );
 });
+
+
+test("Android pairs as a phone without desktop authority", async () => {
+  const pairing = fixture({ hostCapabilitiesSupported: true });
+  const opened = pairing.service.begin(endpoint, fingerprint);
+  const result = await pairing.service.exchange({ ...exchange(opened.bootstrap.secret, true, true, true), deviceType: "android" }, "android");
+  assert.equal(result.capabilities.includes("host:events"), false);
+  assert.equal(result.capabilities.includes("simulators:control"), false);
+});

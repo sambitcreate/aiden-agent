@@ -7,6 +7,7 @@ import { createServer as createHttpServer, type Server as HttpServer } from "nod
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import os from "node:os";
+import { peerLanInterfaceAddresses } from "./peer-routes.js";
 import type { Duplex } from "node:stream";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
 import {
@@ -103,7 +104,7 @@ export function aidenRemotePortCandidates(preferredPort: number): number[] {
 
 export interface AidenRemoteBonjourPublisher {
   start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void>;
   stop(): void;
@@ -366,7 +367,7 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
   ) {}
 
   async start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void> {
     this.stop();
@@ -379,6 +380,7 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
       [
         "-R", serviceName, "_aiden-agent._tcp", "local.",
         String(input.port), "v=1", `instance=${input.instanceId}`,
+        ...(input.hostname ? [`hostname=${input.hostname}`] : []),
       ],
       { stdio: "ignore", windowsHide: true },
     );
@@ -430,7 +432,7 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
   ) {}
 
   async start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void> {
     this.stop();
@@ -466,7 +468,7 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
       type: "aiden-agent",
       protocol: "tcp",
       port: input.port,
-      txt: { v: "1", instance: input.instanceId },
+      txt: { v: "1", instance: input.instanceId, ...(input.hostname ? { hostname: input.hostname } : {}) },
     });
     const readySignal = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
@@ -588,6 +590,9 @@ export class AidenRemoteService {
           })
         : null;
       if (pairingRequests) await this.loadPairingRequestSetting();
+      let routeKey: string | undefined;
+      let tailnetRouteCache: { key: string; expires: number; route?: import("./peer-transport.js").PeerTrust } | undefined;
+      let tailnetRouteRefresh: Promise<void> | undefined;
       const routerDependencies: AidenRemoteRouterDependencies = {
         instanceId: state.instanceId,
         displayName: () => this.activeState?.displayName ?? state.displayName,
@@ -599,6 +604,45 @@ export class AidenRemoteService {
         ...(this.options.simulators ? { simulators: this.options.simulators } : {}),
         ...(this.options.hostPlatform ? { platform: this.options.hostPlatform } : {}),
         connectionMode: () => this.activeState?.connectionMode ?? state.connectionMode,
+        peerRoutes: async () => {
+          const current = await this.options.state.snapshot();
+          const routes: Array<import("./peer-transport.js").PeerTrust & { addresses?: string[] }> = [];
+          if (!current.enabled) return routes;
+          const key = JSON.stringify([current.connectionMode, current.tailscaleOwnership, current.tailscalePendingOutcome, Boolean(this.lanServer), Boolean(this.tailscaleServer)]);
+          routeKey = key;
+          // LAN identity is already local. Optional alternate-route discovery must
+          // never hold up an identity read or a healthy peer's wake probe.
+          try {
+            const endpoint = await this.transportEndpoint("lan", current, tlsIdentity);
+            if (new URL(endpoint.endpoint).hostname.endsWith(".local")) {
+              const trust = this.transportTrust("lan", tlsIdentity);
+              routes.push({ ...endpoint,
+                ...(trust.mode === "private-ca" ? { caCertificateDerBase64: trust.caCertificateDerBase64 } : {}),
+                addresses: peerLanInterfaceAddresses(os.networkInterfaces()),
+              });
+            }
+          } catch { /* Local access may be disabled on a Tailscale-only host. */ }
+          const cached = tailnetRouteCache?.key === key ? tailnetRouteCache : undefined;
+          // Keep the last validated observation available to delayed clients
+          // while refreshing. Peers independently verify identity before use.
+          if (cached?.route) routes.push(cached.route);
+          if ((!cached || cached.expires <= this.now()) && !tailnetRouteRefresh && current.tailscaleOwnership && !current.tailscalePendingOutcome
+            && this.tailscaleServer && (current.connectionMode === "tailscale" || current.connectionMode === "both")) {
+            // One on-demand refresh uses the existing bounded ownership/pin
+            // checks. Cold and failed alternates are omitted meanwhile.
+            tailnetRouteRefresh = (async () => {
+              let route: import("./peer-transport.js").PeerTrust | undefined;
+              try {
+                const endpoint = await this.transportEndpoint("tailscale", current, tlsIdentity, { cachedTailscalePin: true });
+                if (new URL(endpoint.endpoint).hostname.endsWith(".ts.net")) route = endpoint;
+              } catch { /* Retry only after the negative cache expires. */ }
+              if (routeKey === key && this.tlsIdentity === tlsIdentity && this.activeState?.instanceId === current.instanceId) {
+                tailnetRouteCache = { key, expires: this.now() + 30_000, ...(route ? { route } : {}) };
+              }
+            })().finally(() => { tailnetRouteRefresh = undefined; });
+          }
+          return routes;
+        },
         now: this.now,
         log: (entry) => {
           this.options.log?.({
@@ -819,10 +863,12 @@ export class AidenRemoteService {
   }
 
   private async publishBonjour(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
   ): Promise<void> {
     try {
-      await this.options.bonjour.start(input, (error) => {
+      const hostname = localDnsName(this.hostname);
+      const hint = hostname.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.local$/u.test(hostname) ? { hostname } : {};
+      await this.options.bonjour.start({ ...input, ...hint }, (error) => {
         void this.serialized(async () => {
           if (
             this.activeState?.instanceId !== input.instanceId

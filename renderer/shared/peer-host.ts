@@ -31,6 +31,9 @@ export interface PeerHostView {
   state: PeerConnectionState;
   features: string[];
   capabilities: string[];
+  activeRouteKind?: "lan" | "tailscale";
+  routes?: { id: string; kind: "lan" | "tailscale"; origin: "paired" | "learned"; active: boolean }[];
+  hasSuppressedRoutes?: boolean;
 }
 
 /** Why a supervisor stopped retrying; only re-pairing, or disable and enable, clears it. */
@@ -55,6 +58,10 @@ export interface PeerHostStatus {
   feed: PeerFeedState;
   /** Last-known rows are kept while the host is offline and marked stale. */
   stale: boolean;
+  /** Last completed feed sync, retained across a temporary connection failure. */
+  lastSyncedAt?: number;
+  /** Sanitized transport category; never includes an endpoint or credential. */
+  failure?: "timeout" | "unreachable" | "invalid_response";
 }
 
 /** One run's state as the host feed reports it. */

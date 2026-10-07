@@ -179,9 +179,13 @@ test("an answer that lands after the connection changed is fenced, and its same-
     await settle();
     assert.deepEqual(host.turns, ["Summarize the changelog"], "the host already started the turn");
 
-    // The Mac wakes from sleep and reconnects before the host's answer arrives.
+    // A failed wake probe replaces the connection before its held answer arrives.
+    host.down = true;
     harness.manager.wake();
     harness.timers.advance(PEER_WAKE_COALESCE_MS);
+    await settle();
+    host.down = false;
+    await harness.manager.reconnect(host.id);
     await settle();
     host.turnGate = undefined;
     release();

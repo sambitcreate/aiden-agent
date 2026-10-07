@@ -8,6 +8,186 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    @MainActor
+    func testRestoredRunInputRetryKeepsOriginalStreamAndLaterDraft() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let drafts = AidenChatDraftStore(root: root.appending(path: "drafts"))
+        let session = await drafts.beginSession(instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle")
+        let key = UUID()
+        try await drafts.savePendingSend(.init(deviceId: "device-progress-lifecycle", request: AidenTurnStart(text: "Original guidance"), key: key,
+            createdAt: Date(), attachments: [], streamId: "stream-original", inputMode: .queue), session: session)
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: AidenChatCache(root: root.appending(path: "cache")), draftStore: drafts)
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let submitted = expectation(description: "Original stream receives retry")
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/streams/stream-original/inputs")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+                submitted.fulfill()
+                return (200, "application/json", Data(#"{"streamId":"stream-original","chatId":"chat-progress-lifecycle","turnId":"turn-original","mode":"queue","status":"rejected","reason":"run_not_active","committed":false}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        model.draft = "Later draft"
+        XCTAssertFalse(model.canSend)
+        XCTAssertTrue(model.canRetrySend)
+        await model.send(retry: true)
+        await fulfillment(of: [submitted], timeout: 1)
+        XCTAssertEqual(model.draft, "Later draft")
+        XCTAssertNil(model.pendingSend)
+        let next = await drafts.beginSession(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        let saved = try await drafts.loadPendingSend(session: next, deviceId: "device-progress-lifecycle")
+        XCTAssertNil(saved)
+    }
+
+    @MainActor
+    func testHeldReceiptsSettleOriginalAttemptAfterInstallationSwitchWithoutClearingAnotherRequest() async throws {
+        for input in [false, true] {
+            for replacement in [false, true] {
+                let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+                let drafts = AidenChatDraftStore(root: root.appending(path: "drafts"))
+                var coordinator: AidenRemoteCoordinator!
+                let model = try await makeProgressLifecycleModel(mode: .denied, cache: AidenChatCache(root: root.appending(path: "cache")), draftStore: drafts, onCoordinator: { coordinator = $0 })
+                let originalContext = try coordinator.requestContext()
+                let session = await drafts.beginSession(instanceId: originalContext.instanceId, chatId: model.chat.id)
+                if input {
+                    try await drafts.savePendingSend(.init(deviceId: originalContext.deviceId, request: AidenTurnStart(text: "Original"), key: UUID(), createdAt: Date(), attachments: [], streamId: "stream-original", inputMode: .queue), session: session)
+                }
+                let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+                AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                    if request.httpMethod == "POST" {
+                        if input { return (200, "application/json", Data(#"{"streamId":"stream-original","chatId":"chat-progress-lifecycle","turnId":"turn-original","mode":"queue","status":"rejected","reason":"run_not_active","committed":false}"#.utf8)) }
+                        return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Original","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+                    }
+                    return fixture.response(request)
+                }
+                await model.load(observeProgress: false)
+                model.draft = "Original"
+                let arrived = expectation(description: "Receipt held")
+                AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: input ? "/inputs" : "/turns", onRequest: { arrived.fulfill() })
+                let sending = Task { await model.send(retry: input) }
+                await fulfillment(of: [arrived], timeout: 3)
+                let next = await drafts.beginSession(instanceId: originalContext.instanceId, chatId: model.chat.id)
+                let other = AidenChatDraftStore.PendingSend(deviceId: originalContext.deviceId, request: AidenTurnStart(text: "Other request"), key: UUID(), createdAt: Date(), attachments: [])
+                if replacement { try await drafts.savePendingSend(nil, session: next); try await drafts.savePendingSend(other, session: next) }
+                _ = try coordinator.installationStore.savePairing(.init(protocolVersion: 1, instanceId: "other-instance", deviceId: "other-device", credential: "other", capabilities: [.serverRead], endpoint: URL(string: "https://other.test/api/aiden/v1")!, serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), trust: .init(mode: .system), name: "Other desktop")
+                XCTAssertFalse(coordinator.isCurrent(originalContext))
+                XCTAssertTrue(coordinator.isRetained(originalContext))
+                AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+                await sending.value
+                let reopened = AidenChatDraftStore(root: root.appending(path: "drafts"))
+                let reopenedSession = await reopened.beginSession(instanceId: originalContext.instanceId, chatId: model.chat.id)
+                let pending = try await reopened.loadPendingSend(session: reopenedSession, deviceId: originalContext.deviceId)
+                XCTAssertEqual(pending?.key, replacement ? other.key : nil)
+            }
+        }
+    }
+
+    func testCorruptPendingSendFailsClosedUntilExplicitRemoval() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenChatDraftStore(root: root)
+        let session = await store.beginSession(instanceId: "mac", chatId: "chat")
+        let pending = AidenChatDraftStore.PendingSend(deviceId: "device", request: AidenTurnStart(text: "Once"), key: UUID(), createdAt: Date(), attachments: [])
+        try await store.savePendingSend(pending, session: session)
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)!
+        let url = try XCTUnwrap(files.allObjects.compactMap { $0 as? URL }.first { $0.lastPathComponent.hasSuffix(".attempt.json") })
+        try Data("broken".utf8).write(to: url)
+        do { _ = try await store.loadPendingSend(session: session, deviceId: "device"); XCTFail("Corruption must not look like no pending send") } catch { }
+        try await store.savePendingSend(nil, session: session)
+        let cleared = try await store.loadPendingSend(session: session, deviceId: "device")
+        XCTAssertNil(cleared)
+    }
+
+    @MainActor
+    func testAmbiguousSendReopensWithOriginalKeyAndPreservesNewerDraft() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let drafts = AidenChatDraftStore(root: root.appending(path: "drafts"))
+        let cache = AidenChatCache(root: root.appending(path: "cache"))
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, draftStore: drafts, onCoordinator: { coordinator = $0 })
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        final class Requests: @unchecked Sendable {
+            let lock = NSLock()
+            var values: [(String?, Data?)] = []
+            func record(_ request: URLRequest) {
+                var body = request.httpBody
+                if body == nil, let stream = request.httpBodyStream {
+                    stream.open(); defer { stream.close() }
+                    var bytes = [UInt8](repeating: 0, count: 4096)
+                    var data = Data()
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&bytes, maxLength: bytes.count)
+                        if count <= 0 { break }
+                        data.append(contentsOf: bytes.prefix(count))
+                    }
+                    body = data
+                }
+                lock.withLock { values.append((request.value(forHTTPHeaderField: "Idempotency-Key"), body)) }
+            }
+        }
+        let requests = Requests()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                requests.record(request)
+                return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"send-unknown","retryable":true}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        model.draft = "Run once"
+        XCTAssertTrue(model.canSend)
+        await model.send()
+        XCTAssertNotNil(model.pendingSend)
+        XCTAssertFalse(model.canSend)
+        let restored = AidenChatViewModel(coordinator: coordinator, chat: model.chat, cache: cache,
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")), onChatUpdated: { _ in })
+        await restored.load(observeProgress: false)
+        restored.draft = "Later edit"
+        await restored.send()
+        XCTAssertEqual(requests.values.count, 1, "An unresolved attempt blocks a fresh send")
+        await restored.send(retry: true)
+        XCTAssertEqual(requests.values.count, 2)
+        XCTAssertEqual(requests.values[0].0, requests.values[1].0)
+        XCTAssertNotNil(requests.values[0].1)
+        XCTAssertEqual(
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(requests.values[0].1)),
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(requests.values[1].1))
+        )
+        XCTAssertTrue(restored.draft.contains("Later edit"))
+    }
+
+    func testPendingSendSurvivesRelaunchExpiresAndIsPurgedWithPairing() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenChatDraftStore(root: root)
+        let session = await store.beginSession(instanceId: "mac", chatId: "chat")
+        let started = Date(timeIntervalSince1970: 1_000)
+        let attempt = AidenChatDraftStore.PendingSend(deviceId: "device", request: AidenTurnStart(text: "Run once", providerId: "provider", modelId: "model"), key: UUID(), createdAt: started, attachments: [])
+        try await store.savePendingSend(attempt, session: session)
+        let reopened = AidenChatDraftStore(root: root)
+        let restoredSession = await reopened.beginSession(instanceId: "mac", chatId: "chat")
+        let restored = try await reopened.loadPendingSend(session: restoredSession, deviceId: "device")
+        let other = AidenChatDraftStore.PendingSend(deviceId: "device", request: AidenTurnStart(text: "Different"), key: UUID(), createdAt: started, attachments: [])
+        do { try await reopened.savePendingSend(other, session: restoredSession); XCTFail("An unresolved key cannot be overwritten") } catch { }
+        XCTAssertEqual(restored?.key, attempt.key)
+        XCTAssertEqual(restored?.request.text, "Run once")
+        XCTAssertTrue(try XCTUnwrap(restored).canRetry(at: started.addingTimeInterval(86_399)))
+        XCTAssertFalse(try XCTUnwrap(restored).canRetry(at: started.addingTimeInterval(86_400)))
+        XCTAssertFalse(try XCTUnwrap(restored).canRetry(at: started.addingTimeInterval(-1)))
+        let wrongDevice = try await reopened.loadPendingSend(session: restoredSession, deviceId: "replacement")
+        XCTAssertNil(wrongDevice)
+        await reopened.purge(instanceId: "mac")
+        do { try await reopened.savePendingSend(attempt, session: restoredSession); XCTFail("Retired pairing must not recreate an attempt") } catch { }
+        let next = await reopened.beginSession(instanceId: "mac", chatId: "chat")
+        let afterPurge = try await reopened.loadPendingSend(session: next, deviceId: "device")
+        XCTAssertNil(afterPurge)
+    }
+
     private var agentNavigationScope: AidenAgentNavigationScope {
         .init(instanceId: "mac-a", deviceId: "device-a", chatId: "chat-a", epoch: "epoch-a", turnId: "turn-a")
     }
@@ -413,6 +593,19 @@ final class AidenChatTests: XCTestCase {
             renderer.scale = 2
             XCTAssertNotNil(renderer.cgImage)
         }
+    }
+
+    @MainActor
+    func testProgressWaitsOfflineAndOpensOnceWhenNetworkReturns() async throws {
+        let path = AidenNetworkAvailability(isNetworkAvailable: false)
+        let model = try await makeProgressLifecycleModel(mode: .denied, networkPath: path)
+        defer { model.stopProgressObservation(); AidenChatProgressLifecycleURLProtocol.reset() }
+        model.startProgressObservation()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 0)
+        path.setAvailable(true)
+        await model.waitForProgressObservation()
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
     }
 
     @MainActor
@@ -940,7 +1133,7 @@ final class AidenChatTests: XCTestCase {
     private func makeProgressLifecycleModel(
         mode: AidenChatProgressLifecycleURLProtocol.Mode,
         cache: AidenChatCache = .shared,
-        draftStore: AidenChatDraftStore = .shared,
+        draftStore: AidenChatDraftStore = AidenChatDraftStore(root: FileManager.default.temporaryDirectory.appending(path: "isolated-draft-\(UUID())")),
         modelPreferenceStore: AidenModelPreferenceStore = .shared,
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         initialChat: AidenChat? = nil,
@@ -3187,10 +3380,10 @@ final class AidenChatTests: XCTestCase {
             let failures = await model.upload(.text(name: "fixture.txt", mimeType: "text/plain", text: "fixture"))
             XCTAssertEqual(failures, 0)
             XCTAssertTrue(model.canSend)
-            let requested = self.expectation(description: "Attachment-only turn reached the server")
-            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { requested.fulfill() }
             let send = Task { await model.send() }
-            await self.fulfillment(of: [requested], timeout: 5)
+            await Task.yield()
+            XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.turnRequestCount, 0,
+                "The request waits for durable attempt storage while the draft actor is reading.")
             XCTAssertTrue(model.isStarting)
             XCTAssertTrue(model.draft.isEmpty)
             XCTAssertTrue(model.pendingAttachments.isEmpty)
@@ -3833,6 +4026,8 @@ final class AidenChatTests: XCTestCase {
     }
 
     func testFailedSendRestoresSubmittedTextWithoutClobberingTheNextDraft() {
+        XCTAssertEqual(AidenDraftSendReconciliation.failedDraft(submitted: "First message", current: "First message\n\nNext message"), "First message\n\nNext message")
+        XCTAssertEqual(AidenDraftSendReconciliation.failedDraft(submitted: "First message", current: "First message"), "First message")
         XCTAssertEqual(
             AidenDraftSendReconciliation.failedDraft(submitted: "First message", current: ""),
             "First message"

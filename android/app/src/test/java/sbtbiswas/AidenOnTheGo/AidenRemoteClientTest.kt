@@ -17,6 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
 import okhttp3.EventListener
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.ResponseBody
 import okio.ForwardingSource
 import okio.buffer
@@ -49,6 +50,57 @@ class AidenRemoteClientTest {
     private lateinit var client: AidenRemoteClient
     private lateinit var httpClient: OkHttpClient
 
+    @Test
+    fun qrAndSetupCodePairingIdentifyAndroidAndRejectOlderHostsWithoutIdentityFallback() = runBlocking {
+        val endpoint = "https://desktop.test/api/aiden/v1"
+        val expires = Instant.now().plusSeconds(120).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+        val payload = AidenPairingPayload(bootstrap = AidenPairingBootstrap(instanceId = "desktop", endpoint = endpoint,
+            serverSpkiSha256 = "sha256/" + "A".repeat(43) + "=", secret = "S".repeat(32), expiresAt = expires), trust = AidenPairingTrust("system"))
+        val code = "0123456789ABCDEFGHJK"
+        val sessionId = "pairing_" + "P".repeat(32)
+        val salt = ByteArray(32) { it.toByte() }
+        val nonce = ByteArray(12) { (it + 32).toByte() }
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(salt, "HmacSHA256"))
+        val prk = mac.doFinal(code.toByteArray(Charsets.US_ASCII))
+        mac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
+        val key = mac.doFinal(("aiden-manual-pairing-v1\n$sessionId").toByteArray() + byteArrayOf(1))
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "AES"), javax.crypto.spec.GCMParameterSpec(128, nonce))
+        cipher.updateAAD("aiden-manual-pairing-v1\n$sessionId\n$expires".toByteArray())
+        val encrypted = cipher.doFinal(Json.encodeToString(payload).toByteArray())
+        fun b64(bytes: ByteArray) = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        val sealed = AidenManualPairingBootstrap(sessionId = sessionId, expiresAt = expires, salt = b64(salt), nonce = b64(nonce),
+            ciphertext = b64(encrypted.dropLast(16).toByteArray()), tag = b64(encrypted.takeLast(16).toByteArray()))
+        val exchange = AidenPairingExchange(instanceId = "desktop", deviceId = "phone", credential = "credential", capabilities = emptyList(), endpoint = endpoint, serverSpkiSha256 = payload.bootstrap.serverSpkiSha256)
+        for (manual in listOf(false, true)) for (oldHost in listOf(false, true)) {
+            val requests = mutableListOf<Pair<String, String>>()
+            val transport = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                val buffer = okio.Buffer(); request.body!!.writeTo(buffer)
+                requests.add(request.url.encodedPath to buffer.readUtf8())
+                val bootstrap = request.url.encodedPath.endsWith("/manual-bootstrap")
+                val body = if (bootstrap) Json.encodeToString(sealed) else if (oldHost)
+                    """{"error":{"code":"invalid_request","message":"Unsupported device type","requestId":"pair","retryable":false}}"""
+                    else Json.encodeToString(exchange)
+                okhttp3.Response.Builder().request(request).protocol(okhttp3.Protocol.HTTP_1_1).code(if (!bootstrap && oldHost) 400 else 200)
+                    .message("pairing").body(body.toResponseBody()).build()
+            }.build()
+            try {
+                if (manual) AidenRemoteClient.pair(manualCode = code, endpoint = endpoint, deviceName = "Phone", deviceType = AidenDeviceType.ANDROID_PHONE, customOkHttpClient = transport)
+                else AidenRemoteClient.pair(payload, "Tablet", AidenDeviceType.ANDROID_TABLET, customOkHttpClient = transport)
+                assertFalse("An older host must require an update", oldHost)
+            } catch (error: sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.AndroidPairingUnsupported) {
+                assertTrue(oldHost)
+                assertTrue(error.message!!.contains("Update Aiden Agent"))
+            }
+            val sent = requests.filter { it.first.endsWith("/exchange") }
+            assertEquals("Never retry using an Apple identity", 1, sent.size)
+            assertEquals("android", Json.parseToJsonElement(sent.single().second).jsonObject["deviceType"]!!.jsonPrimitive.content)
+            assertEquals(if (manual) 2 else 1, requests.size)
+        }
+    }
+
     @Before
     fun setup() {
         server = MockWebServer()
@@ -77,6 +129,33 @@ class AidenRemoteClientTest {
     @After
     fun teardown() {
         server.shutdown()
+    }
+
+    @Test
+    fun quietProgressResumeCarriesEpochAndReportsOpenWithoutASnapshot() = runBlocking {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setHeader("Aiden-Progress-Resumed", "true"))
+        val opened = AtomicBoolean(false)
+        val events = client.progressEvents("chat-1", after = 42, epoch = "epoch-original", onOpen = { opened.set(it) }).toList()
+        assertTrue(events.isEmpty())
+        assertTrue(opened.get())
+        val request = server.takeRequest()
+        assertEquals("epoch-original", request.getHeader("Aiden-Progress-Epoch"))
+        assertEquals("42", request.getHeader("Last-Event-ID"))
+    }
+
+    @Test
+    fun conditionalReadsReuseBytesOnlyWithinTheSameCredentialClient() = runBlocking {
+        val body = """{"protocolVersion":1,"instanceId":"test_instance","name":"Home","capabilities":["server:read"],"serverCapabilities":["server:read"],"appVersion":"1","connectionMode":"lan","serverTime":"2026-10-06T00:00:00Z"}"""
+        server.enqueue(MockResponse().setBody(body).setHeader("ETag", "W/\"snapshot\""))
+        server.enqueue(MockResponse().setResponseCode(304))
+        assertEquals("Home", client.server().name)
+        assertEquals("Home", client.server().name)
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
+        assertEquals("W/\"snapshot\"", server.takeRequest().getHeader("If-None-Match"))
+        val replacement = AidenRemoteClient(server.url("/api/aiden/v1").toString(), "replacement", httpClient)
+        server.enqueue(MockResponse().setResponseCode(304))
+        try { replacement.server(); fail("Unsolicited 304 must not recover another credential's cached bytes") } catch (_: AidenRemoteClientException.Server) { }
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
     }
 
     @Test

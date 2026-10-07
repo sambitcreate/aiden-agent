@@ -569,7 +569,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
         onSelectModel={setModel}
         onSend={send}
         onRetry={retry}
-        onDismiss={() => binding?.control.dismissUnresolved()}
+        onDismiss={() => { void binding?.control.dismissUnresolved().catch(() => toast.error("Couldn’t dismiss this saved request. Try again.")); }}
         onOpenChat={onOpenChat}
         onReconnect={reconnect}
         onManage={onManage}

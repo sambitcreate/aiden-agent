@@ -44,12 +44,14 @@ export function peerHostPresentation(
       case "connecting":
         return { label: "Connecting", tone: "blue", ...idle };
       case "connected":
-        return { label: "Connected", tone: "green", ...idle };
+        if (status.feed === "unsupported") return { label: "Access unavailable", tone: "warning", detail: "Connected, but chat synchronization isn't available. Check access and app versions on the other computer.", ...idle };
+        if (status.feed !== "live" || status.stale) return { label: "Syncing chats", tone: "blue", ...idle };
+        return { label: "Ready", tone: "green", ...idle };
       case "backoff":
         return {
           label: "Reconnecting",
           tone: "warning",
-          detail: `Couldn't reach it. Trying again in ${seconds(state.retryAt - now)}.`,
+          detail: `${status.failure === "timeout" ? "The computer didn't answer in time." : status.failure === "invalid_response" ? "The computer returned an unreadable response. Check both app versions." : "Couldn't reach this computer. Check that it is awake and connected to your network or Tailscale."} Trying again in ${seconds(state.retryAt - now)}.`,
           canReconnect: true,
           needsRepair: false,
         };

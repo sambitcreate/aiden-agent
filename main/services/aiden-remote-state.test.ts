@@ -925,3 +925,17 @@ test("phones negotiate only the phone run subset; the host feed stays desktop-on
   const restoredDesktop = await restored.registry.authenticate(desktop.credential);
   assert.equal(restoredDesktop?.capabilities.has("host:events"), true);
 });
+
+test("Android device identity survives restart without gaining desktop authority", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  const issued = await state.registry.issueDevice({ name: "Pixel", type: "android", clientVersion: "1" });
+  const restored = fixture(state.stored());
+  await restored.registry.initialize();
+  const authenticated = await restored.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.type, "android");
+  assert.equal(authenticated?.capabilities.has("chat:write"), true);
+  assert.equal(authenticated?.capabilities.has("host:events"), false);
+  assert.equal(authenticated?.capabilities.has("simulators:control"), false);
+  assert.equal((await restored.registry.listDevices())[0]?.type, "android");
+});
