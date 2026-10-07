@@ -1590,6 +1590,26 @@ export function createChatStore(
       });
     },
 
+    /**
+     * Empty a chat's transcript in place, keeping its identity, title, owner
+     * and model. Returns false when the chat is missing or already empty.
+     */
+    async clearMessages(
+      id: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<boolean> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat) return false;
+        await assertCurrent(chat);
+        if (chat.messages.length === 0 && chat.forkedFrom === undefined) return false;
+        chat.messages = [];
+        delete chat.forkedFrom;
+        await writeChatAndMeta(chat);
+        return true;
+      });
+    },
+
     async remove(
       id: string,
       assertCurrent?: (chat: Chat | null) => void | Promise<void>,

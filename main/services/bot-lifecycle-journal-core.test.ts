@@ -64,15 +64,9 @@ const operations: readonly BotLifecycleBeginInput[] = [
   },
   {
     operationId: OPERATION_E,
-    kind: "archive_bot",
+    kind: "delete_bot",
     botId: "bot-1",
-    subject: { expectedRevision: "botrev:before-archive" },
-  },
-  {
-    operationId: OPERATION_F,
-    kind: "restore_bot",
-    botId: "bot-1",
-    subject: { expectedRevision: "botrev:before-restore" },
+    subject: {},
   },
   {
     operationId: OPERATION_H,
@@ -90,8 +84,7 @@ const stageSequences: Readonly<
   copy_chat: ["prepared", "policy_committed", "chat_committed"],
   delete_chat: ["prepared", "authority_fenced", "chat_deleted", "policy_removed"],
   update_model: ["prepared", "policy_committed", "chat_committed"],
-  archive_bot: ["prepared", "authority_archived", "identity_archived"],
-  restore_bot: ["prepared", "identity_restored", "authority_restored"],
+  delete_bot: ["prepared", "identity_deleted"],
 };
 
 test("typed lifecycle checkpoints survive restart and completed replay is idempotent", async () => {
@@ -219,14 +212,19 @@ test("checkpoint transitions cannot skip, reverse, or complete early", async () 
     "policy_committed",
   );
 
-  await journal.begin(operations[5]!);
+  await journal.begin(operations[4]!);
   await assert.rejects(
-    journal.checkpoint(OPERATION_F, "prepared", "authority_restored"),
+    journal.checkpoint(OPERATION_E, "prepared", "chat_deleted"),
     /skip or reverse/u,
   );
-  assert.equal(
-    (await journal.checkpoint(OPERATION_F, "prepared", "identity_restored")).stage,
-    "identity_restored",
+  await assert.rejects(
+    journal.begin({
+      operationId: OPERATION_F,
+      kind: "archive_bot",
+      botId: "bot-1",
+      subject: { expectedRevision: "botrev:before-archive" },
+    } as unknown as BotLifecycleBeginInput),
+    /no longer be archived/u,
   );
 
   await journal.begin(operations[1]!);
@@ -274,10 +272,7 @@ test("reconciliation runs in admission order, preserves failures, and exposes ev
       delete_chat: async (operation) => {
         handled.push(operation.kind);
       },
-      archive_bot: async (operation) => {
-        handled.push(operation.kind);
-      },
-      restore_bot: async (operation) => {
+      delete_bot: async (operation) => {
         handled.push(operation.kind);
       },
       update_model: async (operation) => {
@@ -292,8 +287,7 @@ test("reconciliation runs in admission order, preserves failures, and exposes ev
     "create_bot",
     "create_chat",
     "delete_chat",
-    "archive_bot",
-    "restore_bot",
+    "delete_bot",
     "update_model",
   ]);
   assert.match(failed[0]!, /^copy_chat:Error: copy repair failed$/u);
@@ -482,4 +476,45 @@ test("committed journal writes survive unsupported directory fsync and repair mo
   } finally {
     await rm(paths.parent, { recursive: true, force: true });
   }
+});
+
+test("legacy archive and restore entries still load so startup can close them", async () => {
+  let document: unknown = {
+    version: 2,
+    pending: [
+      {
+        operationId: OPERATION_E,
+        kind: "archive_bot",
+        botId: "bot-1",
+        subject: { expectedRevision: "botrev:before-archive" },
+        stage: "authority_archived",
+        startedAt: 1,
+        updatedAt: 2,
+      },
+    ],
+    completed: [
+      {
+        operationId: OPERATION_F,
+        kind: "restore_bot",
+        botId: "bot-2",
+        subject: { expectedRevision: "botrev:before-restore" },
+        outcome: "committed",
+        terminalStage: "authority_restored",
+        completedAt: 3,
+      },
+    ],
+  };
+  const journal = createBotLifecycleJournalCore({
+    storage: {
+      read: async () => structuredClone(document),
+      write: async (next) => {
+        document = structuredClone(next);
+      },
+    },
+    now: () => 10,
+  });
+  const [legacy] = await journal.listPending();
+  assert.equal(legacy?.kind, "archive_bot");
+  await journal.rollback(OPERATION_E, "authority_archived");
+  assert.deepEqual(await journal.listPending(), []);
 });

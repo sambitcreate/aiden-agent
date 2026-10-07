@@ -59,7 +59,13 @@ function isBotAvatarAppearance(value: unknown): value is BotAvatarAppearance {
 }
 import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 
-type StoredBotDefinition = Omit<BotDefinition, "avatar" | "revision"> & {
+type StoredBotDefinition = Omit<BotDefinition, "avatar" | "revision" | "archivedAt"> & {
+  /**
+   * Legacy archive marker from releases that archived instead of deleting.
+   * A record carrying it is treated as deleted: it never leaves the store and
+   * startup erases it through Bot delete (`legacyArchivedIds`).
+   */
+  archivedAt?: number;
   /** Kept as a legacy id so the previous release never drops this bot on rollback. */
   avatar: LegacyBotAvatar;
   /** Transitional inline copy migrated into the rollback-safe companion store on read. */
@@ -151,7 +157,7 @@ function botForRenderer(
   bot: StoredBotDefinition,
   durableAppearance?: BotAvatarAppearance,
 ): BotDefinition {
-  const { avatarAppearance, ...stored } = bot;
+  const { avatarAppearance, archivedAt: _legacyArchivedAt, ...stored } = bot;
   const compatibleInlineAppearance =
     avatarAppearance && legacyAvatarFor(avatarAppearance) === stored.avatar
       ? avatarAppearance
@@ -593,7 +599,8 @@ export function createBotStore(options: {
       return structuredClone(botForRenderer(bot, appearance));
     });
 
-  const list = (includeArchived = false) =>
+  /** Live Bots, newest first. Legacy archived records are deleted Bots and never listed. */
+  const list = () =>
     queueMutation(async () => {
       await ensureAppearanceMigration();
       const [botState, appearanceState] = await Promise.all([
@@ -601,7 +608,7 @@ export function createBotStore(options: {
         appearanceStore.load(),
       ]);
       return structuredClone(botState.bots)
-        .filter((bot) => includeArchived || bot.archivedAt === undefined)
+        .filter((bot) => bot.archivedAt === undefined)
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .map((bot) => botForRenderer(bot, appearanceFor(appearanceState, bot)));
     });
@@ -609,7 +616,7 @@ export function createBotStore(options: {
   return {
     list,
     async get(id: string): Promise<BotDefinition | null> {
-      return (await list(true)).find((bot) => bot.id === id) ?? null;
+      return (await list()).find((bot) => bot.id === id) ?? null;
     },
     create(input: BotCreateInput): Promise<BotDefinition> {
       return createWithId(randomUUID(), input);
@@ -694,41 +701,39 @@ export function createBotStore(options: {
         }
       });
     },
-    async archive(id: string, expectedRevision: string): Promise<BotDefinition> {
-      return queueMutation(async () => {
-        await ensureAppearanceMigration();
-        const existingBot = (await loadBotState()).bots.find((entry) => entry.id === id);
-        if (!existingBot) throw new Error("This bot is no longer available.");
-        const appearance = appearanceFor(await appearanceStore.load(), existingBot);
-        return store.update((draft) => {
-          const bot = draft.bots.find((entry) => entry.id === id);
-          if (!bot) throw new Error("This bot is no longer available.");
-          if (botIdentityRevision(bot) !== expectedRevision) {
-            throw new BotIdentityRevisionConflictError(botIdentityRevision(bot));
-          }
-          const timestamp = nextIdentityTimestamp(bot.updatedAt, now);
-          bot.archivedAt = bot.archivedAt ?? timestamp;
-          bot.updatedAt = timestamp;
-          return structuredClone(botForRenderer(bot, appearance));
-        });
-      });
+    /**
+     * Ids of every stored record, including legacy archived ones. Startup
+     * bootstrap checks need the full inventory; nothing else should.
+     */
+    async storedIds(): Promise<string[]> {
+      return queueMutation(async () => (await loadBotState()).bots.map(({ id }) => id));
     },
-    async restore(id: string, expectedRevision: string): Promise<BotDefinition> {
+    /** Records a previous release archived. Startup erases them as deleted Bots. */
+    async legacyArchivedIds(): Promise<string[]> {
+      return queueMutation(async () =>
+        (await loadBotState()).bots.filter((bot) => bot.archivedAt !== undefined).map(({ id }) => id),
+      );
+    },
+    /**
+     * Hard-delete a Bot record and its companion appearance. Idempotent:
+     * returns false when the record was already gone. The primary record is
+     * the commit point; a companion entry left by a crash is dropped by the
+     * next appearance reconciliation.
+     */
+    async delete(id: string): Promise<boolean> {
       return queueMutation(async () => {
-        await ensureAppearanceMigration();
-        const existingBot = (await loadBotState()).bots.find((entry) => entry.id === id);
-        if (!existingBot) throw new Error("This bot is no longer available.");
-        const appearance = appearanceFor(await appearanceStore.load(), existingBot);
-        return store.update((draft) => {
-          const bot = draft.bots.find((entry) => entry.id === id);
-          if (!bot) throw new Error("This bot is no longer available.");
-          if (botIdentityRevision(bot) !== expectedRevision) {
-            throw new BotIdentityRevisionConflictError(botIdentityRevision(bot));
-          }
-          delete bot.archivedAt;
-          bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
-          return structuredClone(botForRenderer(bot, appearance));
-        });
+        assertBotId(id);
+        const removed = (await loadBotState()).bots.some((entry) => entry.id === id)
+          ? await store.update((draft) => {
+              const before = draft.bots.length;
+              draft.bots = draft.bots.filter((entry) => entry.id !== id);
+              return draft.bots.length !== before;
+            })
+          : false;
+        if ((await appearanceStore.load()).appearances.some((entry) => entry.botId === id)) {
+          await setAppearance(id);
+        }
+        return removed;
       });
     },
   };

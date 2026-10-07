@@ -302,6 +302,36 @@ test("without a model the Bot needs one and sends are refused", async () => {
   }
 });
 
+test("a configured model that fails to resolve shows its real error, not 'needs a model'", async () => {
+  let failure: Error | null = new Error("Sign in to OpenAI again to use this model.");
+  const fauxModels = createFauxModels([fauxAssistantMessage("back")]);
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    resolveModel: async () => {
+      if (failure) throw failure;
+      return FAUX_MODEL_REF;
+    },
+  });
+  try {
+    assert.deepEqual(await service.state("bot:a"), {
+      kind: "model_error",
+      message: "Sign in to OpenAI again to use this model.",
+    });
+    await assert.rejects(
+      service.send("bot:a", { text: "hi", requestId: "m-1" }),
+      (error: unknown) =>
+        error instanceof BotSessionError &&
+        error.reason === "model_error" &&
+        error.message === "Sign in to OpenAI again to use this model.",
+    );
+    assert.equal(fauxModels.calls(), 0);
+    failure = null;
+    const sent = await service.send("bot:a", { text: "hi", requestId: "m-2" });
+    assert.equal((await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind, "completed");
+  } finally {
+    await service.shutdown();
+  }
+});
+
 test("startup removes sessions of Bots that no longer exist", async () => {
   const profile = tempProfile();
   const fauxModels = createFauxModels([fauxAssistantMessage("hi")]);

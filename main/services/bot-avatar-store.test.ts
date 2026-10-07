@@ -387,3 +387,38 @@ test("renderer projection reconciles one concurrent canonical-photo replacement"
     dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
   });
 });
+
+test("Bot delete erases every owner's photo for that Bot and survives restart", async () => {
+  const paths = await temporaryRoot("aiden-bot-avatar-delete-");
+  try {
+    const assets = [ASSET_A, ASSET_B, "30000000-0000-4000-8000-000000000003"];
+    const revisions = [REVISION_A, REVISION_B, "avatar_revision_30000000000040008000000000000003"];
+    const service = createFileBotAvatarStore({
+      root: () => paths.root, normalizer,
+      mintAssetId: () => assets.shift()!, mintAssetRevision: () => revisions.shift()!,
+    });
+    const source = { mimeType: "image/png" as const, bytes: png(640, 480) };
+    await service.put({ ownerId: OWNER_A, botId: BOT_A, expectedAssetRevision: null, operationId: "op-a", source });
+    await service.put({ ownerId: OWNER_B, botId: BOT_A, expectedAssetRevision: null, operationId: "op-b", source });
+    const kept = await service.put({ ownerId: OWNER_A, botId: BOT_B, expectedAssetRevision: null, operationId: "op-c", source });
+
+    await service.deleteBot(BOT_A);
+    assert.equal(await service.metadata(OWNER_A, BOT_A), null);
+    assert.equal(await service.metadata(OWNER_B, BOT_A), null);
+    await assert.rejects(service.read(OWNER_A, BOT_A, REVISION_A), BotAvatarUnavailableError);
+    // Only the other Bot's photo file remains on disk.
+    assert.equal((await readdir(join(paths.root, "assets"))).length, 1);
+    await service.deleteBot(BOT_A);
+
+    const restarted = createFileBotAvatarStore({ root: () => paths.root, normalizer });
+    assert.equal(await restarted.metadata(OWNER_A, BOT_A), null);
+    assert.deepEqual(await restarted.metadata(OWNER_A, BOT_B), kept);
+    // The deleted Bot's operation receipts are gone too: reusing an id starts fresh.
+    const again = await restarted.put({
+      ownerId: OWNER_A, botId: BOT_A, expectedAssetRevision: null, operationId: "op-a", source,
+    });
+    assert.equal(again.mimeType, "image/png");
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});

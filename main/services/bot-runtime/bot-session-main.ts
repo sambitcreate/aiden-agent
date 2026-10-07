@@ -6,24 +6,18 @@
 // admission path the legacy generation used, and releases it immediately:
 // per-call policy checks admit again, so no long-lived lease spans a restart.
 //
-// Tool parity is partial in this slice: Bot file tools, the shell, routines
-// and `suggest_connection` are offered. MCP connections, skills, web search,
-// subagents, computer use and companion vision are not yet ported to the
-// durable runtime (see `.memory/bot-durable-runtime.md`).
+// Tools are the legacy Bot set, built by `bot-tool-sources-main.ts` and
+// filtered by `bot-tool-assembly.ts` against the Bot's Full/Custom authority.
+// Approvals go through `bot-approvals-main.ts` and resolve by `waitId`.
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { app, ipcMain, logger } from "../../platform.js";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
-import {
-  connectionSuggestionFor,
-  type ConnectCardEntry,
-} from "../../../renderer/shared/bot-connections.js";
+import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { botApplicationService } from "../bot-application-service-main.js";
-import { botManagedWorkspace } from "../bot-capability-services-main.js";
+import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
-import { BOT_FILE_TOOL_NAMES, buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import { removeArchivedBotFavorite } from "../bot-favorites-main.js";
 import {
   BOT_DESKTOP_AUDIENCE_ID,
@@ -33,15 +27,12 @@ import {
 import type { BotRuntimeAuthorityAdmission } from "../bot-runtime-authority.js";
 import { botStore } from "../bot-store.js";
 import { withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
-import { createSuggestConnectionTool } from "../bot-runtime-tools/suggest-connection.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
-import { buildPinnedCodingTools } from "../coding-tools.js";
-import { configStore } from "../config-store.js";
-import { presetServerId } from "../mcp-presets.js";
+import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
-import { scheduleTaskToolsForContext } from "../schedule-tool.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
-import type { BotExtensionDeps, BotPolicyDecision, BotToolEntry } from "./bot-extension.js";
+import { botApprovals } from "./bot-approvals-main.js";
+import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -49,15 +40,16 @@ import {
   type BotSessionRuntime,
   type BotSessionState,
 } from "./bot-session-service.js";
+import { createBotToolAssembly } from "./bot-tool-assembly.js";
+import { createBotToolSources } from "./bot-tool-sources-main.js";
 
 export const BOT_CONNECT_CARD_ENTRY_KIND = "aiden.connect-card";
-const READ_ONLY_FILE_TOOLS = new Set<string>(["read_file", "list_dir", "glob", "grep"]);
 const MODEL_CACHE_MS = 30_000;
 
 const profileDir = () => app.getPath("userData");
 const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
-const resolvedModels = new Map<string, { ref: ModelRef; at: number }>();
+const resolvedModels = new Map<string, { ref: ModelRef; imageInput: boolean; at: number }>();
 
 let runtime: Promise<BotSessionRuntime> | undefined;
 
@@ -72,10 +64,14 @@ async function canonicalChatId(botId: string): Promise<string> {
   return chat.id;
 }
 
+async function admit(botId: string): Promise<BotRuntimeAuthorityAdmission> {
+  const chatId = await canonicalChatId(botId);
+  return botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId });
+}
+
 /** Admit the Bot's current authority for one step and release it right away. */
 async function withAdmission<T>(botId: string, action: (admission: BotRuntimeAuthorityAdmission) => Promise<T>): Promise<T> {
-  const chatId = await canonicalChatId(botId);
-  const admission = await botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId });
+  const admission = await admit(botId);
   try {
     return await action(admission);
   } finally {
@@ -85,35 +81,8 @@ async function withAdmission<T>(botId: string, action: (admission: BotRuntimeAut
 
 async function loadBot(botId: string): Promise<BotDefinition> {
   const bot = await botStore.get(botId);
-  if (!bot || bot.archivedAt !== undefined) throw new Error("This Bot no longer exists.");
+  if (!bot) throw new Error("This Bot no longer exists.");
   return bot;
-}
-
-async function fileLocations(admission: BotRuntimeAuthorityAdmission): Promise<BotFileToolLocation[]> {
-  const authority = admission.authority;
-  const locations: BotFileToolLocation[] = [];
-  if (authority.files.botHome) {
-    locations.push({
-      id: "builtin.bot_home.v1",
-      label: "Bot folder",
-      root: authority.workingDirectory,
-      expectedIdentity: authority.managedHome.incarnation,
-    });
-  }
-  if (authority.files.fullMac) {
-    locations.push({ id: authority.files.fullMac.sourceId, label: "Full Mac", root: "/" });
-  }
-  for (const { device, inode, ...location } of await resolveBotRuntimeApprovedRoots(authority)) {
-    locations.push({ ...location, expectedIdentity: { device, inode } });
-  }
-  return locations;
-}
-
-async function isConnected(pluginId: string): Promise<boolean> {
-  const suggestion = connectionSuggestionFor(pluginId);
-  if (!suggestion) return false;
-  const serverId = presetServerId(suggestion.setupEntry.presetId);
-  return (await configStore.listMcpServers()).some((server) => server.id === serverId && server.enabled);
 }
 
 async function connectCards(botId: string): Promise<ConnectCardEntry[]> {
@@ -124,44 +93,38 @@ async function connectCards(botId: string): Promise<ConnectCardEntry[]> {
     .map((entry) => entry.data as unknown as ConnectCardEntry);
 }
 
-function botTools(botId: string, admission: BotRuntimeAuthorityAdmission, locations: BotFileToolLocation[], routineRun: boolean): BotToolEntry[] {
-  const authority = admission.authority;
-  const entries: BotToolEntry[] = [];
-  if (locations.length > 0) {
-    for (const tool of buildBotFileTools({ defaultLocation: locations[0]!, additionalLocations: locations.slice(1) })) {
-      entries.push({ tool, replay: READ_ONLY_FILE_TOOLS.has(tool.name) ? "safe" : "unsafe" });
-    }
+/** Whether the Bot's resolved model takes images; false while it has none. */
+async function imageInput(botId: string): Promise<boolean> {
+  const cached = resolvedModels.get(botId);
+  if (cached) return cached.imageInput;
+  try {
+    await resolveModel(botId);
+  } catch {
+    return false;
   }
-  if (authority.shell.enabled) {
-    const shell = buildPinnedCodingTools(authority.workingDirectory).find(({ name }) => name === "run_command");
-    if (shell) entries.push({ tool: shell, replay: "unsafe" });
-  }
-  for (const tool of scheduleTaskToolsForContext({ bot: { botId, routineRun } })) {
-    entries.push({ tool, replay: "unsafe" });
-  }
-  const suggest: AgentTool = createSuggestConnectionTool(botId, {
-    isConnected,
-    isDismissed: (id, pluginId) => dismissals.isDismissed(id, pluginId),
-    appendConnectCard: async (id, card) => {
-      const conversation = await (await botSessionRuntime()).conversation(id);
-      await conversation.submit(
-        { type: "write", entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { ...card } } },
-        BACKGROUND_CONTEXT,
-      );
-    },
-    hasPendingCard: async (id, pluginId) => {
-      const matching = (await connectCards(id)).filter((card) => card.pluginId === pluginId);
-      const latest = matching[matching.length - 1];
-      return latest?.status === "pending";
-    },
-  });
-  entries.push({ tool: suggest, replay: "unsafe" });
-  return entries;
+  return resolvedModels.get(botId)?.imageInput ?? false;
 }
+
+const toolSources = createBotToolSources({
+  canonicalChatId,
+  imageInput,
+  admit,
+  dismissals,
+  appendConnectCard: async (botId, card) => {
+    const conversation = await (await botSessionRuntime()).conversation(botId);
+    await conversation.submit(
+      { type: "write", entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { ...card } } },
+      BACKGROUND_CONTEXT,
+    );
+  },
+  connectCards,
+});
+
+const tools = createBotToolAssembly({ admit, sources: toolSources });
 
 const extension: BotExtensionDeps = {
   loadBot,
-  async systemSections(bot) {
+  async systemSections(bot, offered) {
     return withAdmission(bot.id, async (admission) => {
       const authority = admission.authority;
       const workspace = await botManagedWorkspace.resolve(bot.id);
@@ -172,42 +135,27 @@ const extension: BotExtensionDeps = {
           : authority.files.mode === "off"
             ? { mode: "off", botHome: false }
             : { mode: "scoped", botHome: authority.files.botHome, approvedRoots: roots.map(({ root }) => root) };
-      const base = await buildSystemPrompt(authority.workingDirectory, undefined, "full", false, false);
+      const toolNames = new Set(offered.toolNames);
+      const base = await buildSystemPrompt(
+        authority.workingDirectory,
+        undefined,
+        "full",
+        toolNames.has("subagent"),
+        true,
+        tools.skillSnapshot(bot.id),
+        toolNames,
+      );
       return [
         base,
         withBotPersona("", bot).trim(),
         withBotManagedWorkspace("", workspace, fileAuthority).trim(),
+        tools.guidance(bot.id, offered.toolNames),
       ];
     });
   },
-  async currentTools(bot, turn) {
-    return withAdmission(bot.id, async (admission) =>
-      botTools(bot.id, admission, await fileLocations(admission), turn.requestId?.startsWith("routine:") ?? false),
-    );
-  },
-  async checkPolicy(botId, toolName): Promise<BotPolicyDecision> {
-    try {
-      return await withAdmission(botId, async (admission) => {
-        await admission.revalidateBeforeEffect();
-        const authority = admission.authority;
-        if (BOT_FILE_TOOL_NAMES.includes(toolName as (typeof BOT_FILE_TOOL_NAMES)[number])) {
-          return (await fileLocations(admission)).length > 0
-            ? { allowed: true }
-            : { allowed: false, reason: "File access is off for this Bot." };
-        }
-        if (toolName === "run_command" && !authority.shell.enabled) {
-          return { allowed: false, reason: "The shell is off for this Bot." };
-        }
-        return { allowed: true };
-      });
-    } catch (error) {
-      return { allowed: false, reason: error instanceof Error ? error.message : "This Bot's access changed." };
-    }
-  },
-  // No tool offered in this slice needs a per-call approval; fail closed if one ever asks.
-  async requestApproval() {
-    return "deny";
-  },
+  currentTools: (bot, turn) => tools.currentTools(bot.id, turn),
+  checkPolicy: (botId, toolName, call) => tools.checkPolicy(botId, toolName, call),
+  requestApproval: (request) => botApprovals.request(request),
   async readmit(botId) {
     if (!(await botStore.get(botId))) return { ok: false, reason: "bot_missing" };
     try {
@@ -217,24 +165,35 @@ const extension: BotExtensionDeps = {
       return { ok: false, reason: "access_changed" };
     }
   },
+  imageInput,
 };
 
+/**
+ * The Bot's model. `null` only when the Bot has no AI model configured; any
+ * other failure (signed out, provider removed, access changed) throws with
+ * its real message, which the Bot shows instead of "Needs an AI model".
+ */
 async function resolveModel(botId: string): Promise<ModelRef | null> {
   const cached = resolvedModels.get(botId);
   if (cached && Date.now() - cached.at < MODEL_CACHE_MS) return cached.ref;
-  try {
-    const ref = await withAdmission(botId, async (admission) => {
-      const { sourceProviderId, sourceModelId } = admission.authority.provider;
-      const resolved = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
-      runtimeModels.register(resolved as unknown as BotModelRuntime);
-      return { provider: resolved.model.provider, modelId: resolved.model.id };
-    });
-    resolvedModels.set(botId, { ref, at: Date.now() });
-    return ref;
-  } catch (error) {
-    logger.warn("bots", `Bot ${botId} has no usable AI model.`, error);
+  if ((await botCapabilityStore.getBotModelAuthority(botId)) === undefined) {
     resolvedModels.delete(botId);
     return null;
+  }
+  try {
+    const resolved = await withAdmission(botId, async (admission) => {
+      const { sourceProviderId, sourceModelId } = admission.authority.provider;
+      const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
+      runtimeModels.register(runtime as unknown as BotModelRuntime);
+      return runtime;
+    });
+    const ref = { provider: resolved.model.provider, modelId: resolved.model.id };
+    resolvedModels.set(botId, { ref, imageInput: runtimeSupportsImages(resolved.model), at: Date.now() });
+    return ref;
+  } catch (error) {
+    logger.warn("bots", `Bot ${botId} could not resolve its AI model.`, error);
+    resolvedModels.delete(botId);
+    throw error;
   }
 }
 
@@ -243,14 +202,9 @@ async function deleteRoutines(botId: string): Promise<void> {
   await botRoutineService.deleteRoutinesForBot(botId);
 }
 
-/**
- * Retire the Bot record last. Bot storage has no hard delete yet, so the
- * record is archived: its authority is fenced and it leaves every list.
- */
-async function retireBotRecord(botId: string): Promise<void> {
-  const bot = await botStore.get(botId);
-  if (!bot || bot.archivedAt !== undefined) return;
-  await botApplicationService.archiveBot({ botId, expectedRevision: bot.revision });
+/** Photo, managed home, access, chat rows, then the Bot record last. */
+async function eraseBotData(botId: string): Promise<void> {
+  await botApplicationService.deleteBot({ botId });
 }
 
 async function unbindTelegram(botId: string): Promise<void> {
@@ -268,15 +222,14 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     models: runtimeModels.models,
     extension,
     resolveModel,
-    // Deleted Bots are archived records; their sessions are orphans.
-    knownBotIds: async () =>
-      new Set((await botStore.list(true)).filter((bot) => bot.archivedAt === undefined).map(({ id }) => id)),
+    knownBotIds: async () => new Set((await botStore.list()).map(({ id }) => id)),
     deleteEffects: [
+      (botId) => toolSources.forgetBot(botId),
       deleteRoutines,
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
       removeArchivedBotFavorite,
-      retireBotRecord,
+      eraseBotData,
     ],
     onStateChange: broadcastState,
     onReport: (botId, error) => logger.warn("bots", `Bot ${botId} runtime report.`, error),
@@ -310,6 +263,7 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   runtime = undefined;
   initialized = undefined;
   await service?.shutdown();
+  await toolSources.shutdown();
 }
 
 export { BOT_NOTICE_ENTRY_KIND };

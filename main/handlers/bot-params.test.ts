@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseBotAccessUpdateInput,
+  parseBotApprovalDecision,
   parseBotChatCreate,
   parseBotCreate,
   parseBotCreateWithAccess,
@@ -176,4 +177,15 @@ test("a desktop Bot message carries text or images and its send UUID as request 
     /attachments/u,
   );
   assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", providerId: "x" }), /fields/u);
+});
+
+test("a Bot approval answer names its waitId and allow or deny, nothing else", () => {
+  const waitId = "3f1c2b9a-7d4e-4a1b-9c2d-5e6f7a8b9c0d";
+  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "allow" }), { waitId, decision: "allow" });
+  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "deny" }), { waitId, decision: "deny" });
+  assert.throws(() => parseBotApprovalDecision({ waitId, decision: "always" }), /decision/u);
+  assert.throws(() => parseBotApprovalDecision({ waitId: "a/b", decision: "allow" }), /approval id/u);
+  assert.throws(() => parseBotApprovalDecision({ waitId: "x".repeat(65), decision: "allow" }), /approval id/u);
+  assert.throws(() => parseBotApprovalDecision({ waitId, decision: "allow", scope: "always" }), /fields/u);
+  assert.throws(() => parseBotApprovalDecision(null), /fields/u);
 });

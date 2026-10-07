@@ -103,11 +103,22 @@ function parseRequest<Result>(
   }
 }
 
+function archiveRetiredError(): AidenRemoteServiceError {
+  return new AidenRemoteServiceError(
+    "invalid_request",
+    "Bots can no longer be archived or restored. Delete the Bot on your Mac instead.",
+    400,
+  );
+}
+
 function mapBotMutationError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotApplicationUnavailableError) {
-    // Deleted Bots are retired records; to a paired device they no longer exist.
-    throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+    throw new AidenRemoteServiceError(
+      "not_found",
+      "This Bot no longer exists.",
+      404,
+    );
   }
   if (error instanceof BotHistoricalChatReadOnlyError) {
     throw new AidenRemoteServiceError(
@@ -684,29 +695,27 @@ export class AidenRemoteBotService {
   }
 
   /**
-   * `DELETE /bots/{id}`: permanently erase the Bot (chat, memory, routines,
-   * files, photo). `If-Match` guards against deleting a Bot that changed.
+   * Archive and restore were removed: Bots are deleted, never archived. The
+   * routes stay until the Remote contract revision replaces them with
+   * `DELETE /bots/{id}`; until then they refuse without changing anything.
    */
-  async delete(botId: string, expectedRevision: string): Promise<void> {
-    if (!this.options.deleteBot) {
-      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-    }
-    const existing = await this.bot(botId);
-    if (existing.revision !== expectedRevision) {
-      throw new AidenRemoteServiceError(
-        "revision_conflict",
-        "This Bot changed. Refresh it before trying again.",
-        409,
-        false,
-        { currentRevision: existing.revision },
-      );
-    }
-    try {
-      await this.options.deleteBot(existing.id);
-    } catch (error) {
-      return mapBotMutationError(error);
-    }
-    this.options.notifyBotsChanged?.(existing.id);
+  async archive(botId: string, expectedRevision: string): Promise<AidenRemoteBotDetail> {
+    await this.bot(botId);
+    void expectedRevision;
+    throw archiveRetiredError();
+  }
+
+  async restore(
+    deviceId: string,
+    botId: string,
+    expectedRevision: string,
+    idempotencyKey: string,
+  ): Promise<AidenRemoteBotDetail> {
+    await this.bot(botId);
+    void deviceId;
+    void expectedRevision;
+    void idempotencyKey;
+    throw archiveRetiredError();
   }
 
   async capabilityCatalog(

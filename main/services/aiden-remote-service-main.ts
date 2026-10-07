@@ -730,7 +730,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             inbox: {
               list: (deviceId, input) =>
                 createBotInboxProjectionService({
-                  listBots: () => botApplicationService.list(true),
+                  listBots: () => botApplicationService.list(),
                   listChatMetadata: () => chatStore.list(),
                   projectBatch: async (request) => {
                     const activities = await streams.projectChatActivities(
