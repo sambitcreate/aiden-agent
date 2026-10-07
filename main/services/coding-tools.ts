@@ -72,7 +72,7 @@ function textLines(text: string): string[] {
 }
 
 /** Count a shortest line edit script without exposing file contents in tool details. */
-function lineChangeCounts(before: string, after: string): Pick<
+export function lineChangeCounts(before: string, after: string): Pick<
   FileMutationDetailsV1,
   "additions" | "deletions"
 > {
