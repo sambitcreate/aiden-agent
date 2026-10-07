@@ -142,6 +142,10 @@ class AidenSettingsStore(
     private var unconfirmedMemoryBaseline: AidenMemorySettings? = null
     private var unconfirmedSpeechBaseline: AidenSpeechStatus? = null
 
+    // Counts speech actions. A status read records it when it starts and is dropped if an
+    // action started since, so an older read can never undo a newer confirmed choice.
+    private var speechActions = 0L
+
     /** Points Settings at the active installation and its client. The same installation keeps its values. */
     fun bind(instanceId: String?, remote: AidenSettingsRemote?) {
         generation += 1
@@ -211,10 +215,11 @@ class AidenSettingsStore(
         if (speechJob?.isActive == true) return
         val gen = generation
         speechJob = scope.launch {
+            val actionsAtStart = speechActions
             fetch(gen, { remote.speechStatus() }) { state, status ->
                 when {
-                    // A speech action in flight owns the visible status until it reconciles.
-                    state.isSavingSpeech -> state
+                    // A speech action in flight, or one that started after this read, owns the status.
+                    state.isSavingSpeech || actionsAtStart != speechActions -> state
                     status == null -> state.copy(speechFailure = AidenSettingsFailure.UNAVAILABLE)
                     else -> state.copy(speech = status, speechFailure = null)
                 }
@@ -290,6 +295,7 @@ class AidenSettingsStore(
         // One speech action at a time, so an older response can never undo a newer choice.
         if (state.isSavingSpeech) return
         val gen = generation
+        speechActions += 1
         unconfirmedSpeechBaseline = previous
         _state.value = state.copy(speech = optimistic(previous), isSavingSpeech = true, speechFailure = null)
         scope.launch {
@@ -322,6 +328,7 @@ class AidenSettingsStore(
         speechPollJob = scope.launch {
             while (gen == generation && _state.value.speech?.isDownloading == true) {
                 delay(SPEECH_POLL_MILLIS)
+                val actionsAtStart = speechActions
                 val status = try {
                     remote.speechStatus()
                 } catch (cancelled: CancellationException) {
@@ -330,7 +337,9 @@ class AidenSettingsStore(
                     break
                 }
                 if (gen != generation) break
-                _state.update { if (it.isSavingSpeech) it else it.copy(speech = status, speechFailure = null) }
+                _state.update {
+                    if (it.isSavingSpeech || actionsAtStart != speechActions) it else it.copy(speech = status, speechFailure = null)
+                }
             }
             if (gen == generation) persist()
         }
@@ -384,7 +393,11 @@ class AidenSettingsStore(
                 speech = unconfirmedSpeechBaseline ?: state.speech
             )
         }.snapshot() ?: return
-        scope.launch(writer) { cache.store(confirmed) }
+        scope.launch(writer) {
+            // A write queued before a rebind or unpair must not land for an installation
+            // Settings has left; the cache also refuses installations no longer paired.
+            if (_state.value.instanceId == confirmed.instanceId) cache.store(confirmed)
+        }
     }
 
     private data class AidenProviderListing(val providers: List<AidenSettingsProvider>, val canCreate: Boolean)

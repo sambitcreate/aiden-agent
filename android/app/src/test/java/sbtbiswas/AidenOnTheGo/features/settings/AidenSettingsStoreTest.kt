@@ -3,6 +3,7 @@ package sbtbiswas.AidenOnTheGo.features.settings
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -58,7 +59,13 @@ class AidenSettingsStoreTest {
             return memory
         }
         override suspend fun readAloudStatus(): AidenReadAloudStatus { read(); return AidenReadAloudStatus(true, true, "t1") }
-        override suspend fun speechStatus(): AidenSpeechStatus { read(); return speech }
+        var speechReadGate: CompletableDeferred<Unit>? = null
+        override suspend fun speechStatus(): AidenSpeechStatus {
+            read()
+            val observed = speech
+            speechReadGate?.await()
+            return observed
+        }
         var speechGate: CompletableDeferred<Unit>? = null
         val speechSelections = mutableListOf<String>()
         override suspend fun selectSpeechModel(modelId: String): AidenSpeechStatus {
@@ -190,6 +197,47 @@ class AidenSettingsStoreTest {
         assertEquals(remote.speech.selectedModelId, store.state.value.speech?.selectedModelId)
         assertEquals(remote.speech.selectedModelId, cache.load("mac")?.speech?.selectedModelId)
         assertFalse(store.state.value.isSavingSpeech)
+    }
+
+    @Test
+    fun aWriteQueuedBeforeUnpairingCannotRecreateTheRemovedSettings() = runTest {
+        val cache = AidenSettingsCache(tempFolder.root)
+        cache.retainOnly(setOf("mac"))
+        val heldWriter = TestCoroutineScheduler()
+        val store = AidenSettingsStore(cache, this, io = StandardTestDispatcher(heldWriter))
+        store.bind("mac", FakeRemote())
+        store.refresh()
+        advanceUntilIdle()
+
+        // The pairing is removed while its snapshot writes are still queued.
+        store.bind(null, null)
+        cache.retainOnly(emptySet())
+        heldWriter.advanceUntilIdle()
+
+        assertNull(cache.load("mac"))
+    }
+
+    @Test
+    fun aSpeechReadThatStartedBeforeAConfirmedChoiceCannotRevertIt() = runTest {
+        val cache = AidenSettingsCache(tempFolder.root)
+        val store = store(cache)
+        val remote = FakeRemote()
+        store.bind("mac", remote)
+        store.refreshSpeech()
+        advanceUntilIdle()
+
+        remote.speechReadGate = CompletableDeferred()
+        store.refreshSpeech()
+        runCurrent() // The read has observed "small" and is still in flight.
+        store.selectSpeechModel("large")
+        runCurrent()
+        assertFalse(store.state.value.isSavingSpeech)
+        remote.speechReadGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("large", remote.speech.selectedModelId)
+        assertEquals("large", store.state.value.speech?.selectedModelId)
+        assertEquals("large", cache.load("mac")?.speech?.selectedModelId)
     }
 
     @Test

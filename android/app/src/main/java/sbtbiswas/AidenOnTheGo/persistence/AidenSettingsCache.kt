@@ -57,8 +57,13 @@ class AidenSettingsCache(private val root: File) {
         }
     }
 
+    // Installations still paired, as last reported to [retainOnly]. Until the first report
+    // every installation may write; afterwards a removed one can never be written back.
+    private var paired: Set<String>? = null
+
     @Synchronized
     fun store(snapshot: AidenSettingsSnapshot) {
+        if (paired?.contains(snapshot.instanceId) == false) return
         try {
             root.mkdirs()
             val bytes = json.encodeToString(snapshot).toByteArray(Charsets.UTF_8)
@@ -84,6 +89,7 @@ class AidenSettingsCache(private val root: File) {
      */
     @Synchronized
     fun retainOnly(instanceIds: Set<String>) {
+        paired = instanceIds.toSet()
         val keep = instanceIds.mapTo(HashSet()) { "${sha256(it)}.json" }
         root.listFiles()?.forEach { candidate ->
             if (candidate.name !in keep) candidate.delete()
