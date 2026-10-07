@@ -1225,6 +1225,11 @@ function EnvironmentPanelSurface({
   const surfaceRef = React.useRef<HTMLElement | null>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const [browserFocusRequest, setBrowserFocusRequest] = React.useState<string | null>(null);
+  const navigationIntentRef = React.useRef(0);
+  React.useLayoutEffect(() => {
+    navigationIntentRef.current++;
+    setBrowserFocusRequest(null);
+  }, [active?.id, fullOpen, panel.tab, panel.frontSurface, presented]);
   const tabMenuSelectionRef = React.useRef(false);
   const handledSubagentFocusRef = React.useRef(0);
   const widthRef = React.useRef(width);
@@ -1237,12 +1242,15 @@ function EnvironmentPanelSurface({
     if (!owner) return;
     const result = await browserApi.command(owner, command);
     if (workspaceRef.current !== owner) return;
-    // Child events and command completions share one monotonic revision policy.
-    // A superseded result must not reveal or dismiss tabs either.
-    if (!commitBrowserState(result.state)) return;
-    return result;
+    // Keep snapshots monotonic while preserving the command's completion signal.
+    // Callers validate navigation against this latest state and their own intent.
+    commitBrowserState(result.state);
+    const current = browserStateRef.current;
+    if (current?.workspaceId !== owner) return;
+    return { ...result, state: current };
   };
   const openTool = (tool: EnvironmentPanelTab) => {
+    navigationIntentRef.current++;
     setBrowserFocusRequest(null);
     if (tool === "terminal") terminal.moveTo("side");
     else panel.setTab(tool);
@@ -1252,22 +1260,34 @@ function EnvironmentPanelSurface({
     : [{ id: kind, kind, label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
   const selectStripTab = (entry: typeof stripTabs[number]) => {
     if (entry.kind === "browser" && entry.id !== "browser") {
-      setBrowserFocusRequest(entry.id);
+      const intent = ++navigationIntentRef.current;
       void runBrowser({ action: "select", tabId: entry.id }).then((result) => {
-        if (result) panel.setTab("browser");
-        if (browserStateRef.current?.activeTabId !== entry.id) setBrowserFocusRequest((current) => current === entry.id ? null : current);
+        if (!result || intent !== navigationIntentRef.current || result.state.activeTabId !== entry.id || !result.state.tabs.some((page) => page.id === entry.id)) return;
+        panel.setTab("browser");
+        setBrowserFocusRequest(entry.id);
       }).catch(() => toast.error("Could not select browser tab."));
     } else openTool(entry.kind);
   };
   const closeStripTab = (entry: typeof stripTabs[number]) => {
+    const intent = ++navigationIntentRef.current;
     requestAnimationFrame(() => activeTabRef.current?.focus());
     if (entry.kind === "browser" && entry.id !== "browser") {
       void runBrowser({ action: "close", tabId: entry.id }).then((result) => {
-        if (!result) return;
+        if (!result || intent !== navigationIntentRef.current || result.state.tabs.some((page) => page.id === entry.id)) return;
         if (!result.state.tabs.length) panel.closeTab("browser");
-        requestAnimationFrame(() => activeTabRef.current?.focus());
+        else if (panel.tab === "browser") setBrowserFocusRequest(result.state.activeTabId);
       }).catch(() => toast.error("Could not close browser tab."));
     } else panel.closeTab(entry.kind);
+  };
+  const openBrowserUrl = async (url: string) => {
+    const intent = ++navigationIntentRef.current;
+    const result = await runBrowser({ action: "create", url, show: false });
+    if (!result || intent !== navigationIntentRef.current || !result.tabId || !result.state.tabs.some((page) => page.id === result.tabId)) return;
+    // A hidden create deliberately preserves the previous active page. Select it
+    // only while this request still owns navigation, then reveal the presenter.
+    const selected = await runBrowser({ action: "select", tabId: result.tabId });
+    if (!selected || intent !== navigationIntentRef.current || selected.state.activeTabId !== result.tabId || !selected.state.tabs.some((page) => page.id === result.tabId)) return;
+    panel.setTab("browser");
   };
   widthRef.current = width;
 
@@ -1416,14 +1436,14 @@ function EnvironmentPanelSurface({
             </div>;
           })}
         </div>
-        <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={panel.gitOperationBusy} aria-label="New workspace tab" onClick={() => panel.setTab("new-tab")}><Plus /></Button>
+        <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={panel.gitOperationBusy} aria-label="New workspace tab" onClick={() => openTool("new-tab")}><Plus /></Button>
         <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{stripTabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={panel.gitOperationBusy} onSelect={() => { tabMenuSelectionRef.current = true; selectStripTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         <Button variant="transparent" size="small" iconOnly onClick={panel.closeTools} aria-label="Close environment panel" aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`Close workspace panel (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
       </header>
 
       <div className="min-h-0 flex-1 @container">
         <div id="environment-new-tab-panel" role="tabpanel" aria-labelledby="environment-new-tab-tab" hidden={panel.tab !== "new-tab"} className="h-full min-h-0">
-          <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={async (url) => { const result = await runBrowser({ action: "create", url }); if (result) panel.setTab("browser"); }} />
+          <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
         </div>
         <div id="environment-context-panel" role="tabpanel" aria-labelledby="environment-context-tab" hidden={panel.tab !== "context"} className="h-full min-h-0"><ChatContextPanel details={panel.contextDetails} /></div>
         <div id="environment-terminal-panel" role="tabpanel" aria-labelledby="environment-terminal-tab" hidden={panel.tab !== "terminal"} className="h-full min-h-0"><TerminalSideTarget presented={presented && panel.tab === "terminal"} /></div>

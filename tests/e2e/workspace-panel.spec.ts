@@ -321,3 +321,72 @@ test("the shared browser strip ignores a delayed command snapshot after a newer 
   await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(panel.locator("#environment-browser-panel")).toBeHidden();
 });
+
+for (const scenario of ["create", "select", "superseded select", "superseded create"] as const) {
+  test(`browser ${scenario} distinguishes newer metadata from superseding navigation`, async ({ aiden }) => {
+    const { page, app } = aiden;
+    const creating = scenario.endsWith("create");
+    const superseded = scenario.startsWith("superseded");
+    await finishLmStudioOnboarding(page);
+    await page.locator("[data-environment-toggle]").click();
+    const panel = page.getByRole("complementary", { name: "Environment work surface" });
+    if (!creating) {
+      await panel.getByRole("button", { name: "Browser", exact: true }).click();
+      await panel.getByRole("button", { name: "New browser tab" }).click();
+      await expect(panel.getByRole("textbox", { name: "Search or enter URL" })).toBeFocused();
+      await panel.getByRole("button", { name: "New workspace tab" }).click();
+      await panel.getByRole("button", { name: "Context", exact: true }).click();
+    }
+    await app.evaluate(({ ipcMain }, action) => {
+      const control = globalThis as unknown as { heldMetadataTab?: string; releaseMetadataResponse?: () => void };
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+      const original = handlers.get("browser:command")!;
+      let holdNext = true;
+      ipcMain.removeHandler("browser:command");
+      ipcMain.handle("browser:command", async (event, ...args) => {
+        const command = args[1] as { action: string; tabId?: string };
+        const hold = holdNext && command.action === action;
+        if (hold) holdNext = false;
+        const result = await original(event, ...args) as { tabId?: string };
+        if (hold) await new Promise<void>((resolve) => {
+          control.heldMetadataTab = result.tabId ?? command.tabId;
+          control.releaseMetadataResponse = resolve;
+        });
+        return result;
+      });
+    }, creating ? "create" : "select");
+    if (creating) {
+      await panel.getByRole("textbox", { name: "Open a URL" }).fill("about:blank");
+      await panel.getByRole("textbox", { name: "Open a URL" }).press("Enter");
+    } else {
+      await panel.getByRole("tablist", { name: "Environment views" }).getByRole("tab").first().click();
+    }
+    await expect.poll(() => app.evaluate(() => Boolean((globalThis as unknown as { heldMetadataTab?: string }).heldMetadataTab))).toBe(true);
+    const tabId = await app.evaluate(() => (globalThis as unknown as { heldMetadataTab: string }).heldMetadataTab);
+    await page.evaluate(async ({ workspaceId, tabId }) => {
+      const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
+      await ipc.invoke("browser:command", workspaceId, { action: "mute", tabId, muted: true });
+    }, { workspaceId: E2E_WORKSPACE_ID, tabId });
+    // Metadata does not reveal the presenter. Hidden creates intentionally leave
+    // the active page unchanged until their navigation intent is revalidated.
+    if (!creating) await expect(panel.locator('#environment-browser-panel .browser-chrome button[aria-label="Unmute tab"]')).toHaveCount(1);
+    await expect(panel.locator("#environment-browser-panel")).toBeHidden();
+    if (superseded) {
+      await panel.getByRole("button", { name: "New workspace tab" }).click();
+      await panel.getByRole("button", { name: "Files", exact: true }).click();
+    }
+    await app.evaluate(() => (globalThis as unknown as { releaseMetadataResponse?: () => void }).releaseMetadataResponse?.());
+    await page.evaluate(async (workspaceId) => {
+      const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
+      await ipc.invoke("browser:get-state", workspaceId);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    }, E2E_WORKSPACE_ID);
+    if (superseded) {
+      await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(panel.locator("#environment-browser-panel")).toBeHidden();
+    } else {
+      await expect(panel.locator("#environment-browser-panel")).toBeVisible();
+      await expect(panel.getByRole("button", { name: "Unmute tab", exact: true })).toBeVisible();
+    }
+  });
+}
