@@ -1,6 +1,6 @@
 # Workspace panel redesign spike
 
-Status: Complete locally — 2026-10-07; uncommitted on `feature/workspace-panel-redesign`. Verification caveats below.
+Status: Complete locally — 2026-10-07; PR [#381](https://github.com/sambitcreate/aiden-agent/pull/381) on `feature/workspace-panel-redesign`, stacked on [#380](https://github.com/sambitcreate/aiden-agent/pull/380). Verification caveats below.
 Date: 2026-10-07. Baseline: `0c708ad94`.
 
 ## Direction

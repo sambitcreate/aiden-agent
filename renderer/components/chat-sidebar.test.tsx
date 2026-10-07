@@ -328,20 +328,8 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   assert.match(styles, /@container settings-content \(max-width: 640px\)/u);
 });
 
-test("environment inline handoff uses the same animated spacer pattern", () => {
-  const panel = source("./environment-panel.tsx");
-  assert.match(panel, /environment-panel absolute z-30/u);
-  assert.match(panel, /inline\s*\? "inset-y-0 right-0 border-l border-separator"/u);
-  assert.match(
-    panel,
-    /"bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog"/u,
-  );
-  assert.match(
-    panel,
-    /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,
-  );
-  assert.doesNotMatch(panel, /inline \? "relative" : "absolute/u);
-});
+// Workspace layout is covered by Electron geometry checks in workspace-panel.spec.ts
+// and focus/interaction checks in environment-focus.spec.ts.
 
 test("terminal drawer keeps its exit surface until the shared motion completes", () => {
   const terminal = source("./terminal-drawer.tsx");
