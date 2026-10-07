@@ -1030,97 +1030,6 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
-    func testBotProfileDeleteFetchesAuthoritativeChatAndUsesItsRevision() async throws {
-        let client = makeClient()
-        let projection: AidenBotConversationItem = try botFixtureValue(at: ["botConversation"])
-        var chatObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(
-                with: botFixtureData(at: ["botChatCreate", "response"])
-            ) as? [String: Any]
-        )
-        chatObject["id"] = projection.id
-        chatObject["revision"] = "authoritative_chat_revision_42"
-        let authoritativeChat = try JSONSerialization.data(
-            withJSONObject: chatObject,
-            options: [.sortedKeys]
-        )
-        var step = 0
-        AidenRemoteMockURLProtocol.handler = { request in
-            step += 1
-            switch step {
-            case 1:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/\(projection.id)")
-                return Self.response(for: request, status: 200, data: authoritativeChat)
-            case 2:
-                XCTAssertEqual(request.httpMethod, "DELETE")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/\(projection.id)")
-                XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "If-Match"),
-                    "authoritative_chat_revision_42"
-                )
-                XCTAssertNotEqual(
-                    request.value(forHTTPHeaderField: "If-Match"),
-                    projection.revision
-                )
-                return Self.response(for: request, status: 204, data: Data())
-            default:
-                XCTFail("Unexpected Bot profile delete request")
-                return Self.response(for: request, status: 500, json: "{}")
-            }
-        }
-
-        let deleted = try await aidenBotProfileDeleteConversation(
-            client: client,
-            projection: projection,
-            expectedBotID: projection.botId,
-            isCurrent: { true }
-        )
-
-        XCTAssertEqual(deleted.id, projection.id)
-        XCTAssertEqual(deleted.revision, "authoritative_chat_revision_42")
-        XCTAssertEqual(step, 2)
-    }
-
-    @MainActor
-    func testBotProfileLifecycleRefreshesFavoritesAfterArchive() async throws {
-        let client = makeClient()
-        let botID = "bot_fixture_01"
-        let archive = try botFixtureData(at: ["botArchive"])
-        let favorites = try botFixtureData(at: ["botFavorites"])
-        var step = 0
-        AidenRemoteMockURLProtocol.handler = { request in
-            step += 1
-            switch step {
-            case 1:
-                XCTAssertEqual(request.httpMethod, "DELETE")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_revision_8")
-                return Self.response(for: request, status: 200, data: archive)
-            case 2:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-favorites")
-                return Self.response(for: request, status: 200, data: favorites)
-            default:
-                XCTFail("Unexpected Bot profile lifecycle request")
-                return Self.response(for: request, status: 500, json: "{}")
-            }
-        }
-
-        let result = try await aidenBotProfileLifecycleUpdate(
-            client: client,
-            botID: botID,
-            revision: "bot_revision_8",
-            action: .archive,
-            isCurrent: { true }
-        )
-
-        XCTAssertEqual(result.detail.health, .archived)
-        XCTAssertEqual(result.favorites.revision, "bot_favorites_revision_2")
-        XCTAssertEqual(step, 2)
-    }
-
-    @MainActor
     func testLostBotChatCreateResponseRetainsTheExactAttemptKey() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
@@ -1534,7 +1443,7 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
-    func testBotChatToolsNarrowAccessReconcileFilesAndRevokeWithinExactGrant() async throws {
+    func testBotChatFilesFollowBotAccessAndRevokeWithinExactGrant() async throws {
         let cacheRoot = FileManager.default.temporaryDirectory
             .appending(path: "aiden-bot-chat-tools-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: cacheRoot) }
@@ -1554,7 +1463,6 @@ final class AidenRemoteClientTests: XCTestCase {
         let fileID = "file_\(String(repeating: "F", count: 43))"
         let botDetail = try botFixtureData(at: ["botDetail"])
         let catalog = try botFixtureData(at: ["botCapabilityCatalog"])
-        let inheritedAccess = try botFixtureData(at: ["botChatSubset"])
         let index = Data("""
         {"snapshotId":"files_snapshot_1","entries":[{"id":"\(fileID)","displayPath":"notes.md",
         "name":"notes.md","kind":"file","size":12,"language":"markdown"}],
@@ -1563,24 +1471,16 @@ final class AidenRemoteClientTests: XCTestCase {
         var document = Data("""
         {"id":"\(fileID)","displayPath":"notes.md","content":"first","version":"file_revision_1","truncated":false}
         """.utf8)
-        var authoritativeAccess = inheritedAccess
         var currentBotDetail = botDetail
-        var ambiguousPatch = false
         var failBotLoad = false
         var revokeCredential = false
-        var patchCount = 0
+        var chatAccessReads = 0
         var writeCount = 0
 
-        func customAccessData(body: [String: Any], revision: Int) throws -> Data {
-            try JSONSerialization.data(withJSONObject: [
-                "chatId": chatID,
-                "botId": botID,
-                "mode": "custom",
-                "revision": "chat_policy_revision_\(revision)",
-                "botPolicyRevision": "bot_policy_revision_4",
-                "summary": "Custom · reduced for this chat",
-                "custom": body["custom"] as Any,
-            ])
+        func mutatedBotDetail(_ change: (inout [String: Any]) -> Void) throws -> Data {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: botDetail) as? [String: Any])
+            change(&object)
+            return try JSONSerialization.data(withJSONObject: object)
         }
 
         AidenRemoteMockURLProtocol.handler = { request in
@@ -1609,27 +1509,10 @@ final class AidenRemoteClientTests: XCTestCase {
                 }
                 return Self.response(for: request, status: 200, data: currentBotDetail)
             case ("GET", "/api/aiden/v1/chats/\(chatID)/capabilities"):
-                return Self.response(for: request, status: 200, data: authoritativeAccess)
+                chatAccessReads += 1
+                return Self.response(for: request, status: 404, json: "{}")
             case ("GET", "/api/aiden/v1/bot-capabilities"):
                 return Self.response(for: request, status: 200, data: catalog)
-            case ("PATCH", "/api/aiden/v1/chats/\(chatID)/capabilities"):
-                XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "If-Match"),
-                    patchCount == 0 ? "chat_policy_revision_2" : "chat_policy_revision_3"
-                )
-                patchCount += 1
-                let body = try Self.jsonBody(request)
-                XCTAssertEqual(body["catalogRevision"] as? String, "bot_catalog_revision_3")
-                XCTAssertEqual(body["expectedBotPolicyRevision"] as? String, "bot_policy_revision_4")
-                let custom = try XCTUnwrap(body["custom"] as? [String: Any])
-                XCTAssertEqual(custom["providerId"] as? String, "provider_fixture")
-                XCTAssertEqual(custom["modelId"] as? String, "model_fixture")
-                authoritativeAccess = try customAccessData(body: body, revision: patchCount + 2)
-                if ambiguousPatch {
-                    ambiguousPatch = false
-                    throw URLError(.networkConnectionLost)
-                }
-                return Self.response(for: request, status: 200, data: authoritativeAccess)
             case ("GET", "/api/aiden/v1/bot-conversations/\(chatID)/files"):
                 return Self.response(for: request, status: 200, data: index)
             case ("GET", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
@@ -1663,8 +1546,6 @@ final class AidenRemoteClientTests: XCTestCase {
 
         let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, cache: botCache)
         await tools.load(coordinator: coordinator)
-        XCTAssertEqual(tools.access?.mode, .inherit)
-        XCTAssertFalse(tools.isDirty)
         XCTAssertTrue(tools.hasFiles)
         let cachedAfterRefresh = await botCache.load(
             instanceId: "instance-bot-tools",
@@ -1674,34 +1555,12 @@ final class AidenRemoteClientTests: XCTestCase {
                        tools.bot?.visionModelSelection)
         XCTAssertEqual(cachedAfterRefresh?.catalog(forBotID: botID), tools.catalog)
 
-        tools.draft?.mode = .custom
-        tools.draft?.skillIDs.removeAll()
-        XCTAssertTrue(tools.isDirty, "A changed Access sheet must require save or discard confirmation.")
-        XCTAssertTrue(tools.canEdit(coordinator: coordinator, hostAllowsMutations: true))
-        let savedAccess = await tools.save(coordinator: coordinator, hostAllowsMutations: true)
-        XCTAssertTrue(savedAccess)
-        XCTAssertEqual(patchCount, 1)
-        XCTAssertFalse(tools.isDirty)
-
-        tools.draft?.connectionIDs.removeAll()
-        ambiguousPatch = true
-        let reconciledAccess = await tools.save(coordinator: coordinator, hostAllowsMutations: true)
-        XCTAssertTrue(
-            reconciledAccess,
-            "An ambiguous PATCH committed on the Mac must reconcile as success without replaying."
-        )
-        XCTAssertEqual(patchCount, 2)
-        XCTAssertFalse(tools.isDirty)
-
-        let grant = try XCTUnwrap(tools.fileGrant(
-            coordinator: coordinator,
-            hostAllowsMutations: true
-        ))
+        let grant = try XCTUnwrap(tools.fileGrant(coordinator: coordinator, hostAllowsMutations: true))
         XCTAssertEqual(grant.chatID, chatID)
         XCTAssertEqual(grant.botID, botID)
-        XCTAssertEqual(grant.chatAccessRevision, "chat_policy_revision_4")
         XCTAssertEqual(grant.botPolicyRevision, "bot_policy_revision_4")
         XCTAssertEqual(grant.catalogRevision, "bot_catalog_revision_3")
+        XCTAssertTrue(grant.allowsWrites)
 
         let files = AidenBotConversationFilesModel(grant: grant)
         await files.load(coordinator: coordinator)
@@ -1712,39 +1571,28 @@ final class AidenRemoteClientTests: XCTestCase {
         let savedFile = await files.save(coordinator: coordinator)
         XCTAssertTrue(savedFile)
         XCTAssertEqual(writeCount, 1)
+        XCTAssertEqual(chatAccessReads, 0, "Bot chats no longer read per-chat access.")
 
-        var staleObject = try XCTUnwrap(JSONSerialization.jsonObject(with: authoritativeAccess) as? [String: Any])
-        staleObject["revision"] = "chat_policy_revision_5"
-        authoritativeAccess = try JSONSerialization.data(withJSONObject: staleObject)
+        // A Bot access change on the Mac invalidates the grant before any write.
+        currentBotDetail = try mutatedBotDetail { object in
+            var access = object["access"] as? [String: Any] ?? [:]
+            access["revision"] = "bot_policy_revision_5"
+            object["access"] = access
+        }
         let openedWithStaleGrant = await files.open(entry, coordinator: coordinator)
         XCTAssertFalse(openedWithStaleGrant)
+        files.draft = "must not write"
+        let savedWithStaleGrant = await files.save(coordinator: coordinator)
+        XCTAssertFalse(savedWithStaleGrant)
         XCTAssertEqual(writeCount, 1, "A stale access grant must fail before any file write.")
 
-        await tools.load(coordinator: coordinator)
-        let freshGrant = try XCTUnwrap(tools.fileGrant(
-            coordinator: coordinator,
-            hostAllowsMutations: true
-        ))
-        let archivedFiles = AidenBotConversationFilesModel(grant: freshGrant)
-        await archivedFiles.load(coordinator: coordinator)
-        let openedBeforeArchive = await archivedFiles.open(entry, coordinator: coordinator)
-        XCTAssertTrue(openedBeforeArchive)
-        var archivedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: botDetail) as? [String: Any])
-        archivedObject["health"] = "archived"
-        archivedObject["archivedAt"] = "2026-08-23T12:30:00.000Z"
-        currentBotDetail = try JSONSerialization.data(withJSONObject: archivedObject)
-        archivedFiles.draft = "must not write"
-        let savedAfterArchive = await archivedFiles.save(coordinator: coordinator)
-        XCTAssertFalse(savedAfterArchive)
-        XCTAssertEqual(writeCount, 1, "Archiving after Files opened must invalidate write authority.")
-
+        currentBotDetail = botDetail
         let readOnlyGrant = AidenBotConversationFileGrant(
-            context: freshGrant.context,
-            chatID: freshGrant.chatID,
-            botID: freshGrant.botID,
-            chatAccessRevision: freshGrant.chatAccessRevision,
-            botPolicyRevision: freshGrant.botPolicyRevision,
-            catalogRevision: freshGrant.catalogRevision,
+            context: grant.context,
+            chatID: grant.chatID,
+            botID: grant.botID,
+            botPolicyRevision: grant.botPolicyRevision,
+            catalogRevision: grant.catalogRevision,
             allowsWrites: false
         )
         let readOnlyFiles = AidenBotConversationFilesModel(grant: readOnlyGrant)
@@ -1752,45 +1600,77 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertFalse(readOnlySaved)
         XCTAssertEqual(writeCount, 1)
 
-        currentBotDetail = botDetail
         failBotLoad = true
         let refreshedAfterOrdinaryFailure = await tools.refresh(coordinator: coordinator)
         XCTAssertFalse(refreshedAfterOrdinaryFailure)
-        XCTAssertNil(tools.access, "A failed authoritative refresh must not keep displaying stale Access.")
-        XCTAssertNotNil(tools.bot, "A failed refresh should retain device-scoped cached Bot capability state.")
-        XCTAssertNotNil(tools.catalog, "A failed refresh should retain the cached model capability catalog.")
+        XCTAssertNil(tools.fileGrant(coordinator: coordinator, hostAllowsMutations: true),
+                     "A failed authoritative refresh must not keep granting Files.")
+        XCTAssertNotNil(tools.bot, "A failed refresh should retain device-scoped cached Bot state.")
         XCTAssertNotNil(store.activeInstallation)
         failBotLoad = false
-        await tools.load(coordinator: coordinator)
-        XCTAssertNotNil(tools.access)
         revokeCredential = true
         let refreshedAfterRevocation = await tools.refresh(coordinator: coordinator)
         XCTAssertFalse(refreshedAfterRevocation)
-        XCTAssertNil(tools.access)
+        XCTAssertNil(tools.bot)
         XCTAssertNil(store.activeInstallation, "Credential revocation must use the coordinator purge bridge.")
     }
 
-    func testBotChatAccessDraftCannotExceedCustomBotCeilingAndFilesFollowEffectiveSelection() throws {
-        let botAccess: AidenBotAccessView = try botFixtureValue(at: ["botPolicyUpdate", "response"])
-        let chatAccess: AidenBotChatAccessView = try botFixtureValue(at: ["botChatSubsetUpdate", "response"])
-        let catalog: AidenBotCapabilityCatalog = try botFixtureValue(at: ["botCapabilityCatalog"])
-        var draft = try XCTUnwrap(AidenBotChatAccessDraft(
-            botAccess: botAccess,
-            chatAccess: chatAccess,
-            catalog: catalog
-        ))
-        XCTAssertTrue(draft.isSaveable(botAccess: botAccess, catalog: catalog))
-        XCTAssertTrue(AidenBotChatAccessPresentation.hasFiles(
-            botAccess: botAccess,
-            chatAccess: chatAccess,
-            catalog: catalog
-        ))
+    @MainActor
+    func testBotDeleteSendsTheBotRevisionAndOnlyWhenTheHostAdvertisesIt() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-bot-delete",
+            deviceId: "device-bot-delete",
+            credential: String(repeating: "D", count: 43),
+            capabilities: [.serverRead, .workspaceRead, .botRead, .botWrite]
+        )
+        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Bot Mac")
+        let session = makeSession()
+        let botID = "bot_fixture_01"
+        let archived = try botFixtureData(at: ["botArchive"])
+        var features = "[]"
+        var deletes: [String?] = []
 
-        draft.connectionIDs.insert("connection.outside-bot-ceiling")
-        XCTAssertFalse(draft.isSaveable(botAccess: botAccess, catalog: catalog))
-        draft.connectionIDs.remove("connection.outside-bot-ceiling")
-        draft.providerID = "provider-outside-bot-ceiling"
-        XCTAssertFalse(draft.isSaveable(botAccess: botAccess, catalog: catalog))
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            switch (request.httpMethod, path) {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"instance-bot-delete","name":"Bot Mac",
+                "appVersion":"1.0.0","capabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "serverCapabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "features":\(features),
+                "connectionMode":"lan","serverTime":"2026-08-23T12:00:00.000Z"}
+                """)
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+            case ("DELETE", "/api/aiden/v1/bots/\(botID)"):
+                deletes.append(request.value(forHTTPHeaderField: "If-Match"))
+                return Self.response(for: request, status: 200, data: archived)
+            default:
+                XCTFail("Unexpected Bot delete request: \(request.httpMethod ?? "nil") \(path)")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator),
+                       "A host that does not advertise delete must not offer Delete.")
+
+        features = "[\"bot-delete-v1\"]"
+        await coordinator.start()
+        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator))
+
+        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator)
+        XCTAssertEqual(deletes, ["bot_revision_8"])
     }
 
     func testUsageReadsPrivacySafeMacAggregate() async throws {

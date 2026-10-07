@@ -254,160 +254,85 @@ func aidenBotImagePlaygroundCleanupAfterProcessLaunch(
     candidateStore.removeAllOwnedCandidates()
 }
 
-struct AidenBotImagePlaygroundView: View {
-    let identity: AidenBotImagePlaygroundIdentity
-    let fallbackOverride: AidenBotImagePlaygroundFallbackReason?
-    let candidateStore: AidenBotImagePlaygroundCandidateStore
-    let onCandidateCopied: (URL) -> Void
+/// Reads whether Apple's Image Playground can run here with Aiden's
+/// non-personalized styles (iOS 18.4 or later on a supported device).
+struct AidenBotImagePlaygroundSupportReader<Content: View>: View {
+    @ViewBuilder let content: (Bool) -> Content
 
-    init(
-        identity: AidenBotImagePlaygroundIdentity,
-        fallbackOverride: AidenBotImagePlaygroundFallbackReason? = nil,
-        candidateStore: AidenBotImagePlaygroundCandidateStore = .init(),
-        onCandidateCopied: @escaping (URL) -> Void
-    ) {
-        self.identity = identity
-        self.fallbackOverride = fallbackOverride
-        self.candidateStore = candidateStore
-        self.onCandidateCopied = onCandidateCopied
-    }
-
-    // `onCandidateCopied` transfers ownership of the copied URL. Its receiver
-    // must remove it after replacement, upload completion, cancellation, or
-    // teardown by calling `candidateStore.removeOwnedCandidate(at:)`.
-
-    @ViewBuilder
     var body: some View {
-        Group {
-            if #available(iOS 18.1, *) {
-                AidenBotSystemImagePlaygroundView(
-                    identity: identity,
-                    fallbackOverride: fallbackOverride,
-                    candidateStore: candidateStore,
-                    onCandidateCopied: onCandidateCopied
-                )
-            } else {
-                AidenBotImagePlaygroundFallbackView(reason: fallbackOverride ?? .updateRequired)
-            }
-        }
-        .task {
-            // Retry launch cleanup when the editor becomes visible in case
-            // protected temporary files were inaccessible while locked.
-            candidateStore.removeAllOwnedCandidates()
-        }
-    }
-}
-
-@available(iOS 18.1, *)
-private struct AidenBotSystemImagePlaygroundView: View {
-    let identity: AidenBotImagePlaygroundIdentity
-    let fallbackOverride: AidenBotImagePlaygroundFallbackReason?
-    let candidateStore: AidenBotImagePlaygroundCandidateStore
-    let onCandidateCopied: (URL) -> Void
-
-    @Environment(\.supportsImagePlayground) private var supportsImagePlayground
-    @State private var presentation = AidenBotImagePlaygroundPresentationState()
-
-    private var isPresenting: Binding<Bool> {
-        Binding(
-            get: { presentation.phase == .presenting },
-            set: { newValue in
-                if !newValue, presentation.phase == .presenting {
-                    presentation.cancel()
-                }
-            }
-        )
-    }
-
-    private var concepts: [ImagePlaygroundConcept] {
-        identity.conceptTexts.map(ImagePlaygroundConcept.text)
-    }
-
-    @ViewBuilder
-    var body: some View {
-        if let fallbackOverride {
-            AidenBotImagePlaygroundFallbackView(reason: fallbackOverride)
-        } else if #unavailable(iOS 18.4) {
-            AidenBotImagePlaygroundFallbackView(reason: .updateRequired)
-        } else if !supportsImagePlayground {
-            AidenBotImagePlaygroundFallbackView(reason: .systemUnavailable)
+        if #available(iOS 18.4, *) {
+            AidenBotImagePlaygroundSupportProbe(content: content)
         } else {
-            configuredSheet
+            content(false)
         }
     }
-
-    @available(iOS 18.4, *)
-    private var configuredSheet: some View {
-        launcherContent
-            .imagePlaygroundSheet(
-                isPresented: isPresenting,
-                concepts: concepts,
-                onCompletion: captureCandidate,
-                onCancellation: { presentation.cancel() }
-            )
-            .imagePlaygroundGenerationStyle(
-                .illustration,
-                in: [.animation, .illustration, .sketch]
-            )
-            .imagePlaygroundPersonalizationPolicy(.disabled)
-    }
-
-    private var launcherContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Create with Apple Intelligence", systemImage: "apple.intelligence")
-                .font(.headline)
-
-            Text(Self.processingDisclosure)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if case .cancelled = presentation.phase {
-                Label("No image was selected. Your semantic avatar is unchanged.", systemImage: "checkmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if case .accepted = presentation.phase {
-                Label("The selected image is ready to preview.", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if case let .fallback(reason) = presentation.phase {
-                AidenBotImagePlaygroundFallbackView(reason: reason)
-            }
-
-            Button {
-                presentation.requestPresentation(systemAvailable: supportsImagePlayground)
-            } label: {
-                Label("Open Image Playground", systemImage: "photo.badge.plus")
-            }
-            .buttonStyle(.bordered)
-            .disabled(presentation.phase == .presenting)
-            .accessibilityHint("Opens Apple's system image creation sheet.")
-        }
-    }
-
-    private func captureCandidate(_ temporaryURL: URL) {
-        do {
-            let copiedURL = try candidateStore.copyImmediately(fromSystemCompletionURL: temporaryURL)
-            presentation.acceptCopiedCandidate()
-            onCandidateCopied(copiedURL)
-        } catch {
-            presentation.failCandidateCopy()
-        }
-    }
-
-    static let processingDisclosure = "Apple creates images in its system Image Playground. Processing is controlled by Apple and may use Private Cloud Compute. Aiden receives only the image you choose."
 }
 
-private struct AidenBotImagePlaygroundFallbackView: View {
-    let reason: AidenBotImagePlaygroundFallbackReason
+@available(iOS 18.4, *)
+private struct AidenBotImagePlaygroundSupportProbe<Content: View>: View {
+    @Environment(\.supportsImagePlayground) private var supportsImagePlayground
+    let content: (Bool) -> Content
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(reason.title, systemImage: "photo.badge.exclamationmark")
-                .font(.headline)
-            Text(reason.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    var body: some View { content(supportsImagePlayground) }
+}
+
+extension View {
+    /// Presents Apple's Image Playground for a Bot photo. The accepted image is
+    /// copied into an app-owned file before the system URL expires; the
+    /// receiver owns that copy and must remove it with the candidate store.
+    func aidenBotImagePlaygroundSheet(
+        isPresented: Binding<Bool>,
+        identity: AidenBotImagePlaygroundIdentity,
+        candidateStore: AidenBotImagePlaygroundCandidateStore = .init(),
+        onCandidateCopied: @escaping (URL) -> Void,
+        onCopyFailed: @escaping () -> Void
+    ) -> some View {
+        modifier(AidenBotImagePlaygroundSheetModifier(
+            isPresented: isPresented,
+            identity: identity,
+            candidateStore: candidateStore,
+            onCandidateCopied: onCandidateCopied,
+            onCopyFailed: onCopyFailed
+        ))
+    }
+}
+
+private struct AidenBotImagePlaygroundSheetModifier: ViewModifier {
+    @Binding var isPresented: Bool
+    let identity: AidenBotImagePlaygroundIdentity
+    let candidateStore: AidenBotImagePlaygroundCandidateStore
+    let onCandidateCopied: (URL) -> Void
+    let onCopyFailed: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.4, *) {
+            content
+                .imagePlaygroundSheet(
+                    isPresented: $isPresented,
+                    concepts: identity.conceptTexts.map(ImagePlaygroundConcept.text),
+                    onCompletion: { temporaryURL in
+                        do {
+                            onCandidateCopied(
+                                try candidateStore.copyImmediately(fromSystemCompletionURL: temporaryURL)
+                            )
+                        } catch {
+                            onCopyFailed()
+                        }
+                    },
+                    onCancellation: { }
+                )
+                .imagePlaygroundGenerationStyle(
+                    .illustration,
+                    in: [.animation, .illustration, .sketch]
+                )
+                .imagePlaygroundPersonalizationPolicy(.disabled)
+                .task {
+                    // Retry launch cleanup once visible, in case protected
+                    // temporary files were inaccessible while locked.
+                    candidateStore.removeAllOwnedCandidates()
+                }
+        } else {
+            content
         }
-        .accessibilityElement(children: .combine)
     }
 }
