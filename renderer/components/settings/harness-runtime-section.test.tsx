@@ -121,3 +121,10 @@ test("screen readers hear each install phase in the same words the summary shows
   // Byte counts change many times a second; the announcement does not.
   assert.equal(announced("downloading"), "Google Antigravity: Downloading");
 });
+
+test("before installing, the download size is stated once", () => {
+  const html = render({ status: "not_installed", downloadBytes: 111_456_962, requiredBytes: 900_000_000, downloadHost: "dl.google.com" });
+  const visible = html.replace(/<span class="sr-only"[^>]*>[^<]*<\/span>/u, "");
+  assert.equal(visible.match(/111 MB/gu)?.length, 1);
+  assert.match(visible, />Not installed\.</u);
+});

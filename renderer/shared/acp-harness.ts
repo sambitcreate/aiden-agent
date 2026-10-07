@@ -130,9 +130,8 @@ export function harnessRuntimeSummary(status: AcpHarnessStatus["runtime"]): stri
     case "unsupported":
       return status.message ?? "Not available for this computer.";
     case "not_installed":
-      return status.downloadBytes
-        ? `Not installed. ${formatHarnessBytes(status.downloadBytes)} download${status.downloadHost ? ` from ${status.downloadHost}` : ""}.`
-        : "Not installed.";
+      // The install disclosure right below states the size, source and space.
+      return "Not installed.";
     case "installing": {
       const phase = harnessPhaseLabel(status.phase);
       if (status.phase === "downloading" && status.totalBytes) {

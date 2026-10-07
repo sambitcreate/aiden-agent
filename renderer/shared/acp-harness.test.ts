@@ -51,9 +51,8 @@ test("summaries describe sizes and progress in plain terms", () => {
   assert.equal(harnessRuntimeSummary({ status: "installing", phase: "validating" }), "Starting it once to confirm it works…");
   assert.equal(
     harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962, downloadHost: "dl.google.com" }),
-    "Not installed. 111 MB download from dl.google.com.",
+    "Not installed.",
   );
-  assert.equal(harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962 }), "Not installed. 111 MB download.");
 });
 
 test("the publisher and download host reach the renderer only as plain names", () => {
