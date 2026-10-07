@@ -13,7 +13,12 @@ const html = (label: string) =>
 test("opening and saving a 200-revision project stays under 200 ms of store time", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-perf-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const chats: DesignChatPort = { exists: async () => true, create: async () => {}, remove: async () => {} };
+  const chats: DesignChatPort = {
+    exists: async () => true,
+    create: async () => {},
+    remove: async () => {},
+    ownedChatIds: async () => [],
+  };
   let counter = 0;
   const newId = () => `id-${(counter += 1)}`;
   const seed = new DesignProjectStore({ root: async () => root, chats, newId });

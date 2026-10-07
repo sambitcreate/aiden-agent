@@ -52,6 +52,8 @@ export interface DesignChatPort {
   exists(chatId: string): Promise<boolean>;
   create(chatId: string, projectId: string): Promise<void>;
   remove(chatId: string): Promise<void>;
+  /** Ids of every hidden chat whose owner names this project, found without the manifest. */
+  ownedChatIds(projectId: string): Promise<string[]>;
 }
 
 export interface DesignRunArtifact {
@@ -311,7 +313,8 @@ export class DesignProjectStore {
   /**
    * Delete a project whose manifest cannot be read, after the caller showed the unknown-contents
    * preview and the user confirmed. This is the only way an unreadable project is ever removed.
-   * Its hidden chat, if it has one, cannot be found without the manifest and is left as it is.
+   * Its hidden chats are found by their owner (the manifest's chatId is unreadable), removed first,
+   * so a failed chat removal leaves the project in place for a retry.
    */
   async deleteUnreadable(projectId: string): Promise<void> {
     // Validate before any path is joined: the id arrives from the renderer.
@@ -331,6 +334,9 @@ export class DesignProjectStore {
         throw current
           ? new DesignStoreError("stale", "This project can be opened now. Review it before deleting.")
           : new DesignStoreError("not_found", "This design project no longer exists.");
+      }
+      for (const chatId of await this.options.chats.ownedChatIds(projectId)) {
+        await this.options.chats.remove(chatId);
       }
       await fs.rm(this.projectDir(projectId), { recursive: true, force: true });
       this.entries.delete(projectId);

@@ -21,6 +21,7 @@ function fakeChats() {
   let failedRemoves = 0;
   const port: DesignChatPort = {
     exists: async (chatId) => owners.has(chatId),
+    ownedChatIds: async (projectId) => [...owners].filter(([, owner]) => owner === projectId).map(([id]) => id),
     create: async (chatId, projectId) => {
       owners.set(chatId, projectId);
     },
@@ -425,6 +426,19 @@ test("an unreadable project is deleted only by an explicit call, after a preview
   assert.deepEqual(store.list().map((project) => project.id), [healthy.id]);
   const reopened = await f.reopen();
   assert.deepEqual(reopened.store.list().map((project) => project.id), [healthy.id]);
+});
+
+test("deleting an unreadable project also removes its hidden chat, found by owner, and no other project's chat", async (t) => {
+  const f = await fixture(t);
+  const healthy = await f.store.create({ title: "Healthy" });
+  await fs.mkdir(path.join(f.root, "broken-1", "revisions"), { recursive: true });
+  await fs.writeFile(path.join(f.root, "broken-1", "manifest.json"), "{ not json");
+  // The manifest cannot name its chat, so the hidden chat is found by its owner.
+  f.chats.owners.set("broken-chat", "broken-1");
+  const { store } = await f.reopen();
+  await store.deleteUnreadable("broken-1");
+  assert.equal(f.chats.owners.has("broken-chat"), false);
+  assert.equal(f.chats.owners.get(healthy.chatId), healthy.id);
 });
 
 test("deleting an unreadable project refuses readable projects, unknown ids and paths that leave the library", async (t) => {
