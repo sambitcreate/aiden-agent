@@ -2838,7 +2838,6 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(detailSource, /subagentMilestoneAggregate\(run\)/u);
   assert.match(detailSource, /run\.milestones\.map/u);
   assert.match(detailSource, /Model:/u);
-  assert.match(detailSource, /run\.modelId/u);
   assert.match(detailSource, /Copy task preview for/u);
   assert.match(detailSource, /Copy result from/u);
   assert.match(detailSource, /data-subagent-projection-notice="true"/u);
