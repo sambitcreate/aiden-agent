@@ -638,6 +638,7 @@
         "renderer/lib/environment-panel-state.test.ts",
         "renderer/lib/gemini-live-media-core.test.ts",
         "renderer/lib/gemini-recorded-retry.test.ts",
+        "renderer/lib/generation-stream.test.ts",
         "renderer/lib/ghostty-terminal/core.test.ts",
         "renderer/lib/ghostty-terminal/keyCodes.test.ts",
         "renderer/lib/ghostty-terminal/runtime.test.ts",
