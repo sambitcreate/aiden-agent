@@ -800,4 +800,30 @@
     <string name="scheduled_section_recent_runs">Recent runs</string>
     <string name="scheduled_loading_runs">Loading recent runs</string>
     <string name="scheduled_no_runs">No runs yet.</string>
+
+    <!-- Product shell -->
+    <string name="shell_area_bots">Bots</string>
+    <string name="shell_area_workspaces">Workspaces</string>
+    <string name="shell_new_bot_cd">New Bot</string>
+    <string name="shell_installations_cd">Installations</string>
+    <string name="shell_switcher_cd">Aiden. Current area: %1$s. Choose Bots or Workspaces.</string>
+    <string name="shell_connection_connected">Connected</string>
+    <string name="shell_connection_connecting">Connecting</string>
+    <string name="shell_connection_offline">Offline</string>
+    <string name="shell_connection_needs_pairing">Needs pairing</string>
+
+    <!-- Bot chat tools -->
+    <string name="bot_tools_scope_bot">Bot defaults</string>
+    <string name="bot_tools_scope_chat">This chat</string>
+    <string name="bot_tools_mode_inherit">Inherit Bot</string>
+    <string name="bot_tools_mode_custom">Customize</string>
+    <string name="bot_tools_files">Files</string>
+    <string name="bot_tools_access">Access</string>
+    <string name="bot_tools_profile">Profile</string>
+    <string name="bot_tools_effective_access">Effective bot access</string>
+    <string name="bot_tools_mode">Mode</string>
+    <string name="bot_tools_run_commands">Run commands</string>
+
+    <!-- Shared components -->
+    <string name="model_picker_close_sheet">Close sheet</string>
 </resources>

@@ -42,6 +42,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.abs
+import androidx.compose.ui.res.stringResource
+import androidx.annotation.StringRes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,7 +124,7 @@ fun AidenProductShellScreen(
                     .semantics { if (activeArea != AidenProductArea.BOTS) hideFromAccessibility() }
             ) {
                 AidenProductTopBar(
-                    title = "Bots",
+                    title = stringResource(R.string.shell_area_bots),
                     connectionState = connectionState,
                     productSwitcher = {
                         AidenProductSwitcher(
@@ -135,19 +137,19 @@ fun AidenProductShellScreen(
                     primaryAction = {
                         AidenProductTopBarPrimaryAction(
                             icon = Icons.Outlined.Add,
-                            contentDescription = "New Bot",
+                            contentDescription = stringResource(R.string.shell_new_bot_cd),
                             onClick = { onNavigateToBotEditor(null) }
                         )
                     }
                 ) {
                     AidenProductTopBarAction(
                         icon = Icons.Outlined.Devices,
-                        contentDescription = "Installations",
+                        contentDescription = stringResource(R.string.shell_installations_cd),
                         onClick = onOpenInstallations
                     )
                     AidenProductTopBarAction(
                         icon = Icons.Outlined.Settings,
-                        contentDescription = "Settings",
+                        contentDescription = stringResource(R.string.settings_title),
                         onClick = onOpenSettings
                     )
                 }
@@ -185,6 +187,7 @@ fun AidenProductSwitcher(
         label = "ProductSwitcherChevron"
     )
     val interaction = remember { MutableInteractionSource() }
+    val switcherDescription = stringResource(R.string.shell_switcher_cd, stringResource(activeArea.displayTitle))
 
     Box {
         Surface(
@@ -197,7 +200,7 @@ fun AidenProductSwitcher(
                 .width(58.dp)
                 .tactilePress(interaction)
                 .semantics {
-                    contentDescription = "Aiden. Current area: ${activeArea.displayTitle}. Choose Bots or Workspaces."
+                    contentDescription = switcherDescription
                 }
         ) {
             Row(
@@ -231,7 +234,7 @@ fun AidenProductSwitcher(
         ) {
             AidenProductArea.entries.forEach { area ->
                 DropdownMenuItem(
-                    text = { Text(area.displayTitle) },
+                    text = { Text(stringResource(area.displayTitle)) },
                     leadingIcon = {
                         Icon(
                             imageVector = if (area == AidenProductArea.BOTS) Icons.Outlined.SmartToy else Icons.Outlined.FolderOpen,
@@ -241,7 +244,7 @@ fun AidenProductSwitcher(
                     },
                     trailingIcon = {
                         if (area == activeArea) {
-                            Icon(Icons.Outlined.Check, contentDescription = "Selected", tint = palette.accent)
+                            Icon(Icons.Outlined.Check, contentDescription = stringResource(R.string.state_selected), tint = palette.accent)
                         }
                     },
                     onClick = {
@@ -256,8 +259,9 @@ fun AidenProductSwitcher(
     }
 }
 
-private val AidenProductArea.displayTitle: String
-    get() = if (this == AidenProductArea.BOTS) "Bots" else "Workspaces"
+@get:StringRes
+private val AidenProductArea.displayTitle: Int
+    get() = if (this == AidenProductArea.BOTS) R.string.shell_area_bots else R.string.shell_area_workspaces
 
 /** Horizontal travel of an entering or leaving area, as a fraction of the shell width. */
 private const val AidenProductAreaSlideFraction = 0.2f

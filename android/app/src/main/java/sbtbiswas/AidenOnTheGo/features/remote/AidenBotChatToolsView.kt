@@ -45,10 +45,13 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.UUID
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import androidx.annotation.StringRes
 
-enum class AidenBotChatAccessScope(val label: String) {
-    BOT("Bot defaults"),
-    CHAT("This chat")
+enum class AidenBotChatAccessScope(@StringRes val label: Int) {
+    BOT(R.string.bot_tools_scope_bot),
+    CHAT(R.string.bot_tools_scope_chat)
 }
 
 sealed class AidenBotChatSheet {
@@ -378,9 +381,10 @@ object AidenBotChatToolsTags {
     const val GENERIC_ICON = "aiden.botTools.genericIcon"
 }
 
-fun aidenBotChatAccessModeLabel(mode: AidenBotChatAccessMode): String = when (mode) {
-    AidenBotChatAccessMode.INHERIT -> "Inherit Bot"
-    AidenBotChatAccessMode.CUSTOM -> "Customize"
+@StringRes
+fun aidenBotChatAccessModeLabel(mode: AidenBotChatAccessMode): Int = when (mode) {
+    AidenBotChatAccessMode.INHERIT -> R.string.bot_tools_mode_inherit
+    AidenBotChatAccessMode.CUSTOM -> R.string.bot_tools_mode_custom
 }
 
 private data class AidenBotChatToolAction(
@@ -429,7 +433,7 @@ fun AidenBotChatToolsBar(
             Spacer(modifier = Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = bot?.name ?: "Bot",
+                    text = bot?.name ?: stringResource(R.string.bot_profile_bot_fallback),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.foreground
@@ -444,12 +448,15 @@ fun AidenBotChatToolsBar(
                 }
             }
 
+            val filesLabel = stringResource(R.string.bot_tools_files)
+            val accessLabel = stringResource(R.string.bot_tools_access)
+            val profileLabel = stringResource(R.string.bot_tools_profile)
             val actions = buildList {
                 if (model?.hasFiles == true && onOpenFiles != null) {
-                    add(AidenBotChatToolAction(Icons.Default.Folder, "Files", onOpenFiles))
+                    add(AidenBotChatToolAction(Icons.Default.Folder, filesLabel, onOpenFiles))
                 }
-                add(AidenBotChatToolAction(Icons.Default.Shield, "Access", onOpenAccess))
-                add(AidenBotChatToolAction(Icons.Default.Info, "Profile", onOpenProfile))
+                add(AidenBotChatToolAction(Icons.Default.Shield, accessLabel, onOpenAccess))
+                add(AidenBotChatToolAction(Icons.Default.Info, profileLabel, onOpenProfile))
             }
             Spacer(modifier = Modifier.width(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)) {
@@ -510,6 +517,8 @@ fun AidenBotChatAccessSheet(
     val palette = AidenTheme.palette
     val coroutineScope = rememberCoroutineScope()
     var selectedScope by remember { mutableStateOf(AidenBotChatAccessScope.CHAT) }
+    val scopeLabels = AidenBotChatAccessScope.entries.associateWith { stringResource(it.label) }
+    val modeLabels = AidenBotChatAccessMode.entries.associateWith { stringResource(aidenBotChatAccessModeLabel(it)) }
 
     LaunchedEffect(model.chatID) {
         if (client != null) {
@@ -534,7 +543,7 @@ fun AidenBotChatAccessSheet(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = "Access",
+                    text = stringResource(R.string.bot_tools_access),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = palette.foreground,
@@ -542,7 +551,7 @@ fun AidenBotChatAccessSheet(
                 )
                 if (selectedScope == AidenBotChatAccessScope.CHAT) {
                     AidenPrimaryButton(
-                        text = if (model.isSaving) "Saving…" else "Save",
+                        text = if (model.isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
                         onClick = {
                             if (client != null) {
                                 coroutineScope.launch {
@@ -563,7 +572,7 @@ fun AidenBotChatAccessSheet(
                 options = listOf(AidenBotChatAccessScope.CHAT, AidenBotChatAccessScope.BOT),
                 selected = selectedScope,
                 onSelect = { selectedScope = it },
-                label = { it.label }
+                label = { scopeLabels.getValue(it) }
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -577,7 +586,7 @@ fun AidenBotChatAccessSheet(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
-                            Text("Effective bot access", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
+                            Text(stringResource(R.string.bot_tools_effective_access), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(b.access.summary, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                         }
@@ -589,13 +598,13 @@ fun AidenBotChatAccessSheet(
                 val canEdit = model.allowsDraftEditing(hostAllowsMutations, connected, canWriteBots)
 
                 if (currentDraft != null) {
-                    Text("Mode", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                    Text(stringResource(R.string.bot_tools_mode), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                     Spacer(modifier = Modifier.height(8.dp))
                     AidenSegmentedPillRow(
                         options = listOf(AidenBotChatAccessMode.INHERIT, AidenBotChatAccessMode.CUSTOM),
                         selected = currentDraft.mode,
                         onSelect = { mode -> if (canEdit) model.draft = currentDraft.copy(mode = mode) },
-                        label = ::aidenBotChatAccessModeLabel,
+                        label = { modeLabels.getValue(it) },
                         enabled = canEdit
                     )
 
@@ -609,7 +618,7 @@ fun AidenBotChatAccessSheet(
                                     .verticalScroll(rememberScrollState())
                             ) {
                                 AidenGroupCard(index = 0, count = 1, role = null) {
-                                    Text("Run commands", style = MaterialTheme.typography.bodyMedium, color = palette.foreground, modifier = Modifier.weight(1f))
+                                    Text(stringResource(R.string.bot_tools_run_commands), style = MaterialTheme.typography.bodyMedium, color = palette.foreground, modifier = Modifier.weight(1f))
                                     Switch(
                                         checked = currentDraft.shellEnabled,
                                         onCheckedChange = { if (canEdit) model.draft = currentDraft.copy(shellEnabled = it) },
@@ -619,7 +628,7 @@ fun AidenBotChatAccessSheet(
 
                                 if (cat.skills.isNotEmpty()) {
                                     Spacer(modifier = Modifier.height(16.dp))
-                                    Text("Skills", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
+                                    Text(stringResource(R.string.bot_access_skills), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
                                     Spacer(modifier = Modifier.height(8.dp))
                                     AidenConnectedColumn {
                                         cat.skills.forEachIndexed { index, skill ->

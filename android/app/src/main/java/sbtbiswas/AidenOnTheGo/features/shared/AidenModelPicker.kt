@@ -354,6 +354,7 @@ internal fun AidenStillBottomSheet(
     content: @Composable () -> Unit
 ) {
     val maxSheetHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.9f).toDp() }
+    val closeSheetLabel = stringResource(R.string.model_picker_close_sheet)
     Popup(
         alignment = Alignment.BottomCenter,
         onDismissRequest = onDismiss,
@@ -363,7 +364,7 @@ internal fun AidenStillBottomSheet(
             modifier = Modifier
                 .fillMaxSize()
                 .background(BottomSheetDefaults.ScrimColor)
-                .clickable(interactionSource = null, indication = null, onClickLabel = "Close sheet", onClick = onDismiss)
+                .clickable(interactionSource = null, indication = null, onClickLabel = closeSheetLabel, onClick = onDismiss)
                 .testTag(AidenStillBottomSheetTag),
             contentAlignment = Alignment.BottomCenter
         ) {
