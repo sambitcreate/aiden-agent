@@ -25,9 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -77,9 +74,7 @@ fun AidenToolbarAction(
     val palette = AidenTheme.palette
     IconButton(
         onClick = onClick,
-        modifier = modifier
-            .size(AidenUi.MinimumTouchTarget)
-            .semantics { role = Role.Button }
+        modifier = modifier.size(AidenUi.MinimumTouchTarget)
     ) {
         Icon(
             imageVector = icon,

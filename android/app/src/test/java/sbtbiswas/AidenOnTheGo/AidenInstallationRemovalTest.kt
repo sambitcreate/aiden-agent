@@ -17,6 +17,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotList
 import sbtbiswas.AidenOnTheGo.models.AidenChatModelSelection
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
+import sbtbiswas.AidenOnTheGo.models.AidenGitBranches
 import sbtbiswas.AidenOnTheGo.models.AidenPairingExchange
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenUsageTokens
@@ -28,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenModelPreferenceStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenReadSnapshotKeys
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
 
@@ -90,6 +92,12 @@ class AidenInstallationRemovalTest {
             "workspace-one"
         )
         coordinator.usageCache.store(installation.instanceId, emptyUsageSummary())
+        coordinator.readSnapshotCache.store(
+            installation.instanceId,
+            AidenReadSnapshotKeys.gitBranches("workspace-one"),
+            AidenGitBranches(current = "main", branches = listOf("main")),
+            AidenGitBranches.serializer()
+        )
         coordinator.modelPreferenceStore.remember(
             installation.instanceId,
             AidenChatModelSelection("openai", "gpt-5.6", "high")
@@ -114,6 +122,13 @@ class AidenInstallationRemovalTest {
         assertNull(coordinator.scheduledCache.load(installation.instanceId))
         assertNull(coordinator.workspaceCache.load(installation.instanceId, "workspace-one"))
         assertNull(coordinator.usageCache.load(installation.instanceId))
+        assertNull(
+            coordinator.readSnapshotCache.load(
+                installation.instanceId,
+                AidenReadSnapshotKeys.gitBranches("workspace-one"),
+                AidenGitBranches.serializer()
+            )
+        )
         assertNull(coordinator.modelPreferenceStore.selection(installation.instanceId))
         assertNull(AidenModelPreferenceStore(tempFolder.root).selection(installation.instanceId))
         coordinator.botCache.activate(installation.instanceId, installation.deviceId)
