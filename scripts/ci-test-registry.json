@@ -218,7 +218,9 @@
         "scripts/run-ci-tests.test.mjs",
         "scripts/ci-timings.test.mjs",
         "scripts/worktree-file-io.test.mjs",
-        "main/services/generation-delta-coalescer.test.ts"
+        "main/services/generation-delta-coalescer.test.ts",
+        "main/services/bot-connection-dismissals.test.ts",
+        "main/services/bot-runtime-tools/suggest-connection.test.ts"
       ],
       "preserved": [
         "browser",
@@ -728,7 +730,10 @@
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
         "scripts/update-model-capabilities.test.mjs",
         "scripts/vendor-cua-driver.test.mjs",
-        "scripts/verify-macos-package.test.mjs"
+        "scripts/verify-macos-package.test.mjs",
+        "renderer/components/bots/bot-connection-ui.test.tsx",
+        "renderer/shared/bot-connections.test.ts",
+        "renderer/shared/bot-presets.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",
