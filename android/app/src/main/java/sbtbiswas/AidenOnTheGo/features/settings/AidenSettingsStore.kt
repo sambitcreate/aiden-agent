@@ -147,6 +147,9 @@ class AidenSettingsStore(
     // action (begun before it, or while it was pending) can never undo its confirmed result.
     private var speechActions = 0L
 
+    // The same ordering for the memory toggle: a memory read that overlapped a toggle is dropped.
+    private var memoryActions = 0L
+
     /** Points Settings at the active installation and its client. The same installation keeps its values. */
     fun bind(instanceId: String?, remote: AidenSettingsRemote?) {
         generation += 1
@@ -189,10 +192,11 @@ class AidenSettingsStore(
                 }
             }
             val memory = launch {
+                val actionsAtStart = memoryActions
                 fetch(gen, { remote.memorySettings() }) { state, memory ->
                     when {
-                        // A toggle in flight owns the visible value until it reconciles.
-                        state.isSavingMemory -> state
+                        // A toggle in flight, or one that started or settled during this read, owns the value.
+                        state.isSavingMemory || actionsAtStart != memoryActions -> state
                         memory == null -> state.copy(memoryFailure = AidenSettingsFailure.UNAVAILABLE)
                         else -> state.copy(memory = memory, memoryFailure = null)
                     }
@@ -239,6 +243,7 @@ class AidenSettingsStore(
         val previous = state.memory ?: return
         if (state.isSavingMemory || previous.enabled == enabled) return
         val gen = generation
+        memoryActions += 1
         unconfirmedMemoryBaseline = previous
         _state.value = state.copy(memory = previous.copy(enabled = enabled), isSavingMemory = true, memoryFailure = null)
         scope.launch {
@@ -246,6 +251,7 @@ class AidenSettingsStore(
                 remote.updateMemorySettings(previous.revision, enabled)
             } catch (cancelled: CancellationException) {
                 if (gen == generation) {
+                    memoryActions += 1
                     unconfirmedMemoryBaseline = null
                     _state.update { it.copy(memory = previous, isSavingMemory = false) }
                 }
@@ -255,6 +261,7 @@ class AidenSettingsStore(
             }
             // A rebind already restored the confirmed value; its refresh reads the truth.
             if (gen != generation) return@launch
+            memoryActions += 1
             unconfirmedMemoryBaseline = null
             _state.update {
                 if (saved == null) it.copy(memory = previous, isSavingMemory = false, memoryFailure = AidenSettingsFailure.SAVE_FAILED)

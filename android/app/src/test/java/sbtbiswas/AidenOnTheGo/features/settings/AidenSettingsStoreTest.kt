@@ -50,7 +50,13 @@ class AidenSettingsStoreTest {
         override suspend fun providers(): List<AidenSettingsProvider> { read(); return providers }
         override suspend fun createProvider(input: AidenProviderCreation, idempotencyKey: UUID) =
             AidenProviderCreationReceipt("custom:remote-1", input.label, input.models.map { it.id })
-        override suspend fun memorySettings(): AidenMemorySettings { read(); return memory }
+        var memoryReadGate: CompletableDeferred<Unit>? = null
+        override suspend fun memorySettings(): AidenMemorySettings {
+            read()
+            val observed = memory
+            memoryReadGate?.await()
+            return observed
+        }
         override suspend fun updateMemorySettings(revision: String, enabled: Boolean): AidenMemorySettings {
             memoryUpdates += revision to enabled
             memoryGate?.await()
@@ -268,6 +274,31 @@ class AidenSettingsStoreTest {
 
         assertEquals("large", store.state.value.speech?.selectedModelId)
         assertEquals("large", cache.load("mac")?.speech?.selectedModelId)
+    }
+
+    @Test
+    fun aMemoryReadThatOverlappedAConfirmedToggleCannotRevertIt() = runTest {
+        val cache = AidenSettingsCache(tempFolder.root)
+        val store = store(cache)
+        val remote = FakeRemote()
+        store.bind("mac", remote)
+        store.refresh()
+        advanceUntilIdle()
+        assertEquals(true, store.state.value.memory?.enabled)
+
+        // A refresh observes enabled=true and is held; the toggle then confirms on the desktop.
+        remote.memoryReadGate = CompletableDeferred()
+        store.refresh()
+        runCurrent()
+        store.setMemoryEnabled(false)
+        runCurrent()
+        assertFalse(store.state.value.isSavingMemory)
+        remote.memoryReadGate?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(false, remote.memory.enabled)
+        assertEquals(false, store.state.value.memory?.enabled)
+        assertEquals(false, cache.load("mac")?.memory?.enabled)
     }
 
     @Test
