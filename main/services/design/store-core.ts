@@ -6,7 +6,9 @@
 // direction set, revision and run), so every transition below changes both
 // sides in the same update. The parser stays lenient about project bytes, set
 // size and the revision counts of settled runs; this module is the authority.
+import { isDeepStrictEqual } from "node:util";
 import {
+  MAX_DESIGN_MANIFEST_BYTES,
   MAX_DESIGN_PROJECT_BYTES,
   MAX_DESIGN_REVISION_BYTES,
   MAX_DESIGN_REVISIONS_PER_PROJECT,
@@ -35,6 +37,7 @@ import {
   type DesignRunStatus,
   type DesignScreenFrame,
 } from "../../../renderer/shared/design/types.js";
+import { parseDesignProjectManifestV1 } from "./manifest-core.js";
 import { parseDesignTitle } from "./ops-parse.js";
 
 export type DesignStoreErrorCode = "invalid" | "quota" | "busy" | "not_found" | "stale" | "unavailable";
@@ -96,6 +99,47 @@ export function touchDesignManifest(manifest: DesignProjectManifestV1, now: numb
   manifest.revision += 1;
   manifest.updatedAt = Math.max(manifest.updatedAt, now);
   return manifest;
+}
+
+/**
+ * The states the manifest parser leaves to the store: no project over its byte cap, no set
+ * beyond the directions it asked for, no empty set unless its run is still filling it, and no
+ * settled run without a design. Every transition above keeps them, so a violation is a bug.
+ */
+function assertDesignManifestInvariants(manifest: DesignProjectManifestV1): void {
+  if (designProjectBytes(manifest) > MAX_DESIGN_PROJECT_BYTES) {
+    throw invalid("This project declares more than its 64 MiB design limit.");
+  }
+  const runs = Object.values(manifest.runs);
+  for (const set of Object.values(manifest.directionSets)) {
+    if (set.screenIds.length > set.requestedCount) throw invalid("A direction set holds more Screens than it asked for.");
+    const filling = runs.some((run) => run.directionSetId === set.id && run.status === "running");
+    if (set.screenIds.length === 0 && !filling) throw invalid("A direction set has no Screens and no run filling it.");
+  }
+  for (const run of runs) {
+    if (run.status === "partial" && (run.revisionIds.length === 0 || run.endReason === undefined)) {
+      throw invalid("A partial run must keep a design and say why it stopped.");
+    }
+    if (run.status === "complete" && run.revisionIds.length === 0) throw invalid("A complete run must keep a design.");
+  }
+}
+
+/**
+ * The gate every manifest passes before it is written (and again when it is loaded): it must
+ * fit the manifest size cap, re-parse through the same parser that loads it unchanged, and keep
+ * the store invariants. A failure means nothing may be written.
+ */
+export function assertDesignManifestWritable(manifest: DesignProjectManifestV1): void {
+  const serialized = JSON.stringify(manifest);
+  if (Buffer.byteLength(serialized, "utf8") > MAX_DESIGN_MANIFEST_BYTES) {
+    throw quota("This project's manifest would exceed 1 MiB. Delete Screens to continue.");
+  }
+  const reread: unknown = JSON.parse(serialized);
+  const parsed = parseDesignProjectManifestV1(reread);
+  if (!parsed || !isDeepStrictEqual(parsed, reread)) {
+    throw invalid("This change would leave the project in a state Aiden cannot reopen, so nothing was saved.");
+  }
+  assertDesignManifestInvariants(manifest);
 }
 
 /**

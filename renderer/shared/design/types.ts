@@ -178,7 +178,7 @@ export type DesignProjectOp =
 
 export type DesignMutateResult =
   | { ok: true; snapshot: DesignProjectSnapshot }
-  | { ok: false; reason: "stale" | "quota" | "invalid"; message: string; snapshot: DesignProjectSnapshot };
+  | { ok: false; reason: "stale" | "quota" | "invalid" | "busy"; message: string; snapshot: DesignProjectSnapshot };
 
 export interface DesignDeletePreview {
   screens: number;

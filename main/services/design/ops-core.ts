@@ -1,12 +1,16 @@
 // Pure application of one renderer project operation (ADR-DS §6 designProjects:mutate),
 // plus the project-level guards the store applies before deleting or duplicating.
+import { MAX_DESIGN_PROJECT_TITLE_CHARS } from "../../../renderer/shared/design/limits.js";
 import { own } from "../../../renderer/shared/design/own.js";
 import { designResumeOffer } from "../../../renderer/shared/design/resume.js";
 import type {
   DesignDeletePreview,
   DesignProjectManifestV1,
   DesignProjectOp,
+  DesignRunRecord,
+  DesignRunRequest,
 } from "../../../renderer/shared/design/types.js";
+import { createDesignProjectManifest } from "./manifest-core.js";
 import { DesignStoreError, removeDesignScreen, touchDesignManifest } from "./store-core.js";
 
 const invalid = (message: string) => new DesignStoreError("invalid", message);
@@ -19,7 +23,7 @@ export function assertDesignProjectIdle(manifest: DesignProjectManifestV1, actio
   if (Object.values(manifest.runs).some((run) => run.status === "running")) {
     throw new DesignStoreError(
       "busy",
-      `A design run is in progress. Stop it before you ${action === "delete" ? "delete" : "duplicate"} this project.`,
+      `A design run is in progress. Stop it before you ${action} this project.`,
     );
   }
 }
@@ -106,4 +110,133 @@ export function applyDesignProjectOp(
     }
   }
   return { manifest: touchDesignManifest(next, now), deletedRevisionIds };
+}
+
+function duplicateTitle(title: string): string {
+  const suffix = " copy";
+  let head = title.slice(0, MAX_DESIGN_PROJECT_TITLE_CHARS - suffix.length);
+  // Never cut a surrogate pair in half: a lone surrogate is not a title the parser accepts.
+  if (/[\ud800-\udbff]$/u.test(head)) head = head.slice(0, -1);
+  return `${head.trimEnd()}${suffix}`;
+}
+
+export interface DesignProjectCopy {
+  manifest: DesignProjectManifestV1;
+  /** Source revision id to the copy's revision id. The store copies the file of each one the copy does not mark missing. */
+  revisionIds: ReadonlyMap<string, string>;
+}
+
+/**
+ * Build the manifest of a duplicated project (ADR-DS §2), purely. The copy is its own project:
+ * the project, its hidden chat, and every Screen, revision, direction set, run, canvas node and
+ * turn get fresh ids, so it shares no identity or run state with its source. The source must be
+ * idle, so no running run is copied. A revision whose file the store could not verify
+ * (`intactRevisionIds`) is copied as missing rather than carrying damage forward.
+ *
+ * Known limitation: Resume is not offered on a copy. A Resume repeats the brief held in the
+ * source's hidden chat, which a copy does not have, so the runs that filled a set that is still
+ * short of its directions are detached from it. The copy keeps those directions and shows no
+ * Resume or interrupted notice for them.
+ */
+export function buildDesignProjectCopy(
+  source: DesignProjectManifestV1,
+  input: { newId: () => string; now: number; intactRevisionIds: ReadonlySet<string> },
+): DesignProjectCopy {
+  if (source.state !== "active") throw new DesignStoreError("not_found", "This design project is being deleted.");
+  assertDesignProjectIdle(source, "duplicate");
+  const screens = new Map<string, string>();
+  const revisions = new Map<string, string>();
+  const sets = new Map<string, string>();
+  const runs = new Map<string, string>();
+  const nodes = new Map<string, string>();
+  for (const [ids, record] of [
+    [screens, source.screens],
+    [revisions, source.revisions],
+    [sets, source.directionSets],
+    [runs, source.runs],
+  ] as const) {
+    for (const id of Object.keys(record)) ids.set(id, input.newId());
+  }
+  for (const node of source.canvas.nodes) nodes.set(node.id, input.newId());
+  // Ids a trimmed run or a deleted base left dangling keep their old spelling: lineage tolerates a missing target.
+  const remap = (ids: ReadonlyMap<string, string>, id: string) => ids.get(id) ?? id;
+
+  const copy = createDesignProjectManifest({
+    id: input.newId(),
+    chatId: input.newId(),
+    title: duplicateTitle(source.title),
+    now: input.now,
+  });
+  copy.canvas.viewport = { ...source.canvas.viewport };
+  copy.canvas.nodes = source.canvas.nodes.map((node) => ({
+    ...node,
+    id: remap(nodes, node.id),
+    screenId: remap(screens, node.screenId),
+  }));
+  for (const screen of Object.values(source.screens)) {
+    const id = remap(screens, screen.id);
+    copy.screens[id] = {
+      ...structuredClone(screen),
+      id,
+      revisionIds: screen.revisionIds.map((revisionId) => remap(revisions, revisionId)),
+      activeRevisionId: remap(revisions, screen.activeRevisionId),
+      ...(screen.directionSetId === undefined ? {} : { directionSetId: remap(sets, screen.directionSetId) }),
+    };
+  }
+  for (const revision of Object.values(source.revisions)) {
+    const id = remap(revisions, revision.id);
+    const intact = revision.state !== "missing" && input.intactRevisionIds.has(revision.id);
+    copy.revisions[id] = {
+      ...structuredClone(revision),
+      id,
+      screenId: remap(screens, revision.screenId),
+      runId: remap(runs, revision.runId),
+      ...(revision.parentRevisionId === undefined ? {} : { parentRevisionId: remap(revisions, revision.parentRevisionId) }),
+      state: intact ? revision.state : "missing",
+    };
+  }
+  for (const set of Object.values(source.directionSets)) {
+    const id = remap(sets, set.id);
+    copy.directionSets[id] = {
+      ...structuredClone(set),
+      id,
+      runId: remap(runs, set.runId),
+      screenIds: set.screenIds.map((screenId) => remap(screens, screenId)),
+      ...(set.chosenScreenId === undefined ? {} : { chosenScreenId: remap(screens, set.chosenScreenId) }),
+    };
+  }
+  for (const run of Object.values(source.runs)) {
+    const id = remap(runs, run.id);
+    const set = run.directionSetId === undefined ? undefined : own(source.directionSets, run.directionSetId);
+    const copied: DesignRunRecord = {
+      ...structuredClone(run),
+      id,
+      turnId: input.newId(),
+      request: remapRunRequest(run.request, { screens, revisions, runs }),
+      revisionIds: run.revisionIds.map((revisionId) => remap(revisions, revisionId)),
+    };
+    // The brief lives in the source's chat, so the copy keeps no pointer to it.
+    delete copied.promptMessageId;
+    if (set && set.screenIds.length >= set.requestedCount) copied.directionSetId = remap(sets, set.id);
+    else delete copied.directionSetId;
+    copy.runs[id] = copied;
+  }
+  return { manifest: copy, revisionIds: revisions };
+}
+
+function remapRunRequest(
+  request: DesignRunRequest,
+  ids: { screens: ReadonlyMap<string, string>; revisions: ReadonlyMap<string, string>; runs: ReadonlyMap<string, string> },
+): DesignRunRequest {
+  if (request.op === "refine") {
+    return {
+      ...request,
+      screenId: ids.screens.get(request.screenId) ?? request.screenId,
+      baseRevisionId: ids.revisions.get(request.baseRevisionId) ?? request.baseRevisionId,
+    };
+  }
+  const next = structuredClone(request);
+  if (next.baseRevisionId !== undefined) next.baseRevisionId = ids.revisions.get(next.baseRevisionId) ?? next.baseRevisionId;
+  if (next.resumeRunId !== undefined) next.resumeRunId = ids.runs.get(next.resumeRunId) ?? next.resumeRunId;
+  return next;
 }

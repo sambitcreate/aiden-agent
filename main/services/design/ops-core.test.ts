@@ -2,12 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { DesignProjectManifestV1, DesignProjectOp, DesignRunRequest } from "../../../renderer/shared/design/types.js";
 import { createDesignProjectManifest } from "./manifest-core.js";
-import { applyDesignProjectOp, assertDesignProjectIdle, unreadableDesignDeletePreview } from "./ops-core.js";
+import { designResumeOffer } from "../../../renderer/shared/design/resume.js";
+import {
+  applyDesignProjectOp,
+  assertDesignProjectIdle,
+  buildDesignProjectCopy,
+  unreadableDesignDeletePreview,
+} from "./ops-core.js";
 import {
   DesignStoreError,
   acceptDesignArtifact,
   beginDesignRun,
   designProjectBytes,
+  designProjectSummary,
   finishDesignRun,
   planDesignRun,
   reconcileDesignManifest,
@@ -36,7 +43,9 @@ const expectStoreError = (code: DesignStoreError["code"], message: RegExp) => (e
   error instanceof DesignStoreError && error.code === code && message.test(error.message);
 
 const project = () => createDesignProjectManifest({ id: "project-1", chatId: "chat-1", title: "Checkout", now: 1_000 });
-const explore = (count: 2 | 3 | 4): DesignRunRequest => ({ op: "explore", count, creativeRange: "balanced", aspects: [] });
+type ExploreRequest = Extract<DesignRunRequest, { op: "explore" }>;
+const explore = (count: 2 | 3 | 4): ExploreRequest => ({ op: "explore", count, creativeRange: "balanced", aspects: [] });
+const resume = (count: 2 | 3 | 4, resumeRunId: string): ExploreRequest => ({ ...explore(count), resumeRunId });
 
 function run(
   manifest: DesignProjectManifestV1,
@@ -157,7 +166,6 @@ test("Discard archives an interrupted Explore's set without deleting or freeing 
   );
 });
 
-
 test("the deleteScreen refusal is a busy error that changes nothing, and covers a running Refine's target", () => {
   const settled = run(project(), "run-1", explore(2), ["Home", "Alt"]);
   const home = screenByTitle(settled, "Home");
@@ -225,7 +233,7 @@ test("Discard refuses a run that is still rendering or a set that was resumed pa
     expectStoreError("invalid", /Wait for the design run/u),
   );
   const stopped = finishDesignRun(live, "run-1", "cancelled", 6_000)!;
-  const resumed = run(stopped, "run-2", { ...explore(3), resumeRunId: "run-1" } as DesignRunRequest, ["Two"], "cancelled");
+  const resumed = run(stopped, "run-2", resume(3, "run-1"), ["Two"], "cancelled");
   assert.throws(
     () => op(resumed, { op: "settleRun", runId: "run-1", decision: "discard" }, 7_000),
     expectStoreError("invalid", /newest run/u),
@@ -247,4 +255,81 @@ test("a project with a running run can be neither deleted nor duplicated; an idl
 
 test("an unreadable project's delete preview says its contents are unknown", () => {
   assert.deepEqual(unreadableDesignDeletePreview(), { screens: 0, revisions: 0, bytes: 0, references: 0, unreadable: true });
+});
+
+function copyIds() {
+  let n = 0;
+  return () => `copy-${(n += 1)}`;
+}
+
+const everyId = (manifest: DesignProjectManifestV1) =>
+  [
+    manifest.id,
+    manifest.chatId,
+    ...Object.keys(manifest.screens),
+    ...Object.keys(manifest.revisions),
+    ...Object.keys(manifest.directionSets),
+    ...Object.keys(manifest.runs),
+    ...manifest.canvas.nodes.map((node) => node.id),
+    ...Object.values(manifest.runs).map((entry) => entry.turnId),
+  ];
+
+test("a copy re-identifies everything, keeps the designs and the lineage, and leaves no Resume to offer", () => {
+  const rendering = run(project(), "run-1", explore(3), ["Calm", "Bold"], "running");
+  const files = new Map(Object.values(rendering.revisions).map((revision) => [revision.id, revision.bytes]));
+  // A restart ends the run as interrupted, which is what makes the set resumable.
+  let source = reconcileDesignManifest(rendering, files, 5_000).manifest;
+  source.runs["run-1"]!.promptMessageId = "message-1";
+  const complete = run(source, "run-2", explore(2), ["Solo", "Duo"]);
+  const solo = screenByTitle(complete, "Solo");
+  source = run(complete, "run-3", { op: "refine", screenId: solo.id, baseRevisionId: solo.activeRevisionId }, ["Solo v2"]);
+  assert.equal(designResumeOffer(source, "run-1").ok, true);
+  const before = structuredClone(source);
+  const { manifest: copy, revisionIds } = buildDesignProjectCopy(source, {
+    newId: copyIds(), now: 9_000, intactRevisionIds: new Set(Object.keys(source.revisions)),
+  });
+  assert.deepEqual(source, before, "the source is never mutated");
+  check(copy);
+  assert.deepEqual(everyId(copy).filter((id) => everyId(source).includes(id)), [], "no identity is shared");
+  assert.equal(new Set(everyId(copy)).size, everyId(copy).length, "no id is reused inside the copy");
+  assert.deepEqual([copy.title, copy.revision, copy.createdAt, copy.updatedAt, copy.state], ["Checkout copy", 1, 9_000, 9_000, "active"]);
+  assert.deepEqual(
+    Object.values(copy.screens).map((screen) => screen.title).sort(),
+    Object.values(source.screens).map((screen) => screen.title).sort(),
+  );
+  assert.equal(designProjectBytes(copy), designProjectBytes(source));
+  assert.equal([...revisionIds.keys()].length, Object.keys(source.revisions).length);
+  for (const [oldId, newId] of revisionIds) {
+    assert.equal(copy.revisions[newId]!.title, source.revisions[oldId]!.title);
+    assert.equal(copy.revisions[newId]!.sha256, source.revisions[oldId]!.sha256);
+  }
+  // The refine's lineage follows the new ids.
+  const copiedRefine = Object.values(copy.runs).find((entry) => entry.kind === "refine")!;
+  assert.equal(copiedRefine.request.op === "refine" ? copy.revisions[copiedRefine.request.baseRevisionId]?.title : undefined, "Solo");
+  assert.ok(Object.values(copy.runs).every((entry) => entry.promptMessageId === undefined), "the source's chat messages are not referenced");
+  for (const entry of Object.values(copy.runs)) assert.equal(designResumeOffer(copy, entry.id).ok, false);
+  assert.equal(designProjectSummary(copy).health, "ok");
+  assert.equal(designProjectSummary(source).health, "interrupted");
+  assert.equal(Object.values(copy.directionSets).length, 2, "an incomplete set keeps its published directions");
+});
+
+test("a copy marks the revisions whose files could not be verified as missing, and keeps long titles valid", () => {
+  const source = run(project(), "run-1", explore(2), ["Calm", "Bold"]);
+  source.title = `${"é".repeat(114)}😀😀`;
+  const calm = screenByTitle(source, "Calm").activeRevisionId;
+  const { manifest: copy, revisionIds } = buildDesignProjectCopy(source, {
+    newId: copyIds(), now: 9_000, intactRevisionIds: new Set(Object.keys(source.revisions).filter((id) => id !== calm)),
+  });
+  check(copy);
+  assert.equal(copy.revisions[revisionIds.get(calm)!]!.state, "missing");
+  assert.equal(Object.values(copy.revisions).filter((revision) => revision.state === "missing").length, 1);
+  assert.ok(copy.title.endsWith(" copy") && copy.title.length <= 120);
+});
+
+test("a project that is rendering cannot be copied", () => {
+  const live = run(project(), "run-1", explore(2), ["Live"], "running");
+  assert.throws(
+    () => buildDesignProjectCopy(live, { newId: copyIds(), now: 9_000, intactRevisionIds: new Set() }),
+    expectStoreError("busy", /duplicate this project/u),
+  );
 });

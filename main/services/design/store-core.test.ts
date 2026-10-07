@@ -14,6 +14,7 @@ import {
   finishDesignRun,
   markDesignRevisionMissing,
   touchDesignManifest,
+  assertDesignManifestWritable,
   orphanRevisionIds,
   planDesignRun,
   removeDesignScreen,
@@ -884,4 +885,47 @@ test("random legal operation sequences always leave a parseable manifest that ke
   // The walks must actually reach the interesting transitions, or they prove nothing.
   const reached = { refusals, resumes, busyDeletes, emptyEnds, emptyResumeEnds, appliedOps, discards };
   for (const [name, count] of Object.entries(reached)) assert.ok(count > 0, `the walks never reached ${name}: ${JSON.stringify(reached)}`);
+});
+
+test("a manifest is writable only when it re-parses unchanged and keeps the store invariants", () => {
+  let live = startRun(project(), "run-1", explore(3)).manifest;
+  for (const title of ["Calm", "Bold"]) live = accept(live, "run-1", title);
+  const stopped = settle(live, "run-1", "cancelled", 4_000)!;
+  let full = startRun(project(), "run-2", explore(3)).manifest;
+  for (const title of ["A", "B", "C"]) full = accept(full, "run-2", title);
+  full = settle(full, "run-2", "completed", 4_000)!;
+  assert.doesNotThrow(() => assertDesignManifestWritable(stopped));
+  assert.doesNotThrow(() => assertDesignManifestWritable(full));
+  assert.doesNotThrow(() => assertDesignManifestWritable(live), "a running run may hold an unfinished set");
+
+  const refused = (name: string, base: DesignProjectManifestV1, change: (draft: DesignProjectManifestV1) => void) => {
+    const draft = structuredClone(base);
+    change(draft);
+    assert.throws(
+      () => assertDesignManifestWritable(draft),
+      (error: unknown) => error instanceof DesignStoreError && error.code === "invalid",
+      name,
+    );
+  };
+  // The parser's own refusals.
+  refused("untrimmed title", stopped, (draft) => { draft.title = "  padded  "; });
+  refused("unusable id", stopped, (draft) => { draft.chatId = "not a valid id"; });
+  refused("dangling active revision", stopped, (draft) => { Object.values(draft.screens)[0]!.activeRevisionId = "elsewhere"; });
+  // States the parser leaves to the store.
+  refused("a set holding more Screens than it asked for", full, (draft) => {
+    Object.values(draft.directionSets)[0]!.requestedCount = 2;
+  });
+  refused("an empty set no run is filling", stopped, (draft) => {
+    draft.directionSets["ghost"] = { id: "ghost", runId: "run-1", requestedCount: 2, screenIds: [], archived: false };
+  });
+  refused("a partial run without its reason", stopped, (draft) => { delete draft.runs["run-1"]!.endReason; });
+  refused("a complete run without a design", full, (draft) => {
+    draft.runs["empty"] = { ...structuredClone(draft.runs["run-2"]!), id: "empty", revisionIds: [] };
+    delete draft.runs["empty"]!.directionSetId;
+  });
+  refused("more declared bytes than a project may hold", stopped, (draft) => {
+    for (const n of [1, 2, 3]) {
+      Object.assign(draft, seedScreen(draft, `big-${n}`, Array.from({ length: 100 }, () => 256 * KIB)));
+    }
+  });
 });
