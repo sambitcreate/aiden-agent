@@ -181,6 +181,7 @@
         "main/services/skill-registry.test.ts",
         "main/services/skill-tools.test.ts",
         "main/services/skills-discovery.test.ts",
+        "main/services/studio-assets/image-validation-core.test.ts",
         "main/services/studio/feature-flags.test.ts",
         "main/services/terminal-history.test.ts",
         "main/services/tool-output-store.test.ts",
