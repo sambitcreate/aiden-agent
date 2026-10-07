@@ -246,11 +246,11 @@ test("delete waits for a stopped run, then removes the workflow's runs and image
   // Wait for the provider to hold the request, not just for the ledger claim, so the cancel below lands on a request in flight.
   await until(() => env.fake.calls.length === 1, "the held request");
 
-  assert.deepEqual(await env.invoke("imageWorkflows:mutate", { op: "delete", workflowId: doc.id }), { ok: false });
+  assert.deepEqual(await env.invoke("imageWorkflows:mutate", { op: "delete", workflowId: doc.id }), { ok: false, reason: "busy" });
   assert.deepEqual(await env.invoke("imageWorkflows:cancel-run", { runId: started.runId }), { ok: true });
   await env.runtime.services().coordinator.whenIdle();
   assert.deepEqual(await env.invoke("imageWorkflows:mutate", { op: "delete", workflowId: doc.id }), { ok: true });
-  assert.deepEqual(await env.invoke("imageWorkflows:mutate", { op: "delete", workflowId: doc.id }), { ok: false });
+  assert.deepEqual(await env.invoke("imageWorkflows:mutate", { op: "delete", workflowId: doc.id }), { ok: false, reason: "not-found" });
   assert.deepEqual(await env.invoke("imageWorkflows:list-runs", { workflowId: doc.id, limit: 5 }), { runs: [] });
   assert.deepEqual(env.assets.holders(imported.assetId), []);
   await assert.rejects(env.invoke("imageWorkflows:get", { workflowId: doc.id }), /no longer exists/u);
