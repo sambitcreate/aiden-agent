@@ -1,6 +1,6 @@
 # Connection reliability — October 2026
 
-Branch `fix/connection-reliability`; implementation complete; PR and hosted validation pending.
+Branch `fix/connection-reliability`; implementation complete; [PR #370](https://github.com/sambitcreate/aiden-agent/pull/370) opened, hosted validation in progress.
 
 - Desktop uncertain chat sends, guidance, approvals, questions, stop requests and
   forks use exact saved request identities. Admission persists an encrypted bounded
@@ -42,3 +42,8 @@ Logs: `/tmp/aiden-remote-full.log`, `/tmp/peer-service-rerun.log`.
 
 Packaged multi-device LAN/Tailscale, Linux↔Mac, real Wi-Fi roaming, and physical-device
 acceptance remain distinct from fixture/simulator results; do not claim them based on CI.
+
+Hosted Android check initially found a stale revision-24 assertion in the Bot fixture
+consumer after the shared contract moved to 25. The assertion is updated and the
+full Android unit suite passed all 427 cases in follow-up validation; this was a coverage
+omission in the focused local run, not a transient CI failure.
