@@ -38,6 +38,31 @@ function percent(status: AcpHarnessStatus["runtime"]): number | null {
   return Math.min(100, Math.floor(((status.receivedBytes ?? 0) / status.totalBytes) * 100));
 }
 
+export type RuntimeFocusTarget = "keep" | "cancel" | "install" | "remove" | "section";
+
+/**
+ * Where focus belongs once the control the user was on unmounts: each install,
+ * cancel or remove swaps the visible actions, which would otherwise drop focus
+ * to the page body in the middle of the dialog.
+ */
+export function runtimeFocusTarget(
+  runtime: AcpHarnessStatus["runtime"],
+  confirmRemove: boolean,
+): RuntimeFocusTarget {
+  switch (runtime.status) {
+    case "installing":
+      return "cancel";
+    case "not_installed":
+    case "failed":
+    case "update_available":
+      return "install";
+    case "installed":
+      return confirmRemove ? "keep" : "remove";
+    case "unsupported":
+      return "section";
+  }
+}
+
 export interface HarnessRuntimeSectionProps {
   providerId: string;
   label: string;
@@ -52,12 +77,56 @@ export interface HarnessRuntimeSectionProps {
 export function HarnessRuntimeSection({ providerId, label, status }: HarnessRuntimeSectionProps) {
   const [acting, setActing] = React.useState(false);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
+  const sectionRef = React.useRef<HTMLDivElement>(null);
+  const cancelRef = React.useRef<HTMLButtonElement>(null);
+  const installRef = React.useRef<HTMLButtonElement>(null);
+  const removeRef = React.useRef<HTMLButtonElement>(null);
   const keepRef = React.useRef<HTMLButtonElement>(null);
+  // True while the user's focus is somewhere in this section.
+  const focusedInsideRef = React.useRef(false);
+  const wasConfirmingRef = React.useRef(false);
   const busyReasonId = React.useId();
+  const runtimeStatus = status?.runtime.status;
+
   React.useEffect(() => {
-    // The Remove button unmounts when confirming; keep focus in the dialog.
-    if (confirmRemove) keepRef.current?.focus();
+    const section = sectionRef.current;
+    if (!status || !section) return;
+    const active = section.ownerDocument.activeElement;
+    const openedConfirm = confirmRemove && !wasConfirmingRef.current;
+    wasConfirmingRef.current = confirmRemove;
+    // Opening the confirmation moves to Keep. Otherwise recover only focus that
+    // was in this section and fell to the page (or was parked on the section)
+    // when its control unmounted or was disabled.
+    const lost =
+      focusedInsideRef.current && (!active || active === section.ownerDocument.body || active === section);
+    if (!openedConfirm && !lost) return;
+    const target = runtimeFocusTarget(status.runtime, confirmRemove);
+    const element = {
+      keep: keepRef.current,
+      cancel: cancelRef.current,
+      install: installRef.current,
+      remove: removeRef.current,
+      section,
+    }[target];
+    (element && !(element instanceof HTMLButtonElement && element.disabled) ? element : section).focus();
+    // Re-run only when the visible actions change, not on download progress.
+  }, [runtimeStatus, confirmRemove, acting]);
+
+  React.useEffect(() => {
+    if (!confirmRemove) return undefined;
+    const section = sectionRef.current;
+    // Escape backs out of the inline confirmation before it can close the dialog.
+    // The dialog listens on the document in the capture phase, so this listens on the window first.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !(event.target instanceof Node) || !section?.contains(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setConfirmRemove(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [confirmRemove]);
+
   if (!status) {
     return (
       <Text variant="small" color="tertiary" aria-live="polite">
@@ -89,7 +158,22 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
     runtime.status === "not_installed" || runtime.status === "failed" || runtime.status === "update_available";
 
   return (
-    <div className="grid gap-2" role="group" aria-label={`${label} runtime`}>
+    <div
+      ref={sectionRef}
+      className="grid gap-2 outline-none"
+      role="group"
+      aria-label={`${label} runtime`}
+      tabIndex={-1}
+      onFocus={() => {
+        focusedInsideRef.current = true;
+      }}
+      onBlur={(event) => {
+        // Unmounting the focused control blurs with no next target; that focus is still ours to place.
+        if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
+          focusedInsideRef.current = false;
+        }
+      }}
+    >
       <Text variant="small-strong">Runtime</Text>
       <Text variant="small" color="secondary">
         {harnessRuntimeSummary(runtime)}
@@ -122,6 +206,7 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
             />
           </div>
           <Button
+            ref={cancelRef}
             size="small"
             variant="muted"
             className="justify-self-start"
@@ -133,6 +218,7 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
       ) : null}
       {canInstall ? (
         <Button
+          ref={installRef}
           size="small"
           variant="filled"
           className="justify-self-start"
@@ -173,6 +259,7 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
         ) : (
           <div className="flex flex-wrap items-center gap-2">
             <Button
+              ref={removeRef}
               size="small"
               variant="muted"
               disabled={status.busy || acting}

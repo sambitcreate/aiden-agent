@@ -3,7 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { AcpHarnessStatus } from "../../shared/acp-harness.js";
-import { HarnessRuntimeSection } from "./harness-runtime-section.js";
+import { HarnessRuntimeSection, runtimeFocusTarget } from "./harness-runtime-section.js";
 
 function render(runtime: AcpHarnessStatus["runtime"], busy = false): string {
   return renderToStaticMarkup(
@@ -54,4 +54,23 @@ test("unsupported computers get an explanation and no actions; failures offer a 
   assert.match(failed, />Retry installation</u);
   const update = render({ status: "update_available", installedVersion: "1.2.1", version: "1.3.0", downloadBytes: 1, requiredBytes: 2 });
   assert.match(update, />Update Google Antigravity</u);
+});
+
+test("when an action unmounts, focus moves to the control that replaced it", () => {
+  // Install → installing: the install button is gone, Cancel is the only action.
+  assert.equal(runtimeFocusTarget({ status: "installing", phase: "downloading" }, false), "cancel");
+  // Cancel or failure: Retry replaces Cancel; removal: Install replaces Remove.
+  assert.equal(runtimeFocusTarget({ status: "failed", message: "Installation cancelled." }, false), "install");
+  assert.equal(runtimeFocusTarget({ status: "not_installed" }, false), "install");
+  assert.equal(runtimeFocusTarget({ status: "update_available" }, false), "install");
+  // Finished install: Remove runtime. Confirming: Keep, the safe choice. Backing out: Remove runtime again.
+  assert.equal(runtimeFocusTarget({ status: "installed" }, false), "remove");
+  assert.equal(runtimeFocusTarget({ status: "installed" }, true), "keep");
+  // No actions at all: the section itself, so focus stays in the dialog.
+  assert.equal(runtimeFocusTarget({ status: "unsupported" }, false), "section");
+});
+
+test("the section can hold focus itself when it has no action left to offer", () => {
+  const html = render({ status: "unsupported", message: "Not available for this computer." });
+  assert.match(html, /<div[^>]*role="group"[^>]*tabindex="-1"/u);
 });
