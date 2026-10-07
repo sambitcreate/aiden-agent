@@ -176,3 +176,13 @@ test("cross-store final assertion does not reopen already-deleted private stores
   assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
   assert.equal(eligibilityReads, 1);
 });
+
+test("the empty-chat sweep never deletes a feature-owned chat", async () => {
+  const h = harness([
+    empty("blank"),
+    empty("design", { owner: { kind: "design-project", projectId: "project-1" } }),
+  ]);
+  assert.equal(await migrateEmptyWorkspaceChats(h.deps), 1);
+  assert.deepEqual(h.removed, ["blank"]);
+  assert.ok(h.records.has("design"));
+});

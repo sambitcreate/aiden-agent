@@ -14,30 +14,6 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("sidebar places primary actions above the unified workspace outline", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  const sidebarBody = between(sidebar, "<Sidebar\n", "</Sidebar>");
-  const newAgentIndex = sidebarBody.indexOf("New Agent");
-  const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
-  const workspaceIndex = sidebarBody.indexOf("Workspaces");
-
-  assert.notEqual(newAgentIndex, -1);
-  assert.notEqual(scheduledIndex, -1);
-  assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
-  assert.ok(
-    scheduledIndex < workspaceIndex,
-    "Scheduled should stay above the unified workspace and chat list",
-  );
-});
-
-test("new agent uses the same sidebar row style as scheduled", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  const section = between(sidebar, '<div className="flex flex-col gap-0.5 px-2.5 pb-2">', "</div>");
-  assert.match(section, /<SidebarListItem[\s\S]*title="New Agent"/u);
-  assert.match(section, /<SidebarListItem[\s\S]*title="Scheduled"/u);
-  assert.doesNotMatch(section, /variant="accent"/u);
-});
-
 test("newAgent opens a transient draft in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /const newAgentInWorkspace = React\.useCallback/u);

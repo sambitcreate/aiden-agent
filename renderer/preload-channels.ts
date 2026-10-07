@@ -99,6 +99,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "providers:auth:event",
   "providers:auth:prompt",
   "providers:auth:status-changed",
+  "providers:harness:changed",
   "remote:changed",
   "remote:peers-changed",
   "remote:approval-changed",

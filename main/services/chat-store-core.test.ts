@@ -10,6 +10,7 @@ import {
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
+import { ChatForkError } from "./chat-fork-error.js";
 
 async function testStore(t: test.TestContext) {
   const directory = await fs.mkdtemp(
@@ -1715,4 +1716,50 @@ test("loads legacy Azure chat identities through the renamed native provider", a
 
   assert.equal((await store.list())[0]?.providerId, "azure");
   assert.equal((await store.get("legacy-chat"))?.providerId, "azure");
+});
+
+test("feature-owned chats leave regular listings but stay in the full index across a restart", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-owner-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const owner = { kind: "design-project" as const, projectId: "project-1" };
+  const store = createChatStore(async () => directory);
+  const regular = await store.create({ workspaceId: "default" });
+  const assistant = await store.create({ workspaceId: "assistant" });
+  // No workspace: an owned chat lands in "default", which is exactly where a leak would show.
+  const owned = await store.create({ owner });
+
+  assert.deepEqual(
+    new Set((await store.listRegular()).map(({ id }) => id)),
+    new Set([regular.id, assistant.id]),
+  );
+  assert.deepEqual((await store.listRegular("default")).map(({ id }) => id), [regular.id]);
+
+  const restarted = createChatStore(async () => directory);
+  assert.deepEqual(
+    new Set((await restarted.list()).map(({ id }) => id)),
+    new Set([regular.id, assistant.id, owned.id]),
+  );
+  assert.deepEqual(
+    (await restarted.listSummaryMetadata()).find(({ id }) => id === owned.id)?.owner,
+    owner,
+  );
+  assert.deepEqual((await restarted.get(owned.id))?.owner, owner);
+  assert.deepEqual((await restarted.listRegular("default")).map(({ id }) => id), [regular.id]);
+});
+
+test("an owner is main-only, exclusive with Bots, and never copied", async (t) => {
+  const store = await testStore(t);
+  const owner = { kind: "design-project" as const, projectId: "project-1" };
+  await assert.rejects(store.create({ botId: "bot-1", owner }), /Invalid chat owner/u);
+  await assert.rejects(
+    store.create({ owner: { kind: "design-project", projectId: "../escape" } }),
+    /Invalid chat owner/u,
+  );
+  const owned = await store.create({ owner });
+  await store.appendMessage(owned.id, { role: "user", content: "A pricing page" });
+  await assert.rejects(
+    store.copyVisibleHistory({ sourceChatId: owned.id }),
+    (error: unknown) => error instanceof ChatForkError && error.code === "ineligible",
+  );
+  assert.equal((await store.list()).length, 1);
 });

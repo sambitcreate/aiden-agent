@@ -202,3 +202,25 @@ export async function editConfinedWorkspaceFile(identity: ConfinedWorkspaceFileI
   if (!recoveryName || recoveryName.includes("/") || recoveryName === "." || recoveryName === "..") throw new ManagedWorktreeFileIoError("io_failed");
   return { device: header[1], inode: header[2], recoveryName };
 }
+
+/**
+ * Create a new file beneath `root`, walking every component with
+ * descriptor-relative, no-follow opens (missing directories are created
+ * along the way). A replaced ancestor cannot redirect the creation.
+ */
+export async function createConfinedWorkspaceFile(
+  root: ManagedWorktreeRootIdentity,
+  relativePath: string,
+  content: Buffer,
+  signal?: AbortSignal,
+): Promise<{ device: string; inode: string }> {
+  if (content.length > 8 * 1024 * 1024) throw new ManagedWorktreeFileIoError("invalid_input");
+  const output = await runConfinedFile(
+    ["create", root.path, root.device, root.inode, relativePath, String(content.length)],
+    signal,
+    content,
+  );
+  const header = /^c ([0-9]+) ([0-9]+)\n$/u.exec(output.toString("ascii"));
+  if (!header) throw new ManagedWorktreeFileIoError("io_failed");
+  return { device: header[1]!, inode: header[2]! };
+}

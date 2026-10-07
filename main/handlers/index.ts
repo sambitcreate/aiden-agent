@@ -6,6 +6,7 @@
 
 import { appHandlers } from "./app.js";
 import { registerProviderHandlers } from "./providers.js";
+import { registerAcpHarnessHandlers } from "./acp-harnesses.js";
 import { registerChatHistoryHandlers } from "./chats.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
@@ -54,6 +55,7 @@ export function registerHandlers(): void {
 
   // AI chat client handlers
   registerProviderHandlers();
+  registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();

@@ -6,6 +6,7 @@ import {
 } from "../shared/model-visibility";
 import type { Provider, ScheduledTask, ScheduledTaskMode } from "./types";
 import { formatScheduledTaskCadence } from "../shared/scheduled-task-presentation";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
 
 export type ScheduledTaskTab = "all" | "active" | "paused";
 
@@ -191,6 +192,7 @@ export function scheduledTaskProviderPin(
   if (
     !provider ||
     !isUsable(provider) ||
+    isAcpHarnessProvider(provider.id) ||
     !provider.models.includes(selection.model) ||
     isModelHidden(hidden, provider.id, selection.model)
   ) {
@@ -247,7 +249,7 @@ export function scheduledTaskProviderGuardrail(
   providers: Provider[] | undefined,
 ): boolean {
   if (mode !== "llm" || providerId) return false;
-  if (!appDefaultProviderId) return true;
+  if (!appDefaultProviderId || isAcpHarnessProvider(appDefaultProviderId)) return true;
   return !providers?.some(
     (provider) => provider.id === appDefaultProviderId && isUsable(provider),
   );

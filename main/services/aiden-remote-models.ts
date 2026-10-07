@@ -17,6 +17,7 @@ import {
 import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-thinking.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
+import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 
 const MAX_REMOTE_MODEL_ID_LENGTH = 256;
 const MAX_REMOTE_MODEL_CATALOG_BYTES = 900 * 1024;
@@ -67,6 +68,8 @@ export class AidenRemoteModelService {
     for (const provider of configured) {
       if (
         (!provider.hasKey && provider.needsKey) ||
+        // Agent harnesses run only in chats open on the Mac, never from a phone.
+        isAcpHarnessProvider(provider.id) ||
         provider.id.length === 0 ||
         provider.id.length > MAX_REMOTE_MODEL_ID_LENGTH
       ) {
@@ -181,6 +184,8 @@ export class AidenRemoteModelService {
     thinkingLevels: readonly string[];
     supportsImages: boolean;
   }> {
+    const harnessReason = acpHarnessUnavailableReason(providerId);
+    if (harnessReason) throw new AidenRemoteServiceError("invalid_request", harnessReason, 400);
     const [projection, settings] = await Promise.all([this.list(), this.options.getSettings()]);
     const provider = providerId
       ? projection.providers.find((candidate) => candidate.id === providerId)

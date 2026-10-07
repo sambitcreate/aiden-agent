@@ -96,10 +96,12 @@ import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
-import {
-  registerGenerativeUiProtocol,
-  registerGenerativeUiScheme,
-} from "./services/generative-ui-protocol.js";
+import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { registerCustomSchemes } from "./services/custom-schemes.js";
+import { studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
+import { startStudioAssets } from "./services/studio-assets/startup-core.js";
+import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
@@ -147,6 +149,7 @@ import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 
 if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
   process.stdout.write(`${app.getVersion()}\n`);
@@ -159,7 +162,7 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
 
-registerGenerativeUiScheme();
+registerCustomSchemes({ studioAssets: studioAssetsEnabled() });
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -422,6 +425,18 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         await subagentRunStore.close();
       })(),
       terminalService.flushHistory(),
+      // Bounded so a wedged queue cannot hold quit; a store that was never
+      // opened (flags off) resolves at once.
+      Promise.race([
+        studioAssetStore.close().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+      ])
+        .then((closed) => {
+          if (!closed) logger.warn("studio", "Studio asset store did not close within the shutdown budget.");
+        })
+        .catch((error) =>
+          logger.warn("studio", "Studio asset store did not close cleanly.", error),
+        ),
       browserService.shutdown(),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
@@ -1758,6 +1773,18 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      await startStudioAssets({
+        enabled: studioAssetsEnabled(),
+        store: studioAssetStore,
+        grants: studioAssetGrants,
+        registerProtocol: registerStudioAssetProtocol,
+        onError: (error) =>
+          logger.warn(
+            "studio",
+            "Studio assets are unavailable; Design and Images will report a storage error.",
+            error,
+          ),
+      });
       const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
       if (quarantinedImageArtifactPath) {
         logger.warn(
@@ -1896,12 +1923,9 @@ if (!ownsSingleInstanceLock) {
         if (error instanceof EmptyChatMigrationSnapshotError) throw error;
         logger.warn("chat", "Empty-chat migration is incomplete; it will resume on the next launch.", error);
       }
-      const visibleChatIds = new Set(
-        (await chatStore.list()).map((chat) => chat.id),
-      );
-      await Promise.all([
-        piRuntimeEffectStore.reconcileChats(visibleChatIds),
-        piCompactionSessionStore.reconcileChats(visibleChatIds),
+      await reconcileChatScopedStores(chatStore, [
+        piRuntimeEffectStore,
+        piCompactionSessionStore,
       ]);
       await reconcilePendingManagedWorktreeDeletions({
         listWorkspaces: () => configStore.listWorkspaces(),

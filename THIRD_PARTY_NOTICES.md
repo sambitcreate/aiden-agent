@@ -146,6 +146,85 @@ Copyright (c) 2010-2026 three.js authors
 
 MIT License. https://github.com/mrdoob/three.js/blob/dev/LICENSE
 
+## React Flow (@xyflow/react)
+
+Renders the Design Studio and Create Images canvases. Loaded only when one of
+those experimental surfaces is opened.
+
+Copyright (c) 2019-2026 webkid GmbH
+
+MIT License. https://github.com/xyflow/xyflow/blob/main/LICENSE
+
+## React Flow runtime dependencies
+
+These packages are bundled with React Flow in the same lazily loaded canvas
+chunk, so they are loaded only when the Design Studio or Create Images surface
+is opened.
+
+- `@xyflow/system@0.0.82`: Copyright (c) 2019-2025 webkid GmbH. MIT License.
+  https://github.com/xyflow/xyflow/blob/main/LICENSE
+- `zustand@4.5.7`: Copyright (c) 2019 Paul Henschel. MIT License.
+  https://github.com/pmndrs/zustand/blob/main/LICENSE
+- `classcat@5.0.5`: Copyright (c) Jorge Bucaran. MIT License.
+  https://github.com/jorgebucaran/classcat/blob/main/LICENSE.md
+
+### D3 modules (ISC)
+
+`d3-color@3.1.0` (Copyright 2010-2022 Mike Bostock), `d3-dispatch@3.0.1`,
+`d3-drag@3.0.0`, `d3-interpolate@3.0.1`, `d3-selection@3.0.0`,
+`d3-timer@3.0.1`, `d3-transition@3.0.1` and `d3-zoom@3.0.0` (each Copyright
+2010-2021 Mike Bostock) are licensed under the ISC License. https://d3js.org
+
+```text
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+```
+
+### d3-ease (BSD-3-Clause)
+
+`d3-ease@3.0.1` is licensed under the BSD 3-Clause License.
+https://github.com/d3/d3-ease/blob/main/LICENSE
+
+```text
+Copyright 2010-2021 Mike Bostock
+Copyright 2001 Robert Penner
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the author nor the names of contributors may be used to
+  endorse or promote products derived from this software without specific prior
+  written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
 ## expo-device-hub and agent-device (installed on request)
 
 These are not bundled. After the user consents in the Simulator tab, Aiden

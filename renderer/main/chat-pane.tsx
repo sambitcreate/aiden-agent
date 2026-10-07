@@ -189,6 +189,7 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -238,7 +239,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ? "Side questions are not available in Bot chats."
       : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
         ? "Side questions are not available in Assistant chats."
-        : undefined;
+        : isAcpHarnessProvider(chat.data?.providerId ?? "")
+          ? "Side questions are not available with agent-backed models."
+          : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),

@@ -72,7 +72,7 @@ function textLines(text: string): string[] {
 }
 
 /** Count a shortest line edit script without exposing file contents in tool details. */
-function lineChangeCounts(before: string, after: string): Pick<
+export function lineChangeCounts(before: string, after: string): Pick<
   FileMutationDetailsV1,
   "additions" | "deletions"
 > {
@@ -842,7 +842,7 @@ function rejectProtectedCredential(
 }
 
 /** Preserve the parent agent's established narrow `.env*` read/search exclusion. */
-function isEnvironmentSecretPath(relativePath: string): boolean {
+export function isEnvironmentSecretPath(relativePath: string): boolean {
   return relativePath
     .split(/[\\/]/)
     .some((segment) => {

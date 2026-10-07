@@ -22,6 +22,7 @@ import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
 import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
+import { isStudioPath } from "../shared/studio-routes";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
@@ -34,6 +35,7 @@ export function ChatLayout() {
   );
   // Every `/host/...` route works on a paired host, never on this Mac's environment.
   const onRemoteHost = Boolean(params.hostId);
+  const studioSurface = isStudioPath(pathname);
   const qc = useQueryClient();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
@@ -101,7 +103,7 @@ export function ChatLayout() {
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench suppressed={onRemoteHost}>
+      <EnvironmentWorkbench suppressed={onRemoteHost || studioSurface}>
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />
@@ -109,6 +111,7 @@ export function ChatLayout() {
           {pathname === "/profile" ||
           pathname === "/scheduled" ||
           onRemoteHost ||
+          studioSurface ||
           (pathname.startsWith("/bots") && !params.chatId) ? null : (
             <TerminalDrawer />
           )}
