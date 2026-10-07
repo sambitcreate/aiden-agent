@@ -41,6 +41,7 @@ import type { ModelInfo, Provider } from "../lib/types";
 import { Check, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -101,10 +102,20 @@ function formatCapabilities(info: ModelInfo | undefined): string {
   return hasKnownCapability ? "Standard generation" : "Unknown";
 }
 
+/** Agent-backed providers run their own tools on this computer; say so next to the provider. */
+function deploymentSuffix(entry: Pick<ModelEntry, "providerId" | "isLocal">): string {
+  if (isAcpHarnessProvider(entry.providerId)) return " · Agent";
+  return entry.isLocal ? " · Local" : " · Hosted";
+}
+
 function describeModel(entry: ModelEntry): string {
   const details = [
     `Provider ${entry.providerLabel}`,
-    entry.isLocal ? "Deployment local" : "Deployment hosted",
+    isAcpHarnessProvider(entry.providerId)
+      ? "Agent running on this computer"
+      : entry.isLocal
+        ? "Deployment local"
+        : "Deployment hosted",
     `Inputs ${formatInputs(entry.info)}`,
     `Capabilities ${formatCapabilities(entry.info)}`,
   ];
@@ -276,7 +287,7 @@ function ModelHoverDetails({
           </Text>
           <Text variant="small" color="tertiary" as="p" truncate>
             {model.providerLabel}
-            {model.isLocal ? " · Local" : " · Hosted"}
+            {deploymentSuffix(model)}
             {model.format ? ` · ${model.format}` : ""}
           </Text>
         </div>
@@ -690,7 +701,7 @@ export function ModelPicker({
                         <span className="block truncate text-small-strong">{entry.label}</span>
                         <span className="block truncate text-small text-tertiary">
                           {entry.providerLabel}
-                          {entry.isLocal ? " · Local" : " · Hosted"}
+                          {deploymentSuffix(entry)}
                         </span>
                       </span>
                       {entry.format ? (

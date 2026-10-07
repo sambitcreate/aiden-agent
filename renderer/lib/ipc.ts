@@ -1,4 +1,5 @@
 import type { CompactionEngine } from "../shared/compaction";
+import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
 import { parseAgentsInstructionNotices, type AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
@@ -130,7 +131,7 @@ import type {
   ChatRunInputMode,
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
-import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
+import { parseToolApprovalScope, type ToolApprovalRuleView, type ToolApprovalScope } from "../shared/tool-approval-scope";
 import {
   parseSubagentHistoryDetailV1,
   parseSubagentRunSnapshot,
@@ -368,6 +369,25 @@ export const providersApi = {
     onNotification("providers:auth:error", handler),
   onAuthStatusChanged: (handler: (event: CodexProviderStatusChanged) => void) =>
     onNotification("providers:auth:status-changed", handler),
+};
+
+async function harnessStatus(channel: string, providerId: string): Promise<AcpHarnessStatus> {
+  const status = parseAcpHarnessStatus(await invoke<unknown>(channel, providerId));
+  if (!status) throw new Error("Aiden returned an invalid runtime status.");
+  return status;
+}
+
+/** Managed runtimes for agent-backed providers such as Google Antigravity. */
+export const harnessApi = {
+  status: (providerId: string) => harnessStatus("providers:harness:status", providerId),
+  install: (providerId: string) => harnessStatus("providers:harness:install", providerId),
+  cancelInstall: (providerId: string) => invoke<void>("providers:harness:cancel", providerId),
+  remove: (providerId: string) => harnessStatus("providers:harness:remove", providerId),
+  onChanged: (handler: (status: AcpHarnessStatus) => void) =>
+    onNotification<unknown>(ACP_HARNESS_STATUS_CHANNEL, (payload) => {
+      const status = parseAcpHarnessStatus(payload);
+      if (status) handler(status);
+    }),
 };
 
 
@@ -1539,6 +1559,9 @@ export function startGeneration(
           toolName: p.toolName,
           summary: p.summary,
           details: p.details,
+          // Offered allow scopes ("this chat", "always"); absent means once only.
+          ...(Array.isArray(p.scopes) ? { scopes: p.scopes.filter((scope) => parseToolApprovalScope(scope)) } : {}),
+          ...(typeof p.canAllow === "boolean" ? { canAllow: p.canAllow } : {}),
         });
     }),
   );

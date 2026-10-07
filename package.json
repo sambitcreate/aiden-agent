@@ -54,7 +54,7 @@
     "pretest:generative-ui": "npm run build:subagent-file-mutator",
     "test:aiden-remote-speech": "tsx --test main/services/aiden-remote-speech.test.ts",
     "test": "node scripts/run-ci-tests.mjs --parallel",
-    "pretest:serial": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run test:mcp && npm run test:browser && npm run test:aiden-remote-speech && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:memory-policy && npm run test:ios-release && npm run test:terminal:coverage && npm run test:ghostty-terminal && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:rich-links && npm run test:display-image && npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor && npm run test:generative-ui && npm run test:provider-failure && npm run test:web-search && npm run test:compaction && npm run test:gemini-live && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts && npm run test:bots && npm run test:voice && npm run test:tts && npm run test:sidebar && npm run test:transcript-polish",
+    "pretest:serial": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run test:mcp && npm run test:browser && npm run test:aiden-remote-speech && npm run test:aiden-remote && npm run test:aiden-service-boundary && npm run test:memory-policy && npm run test:ios-release && npm run test:terminal:coverage && npm run test:ghostty-terminal && npm run test:onboarding && npm run test:assistant-automations && npm run test:slash-commands && npm run test:rich-links && npm run test:display-image && npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor && npm run test:generative-ui && npm run test:provider-failure && npm run test:web-search && npm run test:compaction && npm run test:gemini-live && npm run test:subagents && tsx --test main/services/pi-remote-catalog.test.ts main/services/provider-model-info-core.test.ts main/services/aiden-remote-models.test.ts renderer/shared/provider-thinking.test.ts && npm run test:bots && npm run test:voice && npm run test:tts && npm run test:sidebar && npm run test:transcript-polish && npm run test:acp",
     "pretest:coverage": "npm run build:worktree-remover && npm run build:worktree-file-io && npm run build:subagent-run-store && npm run test:preflight && npm run test:ghostty-terminal && npm run test:scheduled && npm run test:memory-policy && npm run test:google-provider && npm run test:config-recovery && npm run test:command-system && npm run test:slash-commands && npm run test:display-image && npm run test:generative-ui && npm run test:compaction && npm run test:gemini-live && npm run test:subagents && npm run test:bots:coverage",
     "test:preflight": "npm run test:mcp && npm run test:artificial-analysis && npm run test:model-pad && tsx --test main/services/appearance-preview-core.test.ts main/services/generation-timeline.test.ts main/services/local-runtime-status.test.ts main/services/mcp-tool-result.test.ts main/services/pi-thinking-disclosure.integration.test.ts renderer/components/activity-feed.test.tsx renderer/components/context-meter.test.tsx renderer/components/chat-sidebar.test.tsx renderer/components/composer.test.tsx renderer/components/settings/providers-settings.test.tsx renderer/main/chat-transition.test.tsx renderer/components/reasoning-block.test.tsx renderer/components/reasoning-visibility-control.test.tsx renderer/components/thinking-control.test.tsx renderer/lib/agent-steps.test.ts renderer/lib/button-appearance-contract.test.ts renderer/lib/dialog-motion-contract.test.ts renderer/lib/inline-metadata-hierarchy.test.ts renderer/lib/scrollbar-gutter-contract.test.ts renderer/lib/scroll-follow.test.ts renderer/lib/text-entry-focus-contract.test.ts renderer/lib/pill-appearance.test.ts renderer/lib/reasoning-disclosure.test.ts renderer/lib/streaming-motion-contract.test.ts renderer/lib/streaming-reveal.test.ts renderer/lib/voice-recorder-core.test.ts renderer/lib/media-recorder-stop.test.ts renderer/lib/dictation-vad.test.ts renderer/lib/dictation-sounds.test.ts renderer/pill-preload-channels.test.ts renderer/shared/anthropic-thinking.test.ts renderer/shared/app-update.test.ts renderer/shared/claim-check.test.ts renderer/shared/codex-thinking.test.ts renderer/shared/context-pressure.test.ts renderer/shared/google-thinking.test.ts renderer/shared/provider-deployment.test.ts renderer/shared/assistant-turn-stats.test.ts renderer/lib/sticky-section.test.ts",
     "test:chat-row-states": "tsx --test renderer/shared/chat-row-state.test.ts renderer/components/chat-row-status.test.tsx renderer/lib/use-mark-chat-read.test.ts main/services/chat-read-markers.test.ts",
@@ -80,6 +80,7 @@
     "test:display-image": "tsx --test renderer/components/classifier-approval.test.tsx main/services/pi-model-tools.test.ts main/services/pi-local-classifier.test.ts main/services/display-image-artifact-store.test.ts main/services/display-image-extension.test.ts main/services/generation-timeline.test.ts renderer/components/message-bubble.test.tsx renderer/lib/ipc-stream.test.ts",
     "test:ask-user-question": "tsx --test renderer/shared/ask-user-question.test.ts main/services/ask-user-question-coordinator.test.ts main/services/ask-user-question-extension.test.ts renderer/components/ask-user-question-composer.test.ts renderer/components/ask-user-question-expiry-notice.test.tsx",
     "test:todo": "tsx --test main/services/rpiv-todo/*.test.ts renderer/shared/todo.test.ts renderer/components/todo-panel.test.tsx renderer/lib/scroll-follow.test.ts main/services/generation-timeline.test.ts main/handlers/ipc-contract.test.ts main/handlers/chats.test.ts renderer/lib/ipc-stream.test.ts",
+    "test:acp": "tsx --test main/services/acp/*.test.ts main/services/antigravity/*.test.ts renderer/shared/acp-harness.test.ts renderer/components/settings/harness-runtime-section.test.tsx main/services/subagents/eligibility-harness.test.ts",
     "test:btw": "tsx --test main/services/rpiv-btw/*.test.ts renderer/shared/btw.test.ts renderer/components/btw-card.test.tsx",
     "test:advisor": "tsx --test renderer/shared/advisor.test.ts main/services/advisor-context.test.ts main/services/advisor-attempt-store.test.ts main/services/advisor-runtime.test.ts main/services/advisor-integration.test.ts",
     "test:pi-extensions": "npm run test:ask-user-question && npm run test:todo && npm run test:btw && npm run test:advisor",
@@ -206,6 +207,7 @@
     "check:bundle-budget": "node scripts/check-renderer-bundle-budget.mjs"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.7.0",
     "@aiden/pi-legacy-harness": "npm:@earendil-works/pi-agent-core@0.87.1",
     "@earendil-works/pi-agent-core": "1.0.3",
     "@earendil-works/pi-ai": "1.0.3",
@@ -231,6 +233,7 @@
     "sherpa-onnx-node": "^1.12.0",
     "unified": "11.0.5",
     "yaml": "2.9.0",
+    "yauzl": "3.2.0",
     "@earendil-works/pi-codemode": "1.0.3"
   },
   "devDependencies": {
@@ -246,6 +249,7 @@
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "@types/three": "^0.186.0",
+    "@types/yauzl": "3.4.0",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
     "@vitejs/plugin-react": "^6.0.1",
