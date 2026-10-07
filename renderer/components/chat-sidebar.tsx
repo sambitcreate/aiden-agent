@@ -72,6 +72,7 @@ import {
 } from "../lib/sidebar-chat-shortcuts";
 import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
 import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
+import { formatGitHubPausedUntil, githubPausedUntil } from "../lib/github-pause";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, GitHubPullRequestCheck, GitHubPullRequestChecksState, Workspace } from "../lib/types";
@@ -343,6 +344,33 @@ function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }
   const status = useGitPullRequestStatus(workspace.id, enabled);
   const pullRequest = status.data?.pullRequest;
   if (!enabled || status.isLoading) return null;
+  const pausedUntil = githubPausedUntil(status.data, Date.now());
+  const pausedLabel = pausedUntil === undefined ? undefined : formatGitHubPausedUntil(pausedUntil, Date.now());
+
+  if (!pullRequest && pausedLabel) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            className="text-tertiary"
+            aria-label={`${accessibilityName} GitHub pull request status: ${pausedLabel}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Clock3 aria-hidden="true" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-3" align="start" aria-label="GitHub pull request status">
+          <p className="text-small-strong text-primary">{pausedLabel}</p>
+          <p className="mt-1 text-small text-secondary">
+            GitHub's API rate limit was reached. Aiden checks pull requests again once it resets.
+          </p>
+        </PopoverContent>
+      </Popover>
+    );
+  }
 
   if (!pullRequest) {
     const message = status.data?.message;
@@ -454,9 +482,15 @@ function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }
             ) : null}
           </div>
         ) : null}
+        {pausedLabel ? (
+          <p className="mt-3 flex items-center gap-1.5 text-small text-secondary" role="status">
+            <Clock3 className="size-3.5 shrink-0" aria-hidden="true" />
+            {pausedLabel}. Showing the last status.
+          </p>
+        ) : null}
         <div className="mt-3 flex items-center justify-between gap-2">
           {status.isFetching ? <span className="inline-flex items-center gap-1.5 text-small text-tertiary"><Loader2 className="size-3.5 animate-spin" />Refreshing…</span> : <span className="text-small text-tertiary">Refreshes every 30 seconds.</span>}
-          <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
+          <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching || pausedLabel !== undefined}>
             Refresh
           </Button>
         </div>

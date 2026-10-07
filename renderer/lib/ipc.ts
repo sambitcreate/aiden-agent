@@ -915,7 +915,7 @@ export const gitApi = {
 export const pullRequestsApi = {
   list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
   current: (chatId: string) =>
-    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string }>(
+    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string; rateLimitedUntil?: number }>(
       "pullRequests:current",
       chatId,
     ),

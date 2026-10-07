@@ -2,6 +2,7 @@
 
 import {
   queryOptions,
+  replaceEqualDeep,
   useMutation,
   useQueries,
   useQuery,
@@ -35,6 +36,7 @@ import {
   workspacesApi,
 } from "./ipc";
 import { isWindowActive } from "./window-activity";
+import { keepPullRequestWhilePaused, pausedPollInterval } from "./github-pause";
 import type {
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
@@ -42,6 +44,7 @@ import type {
   ModelInsightsStatus,
   Provider,
   Chat,
+  GitHubPullRequestStatus,
   UsageDateRange,
 } from "./types";
 
@@ -417,10 +420,19 @@ export function gitPullRequestStatusQueryOptions(workspaceId: string | undefined
     queryKey: queryKeys.gitPullRequestStatus(workspaceId),
     queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    // `gh pr view` is a network call. Push, focus and repository-change
-    // events refresh it when stale; the interval only catches remote updates.
-    refetchInterval: gitSafetyPoll(enabled, PULL_REQUEST_POLL_MS),
+    // A GitHub API call. Push, focus and repository-change events refresh it
+    // when stale; the interval only catches remote updates, and waits out a
+    // rate-limit pause instead of polling into it.
+    refetchInterval: enabled
+      ? (query) =>
+          isWindowActive() ? pausedPollInterval(query.state.data, Date.now(), PULL_REQUEST_POLL_MS) : false
+      : false,
     staleTime: PULL_REQUEST_STALE_MS,
+    structuralSharing: (previous, next) =>
+      replaceEqualDeep(
+        previous,
+        keepPullRequestWhilePaused(previous as GitHubPullRequestStatus | undefined, next as GitHubPullRequestStatus),
+      ),
   });
 }
 
