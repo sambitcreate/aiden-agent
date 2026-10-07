@@ -35,8 +35,14 @@ test("an installed runtime can be removed, except while chats are using it", () 
   assert.match(idle, /Version 1\.3\.0 installed\./u);
   assert.match(idle, /<button[^>]*>.*Remove runtime/u);
   assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*>[^<]*<svg[^>]*>.*Remove runtime/u);
+  assert.doesNotMatch(idle, /Stop running/u);
   const busy = render({ status: "installed", version: "1.3.0" }, true);
-  assert.match(busy, /<button[^>]*disabled=""[^>]*title="Stop running Google Antigravity chats first\."/u);
+  // A disabled button cannot show a tooltip, so the reason is visible text the button points at.
+  const describedBy = busy.match(/<button[^>]*disabled=""[^>]*aria-describedby="([^"]+)"/u)?.[1];
+  assert.ok(describedBy, "the disabled Remove button names its reason");
+  const reason = busy.match(/<span[^>]*\bid="([^"]+)"[^>]*>([^<]+)</u);
+  assert.deepEqual(reason?.slice(1), [describedBy, "Stop running Google Antigravity chats first."]);
+  assert.doesNotMatch(busy, /title="/u);
 });
 
 test("unsupported computers get an explanation and no actions; failures offer a retry", () => {

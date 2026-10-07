@@ -53,6 +53,7 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
   const [acting, setActing] = React.useState(false);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   const keepRef = React.useRef<HTMLButtonElement>(null);
+  const busyReasonId = React.useId();
   React.useEffect(() => {
     // The Remove button unmounts when confirming; keep focus in the dialog.
     if (confirmRemove) keepRef.current?.focus();
@@ -170,16 +171,23 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
             </Button>
           </div>
         ) : (
-          <Button
-            size="small"
-            variant="muted"
-            className="justify-self-start"
-            disabled={status.busy || acting}
-            title={status.busy ? `Stop running ${label} chats first.` : undefined}
-            onClick={() => setConfirmRemove(true)}
-          >
-            <Trash2 /> Remove runtime
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="small"
+              variant="muted"
+              disabled={status.busy || acting}
+              aria-describedby={status.busy ? busyReasonId : undefined}
+              onClick={() => setConfirmRemove(true)}
+            >
+              <Trash2 /> Remove runtime
+            </Button>
+            {/* A disabled button shows no tooltip, so the reason stays visible. */}
+            {status.busy ? (
+              <Text id={busyReasonId} variant="small" color="tertiary">
+                {`Stop running ${label} chats first.`}
+              </Text>
+            ) : null}
+          </div>
         )
       ) : null}
     </div>
