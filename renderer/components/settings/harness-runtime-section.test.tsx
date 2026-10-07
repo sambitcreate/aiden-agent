@@ -74,3 +74,16 @@ test("the section can hold focus itself when it has no action left to offer", ()
   const html = render({ status: "unsupported", message: "Not available for this computer." });
   assert.match(html, /<div[^>]*role="group"[^>]*tabindex="-1"/u);
 });
+
+test("a status read that fails says so and offers a retry instead of checking forever", () => {
+  const props = { providerId: "antigravity", label: "Google Antigravity", status: null };
+  const checking = renderToStaticMarkup(<HarnessRuntimeSection {...props} />);
+  assert.match(checking, /Checking the <!-- -->Google Antigravity<!-- --> runtime…|Checking the Google Antigravity runtime…/u);
+  assert.doesNotMatch(checking, /<button/u);
+  const failed = renderToStaticMarkup(
+    <HarnessRuntimeSection {...props} loadError="The app is restarting." onRetry={() => undefined} />,
+  );
+  assert.match(failed, /role="alert"[^>]*>Couldn&#x27;t check the Google Antigravity runtime\. The app is restarting\.</u);
+  assert.match(failed, /<button[^>]*>.*Try again<\/button>/u);
+  assert.doesNotMatch(failed, /Checking the/u);
+});

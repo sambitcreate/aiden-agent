@@ -55,7 +55,8 @@ export function BuiltinProviderEditor({
   const [responding, setResponding] = React.useState(false);
   const [authLink, setAuthLink] = React.useState<string | null>(null);
   const harness = isAcpHarnessProvider(provider.id);
-  const harnessStatus = useHarnessStatus(harness ? provider.id : undefined);
+  const harnessState = useHarnessStatus(harness ? provider.id : undefined);
+  const harnessStatus = harnessState.status;
   // Agent-backed providers sign in through their runtime, so it must exist first.
   const harnessReady = !harness || harnessStatus?.runtime.status === "installed";
   const interactiveMethods = (provider.authMethods ?? []).filter(
@@ -221,7 +222,13 @@ export function BuiltinProviderEditor({
     >
       <div className="grid gap-4">
         {harness ? (
-          <HarnessRuntimeSection providerId={provider.id} label={provider.label} status={harnessStatus} />
+          <HarnessRuntimeSection
+            providerId={provider.id}
+            label={provider.label}
+            status={harnessStatus}
+            loadError={harnessState.error}
+            onRetry={harnessState.retry}
+          />
         ) : null}
         {prompt?.type === "select" ? (
           <div className="grid gap-2" aria-label={prompt.message}>

@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { Download, Loader2, Trash2 } from "lucide-react";
+import { Download, Loader2, RefreshCw, Trash2 } from "lucide-react";
 
 import { Button, Text, toast } from "../ui";
 import { harnessApi } from "../../lib/ipc";
@@ -10,27 +10,47 @@ import {
   type AcpHarnessStatus,
 } from "../../shared/acp-harness";
 
+export interface HarnessStatusState {
+  status: AcpHarnessStatus | null;
+  /** Why the last status read failed, while there is no status to show. */
+  error: string | null;
+  retry: () => void;
+}
+
 /** Live runtime status for one agent-backed provider. */
-export function useHarnessStatus(providerId: string | undefined): AcpHarnessStatus | null {
+export function useHarnessStatus(providerId: string | undefined): HarnessStatusState {
   const [status, setStatus] = React.useState<AcpHarnessStatus | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     if (!providerId) return undefined;
     let active = true;
     const unsubscribe = harnessApi.onChanged((next) => {
-      if (active && next.providerId === providerId) setStatus(next);
+      if (active && next.providerId === providerId) {
+        setStatus(next);
+        setError(null);
+      }
     });
     void harnessApi
       .status(providerId)
       .then((next) => {
-        if (active) setStatus(next);
+        if (!active) return;
+        setStatus(next);
+        setError(null);
       })
-      .catch(() => undefined);
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error && reason.message ? reason.message : "Aiden couldn't read the runtime status.");
+      });
     return () => {
       active = false;
       unsubscribe();
     };
-  }, [providerId]);
-  return status;
+  }, [providerId, attempt]);
+  const retry = React.useCallback(() => {
+    setError(null);
+    setAttempt((value) => value + 1);
+  }, []);
+  return { status, error, retry };
 }
 
 function percent(status: AcpHarnessStatus["runtime"]): number | null {
@@ -67,6 +87,9 @@ export interface HarnessRuntimeSectionProps {
   providerId: string;
   label: string;
   status: AcpHarnessStatus | null;
+  /** The status read failed; shown with a retry instead of an endless "Checking…". */
+  loadError?: string | null;
+  onRetry?: () => void;
 }
 
 /**
@@ -74,7 +97,7 @@ export interface HarnessRuntimeSectionProps {
  * downloaded until the user chooses Install; the size and source are stated
  * before that choice.
  */
-export function HarnessRuntimeSection({ providerId, label, status }: HarnessRuntimeSectionProps) {
+export function HarnessRuntimeSection({ providerId, label, status, loadError, onRetry }: HarnessRuntimeSectionProps) {
   const [acting, setActing] = React.useState(false);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   const sectionRef = React.useRef<HTMLDivElement>(null);
@@ -127,6 +150,21 @@ export function HarnessRuntimeSection({ providerId, label, status }: HarnessRunt
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [confirmRemove]);
 
+  if (!status && loadError) {
+    return (
+      <div className="grid gap-2" role="group" aria-label={`${label} runtime`}>
+        <Text variant="small-strong">Runtime</Text>
+        <Text variant="small" color="secondary" role="alert">
+          {`Couldn't check the ${label} runtime. ${loadError}`}
+        </Text>
+        {onRetry ? (
+          <Button size="small" variant="filled" className="justify-self-start" onClick={onRetry}>
+            <RefreshCw /> Try again
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
   if (!status) {
     return (
       <Text variant="small" color="tertiary" aria-live="polite">
