@@ -144,6 +144,28 @@ export function harnessRuntimeSummary(status: AcpHarnessStatus["runtime"]): stri
   }
 }
 
+/**
+ * Why sign-in is not offered yet. Agent-backed providers sign in through their
+ * runtime, so sign-in waits for a current install. Nothing is said while the
+ * status is still loading (the runtime section says it is checking).
+ */
+export function harnessSignInHint(status: AcpHarnessStatus["runtime"] | null | undefined): string | undefined {
+  switch (status?.status) {
+    case undefined:
+    case "installed":
+      return undefined;
+    case "unsupported":
+      return "Sign-in needs the runtime, which isn't available for this computer.";
+    case "installing":
+      return "You can sign in when the installation finishes.";
+    case "update_available":
+      return "Update the runtime above before signing in.";
+    case "not_installed":
+    case "failed":
+      return "Install the runtime above before signing in.";
+  }
+}
+
 const HARNESS_LABELS: Record<string, string> = { antigravity: "Google Antigravity" };
 
 /**

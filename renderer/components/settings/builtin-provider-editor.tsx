@@ -10,7 +10,7 @@ import {
   type ProviderAuthSession,
 } from "../../lib/provider-auth-session";
 import type { Provider, ProviderAuthEvent, ProviderAuthPrompt } from "../../lib/types";
-import { isAcpHarnessProvider } from "../../shared/acp-harness";
+import { harnessSignInHint, isAcpHarnessProvider } from "../../shared/acp-harness";
 import { HarnessRuntimeSection, useHarnessStatus } from "./harness-runtime-section";
 import { ProviderModelVisibility } from "./provider-model-visibility";
 
@@ -59,6 +59,7 @@ export function BuiltinProviderEditor({
   const harnessStatus = harnessState.status;
   // Agent-backed providers sign in through their runtime, so it must exist first.
   const harnessReady = !harness || harnessStatus?.runtime.status === "installed";
+  const signInHint = harness ? harnessSignInHint(harnessStatus?.runtime) : undefined;
   const interactiveMethods = (provider.authMethods ?? []).filter(
     (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin,
   );
@@ -285,9 +286,9 @@ export function BuiltinProviderEditor({
                 {method.label}
               </Button>
             ))}
-            {!harnessReady ? (
+            {signInHint ? (
               <Text variant="small" color="tertiary">
-                Install the runtime above before signing in.
+                {signInHint}
               </Text>
             ) : null}
           </div>

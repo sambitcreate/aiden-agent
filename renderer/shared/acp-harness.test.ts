@@ -5,6 +5,7 @@ import { projectRuntime } from "../../main/services/acp/status.js";
 import {
   acpHarnessUnavailableReason,
   formatHarnessBytes,
+  harnessSignInHint,
   harnessRuntimeSummary,
   parseAcpHarnessStatus,
   unattendedFallbackProviderId,
@@ -88,4 +89,19 @@ test("unattended surfaces never inherit an agent-backed last-used provider", () 
   assert.equal(unattendedFallbackProviderId(undefined), undefined);
   assert.match(acpHarnessUnavailableReason("antigravity") ?? "", /^Google Antigravity runs only in chats/u);
   assert.equal(acpHarnessUnavailableReason("openai"), undefined);
+});
+
+test("the sign-in hint tells the user what the runtime still needs, and only that", () => {
+  assert.equal(harnessSignInHint({ status: "not_installed" }), "Install the runtime above before signing in.");
+  assert.equal(harnessSignInHint({ status: "failed", message: "Disk full." }), "Install the runtime above before signing in.");
+  // There is no Install button to point at in these states.
+  assert.equal(harnessSignInHint({ status: "update_available" }), "Update the runtime above before signing in.");
+  assert.equal(harnessSignInHint({ status: "installing", phase: "extracting" }), "You can sign in when the installation finishes.");
+  assert.equal(
+    harnessSignInHint({ status: "unsupported", message: "No build for this computer." }),
+    "Sign-in needs the runtime, which isn't available for this computer.",
+  );
+  // Still loading, or ready: no hint.
+  assert.equal(harnessSignInHint(null), undefined);
+  assert.equal(harnessSignInHint({ status: "installed", version: "1.3.0" }), undefined);
 });
