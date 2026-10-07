@@ -515,7 +515,7 @@ export function AppearanceSettings() {
       </section>
 
       <FieldSet title="Chat">
-        <Field label="Show context usage in composer" description="Show the token meter beside your message.">
+        <Field label="Show context usage in composer" description="Show the token meter beside your message. Context details remain available in the workspace panel.">
           <Switch checked={config.showComposerContextUsage} onCheckedChange={(checked) => update((current) => ({ ...current, showComposerContextUsage: checked }))} aria-label="Show context usage in composer" />
         </Field>
       </FieldSet>

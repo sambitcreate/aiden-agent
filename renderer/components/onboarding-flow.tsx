@@ -233,7 +233,7 @@ const featureBentos: FeatureBento[] = [
     id: "filesEditor",
     group: "create",
     title: "Files & Text Editor",
-    description: "Browse, search, edit, and safely save workspace text files beside the chat. On your phone, expand folders on demand and preview source before editing. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
+    description: "Open Files from the workspace tools launcher to browse, search, edit, and safely save text files beside the chat. On your phone, expand folders on demand and preview source before editing. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
     icon: Files,
     imageUrl: FEATURE_ILLUSTRATIONS.filesEditor,
     size: "standard",
@@ -252,7 +252,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Integrated Terminal",
     description:
-      "Run a workspace shell in tabs or split panes, then reopen it with sanitized local history.",
+      "Open Terminal from the workspace tools launcher. Keep shell tabs and split panes at the bottom or move them beside your chat, then reopen it with sanitized local history.",
     icon: SquareTerminal,
     imageUrl: FEATURE_ILLUSTRATIONS.terminal,
     size: "standard",
