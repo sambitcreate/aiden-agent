@@ -9,7 +9,7 @@ import {
   type Models,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { hasCanonicalBase64Padding, validateDisplayImageDimensions } from "./display-image-extension.js";
+import { MAX_GENERATED_IMAGES as MAX_IMAGES, parseGeneratedImages } from "./pi-model-image-output.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
 /** Parent codemode results aggregate child usage; only provider operations add turn totals. */
@@ -59,8 +59,6 @@ export interface PiModelToolsHost {
     signal?: AbortSignal,
   ): Promise<void>;
 }
-const MAX_IMAGES = 4;
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_JSON_BYTES = CLASSIFIER_JSON_BYTES;
 const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -204,55 +202,6 @@ function errorResult(message: string, usage?: Usage): AgentToolResult<null> {
     ...(usage ? { usage } : {}),
   };
 }
-/** One decode per image: callers reuse the decoded byte count and pixel area. */
-function validImages(output: unknown, name = "Generated image"): {
-  images: ImageContent[];
-  sizes: { bytes: number; pixels: number }[];
-  description: string;
-} {
-  if (!Array.isArray(output) || output.length > 64)
-    throw new Error("Invalid image-generation output.");
-  const images: ImageContent[] = [];
-  const sizes: { bytes: number; pixels: number }[] = [];
-  let bytes = 0,
-    description = "";
-  for (const raw of output) {
-    if (!record(raw)) throw new Error("Invalid image-generation content.");
-    if (raw.type === "text") {
-      description += text(raw.text, 32_768, "image description", true).slice(
-        0,
-        Math.max(0, 8192 - description.length),
-      );
-      continue;
-    }
-    if (
-      raw.type !== "image" ||
-      typeof raw.data !== "string" ||
-      typeof raw.mimeType !== "string" ||
-      !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
-        raw.mimeType,
-      ) ||
-      raw.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 ||
-      raw.data.length % 4 !== 0 ||
-      !/^[A-Za-z0-9+/]+={0,2}$/u.test(raw.data)
-    )
-      throw new Error("Invalid generated image data.");
-    if (!hasCanonicalBase64Padding(raw.data))
-      throw new Error("Invalid generated image encoding.");
-    const data = Buffer.from(raw.data, "base64");
-    bytes += data.length;
-    if (bytes > MAX_IMAGE_BYTES || images.length >= MAX_IMAGES)
-      throw new Error(
-        "Generated images exceed the 4-image or 8 MiB output limit.",
-      );
-    const size = validateDisplayImageDimensions(data, raw.mimeType, name);
-    images.push({ type: "image", data: raw.data, mimeType: raw.mimeType });
-    sizes.push({ bytes: data.length, pixels: size.width * size.height });
-  }
-  if (!images.length)
-    throw new Error("The model returned no generated images.");
-  return { images, sizes, description };
-}
 /** Resolve only host-owned current-chat IDs, and validate the whole batch before dispatch. */
 export async function resolvePiModelImageInputs(
   host: Pick<PiModelToolsHost, "resolveImage" | "resolveImages">,
@@ -284,7 +233,7 @@ export async function resolvePiModelImageInputs(
   if (results.length !== ids.length)
     throw new Error("Reference images could not be resolved.");
   const names = results.map((result) => text(result.name, 256, "reference image name"));
-  const { images, sizes } = validImages(results.map((result) => result.image), "Reference image");
+  const { images, sizes } = parseGeneratedImages(results.map((result) => result.image), { name: "Reference image" });
   const pixels = sizes.reduce((sum, size) => sum + size.pixels, 0);
   if (pixels > 40_000_000)
     throw new Error(
@@ -568,7 +517,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
           result.usage,
         );
       try {
-        const { images, description } = validImages(result.output);
+        const { images, description } = parseGeneratedImages(result.output);
         for (const image of images) {
           signal?.throwIfAborted();
           await host.onImage(id, image, signal);
