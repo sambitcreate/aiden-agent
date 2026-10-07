@@ -87,6 +87,7 @@ fun AidenWorkspaceDirectoryScreen(
     BackHandler(enabled = isActive && selectedWorkspace != null) { selectedWorkspace = null }
     // The selected Workspace's chats render from its saved listing while they refresh.
     var workspaceChats by remember { mutableStateOf<List<AidenWorkspaceChatListing>?>(null) }
+    var workspaceChatsOwner by remember { mutableStateOf<String?>(null) }
     var isLoadingChats by remember { mutableStateOf(false) }
     var chatsLoadFailed by remember { mutableStateOf(false) }
     var chatsReloadToken by remember { mutableIntStateOf(0) }
@@ -137,14 +138,17 @@ fun AidenWorkspaceDirectoryScreen(
     LaunchedEffect(selectedWorkspace?.id, client, activeInstanceId, chatsReloadToken) {
         val ws = selectedWorkspace ?: run {
             workspaceChats = null
+            workspaceChatsOwner = null
             return@LaunchedEffect
         }
         val instanceId = activeInstanceId
         val key = AidenReadSnapshotKeys.workspaceChats(ws.id)
-        if (chatsReloadToken == 0 || workspaceChats == null) {
+        // A retry keeps what is shown; a different Workspace starts from its own saved listing.
+        if (workspaceChatsOwner != ws.id || workspaceChats == null) {
             workspaceChats = instanceId?.let {
                 coordinator.readSnapshotCache.load(it, key, AidenWorkspaceChatListing.listSerializer)
             }
+            workspaceChatsOwner = ws.id
         }
         chatsLoadFailed = false
         val activeClient = client ?: return@LaunchedEffect
