@@ -38,6 +38,7 @@ import {
   parseBotAccessUpdateInput,
   parseBotCreateWithAccess,
   parseBotId,
+  parseBotSend,
   parseBotSessionAction,
   parseBotUpdate,
 } from "./bot-params.js";
@@ -144,6 +145,10 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:sessionState", async (_event, id: unknown) =>
     (await botSessionRuntime()).state(parseBotId(id)),
   );
+  ipcMain.handle("bots:send", async (_event, input: unknown) => {
+    const { botId, ...message } = parseBotSend(input);
+    return (await botSessionRuntime()).send(botId, message);
+  });
   ipcMain.handle("bots:resume", async (_event, input: unknown) => {
     const { botId, requestId } = parseBotSessionAction(input, "resume");
     return (await botSessionRuntime()).resume(botId, requestId);

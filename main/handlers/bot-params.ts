@@ -108,6 +108,66 @@ export function parseBotId(value: unknown): string {
 
 const BOT_SESSION_REQUEST_ID = /^[A-Za-z0-9._:-]{1,200}$/u;
 
+const BOT_SEND_KEYS = new Set(["botId", "text", "requestId", "whenBusy", "attachments"]);
+const BOT_SEND_TEXT_CHARS = 100_000;
+const BOT_SEND_ATTACHMENTS = 20;
+const BOT_SEND_IMAGE_BASE64_CHARS = Math.ceil((8 * 1024 * 1024 * 4) / 3) + 4;
+const BOT_SEND_IMAGE_MIME = /^image\/(?:png|jpeg|gif|webp)$/u;
+
+/** A desktop message to a Bot: its renderer send UUID is the durable request id. */
+export function parseBotSend(input: unknown): {
+  botId: string;
+  text: string;
+  requestId: string;
+  whenBusy?: "steer" | "followUp";
+  attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
+} {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot message fields.");
+  const fields = input as Record<string, unknown>;
+  if (!Object.keys(fields).every((key) => BOT_SEND_KEYS.has(key))) throw new Error("Invalid bot message fields.");
+  if (typeof fields.text !== "string" || fields.text.length > BOT_SEND_TEXT_CHARS) {
+    throw new Error("Invalid bot message text.");
+  }
+  if (typeof fields.requestId !== "string" || !BOT_SESSION_REQUEST_ID.test(fields.requestId)) {
+    throw new Error("Invalid bot message request id.");
+  }
+  if (fields.whenBusy !== undefined && fields.whenBusy !== "steer" && fields.whenBusy !== "followUp") {
+    throw new Error("Invalid bot message busy mode.");
+  }
+  let attachments: Array<{ type: "image"; mimeType: string; data: string }> | undefined;
+  if (fields.attachments !== undefined) {
+    if (!Array.isArray(fields.attachments) || fields.attachments.length > BOT_SEND_ATTACHMENTS) {
+      throw new Error("Invalid bot message attachments.");
+    }
+    attachments = fields.attachments.map((value) => {
+      const item = value as Record<string, unknown> | null;
+      if (
+        !item ||
+        item.type !== "image" ||
+        typeof item.mimeType !== "string" ||
+        !BOT_SEND_IMAGE_MIME.test(item.mimeType) ||
+        typeof item.data !== "string" ||
+        item.data.length === 0 ||
+        item.data.length > BOT_SEND_IMAGE_BASE64_CHARS ||
+        Object.keys(item).some((key) => key !== "type" && key !== "mimeType" && key !== "data")
+      ) {
+        throw new Error("Invalid bot message attachments.");
+      }
+      return { type: "image" as const, mimeType: item.mimeType, data: item.data };
+    });
+  }
+  if (fields.text.trim().length === 0 && (attachments?.length ?? 0) === 0) {
+    throw new Error("A bot message needs text or an image.");
+  }
+  return {
+    botId: parseBotId(fields.botId),
+    text: fields.text,
+    requestId: fields.requestId,
+    ...(fields.whenBusy === undefined ? {} : { whenBusy: fields.whenBusy as "steer" | "followUp" }),
+    ...(attachments === undefined ? {} : { attachments }),
+  };
+}
+
 /** `{ botId, requestId }` for Resume and Dismiss; the request id makes retries idempotent. */
 export function parseBotSessionAction(
   input: unknown,

@@ -506,6 +506,7 @@
         "main/services/onboarding-state-core.test.ts",
         "main/services/profile-share-core.test.ts",
         "main/services/provider-model-info-core.test.ts",
+        "main/services/telegram/bot-reply-outbox.test.ts",
         "main/services/telegram/telegram-activity.test.ts",
         "main/services/telegram/telegram-agent-tools.test.ts",
         "main/services/telegram/telegram-bot-api.test.ts",

@@ -7,6 +7,7 @@ import {
   parseBotChatCreate,
   parseBotCreate,
   parseBotCreateWithAccess,
+  parseBotSend,
   parseBotSessionAction,
   parseBotUpdate,
 } from "./bot-params.js";
@@ -178,4 +179,42 @@ test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
   assert.throws(() => parseBotSessionAction({ botId: "../x", requestId: "r" }, "resume"), /bot id/u);
   assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", extra: true }, "resume"), /fields/u);
   assert.throws(() => parseBotSessionAction(null, "dismiss"), /fields/u);
+});
+
+test("a desktop Bot message carries text or images and its send UUID as request id", () => {
+  assert.deepEqual(parseBotSend({ botId: "bot:1", text: "hi", requestId: "8f1c" }), {
+    botId: "bot:1",
+    text: "hi",
+    requestId: "8f1c",
+  });
+  assert.deepEqual(
+    parseBotSend({
+      botId: "bot:1",
+      text: "",
+      requestId: "r",
+      whenBusy: "steer",
+      attachments: [{ type: "image", mimeType: "image/png", data: "iVBOR" }],
+    }),
+    {
+      botId: "bot:1",
+      text: "",
+      requestId: "r",
+      whenBusy: "steer",
+      attachments: [{ type: "image", mimeType: "image/png", data: "iVBOR" }],
+    },
+  );
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "  ", requestId: "r" }), /text or an image/u);
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi" }), /request id/u);
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", whenBusy: "now" }), /busy/u);
+  assert.throws(
+    () =>
+      parseBotSend({
+        botId: "bot:1",
+        text: "hi",
+        requestId: "r",
+        attachments: [{ type: "image", mimeType: "application/pdf", data: "x" }],
+      }),
+    /attachments/u,
+  );
+  assert.throws(() => parseBotSend({ botId: "bot:1", text: "hi", requestId: "r", providerId: "x" }), /fields/u);
 });
