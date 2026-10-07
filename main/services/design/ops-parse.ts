@@ -33,7 +33,7 @@ export function isDesignId(value: unknown): value is string {
  * True for text that must never reach a title, label or prompt: ASCII and C1 controls, line and
  * paragraph separators, bidi embedding/override/isolate controls, and malformed UTF-16.
  */
-function hasControlCharacter(value: string): boolean {
+export function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
