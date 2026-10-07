@@ -1,3 +1,32 @@
 <resources>
     <string name="app_name">Aiden On The Go</string>
+
+    <!-- BEGIN model picker strings (features/shared/AidenModelPicker.kt) -->
+    <string name="model_picker_title">Model</string>
+    <string name="model_picker_title_with_thinking">Model &amp; Thinking</string>
+    <string name="model_picker_bot_title">AI Model</string>
+    <string name="model_picker_thinking">Thinking</string>
+    <string name="model_picker_select">Select model</string>
+    <string name="model_picker_close">Close</string>
+    <string name="model_picker_search">Search models</string>
+    <string name="model_picker_search_clear">Clear search</string>
+    <string name="model_picker_no_results">No models match “%1$s”</string>
+    <string name="model_picker_no_results_hint">Try a model name, an id, or a provider.</string>
+    <string name="model_picker_recent">Recent</string>
+    <string name="model_picker_default">Default</string>
+    <string name="model_picker_default_uses">Uses %1$s · %2$s</string>
+    <string name="model_picker_default_unknown">Uses the model set on your Mac</string>
+    <string name="model_picker_mac_default">Mac default</string>
+    <string name="model_picker_capability_vision">Vision</string>
+    <string name="model_picker_capability_reasoning">Reasoning</string>
+    <string name="model_picker_unavailable">Unavailable</string>
+    <string name="model_picker_group_expanded">Expanded</string>
+    <string name="model_picker_group_collapsed">Collapsed</string>
+    <plurals name="model_picker_group_count">
+        <item quantity="one">%1$d model</item>
+        <item quantity="other">%1$d models</item>
+    </plurals>
+    <string name="model_picker_change">Change model</string>
+    <string name="model_picker_none">No model selected</string>
+    <!-- END model picker strings -->
 </resources>

@@ -44,6 +44,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
@@ -92,6 +95,8 @@ fun AidenComposerView(
     selectedThinkingLevel: String? = null,
     availableProviders: List<AidenProvider> = emptyList(),
     onSelectModel: ((AidenProvider, AidenModel, String?) -> Unit)? = null,
+    defaultModelRoute: AidenModelRoute? = null,
+    recentModelRoutes: List<AidenModelRoute> = emptyList(),
     placeholder: String = "Message Aiden",
     isReadOnly: Boolean = false,
     voiceErrorMessage: String? = null,
@@ -371,36 +376,38 @@ fun AidenComposerView(
                                     AidenProviderIcon(
                                         providerId = selectedProvider.id,
                                         providerLabel = selectedProvider.label,
+                                        modelId = selectedModel?.id,
                                         artwork = selectedProvider.artwork,
-                                        size = 14.dp
+                                        size = 18.dp,
+                                        modifier = Modifier.clearAndSetSemantics {}
                                     )
-                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                 }
                                 // One label so a narrow picker shortens the name and
                                 // thinking level together, keeping the provider icon
                                 // and chevron visible.
                                 Text(
                                     text = buildAnnotatedString {
-                                        append(selectedModel?.label ?: "Model")
+                                        append(selectedModel?.label ?: stringResource(R.string.model_picker_default))
                                         if (selectedThinkingLevel != null) {
                                             withStyle(SpanStyle(fontWeight = FontWeight.Normal, color = palette.secondary.copy(alpha = 0.8f))) {
                                                 append(" · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}")
                                             }
                                         }
                                     },
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Medium,
                                     color = palette.secondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false)
                                 )
-                                Spacer(modifier = Modifier.width(3.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
                                     imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = "Select model",
+                                    contentDescription = stringResource(R.string.model_picker_select),
                                     tint = palette.secondary,
-                                    modifier = Modifier.size(14.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }
@@ -412,7 +419,9 @@ fun AidenComposerView(
                                 selectedModel = selectedModel,
                                 selectedThinkingLevel = selectedThinkingLevel,
                                 onSelectModel = onSelectModel,
-                                onDismiss = { showModelMenu = false }
+                                onDismiss = { showModelMenu = false },
+                                defaultRoute = defaultModelRoute,
+                                recentRoutes = recentModelRoutes
                             )
                         }
                     }

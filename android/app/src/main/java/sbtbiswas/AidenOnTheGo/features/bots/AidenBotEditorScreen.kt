@@ -31,7 +31,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
-import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.toModelPickerProvider
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
@@ -662,45 +666,22 @@ fun AidenBotEditorScreen(
 
                         // AI Provider and Model picker
                         Text("AI Provider & Model", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                        currentCat.providers.forEach { provider ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                AidenProviderIcon(providerId = provider.id, providerLabel = provider.label, size = 20.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(provider.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                            }
-                            provider.models.forEach { model ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            draft = currentDraft.copy(
-                                                customAccess = currentDraft.customAccess.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            )
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    RadioButton(
-                                        selected = currentDraft.customAccess.providerID == provider.id && currentDraft.customAccess.modelID == model.id,
-                                        onClick = {
-                                            draft = currentDraft.copy(
-                                                customAccess = currentDraft.customAccess.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            )
-                                        },
-                                        colors = RadioButtonDefaults.colors(selectedColor = palette.accent)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(model.label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                                }
-                            }
+                        val pickerProviders = remember(currentCat.providers) {
+                            currentCat.providers.map { it.toModelPickerProvider() }
                         }
+                        AidenModelPickerField(
+                            title = stringResource(R.string.model_picker_bot_title),
+                            providers = pickerProviders,
+                            selection = AidenModelRoute(currentDraft.customAccess.providerID, currentDraft.customAccess.modelID),
+                            onSelect = { entry ->
+                                draft = currentDraft.copy(
+                                    customAccess = currentDraft.customAccess.copy(
+                                        providerID = entry.provider.id,
+                                        modelID = entry.model.id
+                                    )
+                                )
+                            }
+                        )
 
                         // Detailed custom switches if in custom mode
                         AnimatedVisibility(visible = !currentDraft.usesFullAccess) {
