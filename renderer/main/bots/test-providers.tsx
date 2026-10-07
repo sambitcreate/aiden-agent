@@ -1,6 +1,7 @@
 import * as React from "react";
 import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { CommandSystemProvider } from "../../lib/command-system";
 import { BotChatRoute } from "../bot-chat-route";
 import {
   createMemoryHistory,
@@ -73,7 +74,9 @@ function createBotRouterHarness(
     router,
     element: (
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <CommandSystemProvider>
+          <RouterProvider router={router} />
+        </CommandSystemProvider>
       </QueryClientProvider>
     ),
   };

@@ -55,7 +55,7 @@ test("an interrupted Bot's row reads Paused", async () => {
   await waitFor(() => assert.ok(within(row).getByText("Paused — tap to resume")));
 });
 
-test("with no Bots, the first-run carousel starts a starter Bot once per tap pair", async () => {
+test("Start Chat on a starter Bot sends one create request and opens its chat", async () => {
   let created = false;
   const calls = installBotTestIpc({
     "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief of Staff" })] : []),
@@ -80,11 +80,13 @@ test("with no Bots, the first-run carousel starts a starter Bot once per tap pai
   const starters = screen.getByRole("list", { name: "Starter Bots" });
   const startChat = within(starters).getAllByRole("button", { name: "Start Chat" })[0]!;
 
+  // A second tap while the first is still answering is ignored; the same Bot opens.
+  fireEvent.click(startChat);
   fireEvent.click(startChat);
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-chief/chat"));
   const presetCalls = calls.filter((call) => call.channel === "bots:createFromPreset");
   assert.equal(presetCalls.length, 1);
-  assert.equal(typeof (presetCalls[0]!.args[0] as { presetId: string }).presetId, "string");
+  assert.deepEqual(presetCalls[0]!.args[0], { presetId: "chief-of-staff" });
 });
 
 test("Create My Own from the first run opens the create flow", async () => {

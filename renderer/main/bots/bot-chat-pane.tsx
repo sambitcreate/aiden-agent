@@ -111,25 +111,26 @@ function TranscriptEntries({
         break;
       case "assistant": {
         const last = index === entries.length - 1;
-        const { finalText, progressText } = resolveBotReplyProjection(entry.text, null, false);
-        if (entry.toolCalls.length > 0 || progressText) {
+        if (entry.toolCalls.length > 0) {
+          // Text written before a tool call is progress, folded under Updates.
           rows.push(
             <BotUpdates
               key={`${entry.id}:updates`}
-              progressText={progressText || entry.text}
+              progressText={entry.text}
               timeline={null}
               active={false}
             />,
           );
-        }
-        if (finalText || (entry.toolCalls.length === 0 && entry.text)) {
+        } else if (entry.text.trim()) {
           rows.push(
             <SafeMessageBubble
               key={entry.id}
               role="assistant"
-              content={finalText || entry.text}
+              content={entry.text}
               showCopy
-              {...(entry.errorMessage ? { footer: <Text variant="small" color="secondary">{entry.errorMessage}</Text> } : {})}
+              {...(entry.errorMessage
+                ? { footer: <Text variant="small" color="secondary">{entry.errorMessage}</Text> }
+                : {})}
             />,
           );
         }
