@@ -788,3 +788,33 @@ test("IPC failures reach callers without Electron's remote-method wrapper", asyn
     else Reflect.deleteProperty(globalThis, "window");
   }
 });
+
+test("approval prompts keep the allow scopes main offered, and drop unknown ones", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const generation = startGeneration(
+      { chatId: "chat-approval", workspaceId: "workspace-1", providerId: "provider-1", model: "model-1" },
+      { ...callbacks(), onApproval: (prompt) => received.push(prompt) },
+      "turn-approval",
+    );
+    for (const handler of bridge.listeners.get("chat:approval") ?? []) {
+      handler({
+        streamId: generation.streamId,
+        approvalId: "a-1",
+        toolCallId: "call-1",
+        toolName: "run_command",
+        summary: "npm test",
+        scopes: ["once", "chat", "forever"],
+      });
+      handler({ streamId: generation.streamId, approvalId: "a-2", toolCallId: "call-2", toolName: "edit_file", summary: "Edit" });
+    }
+    assert.deepEqual(received, [
+      { approvalId: "a-1", toolCallId: "call-1", toolName: "run_command", summary: "npm test", details: undefined, scopes: ["once", "chat"] },
+      { approvalId: "a-2", toolCallId: "call-2", toolName: "edit_file", summary: "Edit", details: undefined },
+    ]);
+    generation.cancel("lifecycle");
+  } finally {
+    restore();
+  }
+});

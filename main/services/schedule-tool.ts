@@ -44,6 +44,7 @@ import {
   type ScheduledTaskApprovalDetails,
 } from "../../renderer/shared/assistant.js";
 import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task-presentation.js";
+import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.js";
 
 export const SCHEDULE_TOOL_NAME = ASSISTANT_AUTOMATION_TOOL_NAME;
 export const EDIT_AUTOMATION_TOOL_NAME = ASSISTANT_AUTOMATION_EDIT_TOOL_NAME;
@@ -930,7 +931,7 @@ async function resolveStandardDefaultModel(
   dependencies: ScheduleToolDependencies,
 ): Promise<StandardDefaultModel> {
   const settings = await dependencies.getSettings();
-  const providerId = settings.lastProviderId?.trim();
+  const providerId = unattendedFallbackProviderId(settings.lastProviderId?.trim());
   if (!providerId) return {};
   const provider = await dependencies.selectionProvider(providerId);
   const model = settings.lastModel?.trim() || provider?.defaultModel?.trim();

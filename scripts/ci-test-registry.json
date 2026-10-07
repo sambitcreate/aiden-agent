@@ -180,6 +180,7 @@
         "main/services/skill-registry.test.ts",
         "main/services/skill-tools.test.ts",
         "main/services/skills-discovery.test.ts",
+        "main/services/startup-chat-reconciliation.test.ts",
         "main/services/terminal-history.test.ts",
         "main/services/tool-output-store.test.ts",
         "main/services/transcription-core.test.ts",
@@ -217,7 +218,9 @@
         "scripts/run-ci-tests.test.mjs",
         "scripts/ci-timings.test.mjs",
         "scripts/worktree-file-io.test.mjs",
-        "main/services/generation-delta-coalescer.test.ts"
+        "main/services/generation-delta-coalescer.test.ts",
+        "main/services/bot-connection-dismissals.test.ts",
+        "main/services/bot-runtime-tools/suggest-connection.test.ts"
       ],
       "preserved": [
         "browser",
@@ -251,7 +254,21 @@
         "main/handlers/peer-host-live.test.ts",
         "main/handlers/peer-pairing.test.ts",
         "main/handlers/scheduled-tasks-parse.test.ts",
+        "main/services/acp/activity.test.ts",
+        "main/services/acp/client-files.test.ts",
+        "main/services/acp/infrastructure.test.ts",
+        "main/services/acp/permissions.test.ts",
+        "main/services/acp/prompt.test.ts",
+        "main/services/acp/provider.test.ts",
+        "main/services/acp/runtime.test.ts",
+        "main/services/acp/installer.test.ts",
+        "main/services/acp/launcher.test.ts",
+        "main/services/antigravity/auth.test.ts",
+        "main/services/acp/generation-host.test.ts",
+        "main/services/antigravity/service.test.ts",
         "main/services/agents-instructions.test.ts",
+        "main/services/subagents/eligibility-harness.test.ts",
+        "main/services/antigravity/definition.test.ts",
         "main/services/aiden-remote-approved-roots.test.ts",
         "main/services/aiden-remote-bot-files.test.ts",
         "main/services/aiden-remote-bots.test.ts",
@@ -471,6 +488,8 @@
         "worktree-remover-build"
       ],
       "files": [
+        "renderer/components/settings/harness-runtime-section.test.tsx",
+        "renderer/shared/acp-harness.test.ts",
         "main/services/display-image-artifact-store.test.ts",
         "main/services/display-image-extension.test.ts",
         "main/services/generation-timeline.test.ts",
@@ -672,6 +691,7 @@
         "renderer/shared/chat-message-contract.test.ts",
         "renderer/shared/chat-pull-requests.test.ts",
         "renderer/shared/chat-row-state.test.ts",
+        "renderer/shared/chat-visibility.test.ts",
         "renderer/shared/compaction.test.ts",
         "renderer/shared/context-pressure.test.ts",
         "renderer/shared/devices.test.ts",
@@ -710,7 +730,10 @@
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
         "scripts/update-model-capabilities.test.mjs",
         "scripts/vendor-cua-driver.test.mjs",
-        "scripts/verify-macos-package.test.mjs"
+        "scripts/verify-macos-package.test.mjs",
+        "renderer/components/bots/bot-connection-ui.test.tsx",
+        "renderer/shared/bot-connections.test.ts",
+        "renderer/shared/bot-presets.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",

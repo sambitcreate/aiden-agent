@@ -30,6 +30,7 @@ import {
 } from "../../shared/assistant";
 import { appendReconciliationFailureKind } from "../../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../../lib/append-reconciliation";
+import { isAcpHarnessProvider } from "../../shared/acp-harness";
 
 export interface AssistantMessage {
   role: "user" | "assistant";
@@ -259,8 +260,10 @@ export function useAssistantChat(): AssistantChat {
     settings.data?.hiddenModelsByProvider,
   );
   const effectiveSelection = activeChatId ? selection : newWorkSelection;
+  // The dock is an Assistant surface: agent-backed providers cannot run here.
   const modelReady = Boolean(
     effectiveSelection &&
+      !isAcpHarnessProvider(effectiveSelection.providerId) &&
       isModelSelectionAvailable(effectiveSelection, providers.data),
   );
   const ready =

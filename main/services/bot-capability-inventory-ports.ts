@@ -19,6 +19,7 @@ import type {
   BotMacFileInventory,
 } from "./bot-capability-catalog-main.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
+import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 
 export interface BotCapabilityInventoryPortDependencies {
   loadOpaqueSelectionKey(): Promise<Uint8Array>;
@@ -142,6 +143,8 @@ function botCatalogProviderInputs(
   for (const provider of orderedProviders) {
     if (selected.length >= BOT_CAPABILITY_LIMITS.providers || remainingModels === 0) break;
     if (provider.needsKey === true && provider.hasKey !== true) continue;
+    // Agent harnesses need someone watching to answer approvals; Bots never qualify.
+    if (isAcpHarnessProvider(provider.id)) continue;
 
     const seen = new Set<string>();
     const models: string[] = [];

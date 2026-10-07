@@ -275,3 +275,40 @@ test("a caller can refuse the copy before it is installed", async (t) => {
   assert.equal((await store.list()).length, 1);
   assert.deepEqual(summaries, []);
 });
+
+test("feature-owned chats are ineligible for copy and fork", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-owned-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const owned = await store.create({ owner: { kind: "design-project", projectId: "project-1" } });
+  await store.appendMessage(owned.id, { role: "user", content: "A pricing page" });
+  const reply = await store.appendMessage(owned.id, { role: "assistant", content: "Here it is." });
+  const published: Chat[] = [];
+  const admitted: string[] = [];
+  const recordingCaller: ChatForkCaller = {
+    admitWorkspace: (workspaceId) => {
+      admitted.push(workspaceId);
+      return { isAborted: () => false, release: () => undefined };
+    },
+  };
+  // A pending artifact block must not mask the ownership refusal as "unavailable".
+  const forks = service(store, {
+    published: (chat) => published.push(chat),
+    startSummary: () => undefined,
+    blockedReason: async () => "Recover the visual artifact first.",
+  });
+
+  await rejectsWith(forks.fork({ chatId: owned.id }, recordingCaller), "ineligible");
+  await rejectsWith(
+    forks.fork(
+      { chatId: owned.id, forkAt: { messageId: reply.messages[1]!.id, position: "after" } },
+      recordingCaller,
+    ),
+    "ineligible",
+  );
+  // Refused before any workspace admission: an owned chat never borrows the
+  // default workspace's mutation gate.
+  assert.deepEqual(admitted, []);
+  assert.deepEqual(published, []);
+  assert.equal((await store.list()).length, 1);
+});
