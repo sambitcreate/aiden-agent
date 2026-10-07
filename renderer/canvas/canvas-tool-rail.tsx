@@ -18,7 +18,6 @@ export function CanvasToolRail({
     <div
       role="toolbar"
       aria-label="Canvas tools"
-      aria-orientation="vertical"
       className="glass-surface flex flex-col gap-1 rounded-button p-1 shadow-control"
     >
       {TOOLS.map(({ tool: item, label, Icon }) => {

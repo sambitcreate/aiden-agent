@@ -146,6 +146,15 @@ Copyright (c) 2010-2026 three.js authors
 
 MIT License. https://github.com/mrdoob/three.js/blob/dev/LICENSE
 
+## React Flow (@xyflow/react)
+
+Renders the Design Studio and Create Images canvases. Loaded only when one of
+those experimental surfaces is opened.
+
+Copyright (c) 2019-2026 webkid GmbH
+
+MIT License. https://github.com/xyflow/xyflow/blob/main/LICENSE
+
 ## expo-device-hub and agent-device (installed on request)
 
 These are not bundled. After the user consents in the Simulator tab, Aiden

@@ -27,6 +27,15 @@ export interface CanvasKeyEvent {
 
 export const CANVAS_TOOL_SHORTCUTS = Object.freeze({ select: "V", hand: "H" } as const);
 
+/** aria-keyshortcuts strings for the non-tool commands; resolveCanvasKey is the source of truth they must match. */
+export const CANVAS_COMMAND_SHORTCUTS = Object.freeze({
+  zoomIn: "=",
+  zoomOut: "-",
+  zoomReset: "Shift+0",
+  fitView: "Shift+1",
+  toggleMinimap: "M",
+} as const);
+
 export function resolveCanvasKey(
   event: CanvasKeyEvent,
   context: { editable: boolean },

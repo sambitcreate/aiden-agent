@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { COMMANDS, type KeyboardPlatform } from "../shared/keybindings";
-import { CANVAS_TOOL_SHORTCUTS, resolveCanvasKey, type CanvasKeyEvent } from "./canvas-keymap-core";
+import {
+  CANVAS_COMMAND_SHORTCUTS,
+  CANVAS_TOOL_SHORTCUTS,
+  resolveCanvasKey,
+  type CanvasKeyEvent,
+} from "./canvas-keymap-core";
 import { formatZoomPercent } from "./canvas-viewport-core";
 
 const key = (code: string, overrides: Partial<CanvasKeyEvent> = {}): CanvasKeyEvent => ({
@@ -105,4 +110,32 @@ test("zoom percentages round to whole numbers", () => {
   assert.equal(formatZoomPercent(1), "100%");
   assert.equal(formatZoomPercent(1.2), "120%");
   assert.equal(formatZoomPercent(0.3333), "33%");
+});
+
+const PHYSICAL_CODES: Record<string, string> = { "=": "Equal", "-": "Minus" };
+
+/** Builds the event a keyboard would send for an aria-keyshortcuts string such as "Shift+0". */
+function eventForShortcut(shortcut: string): CanvasKeyEvent {
+  const parts = shortcut.split("+");
+  const base = parts.pop() as string;
+  const code =
+    PHYSICAL_CODES[base] ?? (/^\d$/u.test(base) ? `Digit${base}` : `Key${base.toUpperCase()}`);
+  return key(code, { key: base, shiftKey: parts.includes("Shift") });
+}
+
+test("every advertised command shortcut resolves to its own command", () => {
+  assert.deepEqual(Object.keys(CANVAS_COMMAND_SHORTCUTS).sort(), [
+    "fitView",
+    "toggleMinimap",
+    "zoomIn",
+    "zoomOut",
+    "zoomReset",
+  ]);
+  for (const [name, shortcut] of Object.entries(CANVAS_COMMAND_SHORTCUTS)) {
+    assert.deepEqual(
+      resolveCanvasKey(eventForShortcut(shortcut), idle),
+      { type: name },
+      `${name} (${shortcut})`,
+    );
+  }
 });

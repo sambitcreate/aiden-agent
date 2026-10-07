@@ -1,5 +1,6 @@
 import { Map as MapIcon, Maximize, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "../components/ui";
+import { CANVAS_COMMAND_SHORTCUTS } from "./canvas-keymap-core";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM, formatZoomPercent } from "./canvas-viewport-core";
 
 export interface CanvasZoomControlsProps {
@@ -34,7 +35,7 @@ export function CanvasZoomControls({
         variant="transparent"
         iconOnly
         aria-label="Zoom out"
-        aria-keyshortcuts="-"
+        aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomOut}
         disabled={zoom <= CANVAS_MIN_ZOOM + EPSILON}
         onClick={onZoomOut}
       >
@@ -43,7 +44,7 @@ export function CanvasZoomControls({
       <Button
         variant="transparent"
         aria-label={`Zoom ${percent}, reset to 100%`}
-        aria-keyshortcuts="Shift+0"
+        aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomReset}
         className="min-w-14 tabular-nums"
         onClick={onResetZoom}
       >
@@ -53,13 +54,19 @@ export function CanvasZoomControls({
         variant="transparent"
         iconOnly
         aria-label="Zoom in"
-        aria-keyshortcuts="="
+        aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomIn}
         disabled={zoom >= CANVAS_MAX_ZOOM - EPSILON}
         onClick={onZoomIn}
       >
         <ZoomIn />
       </Button>
-      <Button variant="transparent" iconOnly aria-label="Fit to screen" aria-keyshortcuts="Shift+1" onClick={onFitView}>
+      <Button
+        variant="transparent"
+        iconOnly
+        aria-label="Fit to screen"
+        aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.fitView}
+        onClick={onFitView}
+      >
         <Maximize />
       </Button>
       <Button
@@ -67,7 +74,7 @@ export function CanvasZoomControls({
         iconOnly
         aria-label="Overview map"
         aria-pressed={minimapVisible}
-        aria-keyshortcuts="M"
+        aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.toggleMinimap}
         onClick={onToggleMinimap}
       >
         <MapIcon />
