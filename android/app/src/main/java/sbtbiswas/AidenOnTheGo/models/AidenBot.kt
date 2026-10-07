@@ -19,7 +19,6 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.time.Instant
 import java.util.Base64
-import java.util.UUID
 
 object AidenBotWire {
     const val MAX_NAME_LENGTH = 80
@@ -813,33 +812,6 @@ data class AidenBotChatCreateRequest(
     }
 }
 
-enum class AidenBotFavoriteOrderMove {
-    ADD, EARLIER, LATER, REMOVE
-}
-
-fun aidenBotFavoriteOrder(
-    botIds: List<String>,
-    movingBotId: String,
-    move: AidenBotFavoriteOrderMove
-): List<String> {
-    val result = botIds.filter { it != movingBotId }.toMutableList()
-    when (move) {
-        AidenBotFavoriteOrderMove.ADD -> result.add(movingBotId)
-        AidenBotFavoriteOrderMove.REMOVE -> {}
-        AidenBotFavoriteOrderMove.EARLIER, AidenBotFavoriteOrderMove.LATER -> {
-            val oldIndex = botIds.indexOf(movingBotId)
-            if (oldIndex == -1) return botIds
-            val destination = if (move == AidenBotFavoriteOrderMove.EARLIER) {
-                maxOf(0, oldIndex - 1)
-            } else {
-                minOf(botIds.size - 1, oldIndex + 1)
-            }
-            result.add(destination, movingBotId)
-        }
-    }
-    return result
-}
-
 sealed class AidenBotDeepLinkResolution {
     /** Open this Bot's canonical conversation. */
     data class OpenChat(val chatId: String) : AidenBotDeepLinkResolution()
@@ -882,29 +854,6 @@ fun aidenCanonicalBotConversations(
     return conversations.filter { conversation ->
         canonicalByBotId[conversation.botId]?.chatId == conversation.chatId
     }
-}
-
-data class AidenBotsFavoriteMutation(
-    val id: UUID,
-    val botID: String
-)
-
-data class AidenBotsFavoriteMutationFinish(
-    val favoriteOverride: List<String>?,
-    val favoriteError: String?
-)
-
-fun aidenBotsFinishFavoriteMutation(
-    current: AidenBotsFavoriteMutation?,
-    finishing: AidenBotsFavoriteMutation,
-    restoring: List<String>?,
-    error: String? = null
-): AidenBotsFavoriteMutationFinish? {
-    if (current != finishing) return null
-    return AidenBotsFavoriteMutationFinish(
-        favoriteOverride = restoring,
-        favoriteError = error
-    )
 }
 
 @Serializable

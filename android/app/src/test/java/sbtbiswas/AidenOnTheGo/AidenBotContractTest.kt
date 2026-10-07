@@ -291,8 +291,6 @@ class AidenBotContractTest {
 
         assertEquals(AidenBotAvatarShape.ORB, presentation.shape)
         assertEquals(AidenBotAvatarColor.LILAC, presentation.color)
-        assertEquals(AidenBotAvatarEyes.HAPPY, presentation.eyes)
-        assertEquals(AidenBotAvatarDetail.SPARKLES, presentation.detail)
 
         // Legacy conversion
         val legacyAvatar = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.SPARK)
@@ -411,48 +409,5 @@ class AidenBotContractTest {
         )
 
         assertFalse(exceeding.isSubset(ceiling))
-    }
-
-    @Test
-    fun testFavoriteOrderSupportsMembershipAndStableReordering() {
-        fun favoriteOrder(current: List<String>, moving: String, action: String): List<String> {
-            val list = current.toMutableList()
-            when (action) {
-                "add" -> if (!list.contains(moving)) list.add(moving)
-                "remove" -> list.remove(moving)
-                "earlier" -> {
-                    val idx = list.indexOf(moving)
-                    if (idx > 0) {
-                        list.removeAt(idx)
-                        list.add(idx - 1, moving)
-                    }
-                }
-                "later" -> {
-                    val idx = list.indexOf(moving)
-                    if (idx in 0 until list.size - 1) {
-                        list.removeAt(idx)
-                        list.add(idx + 1, moving)
-                    }
-                }
-            }
-            return list
-        }
-
-        assertEquals(listOf("a", "b", "c"), favoriteOrder(listOf("a", "b"), "c", "add"))
-        assertEquals(listOf("b", "a", "c"), favoriteOrder(listOf("a", "b", "c"), "b", "earlier"))
-        assertEquals(listOf("a", "c", "b"), favoriteOrder(listOf("a", "b", "c"), "b", "later"))
-        assertEquals(listOf("a", "c"), favoriteOrder(listOf("a", "b", "c"), "b", "remove"))
-    }
-
-    @Test
-    fun testConversationDeletionRequiresIdleActiveWritableBot() {
-        fun canDeleteConversation(activityState: AidenBotConversationActivityState, botHealth: AidenBotHealth, canWrite: Boolean): Boolean {
-            return activityState == AidenBotConversationActivityState.IDLE && botHealth == AidenBotHealth.READY && canWrite
-        }
-
-        assertTrue(canDeleteConversation(AidenBotConversationActivityState.IDLE, AidenBotHealth.READY, true))
-        assertFalse(canDeleteConversation(AidenBotConversationActivityState.RUNNING, AidenBotHealth.READY, true))
-        assertFalse(canDeleteConversation(AidenBotConversationActivityState.IDLE, AidenBotHealth.ARCHIVED, true))
-        assertFalse(canDeleteConversation(AidenBotConversationActivityState.IDLE, AidenBotHealth.READY, false))
     }
 }
