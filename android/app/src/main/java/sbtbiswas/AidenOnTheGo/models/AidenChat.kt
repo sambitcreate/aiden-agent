@@ -1740,6 +1740,25 @@ data class AidenChatModelSelection(
 )
 
 object AidenChatModelAuthority {
+    /** Agent-backed providers (mirroring the Mac's ACP harness list) run only in
+     *  chats open on the Mac, so the host leaves them out of the phone's catalog. */
+    val macOnlyAgentProviders: Map<String, String> = mapOf("antigravity" to "Google Antigravity")
+
+    /** For a chat the Mac last answered with a Mac-only agent model, which model
+     *  replies from this phone use instead. Null when the chat's own model is
+     *  available here, or for Bot chats, whose model is fixed. */
+    fun macOnlyAgentNotice(chat: AidenChat, catalog: AidenModelCatalog?, replyModelLabel: String?): String? {
+        if (chat.isBotChat) return null
+        val providerId = chat.providerId ?: return null
+        val agentLabel = macOnlyAgentProviders[providerId] ?: return null
+        if (catalog?.providers?.any { it.id == providerId } == true) return null
+        return if (replyModelLabel != null) {
+            "This chat used $agentLabel, which runs only on your Mac. Replies from here use $replyModelLabel."
+        } else {
+            "This chat used $agentLabel, which runs only on your Mac. Choose a model for replies from here."
+        }
+    }
+
     fun resolvedSelection(
         chat: AidenChat,
         catalog: AidenModelCatalog?,

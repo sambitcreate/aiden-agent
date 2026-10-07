@@ -75,6 +75,32 @@ class AidenModelPreferenceTest {
     )
 
     @Test
+    fun desktopStartedAgentChatSaysWhichModelRepliesFromThisPhone() {
+        // The Mac omits agent-backed providers from the phone's catalog.
+        val inventory = catalog(catalogWithoutRemembered)
+        val chat = workspaceChat(providerId = "antigravity", modelId = "gemini-3.8-flash")
+        val resolved = AidenChatModelAuthority.resolvedSelection(
+            chat = chat,
+            catalog = inventory,
+            selectedProviderId = chat.providerId,
+            selectedModelId = chat.modelId,
+            selectedThinkingLevel = null
+        )
+        assertEquals("google", resolved.providerId)
+        assertEquals(
+            "This chat used Google Antigravity, which runs only on your Mac. Replies from here use Gemini Flash.",
+            AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, "Gemini Flash")
+        )
+        assertEquals(
+            "This chat used Google Antigravity, which runs only on your Mac. Choose a model for replies from here.",
+            AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, null)
+        )
+        // A chat on a model this phone can use, or a Bot chat, says nothing.
+        assertNull(AidenChatModelAuthority.macOnlyAgentNotice(workspaceChat("google", "gemini-flash"), inventory, "Gemini Flash"))
+        assertNull(AidenChatModelAuthority.macOnlyAgentNotice(chat.copy(botId = "bot-1"), inventory, "Gemini Flash"))
+    }
+
+    @Test
     fun rememberedHostChoiceWinsOverChatPairWhileTheHostStillOffersIt() {
         val resolved = AidenChatModelAuthority.resolvedSelection(
             chat = workspaceChat("google", "gemini-flash"),

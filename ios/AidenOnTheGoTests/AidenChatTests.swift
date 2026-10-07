@@ -4417,6 +4417,46 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(turn.modelId, "gemini-flash")
     }
 
+    func testDesktopStartedAgentChatSaysWhichModelRepliesFromThisPhone() throws {
+        // The Mac omits agent-backed providers from the phone's catalog.
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = nil
+        chat.providerId = "antigravity"
+        chat.modelId = "gemini-3.8-flash"
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: chat.providerId,
+            selectedModelId: chat.modelId,
+            selectedThinkingLevel: nil
+        )
+        XCTAssertEqual(resolved.providerId, "google")
+        XCTAssertEqual(
+            AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: "Gemini Flash"),
+            "This chat used Google Antigravity, which runs only on your Mac. Replies from here use Gemini Flash."
+        )
+        XCTAssertEqual(
+            AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: nil),
+            "This chat used Google Antigravity, which runs only on your Mac. Choose a model for replies from here."
+        )
+
+        // A chat on a model this phone can use, or a Bot chat, says nothing.
+        var ordinary = chat
+        ordinary.providerId = "google"
+        ordinary.modelId = "gemini-flash"
+        XCTAssertNil(AidenChatModelAuthority.macOnlyAgentNotice(chat: ordinary, catalog: catalog, replyModelLabel: "Gemini Flash"))
+        var bot = chat
+        bot.botId = "bot-1"
+        XCTAssertNil(AidenChatModelAuthority.macOnlyAgentNotice(chat: bot, catalog: catalog, replyModelLabel: "Gemini Flash"))
+    }
+
     func testRememberedHostModelChoiceWinsWhileTheHostStillOffersIt() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,

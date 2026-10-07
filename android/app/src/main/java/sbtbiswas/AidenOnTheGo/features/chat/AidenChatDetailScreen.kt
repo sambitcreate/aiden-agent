@@ -645,6 +645,23 @@ fun AidenChatDetailScreen(
                     )
                 }
 
+                val macOnlyAgentNotice = chat?.let { currentChat ->
+                    val replyModel = modelCatalog?.providers
+                        ?.firstOrNull { it.id == selectedProviderId }
+                        ?.models?.firstOrNull { it.id == selectedModelId }
+                    AidenChatModelAuthority.macOnlyAgentNotice(currentChat, modelCatalog, replyModel?.label)
+                }
+                if (macOnlyAgentNotice != null) {
+                    Text(
+                        text = macOnlyAgentNotice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                }
+
                 // 1:1 Parity iOS Glass Composer
                 AidenComposerView(
                     draft = draft,
