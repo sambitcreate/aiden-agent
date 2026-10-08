@@ -228,6 +228,16 @@ export async function connectCardStatus(botId: string, card: ConnectCardEntry) {
 }
 
 let liveProjection: BotLiveProjection | undefined;
+const stateListeners = new Set<(botId: string, state: BotSessionState) => void>();
+
+/**
+ * Hear every Bot session state change in this process (for example the
+ * Telegram outbox re-attaching a reply once its paused turn is resumed).
+ */
+export function onBotSessionStateChange(listener: (botId: string, state: BotSessionState) => void): () => void {
+  stateListeners.add(listener);
+  return () => void stateListeners.delete(listener);
+}
 
 // A question appearing or settling reaches open desktop chats at once; the
 // Remote session projector listens to the same bridge (`remote-service-main`).
@@ -276,6 +286,13 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     onStateChange: (botId, state) => {
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
+      for (const listener of stateListeners) {
+        try {
+          listener(botId, state);
+        } catch (error) {
+          logger.warn("bots", `Bot ${botId} state listener failed.`, error);
+        }
+      }
     },
     onReport: (botId, error) => logger.warn("bots", `Bot ${botId} runtime report.`, error),
   }).catch((error) => {

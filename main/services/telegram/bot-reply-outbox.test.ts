@@ -6,7 +6,7 @@ import { after, test } from "node:test";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createBotSessionService } from "../bot-runtime/bot-session-service.js";
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF } from "../bot-runtime/test-support/faux.js";
+import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor } from "../bot-runtime/test-support/faux.js";
 import type { BotReplyOutcome } from "../bot-runtime/bot-session-service.js";
 import {
   createTelegramBotIngress,
@@ -181,6 +181,114 @@ test("a send that fails mid-way is retried once with the duplicate label", async
   await ingress.idle();
   assert.deepEqual(attempts, ["Long answer.", `${MAY_BE_DUPLICATE_PREFIX} Long answer.`]);
   assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+});
+
+test("a turn interrupted by a quit is delivered once after an explicit Resume, across restarts", async () => {
+  const dir = tempDir();
+  const file = path.join(dir, "outbox.json");
+  const delivered: string[] = [];
+  const message = { botId: "bot:a", chatId: 7, messageId: 91, ownerUserId: 7, text: "plan the week" };
+
+  /** One process: the real Bot runtime and Telegram ingress, wired the way production wires them. */
+  async function open(responses: Parameters<typeof createFauxModels>[0], options?: { tokensPerSecond?: number }) {
+    const fauxModels = createFauxModels(responses, options);
+    let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
+    const session = await createBotSessionService({
+      profileDir: dir,
+      models: fauxModels.models,
+      extension: recordingDeps(),
+      resolveModel: async () => FAUX_MODEL_REF,
+      knownBotIds: async () => new Set(["bot:a"]),
+      onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
+    });
+    ingress = createTelegramBotIngress({ file, session, deliver: async (reply) => void delivered.push(reply.text) });
+    const quit = async () => {
+      await session.shutdown();
+      await ingress!.idle();
+      ingress!.stop();
+    };
+    return { session, ingress, fauxModels, quit };
+  }
+
+  const first = await open([slowAnswer()], { tokensPerSecond: 40 });
+  await first.ingress.admit(message);
+  await waitFor(async () => (await first.session.state("bot:a")).kind === "running" && first.fauxModels.calls() === 1, {
+    what: "the Telegram turn to stream",
+  });
+  await first.quit();
+  assert.deepEqual((await first.ingress.rows()).map((row) => row.state), ["interrupted"]);
+
+  // A restart without Resume leaves the paused turn alone and delivers nothing.
+  const second = await open([fauxAssistantMessage("never")]);
+  await second.session.initialize();
+  await second.ingress.recover();
+  await second.ingress.idle();
+  assert.equal(second.fauxModels.calls(), 0);
+  await second.quit();
+
+  const third = await open([fauxAssistantMessage("resumed Telegram answer")]);
+  await third.session.initialize();
+  await third.ingress.recover();
+  await third.ingress.idle();
+  assert.deepEqual(delivered, []);
+  await third.session.resume("bot:a", "desk-resume");
+  await waitFor(async () => (await third.ingress.rows())[0]?.state === "sent", { what: "the resumed reply to be sent" });
+  await third.ingress.idle();
+  assert.deepEqual(delivered, ["resumed Telegram answer"]);
+  await third.quit();
+
+  // The next start does not send it again.
+  const fourth = await open([]);
+  await fourth.session.initialize();
+  await fourth.ingress.recover();
+  await fourth.ingress.idle();
+  assert.deepEqual(delivered, ["resumed Telegram answer"]);
+  await fourth.quit();
+});
+
+test("a turn the person dismissed is settled and never delivered", async () => {
+  const dir = tempDir();
+  const file = path.join(dir, "outbox.json");
+  const delivered: string[] = [];
+  const message = { botId: "bot:a", chatId: 7, messageId: 92, ownerUserId: 7, text: "write a lot" };
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
+  const before = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+  });
+  const beforeIngress = createTelegramBotIngress({ file, session: before, deliver: async (reply) => void delivered.push(reply.text) });
+  await beforeIngress.admit(message);
+  await waitFor(async () => (await before.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
+    what: "the Telegram turn to stream",
+  });
+  await before.shutdown();
+  await beforeIngress.idle();
+  beforeIngress.stop();
+
+  let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: createFauxModels([]).models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+    onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
+  });
+  ingress = createTelegramBotIngress({ file, session, deliver: async (reply) => void delivered.push(reply.text) });
+  try {
+    await session.initialize();
+    await ingress.recover();
+    await session.dismiss("bot:a", "desk-dismiss");
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "dismissed", { what: "the row to settle" });
+    await ingress.idle();
+    assert.deepEqual(delivered, []);
+  } finally {
+    await session.shutdown();
+    ingress.stop();
+  }
 });
 
 test("an interrupted turn delivers nothing", async () => {

@@ -69,7 +69,11 @@ export type BotNotice =
 export type BotReplyOutcome =
   | { kind: "completed"; text: string }
   | { kind: "failed"; error: string }
-  | { kind: "interrupted" };
+  /**
+   * No answer now. `settled`: the turn ended without one for good (dismissed,
+   * stopped or deleted); otherwise it is paused and Resume can still answer it.
+   */
+  | { kind: "interrupted"; settled?: true };
 
 export interface BotInputAttachment {
   type: "image";
@@ -500,7 +504,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     },
 
     async awaitReply(botId, submissionId, signal) {
-      if (deleted.has(botId)) return { kind: "interrupted" };
+      if (deleted.has(botId)) return { kind: "interrupted", settled: true };
       const opened = await requireHost().open(botId);
       const id = Number(submissionId) as SubmissionId;
       const submission = await opened.harness.submission(id, ctx);
@@ -527,7 +531,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const answer = await opened.conversation.commit((tx) => tx.entry(AssistantEntry, settled.answer!), ctx);
         return { kind: "completed", text: assistantText(answer?.model?.[0] as AssistantMessage | undefined) };
       }
-      if (settled.reason === "aborted") return { kind: "interrupted" };
+      if (settled.reason === "aborted") return { kind: "interrupted", settled: true };
       return { kind: "failed", error: settled.reason ?? "The reply failed." };
     },
 

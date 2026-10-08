@@ -373,7 +373,11 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     : undefined;
   if (botIngress) {
     void import("../bot-runtime/bot-session-main.js")
-      .then(({ initializeBotSessionRuntime }) => initializeBotSessionRuntime())
+      .then(({ initializeBotSessionRuntime, onBotSessionStateChange }) => {
+        // A paused turn resumed from any client delivers its Telegram reply.
+        onBotSessionStateChange((botId, state) => botIngress.botStateChanged(botId, state));
+        return initializeBotSessionRuntime();
+      })
       .then(() => botIngress.recover())
       .catch((cause: unknown) => logger.warn("telegram", `[${profile}] Bot reply recovery is waiting for the Bot runtime.`, cause));
   }
