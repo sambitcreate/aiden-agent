@@ -76,6 +76,7 @@
         "main/services/design/design-preview.test.ts",
         "main/services/design/run-service.test.ts",
         "main/services/design/startup-core.test.ts",
+        "main/services/design/design-generation.test.ts",
         "main/handlers/design/handlers.test.ts",
         "main/services/dev-log.test.ts",
         "main/services/dictation-cleanup-core.test.ts",

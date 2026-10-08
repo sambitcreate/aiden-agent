@@ -18,12 +18,7 @@ import type { DesignRunBinding } from "../generation-profile.js";
 import type { PiRuntimeEffectStore } from "../pi-runtime-effect-store.js";
 import type { ChatStartParams } from "../types.js";
 import type { DesignChatAccess } from "./chat-port.js";
-import {
-  buildDesignContextBlock,
-  designContextRefusal,
-  redactDesignMessageForStorage,
-  type DesignContextTarget,
-} from "./design-context-core.js";
+import { buildDesignContextBlock, designContextRefusal, type DesignContextTarget } from "./design-context-core.js";
 import { createDesignRenderExtension } from "./design-render-extension.js";
 import { planDesignRun, type DesignRunOutcome, type DesignRunPlan } from "./store-core.js";
 import type { DesignProjectStore } from "./store.js";
@@ -202,7 +197,6 @@ export class DesignRunService {
         runId,
         extension: render.extension,
         acceptedCount: () => render.state().accepted,
-        redactForStorage: redactDesignMessageForStorage,
         onSettled: (outcome) => this.track(this.settle(projectId, runId, outcome)),
       };
       const started = await this.deps.generation.start(

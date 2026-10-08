@@ -2,7 +2,6 @@
 // with the matching main-built binding, and a design profile composes exactly
 // its own extension and exposes exactly its allowlisted tools. Callers resolve
 // the profile first; createGenerationHarness checks the final composition.
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import { RENDER_ARTIFACT_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 import { DESIGN_RENDER_EXTENSION_ID } from "./design/design-render-extension.js";
@@ -16,8 +15,6 @@ export interface DesignRunBinding {
   extension: PiAgentRuntimeExtension;
   /** Accepted revisions so far; they count as visible output at completion. */
   acceptedCount(): number;
-  /** Replace render_artifact HTML before the Pi journal or the stored assistant message keeps it. */
-  redactForStorage<T extends AgentMessage>(message: T): T;
   /** Called once when the started run's completion settles. */
   onSettled(outcome: DesignRunOutcome): void;
 }

@@ -390,7 +390,7 @@ import {
   type DesignRunBinding,
   type GenerationProfile,
 } from "./generation-profile.js";
-import { redactDesignMessageForStorage } from "./design/design-context-core.js";
+import { designGenerationWiring, designRunOutcome } from "./design/design-generation.js";
 import type { DesignRunOutcome } from "./design/store-core.js";
 import {
   createAskUserQuestionExtension,
@@ -820,9 +820,8 @@ async function prepareGeneration(
     (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
 
   if (options.designRun) {
-    // A design run composes exactly one extension. createGenerationHarness
-    // refuses to build if any other tool reaches it (ADR-DS §4).
-    generationExtensions.push(options.designRun.extension);
+    // A design run composes exactly its binding's extension (designGenerationWiring);
+    // createGenerationHarness refuses any other extension, tool or skill (ADR-DS §4).
     const designSettings = await configStore.getSettings();
     const designModel = runtime.model;
     return {
@@ -1817,6 +1816,7 @@ export const llmClient = {
     options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
     const designRun = options.designRun;
+    const designWiring = designRun ? designGenerationWiring(designRun, appendPiMessages) : undefined;
     const turnId = options.turnId;
     const ownsTurn =
       typeof turnId === "string" &&
@@ -2231,8 +2231,8 @@ export const llmClient = {
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage
               ? storedPiAssistantMessage(
-                  generationProfile.kind === "design"
-                    ? redactDesignMessageForStorage(lastAssistantMessage)
+                  designWiring
+                    ? designWiring.storedAssistantMessage(lastAssistantMessage)
                     : lastAssistantMessage,
                 )
               : undefined,
@@ -2423,7 +2423,7 @@ export const llmClient = {
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
         generationProfile.kind === "design"
           ? // Exactly the binding's extension; an empty base fails the composition check.
-            designRun ? [designRun.extension] : []
+            [...(designWiring?.extensions ?? [])]
           : preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
@@ -2559,7 +2559,7 @@ export const llmClient = {
       const telegramInteractive = options.interactionSurface === "telegram";
       const baseSystemPrompt =
         generationProfile.kind === "design"
-          ? ""
+          ? (designWiring?.baseSystemPrompt ?? "")
           : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: devicesEnabled()
@@ -2892,16 +2892,7 @@ export const llmClient = {
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           // Design HTML lives in the project store, never in the Pi journal (ADR-DS §10).
-          ...(generationProfile.kind === "design"
-            ? {
-                appendMessages: (session, messages, visibleChatMessageId) =>
-                  appendPiMessages(
-                    session,
-                    messages.map((message) => redactDesignMessageForStorage(message)),
-                    visibleChatMessageId,
-                  ),
-              }
-            : {}),
+          ...(designWiring ? { appendMessages: designWiring.journalAppend } : {}),
           beforeQueuedUser: async (message, signal) => {
             if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
               throw new Error("Queued guidance must contain text.");
@@ -3860,7 +3851,7 @@ export const llmClient = {
       rendererDetached: initialization.rendererDetached,
       computerUse,
       formFill,
-      inputClosed: designRun !== undefined,
+      inputClosed: designWiring?.inputClosed ?? false,
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -3975,7 +3966,8 @@ export const llmClient = {
             }),
           )
         : undefined;
-    let designOutcome: DesignRunOutcome = "failed";
+    // A throw before the outcome is known is Aiden's failure, not the provider's.
+    let designOutcome: DesignRunOutcome = "host_failed";
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -4045,8 +4037,10 @@ export const llmClient = {
             );
           }
         }
+        const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
+        let replyNotSaved = false;
         const finalError =
-          generationEmergencyUserError(runtimeOutcome.emergencyProjection) ??
+          emergencyError ??
           (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
@@ -4101,7 +4095,6 @@ export const llmClient = {
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           }));
         } else {
-          designOutcome = wasCancelled ? "cancelled" : "completed";
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
             timeline.finish(
@@ -4112,6 +4105,7 @@ export const llmClient = {
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
+          replyNotSaved = Boolean(persisted.error);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
@@ -4130,6 +4124,14 @@ export const llmClient = {
             }));
           }
         }
+        // Only after persistence: a reply that throws while saving stays host_failed.
+        designOutcome = designRunOutcome({
+          runtimeKind: runtimeOutcome.kind,
+          emergency: Boolean(emergencyError),
+          cancelled: wasCancelled,
+          cancellationOrigin: activeGeneration.cancellationOrigin,
+          persistenceFailed: replyNotSaved,
+        });
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
