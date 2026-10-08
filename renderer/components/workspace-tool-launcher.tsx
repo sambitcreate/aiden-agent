@@ -21,7 +21,7 @@ export const WORKSPACE_TOOLS = [
   { id: "context", label: "Context", icon: CircleGauge, folder: false },
   { id: "browser", label: "Browser", icon: Globe, folder: false },
   { id: "subagents", label: "Subagents", icon: Users, folder: false },
-  { id: "devices", label: "Simulator", icon: Smartphone, folder: false },
+  { id: "devices", label: "Device", icon: Smartphone, folder: false },
 ] as const;
 
 export function workspaceToolLabel(tab: EnvironmentPanelTab): string {

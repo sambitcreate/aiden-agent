@@ -2,6 +2,8 @@ import * as React from "react";
 import { LoaderCircle, Monitor, RefreshCw, Smartphone, Tablet, TriangleAlert } from "lucide-react";
 import { Button, Switch, Text, toast } from "./ui";
 import { DeviceViewer } from "./device-viewer";
+import { DeviceFloatingPlaceholder } from "./device-floating-placeholder";
+import { deviceTabKey } from "../lib/device-tabs";
 import { devicesApi } from "../lib/ipc";
 import {
   DEVICE_SETUP_NOTICE,
@@ -19,6 +21,19 @@ export interface DevicesPanelProps {
   /** Presented and selected. Nothing is read, started, or streamed until it is. */
   active: boolean;
   compact: boolean;
+  /**
+   * The device tab being shown, or null for the picker. Without it the panel
+   * shows the chat's first session, as a standalone view does.
+   */
+  selected?: { hostId: string; deviceId: string } | null;
+  /** The device tab key floating over the chat; its tab shows a placeholder instead of streaming. */
+  floating?: string | null;
+  /** The user opened a device from the picker. */
+  onOpened?(session: DeviceSession): void;
+  /** The session ended from the viewer's rail (Close or Shut down). */
+  onClosed?(session: DeviceSession): void;
+  onFloat?(session: DeviceSession): void;
+  onDock?(session: DeviceSession): void;
 }
 
 export interface DevicesPanelViewProps {
@@ -43,6 +58,8 @@ export interface DevicesPanelViewProps {
   onRetryLoad?(): void;
   /** Renders the live viewer for the open session. */
   viewer?: (session: DeviceSession, device: DeviceSummary) => React.ReactNode;
+  /** The device tab to show; null shows the picker. Omitted, the chat's first session shows. */
+  selected?: { hostId: string; deviceId: string } | null;
 }
 
 
@@ -288,6 +305,7 @@ export function DevicesPanelView({
   onPeerSharing,
   onRetryLoad,
   viewer,
+  selected,
 }: DevicesPanelViewProps) {
   // A narrow panel keeps explanations for assistive technology only; status and errors stay visible.
   const explain = compact ? "sr-only" : undefined;
@@ -384,9 +402,15 @@ export function DevicesPanelView({
         </Empty>
       );
     case "ready": {
-      const session = chatId
-        ? state.sessions.find((candidate) => candidate.chatId === chatId)
-        : undefined;
+      const session =
+        chatId && selected !== null
+          ? state.sessions.find(
+              (candidate) =>
+                candidate.chatId === chatId &&
+                (selected === undefined ||
+                  (candidate.hostId === selected.hostId && candidate.deviceId === selected.deviceId)),
+            )
+          : undefined;
       const device = session
         ? state.devices.find(
             (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
@@ -445,7 +469,17 @@ function useDocumentVisible(): boolean {
   return visible;
 }
 
-export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
+export function DevicesPanel({
+  chatId,
+  active,
+  compact,
+  selected,
+  floating,
+  onOpened,
+  onClosed,
+  onFloat,
+  onDock,
+}: DevicesPanelProps) {
   const [state, setState] = React.useState<DeviceServiceState | null>(null);
   const [pending, setPending] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -492,12 +526,14 @@ export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
     }
   };
 
-  const close = (session: DeviceSession, shutdown: boolean) =>
+  const close = (session: DeviceSession, shutdown: boolean) => {
+    onClosed?.(session);
     void devicesApi
       .close({ chatId: session.chatId, hostId: session.hostId, deviceId: session.deviceId, shutdown })
       .catch((reason: unknown) =>
         toast.error(reason instanceof Error ? reason.message : "Could not close the simulator."),
       );
+  };
 
   return (
     <DevicesPanelView
@@ -518,22 +554,33 @@ export function DevicesPanel({ chatId, active, compact }: DevicesPanelProps) {
       onPeerSharing={(granted) => void run("peerSharing", () => devicesApi.setConsent("peerSharing", granted))}
       onOpen={(device) =>
         chatId
-          ? void run(`${device.hostId}:${device.id}`, () =>
-              devicesApi.open({ chatId, hostId: device.hostId, deviceId: device.id }),
-            )
+          ? void run(`${device.hostId}:${device.id}`, async () => {
+              const session = await devicesApi.open({ chatId, hostId: device.hostId, deviceId: device.id });
+              onOpened?.(session);
+            })
           : undefined
       }
-      viewer={(session, device) => (
-        <DeviceViewer
-          key={`${session.hostId}:${session.deviceId}`}
-          chatId={session.chatId}
-          session={session}
-          device={device}
-          active={active && visible}
-          compact={compact}
-          onClose={(shutdown) => close(session, shutdown)}
-        />
-      )}
+      selected={selected}
+      viewer={(session, device) =>
+        floating === deviceTabKey(session) ? (
+          <DeviceFloatingPlaceholder
+            key={`${session.hostId}:${session.deviceId}`}
+            name={device.name}
+            onDock={() => onDock?.(session)}
+          />
+        ) : (
+          <DeviceViewer
+            key={`${session.hostId}:${session.deviceId}`}
+            chatId={session.chatId}
+            session={session}
+            device={device}
+            active={active && visible}
+            compact={compact}
+            onClose={(shutdown) => close(session, shutdown)}
+            onFloat={onFloat ? () => onFloat(session) : undefined}
+          />
+        )
+      }
     />
   );
 }

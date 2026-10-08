@@ -36,7 +36,7 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
   const calls: unknown[][] = [];
   const sent: unknown[][] = [];
   let stateListener: ((state: DeviceServiceState) => void) | null = null;
-  let revealListener: ((chatId: string) => void) | null = null;
+  let revealListener: ((chatId: string, target?: { hostId: string; deviceId: string }) => void) | null = null;
   let serviceBuilt = 0;
   const invalidators: Array<() => void> = [];
   const owner: RendererDocumentOwner = {
@@ -74,7 +74,7 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
       stateListener = listener;
       return () => undefined;
     },
-    onReveal: (listener: (chatId: string) => void) => {
+    onReveal: (listener: (chatId: string, target?: { hostId: string; deviceId: string }) => void) => {
       revealListener = listener;
       return () => undefined;
     },
@@ -100,7 +100,7 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
     sent,
     serviceBuilt: () => serviceBuilt,
     emit: (state: DeviceServiceState) => stateListener?.(state),
-    reveal: (chatId: string) => revealListener?.(chatId),
+    reveal: (chatId: string, target?: { hostId: string; deviceId: string }) => revealListener?.(chatId, target),
     invalidate: () => invalidators.forEach((listener) => listener()),
   };
 }
@@ -156,10 +156,13 @@ test("state changes reach subscribed documents until they are invalidated", asyn
   assert.equal(ipc.sent[0]![0], "devices:state");
   ipc.reveal("chat-1");
   assert.deepEqual(ipc.sent[1], ["devices:reveal", { chatId: "chat-1" }]);
+  // An agent's device_open names the device, so the renderer floats or selects exactly that one.
+  ipc.reveal("chat-1", { hostId: "local", deviceId: "ABC-123" });
+  assert.deepEqual(ipc.sent[2], ["devices:reveal", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123" }]);
   ipc.invalidate();
   ipc.emit({ ...STATE, hostStatus: "ready" });
   ipc.reveal("chat-1");
-  assert.equal(ipc.sent.length, 2);
+  assert.equal(ipc.sent.length, 3);
 });
 
 test("actions are parsed fail-closed and screenshots return plain bytes", async () => {

@@ -74,8 +74,10 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
 
   const subscribe = (owner: RendererDocumentOwner, service: DeviceService): void => {
     unsubscribeState ??= service.onState((state) => broadcast("devices:state", state));
-    // An agent's device_open shows the Simulator tab for its chat.
-    unsubscribeReveal ??= service.onReveal((chatId) => broadcast("devices:reveal", { chatId }));
+    // An agent's device_open floats the device over its chat or shows its tab.
+    unsubscribeReveal ??= service.onReveal((chatId, target) =>
+      broadcast("devices:reveal", target ? { chatId, hostId: target.hostId, deviceId: target.deviceId } : { chatId }),
+    );
     if (subscribers.has(owner)) return;
     subscribers.add(owner);
     const cleanup = owner.onInvalidated(() => {

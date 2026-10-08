@@ -85,7 +85,7 @@ function fakePort(initial: Partial<DeviceServiceState> = {}) {
       calls.push(`agentTarget:${input.chatId}:${input.deviceId}`);
       return { command: "/data/devices/bin/agent-device", args: ["--config", "/data/devices/hosts/x.json", "--session", "aiden-abc"] };
     },
-    reveal: (chatId) => calls.push(`reveal:${chatId}`),
+    reveal: (chatId, target) => calls.push(target ? `reveal:${chatId}:${target.hostId}:${target.deviceId}` : `reveal:${chatId}`),
   };
   return { port, calls };
 }
@@ -188,11 +188,11 @@ test("pickDevice honours an explicit id, else prefers a booted simulator", () =>
   assert.throws(() => pickDevice([], {}), /No simulators were found/u);
 });
 
-test("device_open resolves agent access before booting, then reveals the tab", async () => {
+test("device_open resolves agent access before booting, then reveals that device", async () => {
   const { port, calls } = fakePort();
   const run = tools(port);
   const result = json(await run("device_open", { deviceId: "UDID-1" }));
-  assert.deepEqual(calls, ["agentTarget:chat-1:UDID-1", "open:chat-1:UDID-1:agent", "reveal:chat-1"]);
+  assert.deepEqual(calls, ["agentTarget:chat-1:UDID-1", "open:chat-1:UDID-1:agent", "reveal:chat-1:local:UDID-1"]);
   const agent = result.agentDevice as { command: string; targetArgs: string[] };
   assert.equal(agent.command, "/data/devices/bin/agent-device");
   assert.deepEqual(agent.targetArgs, [

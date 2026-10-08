@@ -6,6 +6,7 @@ import {
   House,
   Lock,
   Moon,
+  PictureInPicture2,
   Power,
   Rotate3d,
   RotateCw,
@@ -59,6 +60,8 @@ export interface DeviceViewerProps {
   active: boolean;
   compact: boolean;
   onClose(shutdown: boolean): void;
+  /** Pops the device out to float over the chat. */
+  onFloat?(): void;
 }
 
 type ViewerStatus = DeviceStreamStatus | "idle";
@@ -83,7 +86,7 @@ function framePoint(element: HTMLElement, event: React.PointerEvent): { x: numbe
   };
 }
 
-export function DeviceViewer({ chatId, session, device, active, compact, onClose }: DeviceViewerProps) {
+export function DeviceViewer({ chatId, session, device, active, compact, onClose, onFloat }: DeviceViewerProps) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const clientRef = React.useRef<DeviceStreamClient | null>(null);
   const renewalsRef = React.useRef<number[]>([]);
@@ -519,6 +522,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           <SlidersHorizontal aria-hidden />
         </Button>
         <span className="flex-1" />
+        {onFloat ? railButton("Float over chat", <PictureInPicture2 aria-hidden />, onFloat) : null}
         {railButton("Shut down simulator", <Power aria-hidden />, () => setShutdownOpen(true))}
         {railButton("Close simulator", <X aria-hidden />, () => onClose(false))}
       </div>

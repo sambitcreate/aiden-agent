@@ -11,6 +11,9 @@ import {
   resolveEnvironmentPanelLayout,
   resolveEnvironmentPanelResizeBounds,
   resolveQuickViewLayout,
+  resolveChatCardInset,
+  MIN_DOCKED_CHAT_COLUMN_WIDTH,
+  SURFACE_GAP,
 } from "./environment-panel-layout.js";
 
 const COMPACT_TABS_BREAKPOINT = 620;
@@ -155,3 +158,52 @@ test("reports only achievable keyboard resize bounds", () => {
   assert.deepEqual(resolveEnvironmentPanelResizeBounds(1200, true), { min: 480, max: 640 });
   assert.deepEqual(resolveEnvironmentPanelResizeBounds(700, false), { min: 480, max: 656 });
 });
+
+// How the CSS lays out the column for an inset: centered in what is left, never wider than its max.
+function dockedColumn(chatWidth: number, maxColumnWidth: number, inset: number) {
+  const width = Math.min(maxColumnWidth, chatWidth - inset);
+  const left = Math.max(0, (chatWidth - inset - maxColumnWidth) / 2);
+  return { left, width, right: left + width };
+}
+
+describeQuickViewDocking();
+function describeQuickViewDocking() {
+  const MAX = 832;
+  const GUTTER = 72;
+  const CARD = 12 + 380; // Quick View's right offset plus its width.
+  const contentClears = (chatWidth: number, inset: number) =>
+    dockedColumn(chatWidth, MAX, inset).right - GUTTER + SURFACE_GAP <= chatWidth - CARD;
+
+  test("Quick View leaves a wide chat centered", () => {
+    assert.equal(resolveChatCardInset({ chatWidth: 2200, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER }), 0);
+  });
+
+  test("on a narrower window the chat moves left only as far as the card needs", () => {
+    for (const chatWidth of [1400, 1300, 1250]) {
+      const inset = resolveChatCardInset({ chatWidth, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER });
+      assert.ok(inset > 0, `docks at ${chatWidth}`);
+      assert.ok(contentClears(chatWidth, inset), `content clears the card at ${chatWidth}`);
+      assert.ok(!contentClears(chatWidth, inset - 2), `no further than needed at ${chatWidth}`);
+      // Still full width: it moved, it did not narrow.
+      assert.equal(dockedColumn(chatWidth, MAX, inset).width, MAX);
+    }
+  });
+
+  test("the chat narrows only after reaching the left edge, then the card floats again", () => {
+    const narrowing = 1100;
+    const inset = resolveChatCardInset({ chatWidth: narrowing, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER });
+    const column = dockedColumn(narrowing, MAX, inset);
+    assert.equal(column.left, 0);
+    assert.ok(column.width < MAX && column.width >= MIN_DOCKED_CHAT_COLUMN_WIDTH);
+    assert.ok(contentClears(narrowing, inset));
+    // Too narrow to dock without crushing the chat: nothing moves and Quick View floats over it.
+    assert.equal(resolveChatCardInset({ chatWidth: 860, maxColumnWidth: MAX, cardInset: CARD, contentGutter: GUTTER }), 0);
+  });
+
+  test("a full-width chat keeps its content clear of the card", () => {
+    const chatWidth = 1300;
+    const inset = resolveChatCardInset({ chatWidth, maxColumnWidth: Number.POSITIVE_INFINITY, cardInset: CARD, contentGutter: GUTTER });
+    assert.equal(inset, CARD + SURFACE_GAP - GUTTER);
+    assert.equal(chatWidth - inset - GUTTER + SURFACE_GAP, chatWidth - CARD);
+  });
+}

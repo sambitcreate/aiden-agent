@@ -141,8 +141,8 @@ export interface DeviceToolPort {
   screenshot(input: { hostId: string; deviceId: string }): Promise<Buffer>;
   /** Starts agent-device and returns the launcher path plus `--config`/`--session` flags for this chat. */
   agentTarget(input: { chatId: string; hostId: string; deviceId: string }): Promise<{ command: string; args: string[] }>;
-  /** Shows the Simulator tab for this chat. */
-  reveal(chatId: string): void;
+  /** Shows the opened device for this chat: floating over it, or in its tab. */
+  reveal(chatId: string, target?: { hostId: string; deviceId: string }): void;
 }
 
 export interface DeviceToolContext {
@@ -259,7 +259,7 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
         }
         live();
       }
-      port.reveal(chatId);
+      port.reveal(chatId, { hostId: session.hostId, deviceId: session.deviceId });
       const device =
         port.state().devices.find((candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId) ??
         target;

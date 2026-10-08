@@ -100,3 +100,42 @@ export function resolveQuickViewLayout(
   }
   return { width: detachedWidth, right: 12, alongsideTools: false };
 }
+
+/** Below this column width the chat stops making room and Quick View floats over it instead. */
+export const MIN_DOCKED_CHAT_COLUMN_WIDTH = 560;
+
+/**
+ * How far the centered chat column must yield so Quick View docks beside it
+ * on a narrower window (adapted from T3 Code's chat canvas lane, MIT). The
+ * column stays centered while the card fits beside its content, moves left
+ * only as far as needed, and narrows only once it reaches the left edge. When
+ * docking would leave less than {@link MIN_DOCKED_CHAT_COLUMN_WIDTH}, it
+ * returns 0 and the card keeps floating over the chat.
+ *
+ * Returns the inset to reserve at the end of the chat area: the column centers
+ * in what is left (`chatWidth - inset`) and never grows past `maxColumnWidth`.
+ * `contentGutter` is the column's own inner padding, which the card may cover.
+ */
+export function resolveChatCardInset(input: {
+  chatWidth: number;
+  maxColumnWidth: number;
+  /** Distance from the chat area's right edge to the card's left edge. */
+  cardInset: number;
+  contentGutter: number;
+  gap?: number;
+  minColumnWidth?: number;
+}): number {
+  const { chatWidth, maxColumnWidth, cardInset, contentGutter } = input;
+  const gap = input.gap ?? SURFACE_GAP;
+  const minColumn = input.minColumnWidth ?? MIN_DOCKED_CHAT_COLUMN_WIDTH;
+  if (chatWidth <= 0 || cardInset <= 0) return 0;
+  // The rightmost the column's outer edge may reach while its content clears the card.
+  const limit = chatWidth - cardInset - gap + contentGutter;
+  const centeredRight = (chatWidth + Math.min(maxColumnWidth, chatWidth)) / 2;
+  if (centeredRight <= limit) return 0;
+  // Centered in (chatWidth - inset): right = (chatWidth - inset + maxColumnWidth) / 2,
+  // or chatWidth - inset once the column fills what is left.
+  const inset = Math.max(0, Math.min(chatWidth + maxColumnWidth - 2 * limit, chatWidth - limit));
+  const column = Math.min(maxColumnWidth, chatWidth - inset);
+  return column < minColumn ? 0 : Math.ceil(inset);
+}
