@@ -71,16 +71,16 @@ test("push remote, merge ref, and insteadOf rewrites shape the head", async (t) 
   git(dir, "config", "branch.local-name.remote", "origin");
   git(dir, "config", "branch.local-name.pushRemote", "fork");
   git(dir, "config", "branch.local-name.merge", "refs/heads/remote-name");
-  git(dir, "config", "push.default", "upstream");
   const sha = git(dir, "rev-parse", "HEAD");
-  git(dir, "update-ref", "refs/remotes/fork/remote-name", sha);
+  git(dir, "update-ref", "refs/remotes/fork/local-name", sha);
 
   const result = await new LocalRepositoryResolver().resolve(dir);
 
   assert.ok(result.ok);
   assert.equal(`${result.repository.owner}/${result.repository.name}`, "acme/app");
-  assert.equal(result.repository.headBranch, "remote-name");
+  assert.equal(result.repository.headBranch, "local-name");
   assert.equal(result.repository.headOwner, "me");
+  assert.equal(result.repository.headSha, sha);
 });
 
 test("a triangular feature branch targets the push head, not the pull upstream", async (t) => {
