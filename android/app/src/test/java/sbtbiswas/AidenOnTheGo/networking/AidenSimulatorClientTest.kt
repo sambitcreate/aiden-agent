@@ -235,14 +235,32 @@ class AidenSimulatorClientTest {
         .setBody(Buffer().write(body))
         .apply { if (throttle) throttleBody(16, 1, TimeUnit.SECONDS) }
 
-    private fun session(retryDelayMillis: Long = 60_000) = AidenSimulatorStreamSession(
-        httpClient = client.simulatorStreamingClient,
-        mjpegRequest = client.simulatorMjpegRequest(iphoneId),
-        inputRequest = client.simulatorInputRequest(iphoneId),
-        scope = scope,
-        decodeFrame = { jpeg: ByteArray -> jpeg },
-        retryDelayMillis = retryDelayMillis
-    )
+    private fun session(retryDelayMillis: Long = 60_000, clock: () -> Long = System::currentTimeMillis) =
+        AidenSimulatorStreamSession(
+            httpClient = client.simulatorStreamingClient,
+            mjpegRequest = client.simulatorMjpegRequest(iphoneId),
+            inputRequest = client.simulatorInputRequest(iphoneId),
+            scope = scope,
+            decodeFrame = { jpeg: ByteArray -> jpeg },
+            retryDelayMillis = retryDelayMillis,
+            clock = clock
+        )
+
+    /** Serves [streams] finite MJPEG bodies, then 404; every input upgrade gets a socket that stays open. */
+    private fun endingStreams(streams: Int): java.util.concurrent.atomic.AtomicInteger {
+        val mjpegRequests = java.util.concurrent.atomic.AtomicInteger()
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse =
+                if (request.path.orEmpty().contains("/helper/ws")) {
+                    MockResponse().withWebSocketUpgrade(RecordingSocket())
+                } else if (mjpegRequests.incrementAndGet() <= streams) {
+                    mjpegResponse(AidenMobileSimulatorsFixture.mjpeg("streamBase64"))
+                } else {
+                    MockResponse().setResponseCode(404)
+                }
+        }
+        return mjpegRequests
+    }
 
     private fun waitUntil(message: String, condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
@@ -320,6 +338,29 @@ class AidenSimulatorClientTest {
         assertEquals(AidenSimulatorStreamFailure.REFUSED, session.state.value.failure)
         Thread.sleep(300)
         assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun aStreamThatRanForAWhileEarnsAFreshRetryEachTime() {
+        val mjpegRequests = endingStreams(streams = 3)
+        // Every reading of the clock is six seconds after the last, so each stream was stable.
+        val now = java.util.concurrent.atomic.AtomicLong()
+        val session = session(retryDelayMillis = 50, clock = { now.addAndGet(6_000) })
+        session.start()
+        waitUntil("stream ends") { session.state.value.phase == AidenSimulatorStreamPhase.FAILED }
+        // Three dropped streams each reconnected; only the missing device ends it.
+        assertEquals(AidenSimulatorStreamFailure.NOT_FOUND, session.state.value.failure)
+        assertEquals(4, mjpegRequests.get())
+    }
+
+    @Test
+    fun aStreamThatDropsRightAfterConnectingRetriesOnlyOnce() {
+        val mjpegRequests = endingStreams(streams = 3)
+        val session = session(retryDelayMillis = 50, clock = { 1_000L })
+        session.start()
+        waitUntil("stream ends") { session.state.value.phase == AidenSimulatorStreamPhase.FAILED }
+        assertEquals(AidenSimulatorStreamFailure.NETWORK, session.state.value.failure)
+        assertEquals(2, mjpegRequests.get())
     }
 
     @Test

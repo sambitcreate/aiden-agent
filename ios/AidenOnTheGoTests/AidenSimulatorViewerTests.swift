@@ -211,6 +211,32 @@ final class AidenSimulatorViewerTests: XCTestCase {
         }
     }
 
+    func testRetryBudgetRefillsOnlyAfterAStableConnection() {
+        typealias Policy = AidenSimulatorInputRetryPolicy
+        var budget = AidenSimulatorRetryBudget()
+        // Connected, then dropped well after the stable interval: one retry, again and again.
+        for round in 0..<3 {
+            let start = Double(round) * 100
+            budget.succeeded(at: start)
+            let used = budget.ended(at: start + AidenSimulatorRetryBudget.stableInterval + 1)
+            XCTAssertEqual(Policy.decision(closeCode: 1001, httpStatus: 101, retriesUsed: used), .retry(after: 1), "drop \(round)")
+            budget.spend()
+        }
+
+        // A connection that drops right after connecting keeps its spent budget and gives up.
+        var flapping = AidenSimulatorRetryBudget()
+        flapping.succeeded(at: 0)
+        XCTAssertEqual(flapping.ended(at: 1), 0)
+        flapping.spend()
+        flapping.succeeded(at: 2)
+        XCTAssertEqual(Policy.decision(closeCode: 1001, httpStatus: 101, retriesUsed: flapping.ended(at: 3)), .giveUp)
+
+        // A connection that never succeeded never refills.
+        var never = AidenSimulatorRetryBudget()
+        never.spend()
+        XCTAssertEqual(never.ended(at: 1_000), 1)
+    }
+
     func testTouchTrackerPairsEveryBeginWithOneEndEvenWhenTheGestureIsCancelled() {
         typealias Touch = AidenSimulatorTouchTracker.Touch
         var tracker = AidenSimulatorTouchTracker()

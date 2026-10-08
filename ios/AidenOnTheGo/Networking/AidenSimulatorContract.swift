@@ -385,6 +385,31 @@ enum AidenSimulatorHelperMessage {
 /// Mac or the network drops the socket, retry once after about a second.
 /// (A browser reports a refused upgrade as 1006; URLSession reports the HTTP
 /// status instead, so 1006 is not a refusal here.)
+/// The reconnect budget of one stream or socket. It refills once a connection
+/// has stayed healthy for `stableInterval`, so a long session survives more than
+/// one drop, while a connection that fails straight after connecting still
+/// gives up after its single retry instead of flapping.
+struct AidenSimulatorRetryBudget: Equatable {
+    static let stableInterval: TimeInterval = 5
+
+    private(set) var used = 0
+    private var healthySince: TimeInterval?
+
+    /// The connection works: input connected, or a frame arrived.
+    mutating func succeeded(at now: TimeInterval) {
+        if healthySince == nil { healthySince = now }
+    }
+
+    /// The connection ended. Returns the retries used, after any refill.
+    mutating func ended(at now: TimeInterval) -> Int {
+        if let since = healthySince, now - since >= Self.stableInterval { used = 0 }
+        healthySince = nil
+        return used
+    }
+
+    mutating func spend() { used += 1 }
+}
+
 enum AidenSimulatorInputRetryPolicy {
     enum Decision: Equatable {
         case retry(after: TimeInterval)

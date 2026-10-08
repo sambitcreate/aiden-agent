@@ -215,8 +215,8 @@ final class AidenSimulatorViewerModel: Identifiable {
     @ObservationIgnored private var stream: AidenSimulatorFrameStream?
     @ObservationIgnored private var socket: AidenSimulatorInputSocket?
     @ObservationIgnored private var generation = 0
-    @ObservationIgnored private var inputRetries = 0
-    @ObservationIgnored private var streamRetries = 0
+    @ObservationIgnored private var inputRetries = AidenSimulatorRetryBudget()
+    @ObservationIgnored private var streamRetries = AidenSimulatorRetryBudget()
     @ObservationIgnored private var isActive = false
     @ObservationIgnored private var touches = AidenSimulatorTouchTracker()
     @ObservationIgnored private var work: Task<Void, Never>?
@@ -352,8 +352,8 @@ final class AidenSimulatorViewerModel: Identifiable {
         stopStreaming()
         generation &+= 1
         let current = generation
-        inputRetries = 0
-        streamRetries = 0
+        inputRetries = AidenSimulatorRetryBudget()
+        streamRetries = AidenSimulatorRetryBudget()
         inputMessage = nil
         screen = nil
         controls.apply(.connecting)
@@ -449,7 +449,7 @@ final class AidenSimulatorViewerModel: Identifiable {
             if socket == nil, inputMessage == nil { connectInput(deviceId: deviceId, generation: current) }
         case .frame(let image):
             frame = image
-            streamRetries = 0
+            streamRetries.succeeded(at: Self.now())
             if phase != .streaming { phase = .streaming }
         case .failed(let failure):
             stream?.cancel()
@@ -457,8 +457,8 @@ final class AidenSimulatorViewerModel: Identifiable {
             socket?.close()
             socket = nil
             if controls.inputConnected { controls.apply(.inputDisconnected) }
-            if failure == .disconnected, streamRetries < 1 {
-                streamRetries += 1
+            if failure == .disconnected, streamRetries.ended(at: Self.now()) < 1 {
+                streamRetries.spend()
                 scheduleAfterDelay(generation: current) { [weak self] in
                     self?.openStream(deviceId: deviceId, generation: current)
                 }
@@ -473,6 +473,7 @@ final class AidenSimulatorViewerModel: Identifiable {
         switch event {
         case .connected:
             inputMessage = nil
+            inputRetries.succeeded(at: Self.now())
             controls.apply(.inputConnected)
         case .screen(let config):
             screen = config
@@ -483,14 +484,14 @@ final class AidenSimulatorViewerModel: Identifiable {
             switch AidenSimulatorInputRetryPolicy.decision(
                 closeCode: closeCode,
                 httpStatus: httpStatus,
-                retriesUsed: inputRetries
+                retriesUsed: inputRetries.ended(at: Self.now())
             ) {
             case .refused:
                 inputMessage = AidenSimulatorViewerCopy.refused
             case .giveUp:
                 inputMessage = AidenSimulatorViewerCopy.generic
             case .retry(let delay):
-                inputRetries += 1
+                inputRetries.spend()
                 scheduleAfterDelay(delay, generation: current) { [weak self] in
                     guard let self, stream != nil else { return }
                     connectInput(deviceId: deviceId, generation: current)
@@ -498,6 +499,8 @@ final class AidenSimulatorViewerModel: Identifiable {
             }
         }
     }
+
+    private static func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     private func scheduleAfterDelay(
         _ delay: TimeInterval = AidenSimulatorInputRetryPolicy.retryDelay,
