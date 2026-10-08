@@ -4,13 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createBotStore } from "./bot-store-core.js";
-import {
-  BOT_AVATAR_SHAPES,
-  resolveBotAvatar,
-} from "../../renderer/shared/bots.js";
-
-/** Avatar ids older stores wrote; the store keeps reading them. */
-const STORED_LEGACY_AVATARS = ["spark", "orbit", "leaf", "prism", "wave", "ember"];
+import { DEFAULT_BOT_AVATAR } from "../../renderer/shared/bots.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "aiden-bots-"));
@@ -18,7 +12,7 @@ async function fixture() {
   return { root, store: createBotStore({ root: () => root, now: () => ++timestamp }) };
 }
 
-test("bot store persists create and edit, and delete erases the record and its appearance", async () => {
+test("bot store persists create and edit, and delete erases the record", async () => {
   const { root, store } = await fixture();
   try {
     const created = await store.create({
@@ -60,10 +54,6 @@ test("bot store persists create and edit, and delete erases the record and its a
     });
     assert.equal(await store.delete(shaped.id), true);
     assert.equal(await store.get(shaped.id), null);
-    const appearances = JSON.parse(
-      await readFile(join(root, "bot-avatar-appearances.json"), "utf8"),
-    ) as { appearances: Array<{ botId: string }> };
-    assert.equal(appearances.appearances.some(({ botId }) => botId === shaped.id), false);
     // Idempotent: a second delete finds nothing and changes nothing.
     assert.equal(await store.delete(shaped.id), false);
     assert.deepEqual((await store.list()).map(({ id }) => id), [created.id]);
@@ -204,350 +194,46 @@ test("bot identity text uses Unicode-scalar bounds and rejects unpaired UTF-16",
   }
 });
 
-test("bot store persists versioned custom appearances while retaining legacy ids", async () => {
-  const { root, store } = await fixture();
+test("a stored avatar that is not a current recipe reads as the default and is rewritten on edit", async () => {
+  const { root } = await fixture();
   try {
-    const avatar = {
-      version: 1,
-      shape: "squircle",
-      color: "graphite",
-    } as const;
-    const created = await store.create({
-      name: "Designer",
-      instructions: "Keep the interface coherent.",
-      avatar,
-    });
-    assert.deepEqual(created.avatar, avatar);
-    assert.deepEqual((await store.get(created.id))?.avatar, avatar);
-    const persisted = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
-      bots: Array<{ avatar: unknown; avatarAppearance?: unknown }>;
-    };
-    const persistedAppearances = JSON.parse(
-      await readFile(join(root, "bot-avatar-appearances.json"), "utf8"),
-    ) as { appearances: Array<{ botId: string; legacyAvatar: unknown; avatar: unknown }> };
-    assert.equal(typeof persisted.bots[0]?.avatar, "string");
-    assert.deepEqual(persisted.bots[0]?.avatarAppearance, avatar);
+    await writeFile(
+      join(root, "bots.json"),
+      JSON.stringify({
+        version: 1,
+        bots: [
+          { id: "bot:old-id", name: "Old id", instructions: "x", avatar: "spark", avatarAppearance: { version: 1, shape: "hex", color: "sun" }, createdAt: 1, updatedAt: 3 },
+          { id: "bot:old-axes", name: "Old axes", instructions: "x", avatar: { version: 1, shape: "orb", color: "sky", eyes: "dots", detail: "none" }, createdAt: 1, updatedAt: 2 },
+          { id: "bot:current", name: "Current", instructions: "x", avatar: { version: 1, shape: "peak", color: "plum" }, createdAt: 1, updatedAt: 1 },
+        ],
+      }),
+    );
+    const store = createBotStore({ root: () => root, now: () => 50 });
+    const bots = await store.list();
     assert.deepEqual(
-      persistedAppearances.appearances.find((entry) => entry.botId === created.id)?.avatar,
-      avatar,
+      bots.map((bot) => [bot.id, bot.avatar]),
+      [
+        ["bot:old-id", DEFAULT_BOT_AVATAR],
+        ["bot:old-axes", DEFAULT_BOT_AVATAR],
+        ["bot:current", { version: 1, shape: "peak", color: "plum" }],
+      ],
     );
-    assert.equal(
-      persistedAppearances.appearances.find((entry) => entry.botId === created.id)?.legacyAvatar,
-      "spark",
-    );
-    const legacy = await store.create({
-      name: "Legacy",
-      instructions: "Keep working.",
-      avatar: { version: 1, shape: "wisp", color: "lilac" },
+    const old = bots[0]!;
+    const edited = await store.update({
+      id: old.id,
+      expectedRevision: old.revision,
+      name: old.name,
+      instructions: old.instructions,
+      avatar: { version: 1, shape: "drop", color: "rose" },
     });
-    assert.deepEqual((await store.get(legacy.id))?.avatar, { version: 1, shape: "wisp", color: "lilac" });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("custom faces survive a real previous-release projection and mutation", async () => {
-  const { root, store } = await fixture();
-  try {
-    const expected = new Map<string, ReturnType<typeof resolveBotAvatar>>();
-    for (const shape of BOT_AVATAR_SHAPES) {
-      const avatar = {
-        version: 1 as const,
-        shape,
-        color: "aqua" as const,
-      };
-      const created = await store.create({
-        name: `Bot ${shape}`,
-        instructions: "Stay available across releases.",
-        avatar,
-      });
-      expected.set(created.id, avatar);
-    }
-    const legacy = await store.create({
-      name: "Legacy edit",
-      instructions: "Keep the identity.",
-      avatar: { version: 1, shape: "orb", color: "sky" },
-    });
-    const legacyAppearance = resolveBotAvatar(legacy.avatar);
-    await store.update({
-      id: legacy.id,
-      expectedRevision: legacy.revision,
-      name: legacy.name,
-      instructions: legacy.instructions,
-      avatar: legacyAppearance,
-    });
-    expected.set(legacy.id, legacyAppearance);
-
+    assert.deepEqual(edited.avatar, { version: 1, shape: "drop", color: "rose" });
     const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
       bots: Array<Record<string, unknown>>;
     };
-    const previousReleaseProjection = disk.bots
-      .filter(
-        (bot) => typeof bot.avatar === "string" && STORED_LEGACY_AVATARS.includes(bot.avatar),
-      )
-      .map((bot) => ({
-        id: bot.id,
-        name: bot.name,
-        ...(typeof bot.description === "string" ? { description: bot.description } : {}),
-        instructions: bot.instructions,
-        avatar: bot.avatar,
-        createdAt: bot.createdAt,
-        updatedAt: bot.updatedAt,
-      }));
-    assert.equal(previousReleaseProjection.length, BOT_AVATAR_SHAPES.length + 1);
-    assert.equal(previousReleaseProjection.find((bot) => bot.id === legacy.id)?.avatar, "orbit");
-    const downgradedAvatarId = previousReleaseProjection[0]?.id as string;
-    expected.delete(downgradedAvatarId);
-    previousReleaseProjection[0] = {
-      ...previousReleaseProjection[0],
-      name: "Edited while downgraded",
-      avatar: "orbit",
-      updatedAt: Number(previousReleaseProjection[0]?.updatedAt) + 1,
-    };
-    await writeFile(
-      join(root, "bots.json"),
-      `${JSON.stringify({ version: 1, bots: previousReleaseProjection }, null, 2)}\n`,
-    );
-
-    const restored = createBotStore({ root: () => root });
-    const restoredBots = await restored.list();
-    assert.equal(restoredBots.length, BOT_AVATAR_SHAPES.length + 1);
-    assert.equal(
-      restoredBots.find((bot) => bot.id === previousReleaseProjection[0]?.id)?.name,
-      "Edited while downgraded",
-    );
-    assert.deepEqual(
-      restoredBots.find((bot) => bot.id === downgradedAvatarId)?.avatar,
-      { version: 1, shape: "orb", color: "sky" },
-    );
-    for (const [botId, avatar] of expected) {
-      assert.deepEqual(restoredBots.find((bot) => bot.id === botId)?.avatar, avatar);
-    }
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("readers never observe a companion appearance before the primary update commits", async () => {
-  const root = await mkdtemp(join(tmpdir(), "aiden-bots-atomic-"));
-  let blockWrite = false;
-  let entered!: () => void;
-  let release!: () => void;
-  const writeEntered = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  const writeRelease = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const store = createBotStore({
-    root: () => root,
-    beforeBotWrite: async () => {
-      if (!blockWrite) return;
-      entered();
-      await writeRelease;
-      throw new Error("forced primary publication failure");
-    },
-  });
-  try {
-    const original = {
-      version: 1 as const,
-      shape: "squircle" as const,
-      color: "peach" as const,
-    };
-    const created = await store.create({
-      name: "Atomic",
-      instructions: "Never expose a partial face update.",
-      avatar: original,
-    });
-    blockWrite = true;
-    const update = store.update({
-      id: created.id,
-      expectedRevision: created.revision,
-      name: created.name,
-      instructions: created.instructions,
-      avatar: { ...original, shape: "capsule" },
-    });
-    await writeEntered;
-
-    let readSettled = false;
-    const read = store.list().then((bots) => {
-      readSettled = true;
-      return bots;
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    assert.equal(readSettled, false);
-
-    release();
-    await assert.rejects(update, /forced primary publication failure/u);
-    assert.deepEqual((await read).find((bot) => bot.id === created.id)?.avatar, original);
-  } finally {
-    release?.();
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("restart ignores an uncommitted companion face with the same legacy projection", async () => {
-  const { root, store } = await fixture();
-  try {
-    const committed = {
-      version: 1 as const,
-      shape: "squircle" as const,
-      color: "peach" as const,
-    };
-    const uncommitted = {
-      version: 1 as const,
-      shape: "capsule" as const,
-      color: "aqua" as const,
-    };
-    const created = await store.create({
-      name: "Crash-safe",
-      instructions: "Expose only committed identity.",
-      avatar: committed,
-    });
-    const appearancePath = join(root, "bot-avatar-appearances.json");
-    const appearanceState = JSON.parse(await readFile(appearancePath, "utf8")) as {
-      version: number;
-      appearances: Array<{ botId: string; legacyAvatar: string; avatar: unknown }>;
-    };
-    const entry = appearanceState.appearances.find((candidate) => candidate.botId === created.id);
-    assert.ok(entry);
-    entry.legacyAvatar = "spark";
-    entry.avatar = uncommitted;
-    await writeFile(appearancePath, `${JSON.stringify(appearanceState, null, 2)}\n`);
-
-    const restarted = createBotStore({ root: () => root });
-    const restored = await restarted.get(created.id);
-    assert.equal(restored?.name, "Crash-safe");
-    assert.equal(restored?.instructions, "Expose only committed identity.");
-    assert.deepEqual(restored?.avatar, committed);
-    const repairedAppearanceState = JSON.parse(await readFile(appearancePath, "utf8")) as {
-      appearances: Array<{ botId: string; avatar: unknown }>;
-    };
-    assert.deepEqual(
-      repairedAppearanceState.appearances.find((candidate) => candidate.botId === created.id)
-        ?.avatar,
-      committed,
-    );
-
-    const botPath = join(root, "bots.json");
-    const botState = JSON.parse(await readFile(botPath, "utf8")) as {
-      version: number;
-      bots: Array<Record<string, unknown>>;
-    };
-    botState.bots = botState.bots.map(({ avatarAppearance: _appearance, ...bot }) =>
-      bot.id === created.id ? { ...bot, name: "Edited while downgraded" } : bot,
-    );
-    await writeFile(botPath, `${JSON.stringify(botState, null, 2)}\n`);
-
-    const upgradedAgain = createBotStore({ root: () => root });
-    const restoredAgain = await upgradedAgain.get(created.id);
-    assert.equal(restoredAgain?.name, "Edited while downgraded");
-    assert.deepEqual(restoredAgain?.avatar, committed);
-    const backfilledBotState = JSON.parse(await readFile(botPath, "utf8")) as {
-      bots: Array<{ id: string; avatarAppearance?: unknown }>;
-    };
-    assert.deepEqual(
-      backfilledBotState.bots.find((bot) => bot.id === created.id)?.avatarAppearance,
-      committed,
-    );
-
-    const crashAppearanceState = JSON.parse(await readFile(appearancePath, "utf8")) as {
-      appearances: Array<{ botId: string; legacyAvatar: string; avatar: unknown }>;
-    };
-    const crashEntry = crashAppearanceState.appearances.find(
-      (candidate) => candidate.botId === created.id,
-    );
-    assert.ok(crashEntry);
-    crashEntry.legacyAvatar = "spark";
-    crashEntry.avatar = uncommitted;
-    await writeFile(appearancePath, `${JSON.stringify(crashAppearanceState, null, 2)}\n`);
-
-    const afterInterruptedEdit = createBotStore({ root: () => root });
-    assert.deepEqual((await afterInterruptedEdit.get(created.id))?.avatar, committed);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("an older-release primary rewrite cannot publish a newer uncommitted companion face", async () => {
-  const { root, store } = await fixture();
-  try {
-    const committed = {
-      version: 1 as const,
-      shape: "squircle" as const,
-      color: "peach" as const,
-    };
-    const uncommitted = {
-      ...committed,
-      shape: "capsule" as const,
-      color: "aqua" as const,
-    };
-    const created = await store.create({
-      name: "Rollback-safe face",
-      instructions: "Keep companion writes tied to the primary commit.",
-      avatar: committed,
-    });
-    const appearancePath = join(root, "bot-avatar-appearances.json");
-    const primaryPath = join(root, "bots.json");
-    const appearances = JSON.parse(await readFile(appearancePath, "utf8")) as {
-      appearances: Array<{ botId: string; primaryRevision?: string; avatar: unknown }>;
-    };
-    const pending = appearances.appearances.find((entry) => entry.botId === created.id)!;
-    pending.avatar = uncommitted;
-    pending.primaryRevision = `botavatar_${"a".repeat(43)}`;
-    await writeFile(appearancePath, `${JSON.stringify(appearances, null, 2)}\n`);
-
-    const primary = JSON.parse(await readFile(primaryPath, "utf8")) as {
-      bots: Array<{ id: string; avatarAppearance?: unknown }>;
-    };
-    const olderReleaseBot = primary.bots.find((entry) => entry.id === created.id)!;
-    delete olderReleaseBot.avatarAppearance;
-    await writeFile(primaryPath, `${JSON.stringify(primary, null, 2)}\n`);
-
-    const restarted = createBotStore({ root: () => root });
-    const restored = await restarted.get(created.id);
-    assert.deepEqual(restored?.avatar, { version: 1, shape: "wisp", color: "lilac" });
-    assert.notDeepEqual(restored?.avatar, uncommitted);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("restart prunes orphan companions before enforcing appearance capacity", async () => {
-  const root = await mkdtemp(join(tmpdir(), "aiden-bots-orphans-"));
-  try {
-    const avatar = {
-      version: 1 as const,
-      shape: "orb" as const,
-      color: "lilac" as const,
-    };
-    await writeFile(
-      join(root, "bot-avatar-appearances.json"),
-      `${JSON.stringify(
-        {
-          version: 1,
-          appearances: Array.from({ length: 256 }, (_, index) => ({
-            botId: `orphan-${index}`,
-            legacyAvatar: "orbit",
-            avatar,
-          })),
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    const restarted = createBotStore({ root: () => root });
-    const created = await restarted.create({
-      name: "First real bot",
-      instructions: "Create after orphan recovery.",
-      avatar,
-    });
-    assert.deepEqual(created.avatar, avatar);
-    const appearanceState = JSON.parse(
-      await readFile(join(root, "bot-avatar-appearances.json"), "utf8"),
-    ) as { appearances: Array<{ botId: string }> };
-    assert.deepEqual(appearanceState.appearances.map((entry) => entry.botId), [created.id]);
+    const written = disk.bots.find((bot) => bot.id === old.id)!;
+    assert.deepEqual(written.avatar, { version: 1, shape: "drop", color: "rose" });
+    assert.equal("avatarAppearance" in written, false);
+    await assert.rejects(readFile(join(root, "bot-avatar-appearances.json"), "utf8"), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
