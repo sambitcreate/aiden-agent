@@ -31,7 +31,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 24 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 25 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -100,6 +100,22 @@ export type AidenRemoteSimulatorCapability =
   (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number];
 
 /**
+ * Phone-only opt-in (contract revision 25): watching and touching the serving
+ * Mac's shared iOS Simulators from Aiden On The Go. Only `iphone` and `ipad`
+ * device records may hold it, it is negotiated post-pairing while the server
+ * advertises `mobile-simulators-v1`, and the serving owner's "Share with Aiden
+ * On The Go" consent must also be on. It reaches a narrower route set than
+ * `simulators:control`: list, open, shut down, the MJPEG stream and the input
+ * socket. Settings, device actions and every other hub route stay desktop-only.
+ */
+export const AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES = [
+  "simulators:mobile",
+] as const;
+
+export type AidenRemoteMobileSimulatorCapability =
+  (typeof AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES)[number];
+
+/**
  * Desktop-only host-wide authority for multi-host control (contract revision
  * 19). `host:events` reads the host feed, `runs:observe` streams any run in a
  * visible chat whatever started it, and `runs:control` stops runs, answers
@@ -136,6 +152,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   ...AIDEN_REMOTE_HOST_CAPABILITIES,
+  ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -147,6 +164,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   ...AIDEN_REMOTE_HOST_CAPABILITIES,
+  ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -227,6 +245,13 @@ export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
  * phone-scoped `runs:observe`/`runs:control` negotiation.
  */
 export const AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1" as const;
+/**
+ * Server feature token for the phone simulator viewer (contract revision 25).
+ * Advertised to `iphone`/`ipad` devices only, and only while this Mac has the
+ * simulator feature; it gates negotiating `simulators:mobile`. It says nothing
+ * about the owner's sharing consent, which `GET /simulators` reports.
+ */
+export const AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE = "mobile-simulators-v1" as const;
 /**
  * Server feature token for unauthenticated desktop connection requests
  * (`/pairing/requests*`, contract revision 20). A requester without a
@@ -1105,6 +1130,36 @@ export interface AidenRemoteContractFixture {
   phoneRunEvents?: AidenRemoteHostFeedFixtureEvent[];
   /** Revision 21, `chat-fork-v1` and `chat-fork-summary-v1`: fork requests, responses and a summary cancel. */
   chatFork?: AidenRemoteChatForkFixture;
+  /** Revision 25, `mobile-simulators-v1`: listing shapes, input vectors and an MJPEG sample for phones. */
+  mobileSimulators?: AidenRemoteMobileSimulatorsFixture;
+}
+
+/** One shared input vector: a viewer command, the last screen config, and the packet it sends. */
+export interface AidenRemoteMobileSimulatorInputVector {
+  command: Record<string, unknown>;
+  screen?: { width: number; height: number; orientation: string };
+  tag: number;
+  payload: Record<string, unknown>;
+}
+
+export interface AidenRemoteMobileSimulatorsFixture {
+  feature: typeof AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE;
+  capability: AidenRemoteMobileSimulatorCapability;
+  listing: Record<string, unknown>;
+  sharingOff: Record<string, unknown>;
+  openResponse: { device: Record<string, unknown> };
+  shutdownResponse: { ok: true };
+  hubRoutes: { mjpeg: string; config: string; input: string };
+  inputMessages: AidenRemoteMobileSimulatorInputVector[];
+  screenConfigs: Array<{ tag: number; payload: Record<string, unknown>; screen: Record<string, unknown> | null }>;
+  mjpeg: {
+    contentType: string;
+    streamBase64: string;
+    framesBase64: string[];
+    unlengthedStreamBase64: string;
+    unlengthedFramesBase64: string[];
+  };
+  refusal: AidenRemoteErrorEnvelope;
 }
 
 export interface AidenRemoteChatForkFixtureExchange {
@@ -5416,6 +5471,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     if (contractRevision < 21) throw new Error("Chat fork fixtures require contract revision 21.");
     parseChatForkFixture(value.chatFork);
   }
+  if (value.mobileSimulators !== undefined) {
+    if (contractRevision < 25) throw new Error("Mobile simulator fixtures require contract revision 25.");
+    parseMobileSimulatorsFixture(value.mobileSimulators);
+  }
   assertNoForbiddenWireKeys(value);
   return {
     ...value,
@@ -5678,6 +5737,155 @@ function parseChatForkFixture(value: unknown): AidenRemoteChatForkFixture {
   const cancel = requiredFixtureRecord(section.summaryCancel, "Chat fork fixture summaryCancel", ["cancelled"]);
   if (typeof cancel.cancelled !== "boolean") throw new Error("Chat fork fixture summaryCancel cancelled must be boolean.");
   return { features: [...features], fork, editFork, summaryStates, summaryCancel: { cancelled: cancel.cancelled } };
+}
+
+const MOBILE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9-]{1,128}$/u;
+const MOBILE_SIMULATOR_HUB_ROUTE_PREFIX = "/simulators/hub/vendor/serve-sim/helper/";
+/** Tags a phone may send through the input socket: touch, button, orientation, hardware keyboard. */
+const MOBILE_SIMULATOR_INPUT_TAGS = new Set([0x03, 0x04, 0x07, 0x0d]);
+
+function parseMobileSimulatorListing(value: unknown, label: string): Record<string, unknown> {
+  const listing = requiredFixtureRecord(
+    value,
+    label,
+    ["sharing", "status", "devices"],
+    ["detail", "chatDeviceIds", "toolVersions"],
+  );
+  if (typeof listing.sharing !== "boolean") throw new Error(`${label} sharing must be boolean.`);
+  assertBoundedString(listing, "status", 32);
+  if (listing.detail !== undefined) assertBoundedString(listing, "detail", 2_000);
+  if (!Array.isArray(listing.devices)) throw new Error(`${label} devices must be an array.`);
+  const ids = listing.devices.map((entry, index) => {
+    const device = requiredFixtureRecord(entry, `${label} device ${index}`, [
+      "id",
+      "name",
+      "platform",
+      "version",
+      "booted",
+      "kind",
+    ]);
+    const id = requiredString(device, "id");
+    if (!MOBILE_SIMULATOR_DEVICE_ID.test(id)) throw new Error(`${label} device ${index} id is invalid.`);
+    assertBoundedString(device, "name", 256);
+    assertBoundedString(device, "platform", 32);
+    assertBoundedString(device, "version", 64);
+    assertBoundedString(device, "kind", 32);
+    if (typeof device.booted !== "boolean") throw new Error(`${label} device ${index} booted must be boolean.`);
+    return id;
+  });
+  if (!listing.sharing && ids.length > 0) throw new Error(`${label} lists no devices while sharing is off.`);
+  if (listing.chatDeviceIds !== undefined) {
+    if (
+      !Array.isArray(listing.chatDeviceIds) ||
+      listing.chatDeviceIds.some((id) => typeof id !== "string" || !ids.includes(id))
+    ) {
+      throw new Error(`${label} chatDeviceIds must name listed devices.`);
+    }
+  }
+  if (listing.toolVersions !== undefined) {
+    const versions = requiredFixtureRecord(listing.toolVersions, `${label} toolVersions`, ["hub", "agent"]);
+    assertBoundedString(versions, "hub", 64);
+    assertBoundedString(versions, "agent", 64);
+  }
+  return listing;
+}
+
+function decodedFixtureBytes(value: unknown, label: string): Buffer {
+  if (typeof value !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/u.test(value)) {
+    throw new Error(`${label} must be base64.`);
+  }
+  return Buffer.from(value, "base64");
+}
+
+function parseMobileSimulatorsFixture(value: unknown): AidenRemoteMobileSimulatorsFixture {
+  const section = requiredFixtureRecord(value, "Mobile simulators fixture", [
+    "feature",
+    "capability",
+    "listing",
+    "sharingOff",
+    "openResponse",
+    "shutdownResponse",
+    "hubRoutes",
+    "inputMessages",
+    "screenConfigs",
+    "mjpeg",
+    "refusal",
+  ]);
+  if (section.feature !== AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE) {
+    throw new Error("Mobile simulators fixture must name mobile-simulators-v1.");
+  }
+  if (section.capability !== AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES[0]) {
+    throw new Error("Mobile simulators fixture must name simulators:mobile.");
+  }
+  const listing = parseMobileSimulatorListing(section.listing, "Mobile simulators listing");
+  const sharingOff = parseMobileSimulatorListing(section.sharingOff, "Mobile simulators sharingOff");
+  if (sharingOff.sharing !== false) throw new Error("Mobile simulators sharingOff must report sharing off.");
+  const open = requiredFixtureRecord(section.openResponse, "Mobile simulators openResponse", ["device"]);
+  parseMobileSimulatorListing(
+    { sharing: true, status: "ready", devices: [open.device] },
+    "Mobile simulators openResponse",
+  );
+  const shutdown = requiredFixtureRecord(section.shutdownResponse, "Mobile simulators shutdownResponse", ["ok"]);
+  if (shutdown.ok !== true) throw new Error("Mobile simulators shutdownResponse must be ok.");
+  const routes = requiredFixtureRecord(section.hubRoutes, "Mobile simulators hubRoutes", ["mjpeg", "config", "input"]);
+  for (const [name, route] of Object.entries(routes)) {
+    if (typeof route !== "string" || !route.startsWith(MOBILE_SIMULATOR_HUB_ROUTE_PREFIX) || !route.includes("{deviceId}")) {
+      throw new Error(`Mobile simulators hubRoutes.${name} is invalid.`);
+    }
+  }
+  if (!Array.isArray(section.inputMessages) || section.inputMessages.length === 0) {
+    throw new Error("Mobile simulators inputMessages must be a non-empty array.");
+  }
+  section.inputMessages.forEach((entry, index) => {
+    const vector = requiredFixtureRecord(entry, `Mobile simulators input ${index}`, ["command", "tag", "payload"], ["screen"]);
+    if (!isRecord(vector.command) || typeof vector.command.kind !== "string") {
+      throw new Error(`Mobile simulators input ${index} command is invalid.`);
+    }
+    if (typeof vector.tag !== "number" || !MOBILE_SIMULATOR_INPUT_TAGS.has(vector.tag)) {
+      throw new Error(`Mobile simulators input ${index} uses a tag phones never send.`);
+    }
+    if (!isRecord(vector.payload)) throw new Error(`Mobile simulators input ${index} payload is invalid.`);
+  });
+  if (!Array.isArray(section.screenConfigs)) throw new Error("Mobile simulators screenConfigs must be an array.");
+  section.screenConfigs.forEach((entry, index) => {
+    const config = requiredFixtureRecord(entry, `Mobile simulators screen config ${index}`, ["tag", "payload", "screen"]);
+    if (typeof config.tag !== "number" || !isRecord(config.payload)) {
+      throw new Error(`Mobile simulators screen config ${index} is invalid.`);
+    }
+    if (config.screen !== null && !isRecord(config.screen)) {
+      throw new Error(`Mobile simulators screen config ${index} screen is invalid.`);
+    }
+  });
+  const mjpeg = requiredFixtureRecord(section.mjpeg, "Mobile simulators mjpeg", [
+    "contentType",
+    "streamBase64",
+    "framesBase64",
+    "unlengthedStreamBase64",
+    "unlengthedFramesBase64",
+  ]);
+  if (!/^multipart\/x-mixed-replace;\s*boundary=frame$/u.test(String(mjpeg.contentType))) {
+    throw new Error("Mobile simulators mjpeg contentType is invalid.");
+  }
+  for (const [streamKey, framesKey] of [
+    ["streamBase64", "framesBase64"],
+    ["unlengthedStreamBase64", "unlengthedFramesBase64"],
+  ] as const) {
+    const stream = decodedFixtureBytes(mjpeg[streamKey], `Mobile simulators mjpeg ${streamKey}`);
+    const frames = mjpeg[framesKey];
+    if (!Array.isArray(frames) || frames.length === 0) throw new Error(`Mobile simulators mjpeg ${framesKey} is empty.`);
+    for (const frame of frames) {
+      const bytes = decodedFixtureBytes(frame, `Mobile simulators mjpeg ${framesKey}`);
+      if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) {
+        throw new Error(`Mobile simulators mjpeg ${framesKey} must hold complete JPEGs.`);
+      }
+      if (!stream.includes(bytes)) throw new Error(`Mobile simulators mjpeg ${streamKey} must carry each frame.`);
+    }
+  }
+  const refusal = parseErrorEnvelopeFixture(section.refusal, "Mobile simulators refusal");
+  if (refusal.error.code !== "capability_denied") {
+    throw new Error("Mobile simulators refusal must be capability_denied.");
+  }
+  return { ...(section as unknown as AidenRemoteMobileSimulatorsFixture), listing, sharingOff, refusal };
 }
 
 /**

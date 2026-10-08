@@ -33,7 +33,8 @@ import {
 } from "./device-host.js";
 import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
-import type { AidenRemoteSimulatorHost } from "../aiden-remote-simulators.js";
+import type { AidenRemoteSimulatorAudience, AidenRemoteSimulatorHost } from "../aiden-remote-simulators.js";
+import { AidenRemoteServiceError } from "../aiden-remote-errors.js";
 import type { DevicePeerPort } from "./peer-devices.js";
 import { AGENT_DEVICE, DEVICE_HUB, installedToolVersions, pruneOldToolVersions } from "./device-toolchain.js";
 import {
@@ -123,8 +124,12 @@ export interface DeviceService {
   /** Asks the renderer to show the Simulator tab for a chat. */
   reveal(chatId: string): void;
   onReveal(listener: (chatId: string) => void): () => void;
-  /** What paired desktops may reach while the owner shares this Mac's simulators. */
-  shareHost(): AidenRemoteSimulatorHost;
+  /**
+   * What one Aiden Remote audience may reach while the owner shares this
+   * Mac's simulators with it: paired desktops (`peerSharing`, the default) or
+   * Aiden On The Go phones (`mobileSharing`).
+   */
+  shareHost(audience?: AidenRemoteSimulatorAudience): AidenRemoteSimulatorHost;
   stop(): Promise<void>;
 }
 
@@ -195,7 +200,7 @@ export function parseSimctlDevices(stdout: string, hostId: string = LOCAL_DEVICE
   return devices.map(({ sortVersion: _sortVersion, ...device }) => device);
 }
 
-const NO_CONSENT: DeviceConsent = { streaming: false, agentAccess: false, peerSharing: false };
+const NO_CONSENT: DeviceConsent = { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false };
 
 function parseConsent(text: string): DeviceConsent {
   try {
@@ -206,6 +211,7 @@ function parseConsent(text: string): DeviceConsent {
       streaming,
       agentAccess: streaming && value.agentAccess === true,
       peerSharing: streaming && value.peerSharing === true,
+      mobileSharing: streaming && value.mobileSharing === true,
     };
   } catch {
     return { ...NO_CONSENT };
@@ -235,8 +241,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let peerRefresh: Promise<void> | null = null;
   /** Bumped whenever the peer list is forgotten, so an in-flight refresh or open cannot repopulate it. */
   let peerEpoch = 0;
-  const sharingListeners = new Set<(sharing: boolean) => void>();
-  let sharingWas = false;
+  const SHARE_AUDIENCES = ["desktop", "mobile"] as const satisfies readonly AidenRemoteSimulatorAudience[];
+  const sharingListeners: Record<AidenRemoteSimulatorAudience, Set<(sharing: boolean) => void>> = {
+    desktop: new Set(),
+    mobile: new Set(),
+  };
+  const sharingWas: Record<AidenRemoteSimulatorAudience, boolean> = { desktop: false, mobile: false };
   let sessions: DeviceSession[] = [];
   /** Bumped per session and per chat by every close, so an open still booting never undoes one. */
   const closes = new Map<string, number>();
@@ -277,15 +287,18 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     ...(unavailableReason === undefined ? {} : { unavailableReason }),
   });
 
-  const sharing = () => consent.streaming && consent.peerSharing;
+  /** Each audience has its own consent, and both build on streaming. */
+  const sharingFor = (audience: AidenRemoteSimulatorAudience) =>
+    consent.streaming && (audience === "mobile" ? consent.mobileSharing === true : consent.peerSharing);
 
   const emit = () => {
     const state = snapshot();
     for (const listener of listeners) listener(state);
-    const now = sharing();
-    if (now !== sharingWas) {
-      sharingWas = now;
-      for (const listener of sharingListeners) listener(now);
+    for (const audience of SHARE_AUDIENCES) {
+      const now = sharingFor(audience);
+      if (now === sharingWas[audience]) continue;
+      sharingWas[audience] = now;
+      for (const listener of sharingListeners[audience]) listener(now);
     }
   };
 
@@ -313,7 +326,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   function load(): Promise<void> {
     loaded ??= (async () => {
       consent = parseConsent(await readFile(consentPath, "utf8").catch(() => ""));
-      sharingWas = sharing();
+      for (const audience of SHARE_AUDIENCES) sharingWas[audience] = sharingFor(audience);
       hostState = await idleStatus();
       // After a relaunch the shim from the earlier grant still pins agent-device for run_command.
       const shim = path.join(deps.baseDir, "bin");
@@ -529,60 +542,90 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     devices = devices.map((device) => (device.id === deviceId ? { ...device, booted: false } : device));
   }
 
-  function requireSharing(): DeviceHostReady {
-    if (!sharing()) throw new Error("Simulator sharing is off.");
+  function requireSharing(audience: AidenRemoteSimulatorAudience): DeviceHostReady {
+    if (!sharingFor(audience)) throw new Error("Simulator sharing is off.");
     const ready = host.current();
     if (!ready) throw new Error("The simulator hub is not running.");
     return ready;
   }
 
-  const share: AidenRemoteSimulatorHost = {
-    sharing,
-    async list() {
-      await load();
-      if (!sharing()) return { sharing: false, status: hostState.status, devices: [] };
-      const ready = host.current() ?? (await start(false));
-      if (ready) {
-        await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
-      }
-      return {
-        sharing: sharing(),
-        status: hostState.status,
-        devices: sharing() ? devices.map(({ hostId: _hostId, ...device }) => device) : [],
-      };
-    },
-    async open(deviceId) {
-      const ready = requireSharing();
-      const device = devices.find((candidate) => candidate.id === deviceId);
-      if (!device) throw new Error("That simulator is no longer available.");
-      const { hostId: _hostId, ...attached } = await attach(ready, device);
-      emit();
-      return attached;
-    },
-    async shutdown(deviceId) {
-      const ready = requireSharing();
-      if (!devices.some((device) => device.id === deviceId)) throw new Error("That simulator is no longer available.");
-      await shutdownLocal(ready, deviceId);
-      emit();
-    },
-    async settings(deviceId) {
-      const ready = requireSharing();
-      requireKnownDevice(host.id, deviceId);
-      return readDeviceSettings(ready, deviceId);
-    },
-    async action(input) {
-      const ready = requireSharing();
-      const local = { ...input, hostId: host.id };
-      requireKnownDevice(host.id, local.deviceId);
-      await runDeviceAction(ready, local);
-      return readDeviceSettings(ready, local.deviceId);
-    },
-    hubOrigin: () => (sharing() ? (host.current()?.hub.origin ?? null) : null),
-    isKnownDevice: (deviceId) => sharing() && devices.some((device) => device.id === deviceId),
-    onSharingChanged(listener) {
-      sharingListeners.add(listener);
-      return () => sharingListeners.delete(listener);
-    },
+  /** This Mac's simulators the desktop attached to one chat, in listing order. */
+  function chatDeviceIds(chatId: string, listed: readonly { id: string }[]): string[] {
+    const attached = new Set(
+      sessions
+        .filter((session) => session.chatId === chatId && session.hostId === host.id)
+        .map((session) => session.deviceId),
+    );
+    return listed.filter((device) => attached.has(device.id)).map((device) => device.id);
+  }
+
+  function createShare(audience: AidenRemoteSimulatorAudience): AidenRemoteSimulatorHost {
+    const sharing = () => sharingFor(audience);
+    return {
+      sharing,
+      async list(options) {
+        await load();
+        if (!sharing()) return { sharing: false, status: hostState.status, devices: [] };
+        // A chat-scoped listing answers from what is already known: a phone
+        // opening a chat must never start the hub. A chat with simulators
+        // attached already has a running hub.
+        if (options?.chatId === undefined) {
+          const ready = host.current() ?? (await start(false));
+          if (ready) {
+            await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
+          }
+        }
+        const listed = sharing() ? devices.map(({ hostId: _hostId, ...device }) => device) : [];
+        return {
+          sharing: sharing(),
+          status: hostState.status,
+          devices: listed,
+          ...(options?.chatId === undefined ? {} : { chatDeviceIds: chatDeviceIds(options.chatId, listed) }),
+          ...(audience === "mobile" ? { toolVersions: { hub: DEVICE_HUB.version, agent: AGENT_DEVICE.version } } : {}),
+        };
+      },
+      async open(deviceId) {
+        const ready = requireSharing(audience);
+        const device = devices.find((candidate) => candidate.id === deviceId);
+        if (!device) throw new Error("That simulator is no longer available.");
+        // Phones stream MJPEG, which only iOS Simulators serve.
+        if (audience === "mobile" && device.platform !== "ios") {
+          throw new AidenRemoteServiceError("capability_denied", "Open this device on your Mac to view it.", 403);
+        }
+        const { hostId: _hostId, ...attached } = await attach(ready, device);
+        emit();
+        return attached;
+      },
+      async shutdown(deviceId) {
+        const ready = requireSharing(audience);
+        if (!devices.some((device) => device.id === deviceId)) throw new Error("That simulator is no longer available.");
+        await shutdownLocal(ready, deviceId);
+        emit();
+      },
+      async settings(deviceId) {
+        const ready = requireSharing(audience);
+        requireKnownDevice(host.id, deviceId);
+        return readDeviceSettings(ready, deviceId);
+      },
+      async action(input) {
+        const ready = requireSharing(audience);
+        const local = { ...input, hostId: host.id };
+        requireKnownDevice(host.id, local.deviceId);
+        await runDeviceAction(ready, local);
+        return readDeviceSettings(ready, local.deviceId);
+      },
+      hubOrigin: () => (sharing() ? (host.current()?.hub.origin ?? null) : null),
+      isKnownDevice: (deviceId) => sharing() && devices.some((device) => device.id === deviceId),
+      onSharingChanged(listener) {
+        sharingListeners[audience].add(listener);
+        return () => sharingListeners[audience].delete(listener);
+      },
+    };
+  }
+
+  const shares: Record<AidenRemoteSimulatorAudience, AidenRemoteSimulatorHost> = {
+    desktop: createShare("desktop"),
+    mobile: createShare("mobile"),
   };
 
   function requireReady(hostId: string): DeviceHostReady {
@@ -645,8 +688,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     await load();
     consentEpoch += 1;
     if (kind === "streaming") streamingEpoch += 1;
-    if (kind === "peerSharing") {
-      consent = { ...consent, peerSharing: false };
+    if (kind === "peerSharing" || kind === "mobileSharing") {
+      consent = { ...consent, [kind]: false };
       await saveConsent();
       emit();
       return snapshot();
@@ -705,6 +748,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
       if (kind === "peerSharing" && !consent.streaming) {
         throw new Error("Set up simulator streaming before sharing with paired Macs.");
+      }
+      if (kind === "mobileSharing" && !consent.streaming) {
+        throw new Error("Set up simulator streaming before sharing with Aiden On The Go.");
       }
       if (kind === "agentAccess") {
         // The only path that installs agent-device: an explicit grant from the Simulator tab.
@@ -1006,10 +1052,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       revealListeners.add(listener);
       return () => revealListeners.delete(listener);
     },
-    shareHost: () => share,
+    shareHost: (audience = "desktop") => shares[audience],
     async stop() {
-      for (const listener of sharingListeners) listener(false);
-      sharingListeners.clear();
+      for (const audience of SHARE_AUDIENCES) {
+        for (const listener of sharingListeners[audience]) listener(false);
+        sharingListeners[audience].clear();
+      }
       await stopHost();
       shimDir = null;
       peerEpoch += 1;

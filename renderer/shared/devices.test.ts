@@ -159,3 +159,16 @@ test("device settings keep known values and reject malformed ones", () => {
   assert.equal(parseDeviceSettings({ colorFilter: "sepia" }), null);
   assert.equal(parseDeviceSettings("dark"), null);
 });
+
+test("the Aiden On The Go sharing consent reads as off when absent and fails closed when malformed", () => {
+  assert.equal(parseDeviceServiceState(state())?.consent.mobileSharing, false);
+  const shared = parseDeviceServiceState(
+    state({ consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: true } }),
+  );
+  assert.equal(shared?.consent.mobileSharing, true);
+  assert.equal(shared?.consent.peerSharing, false);
+  assert.equal(
+    parseDeviceServiceState(state({ consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: "yes" } })),
+    null,
+  );
+});

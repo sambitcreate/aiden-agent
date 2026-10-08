@@ -48,7 +48,7 @@ function requireChatId(value: unknown): string {
 }
 
 function requireConsentKind(value: unknown): DeviceConsentKind {
-  if (value !== "streaming" && value !== "agentAccess" && value !== "peerSharing") {
+  if (value !== "streaming" && value !== "agentAccess" && value !== "peerSharing" && value !== "mobileSharing") {
     throw new Error("Unknown simulator consent.");
   }
   return value;

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 24,
+  "contractRevision": 25,
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
@@ -1104,7 +1104,7 @@
     "nextOffset": 2,
     "complete": true
   },
-  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 24, "pairingRequests": true },
+  "hostHealth": { "ok": true, "protocolVersion": 1, "instanceId": "instance_fixture_01", "displayName": "Fixture Aiden", "platform": "mac", "contractRevision": 25, "pairingRequests": true },
   "hostFeedEvents": [
     { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
     { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false } },
@@ -1482,5 +1482,65 @@
       { "state": "failed", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "error": "The summary could not be generated." }
     ],
     "summaryCancel": { "cancelled": true }
+  },
+  "mobileSimulators": {
+    "feature": "mobile-simulators-v1",
+    "capability": "simulators:mobile",
+    "listing": {
+      "sharing": true,
+      "status": "ready",
+      "devices": [
+        { "id": "5A0C1F3E-0000-4000-8000-000000000001", "name": "iPhone 17 Pro", "platform": "ios", "version": "26.0", "booted": true, "kind": "iphone" },
+        { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": false, "kind": "ipad" },
+        { "id": "emulator-5554", "name": "Pixel 9", "platform": "android", "version": "16", "booted": true, "kind": "other" }
+      ],
+      "chatDeviceIds": ["5A0C1F3E-0000-4000-8000-000000000001", "emulator-5554"],
+      "toolVersions": { "hub": "0.12.0", "agent": "0.21.12" }
+    },
+    "sharingOff": { "sharing": false, "status": "ready", "devices": [] },
+    "openResponse": { "device": { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": true, "kind": "ipad" } },
+    "shutdownResponse": { "ok": true },
+    "hubRoutes": {
+      "mjpeg": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/stream.mjpeg",
+      "config": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/config",
+      "input": "/simulators/hub/vendor/serve-sim/helper/ws?device={deviceId}"
+    },
+    "inputMessages": [
+      { "command": { "kind": "hardwareKeyboard", "enabled": false }, "tag": 13, "payload": { "enabled": false } },
+      { "command": { "kind": "touch", "phase": "begin", "x": 0.25, "y": 0.75 }, "tag": 3, "payload": { "type": "begin", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "move", "x": 0.75, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_right" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.25 } },
+      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait_upside_down" }, "tag": 3, "payload": { "type": "end", "x": 0.75, "y": 0.25 } },
+      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "end", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "button", "button": "home" }, "tag": 4, "payload": { "button": "home" } },
+      { "command": { "kind": "button", "button": "lock" }, "tag": 4, "payload": { "button": "lock" } },
+      { "command": { "kind": "button", "button": "appSwitcher" }, "tag": 4, "payload": { "button": "app_switcher" } },
+      { "command": { "kind": "rotate" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 7, "payload": { "orientation": "landscape_left" } },
+      { "command": { "kind": "rotate" }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_right" }, "tag": 7, "payload": { "orientation": "portrait" } },
+      { "command": { "kind": "rotate" }, "tag": 7, "payload": { "orientation": "landscape_left" } }
+    ],
+    "screenConfigs": [
+      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "portrait" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" } },
+      { "tag": 130, "payload": { "width": 2622, "height": 1206, "orientation": "landscape_left", "screenId": 1, "futureField": true }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" } },
+      { "tag": 130, "payload": { "width": 0, "height": 2622, "orientation": "portrait" }, "screen": null },
+      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "sideways" }, "screen": null },
+      { "tag": 144, "payload": { "requestId": 1, "ok": true }, "screen": null }
+    ],
+    "mjpeg": {
+      "contentType": "multipart/x-mixed-replace; boundary=frame",
+      "streamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQpDb250ZW50LUxlbmd0aDogMTQNCg0K/9j/4AAQSkZJRgAB/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KQ29udGVudC1MZW5ndGg6IDE1DQoNCv/Y/9sNCi0tZnJhbWX/2Q0K",
+      "framesBase64": ["/9j/4AAQSkZJRgAB/9k=", "/9j/2w0KLS1mcmFtZf/Z"],
+      "unlengthedStreamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQoNCv/YAQID/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KDQr/2AQF/9kNCi0tZnJhbWUNCg==",
+      "unlengthedFramesBase64": ["/9gBAgP/2Q==", "/9gEBf/Z"]
+    },
+    "refusal": {
+      "error": {
+        "code": "capability_denied",
+        "message": "Phones can watch, tap, and shut down shared simulators, but not change their settings.",
+        "requestId": "request_fixture_sim_01",
+        "retryable": false
+      }
+    }
   }
 }
