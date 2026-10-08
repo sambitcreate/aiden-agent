@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import {
+  parseAidenRemoteBotSessionEntry,
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
   AIDEN_REMOTE_CAPABILITIES,
@@ -2104,6 +2105,21 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
   assert.deepEqual(parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom, rowLineage);
   assert.equal(parseAidenRemoteChatSummaryProjection(row).forkedFrom, undefined);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: lineage() }));
+});
+
+test("failed-turn entries parse strictly, with and without a message to retry", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botSessionFailedTurns: unknown[] };
+  const [withRetry, withoutRetry] = raw.botSessionFailedTurns.map(parseAidenRemoteBotSessionEntry);
+  assert.deepEqual(withRetry, raw.botSessionFailedTurns[0]);
+  assert.equal(withRetry?.type === "failed_turn" && withRetry.retryText, "Plan my week, please.");
+  assert.deepEqual(withoutRetry, { type: "failed_turn", id: "entry_16:failed" });
+  for (const invalid of [
+    { type: "failed_turn", id: "entry_1:failed", retryText: "" },
+    { type: "failed_turn", id: "entry_1:failed", errorMessage: "provider down" },
+    { type: "failed_turn", id: "entry 1" },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotSessionEntry(invalid));
+  }
 });
 
 test("the shared Bot avatar palette fixture is exactly the desktop colour table", async () => {

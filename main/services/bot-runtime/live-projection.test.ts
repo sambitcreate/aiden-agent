@@ -5,7 +5,12 @@ import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { applyBotLiveEvent, type BotLiveEvent, type BotLiveSnapshot } from "../../../renderer/shared/bot-live.js";
+import {
+  applyBotLiveEvent,
+  botRetryableFailedTurn,
+  type BotLiveEvent,
+  type BotLiveSnapshot,
+} from "../../../renderer/shared/bot-live.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
@@ -261,6 +266,35 @@ test("a routine turn shows as its label, and a [SILENT] answer hides the whole t
     assert.deepEqual(visibleText(snapshot), ["routine:Weekly meal plan", "assistant:Here is your meal plan."]);
     const summary = await live.projection.summary("bot:a");
     assert.equal(summary.preview, "Here is your meal plan.");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a failed reply is a typed failed turn, and Retry as a new submission answers after it", async () => {
+  const failure = fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider is down" });
+  const fauxModels = createFauxModels([failure, fauxAssistantMessage("Here it is.")]);
+  const live = await start(fauxModels);
+  try {
+    const first = await live.service.send("bot:a", { text: "Plan dinner", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal).catch(() => undefined);
+    const tape = recorder();
+    const failed = await live.projection.subscribe("bot:a", tape.sink);
+    failed.unsubscribe();
+    const last = failed.snapshot.entries[failed.snapshot.entries.length - 1];
+    assert.equal(last?.type, "failed_turn");
+    assert.equal(last?.type === "failed_turn" && last.retryText, "Plan dinner");
+    assert.equal(last?.type === "failed_turn" && last.errorMessage, "provider is down");
+    assert.equal(botRetryableFailedTurn(failed.snapshot.entries), last);
+
+    // Retry: the same text, a new request id.
+    const retry = await live.service.send("bot:a", { text: last.type === "failed_turn" ? last.retryText! : "", requestId: "desk-2" });
+    assert.equal(retry.deduped, false);
+    await live.service.awaitReply("bot:a", retry.submissionId, new AbortController().signal);
+    const after = await live.projection.subscribe("bot:a", recorder().sink);
+    after.unsubscribe();
+    assert.deepEqual(visibleText(after.snapshot).slice(-2), ["user:Plan dinner", "assistant:Here it is."]);
+    assert.equal(botRetryableFailedTurn(after.snapshot.entries), null);
   } finally {
     await live.close();
   }

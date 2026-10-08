@@ -25,6 +25,7 @@ import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shar
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import {
   BOT_SILENT_REPLY,
+  botFailedTurnId,
   botQuestionAnswerText,
   botTranscriptPreview,
   type BotLiveEvent,
@@ -96,7 +97,9 @@ function connectCardOf(data: unknown): ConnectCardEntry | null {
  *
  * - `pi.user` → a user bubble; a routine's input → a `routine` label; a
  *   hidden (self-intro) prompt → nothing.
- * - `pi.assistant` / `pi.tool-result` → assistant text and tool activity.
+ * - `pi.assistant` / `pi.tool-result` → assistant text and tool activity. A
+ *   reply that ended in an error becomes a `failed_turn` (after any text it
+ *   wrote), carrying the turn's typed message for Retry.
  * - `aiden.connect-card` → a connect card.
  * - `aiden.bot-notice` → `interrupted` and `session_reset` notices; routine,
  *   silent and hidden markers only shape the entries around them.
@@ -104,7 +107,8 @@ function connectCardOf(data: unknown): ConnectCardEntry | null {
  * - System, reset and compaction entries are not shown.
  */
 export function projectBotTranscript(entries: readonly EntryRecord[]): BotTranscriptEntry[] {
-  type Turn = { start: number; silent: boolean };
+  /** `retryText`: the typed message Retry resends if this turn fails. */
+  type Turn = { start: number; silent: boolean; retryText: string | null };
   const mapped: Array<{ entry: BotTranscriptEntry; turn: Turn | null }> = [];
   let pendingRoutine: string | undefined;
   let pendingHidden = false;
@@ -128,9 +132,13 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     }
     const message = firstMessage(record);
     if (record.kind === "pi.user" && message?.role === "user") {
-      turn = { start: mapped.length, silent: false };
       const content = message.content as UserContent;
       const text = textOf(content);
+      turn = {
+        start: mapped.length,
+        silent: false,
+        retryText: pendingHidden || pendingRoutine !== undefined || !text.trim() ? null : text,
+      };
       if (pendingHidden) {
         pendingHidden = false;
         pendingRoutine = undefined;
@@ -148,12 +156,31 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       const toolCalls = message.content
         .filter((part): part is ToolCall => part.type === "toolCall")
         .map((call) => ({ id: call.id, name: call.name }));
+      const stopReason = stopReasonOf(message);
+      const text = textOf(message.content);
+      if (stopReason === "error") {
+        // A failed reply is a typed entry; any text it wrote before failing stays above it.
+        if (text.trim() || toolCalls.length > 0) {
+          mapped.push({ entry: { id, type: "assistant", text, toolCalls, stopReason, at: message.timestamp }, turn });
+        }
+        mapped.push({
+          entry: {
+            id: botFailedTurnId(id),
+            type: "failed_turn",
+            retryText: turn?.retryText ?? null,
+            ...(message.errorMessage === undefined ? {} : { errorMessage: message.errorMessage }),
+            at: message.timestamp,
+          },
+          turn,
+        });
+        continue;
+      }
       const entry: BotTranscriptEntry = {
         id,
         type: "assistant",
-        text: textOf(message.content),
+        text,
         toolCalls,
-        stopReason: stopReasonOf(message),
+        stopReason,
         ...(message.errorMessage === undefined ? {} : { errorMessage: message.errorMessage }),
         at: message.timestamp,
       };

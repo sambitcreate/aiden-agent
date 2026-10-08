@@ -928,7 +928,13 @@ export type AidenRemoteBotSessionEntry =
       reason: string;
       status: AidenRemoteConnectCardStatus;
     }
-  | { type: "notice"; id: string; notice: "session_reset" };
+  | { type: "notice"; id: string; notice: "session_reset" }
+  /**
+   * A reply that failed. Clients show "I couldn't finish that reply."; on the
+   * newest entry, Retry posts `retryText` as a new message with a new key.
+   * `retryText` is omitted when there is nothing to resend.
+   */
+  | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string };
 
 /** State of a Bot's one durable conversation. */
 export interface AidenRemoteBotSessionStateView {
@@ -4644,6 +4650,18 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
         type: "notice",
         id,
         notice: enumMember(value.notice, ["session_reset"] as const, "Bot session notice"),
+      };
+    case "failed_turn":
+      assertExactKeys(value, ["type", "id", "createdAt", "retryText"], "Bot failed turn");
+      return {
+        type: "failed_turn",
+        id,
+        ...(hasOwn(value, "createdAt")
+          ? { createdAt: dateTimeValue(value.createdAt, "Bot failed turn createdAt") }
+          : {}),
+        ...(hasOwn(value, "retryText")
+          ? { retryText: boundedText(value.retryText, "Bot failed turn retryText", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS) }
+          : {}),
       };
     default:
       throw new Error("Bot session entry type is invalid.");
