@@ -151,6 +151,7 @@ test("inputs are validated and user opens are always attributed to the user", as
 
   await ipc.invoke("devices:consent", "streaming", true);
   await ipc.invoke("devices:consent", "agentAccess", false);
+  await ipc.invoke("devices:consent", "mobileSharing", true);
   await ipc.invoke("devices:open", { chatId: "chat-1", deviceId: "ABC-123", openedBy: "agent" });
   await ipc.invoke("devices:close", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123" });
   // An Android AVD is opened by name before it has an emulator serial.
@@ -158,6 +159,7 @@ test("inputs are validated and user opens are always attributed to the user", as
   assert.deepEqual(ipc.calls, [
     ["grantConsent", "streaming"],
     ["revokeConsent", "agentAccess"],
+    ["grantConsent", "mobileSharing"],
     ["open", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123", openedBy: "user" }],
     ["close", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123", shutdown: false }],
     ["open", { chatId: "chat-1", hostId: "local", deviceId: "Pixel_9_API_35", openedBy: "user" }],

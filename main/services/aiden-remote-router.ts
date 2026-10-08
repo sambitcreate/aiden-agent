@@ -18,6 +18,8 @@ import {
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
   AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE,
+  AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
@@ -749,15 +751,29 @@ function negotiatedDeviceCapabilities(
       (capability !== "simulators:control" &&
         !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability) ||
         device.type === "mac" || device.type === "linux" ||
-        (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)),
+        (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)) &&
+      (!(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) ||
+        device.type === "iphone" || device.type === "ipad"),
     ),
   );
+}
+
+/** Grants that reach `/simulators*`: a desktop's control grant or a phone's viewer grant. */
+const SIMULATOR_ROUTE_CAPABILITIES = [
+  "simulators:control",
+  ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+] as const satisfies readonly AidenRemoteCapability[];
+
+/** A desktop holding `simulators:control`, or a phone holding `simulators:mobile`. */
+function simulatorAudience(device: Pick<AidenRemoteRouterAuthenticatedDevice, "type">): "desktop" | "mobile" {
+  return device.type === "mac" || device.type === "linux" ? "desktop" : "mobile";
 }
 
 async function authenticateCredential(
   request: IncomingMessage,
   devices: Pick<AidenRemoteRouterDeviceRegistry, "authenticate">,
-  capability: AidenRemoteCapability,
+  /** One required grant, or a list of which the device must hold at least one. */
+  capability: AidenRemoteCapability | readonly AidenRemoteCapability[],
 ): Promise<AidenRemoteRouterAuthenticatedDevice> {
   if (request.headers["aiden-protocol-version"] !== "1") {
     throw new AidenRemoteServiceError(
@@ -792,7 +808,8 @@ async function authenticateCredential(
     );
   }
   const capabilities = negotiatedDeviceCapabilities(device);
-  if (!capabilities.has(capability)) {
+  const required: readonly AidenRemoteCapability[] = typeof capability === "string" ? [capability] : capability;
+  if (!required.some((candidate) => capabilities.has(candidate))) {
     throw new AidenRemoteServiceError(
       "capability_denied",
       "This device does not have access to that Aiden capability.",
@@ -1298,6 +1315,19 @@ function requirePhoneRunGrant(
   );
 }
 
+/**
+ * `GET /simulators` takes no query, or exactly `chatId=<id>` (contract
+ * revision 25). Anything else is refused rather than ignored.
+ */
+function simulatorListChatId(query: string): string | undefined {
+  if (!query) return undefined;
+  const match = /^chatId=([A-Za-z0-9._:-]{1,128})$/u.exec(query);
+  if (!match) {
+    throw new AidenRemoteServiceError("invalid_request", "The simulator list query is invalid.", 400);
+  }
+  return match[1]!;
+}
+
 /** `/health` takes no query, or exactly `detail=host` for the desktop descriptor. */
 function healthDetailQuery(query: string): boolean {
   if (!query) return false;
@@ -1401,6 +1431,10 @@ function advertisedServerCapabilities(
       ? AIDEN_REMOTE_PHONE_RUN_CAPABILITIES.filter((capability) =>
           hostCapabilitySupported(dependencies, capability),
         )
+      : []),
+    // And the phone simulator viewer grant (contract revision 25).
+    ...(!isDesktopDevice(device) && dependencies.simulators?.host("mobile")
+      ? AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES
       : []),
   ];
 }
@@ -1540,7 +1574,7 @@ export function createAidenRemoteRequestHandler(
       const authenticate = async (
         _request: IncomingMessage,
         _devices: Pick<AidenRemoteRouterDeviceRegistry, "authenticate">,
-        capability: AidenRemoteCapability,
+        capability: AidenRemoteCapability | readonly AidenRemoteCapability[],
       ): Promise<AidenRemoteRouterAuthenticatedDevice> => {
         const device = await authenticateCredential(request, dependencies.devices, capability);
         // Every authenticated operation crosses the synchronous revocation
@@ -1719,6 +1753,10 @@ export function createAidenRemoteRequestHandler(
             ...(!isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
               ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE]
               : []),
+            // The phone simulator viewer (contract revision 25); sharing consent is reported by `/simulators`.
+            ...(!isDesktopDevice(device) && dependencies.simulators?.host("mobile")
+              ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE]
+              : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
         };
@@ -1783,6 +1821,16 @@ export function createAidenRemoteRequestHandler(
               );
             }
             if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
+          } else if ((AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Desktops use simulators:control; refuse them before revealing the feature.
+            if (isDesktopDevice(device)) {
+              throw new AidenRemoteServiceError(
+                "capability_denied",
+                "Paired desktops control simulators with simulators:control.",
+                403,
+              );
+            }
+            if (!dependencies.simulators?.host("mobile")) throw simulatorsUnavailable();
           } else if ((AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability)) {
             // Refuse non-desktops first so they never learn whether host control
             // exists; phones may hold only the phone-scoped run subset.
@@ -3490,15 +3538,32 @@ export function createAidenRemoteRequestHandler(
         route = path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)
           ? "simulatorHub"
           : "simulators";
-        const device = await authenticate(request, dependencies.devices, "simulators:control");
+        const device = await authenticate(request, dependencies.devices, SIMULATOR_ROUTE_CAPABILITIES);
         deviceIdSuffix = device.id.slice(-8);
         if (!relay) throw simulatorsUnavailable();
+        // `GET /simulators?chatId=` also names the chat's simulators; the device must be able to read that chat.
+        const chatId = request.method === "GET" && path === "/simulators" ? simulatorListChatId(query) : undefined;
+        if (chatId !== undefined) {
+          if (!device.capabilities.has("chat:read")) {
+            throw new AidenRemoteServiceError(
+              "capability_denied",
+              "This device does not have access to that Aiden capability.",
+              403,
+            );
+          }
+          if (!dependencies.chats) {
+            throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+          }
+          await requireChatAccess(dependencies.chats, device, chatId, "read");
+        }
         await relay.handle({
           request,
           response,
           path,
-          query,
+          query: chatId === undefined ? query : "",
           deviceId: device.id,
+          audience: simulatorAudience(device),
+          ...(chatId === undefined ? {} : { chatId }),
           readJson: (maximumBytes) => readJsonBody(request, maximumBytes),
           writeJson: (status, value) => writeJson(response, status, value),
         });
@@ -3551,14 +3616,15 @@ export function createAidenRemoteUpgradeHandler(
       if (request.method !== "GET" || !path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
         throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
       }
-      const device = await authenticateCredential(request, dependencies.devices, "simulators:control");
+      const device = await authenticateCredential(request, dependencies.devices, SIMULATOR_ROUTE_CAPABILITIES);
       deviceIdSuffix = device.id.slice(-8);
       // Cross the revocation fence; a long-lived socket must not delay revocation,
       // which closes it through `revokeDevice` instead.
       dependencies.devices.acquireDeviceAuthorization(device.id, false)();
       const relay = dependencies.simulators;
-      if (!relay?.host()) throw simulatorsUnavailable();
-      relay.upgrade({ request, socket, head, path, query, deviceId: device.id });
+      const audience = simulatorAudience(device);
+      if (!relay?.host(audience)) throw simulatorsUnavailable();
+      relay.upgrade({ request, socket, head, path, query, deviceId: device.id, audience });
     })()
       .then(() => {
         dependencies.log({

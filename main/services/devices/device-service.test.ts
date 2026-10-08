@@ -287,7 +287,7 @@ test("loading never starts or installs anything", async () => {
   await withService(async ({ service, host }) => {
     const state = await service.load();
     assert.equal(state.hostStatus, "needs-consent");
-    assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false });
+    assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
     assert.deepEqual(state.toolVersions, { hub: "0.12.0", agent: "0.21.12" });
     assert.equal((await service.refresh()).hostStatus, "needs-consent");
     assert.deepEqual(host.calls, []);
@@ -312,6 +312,7 @@ test("streaming consent persists, installs, starts, and lists simulators", async
         streaming: true,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
       const statuses = states.map((entry) => entry.hostStatus);
       assert.deepEqual([...new Set(statuses)], ["needs-consent", "installing", "starting", "ready"]);
@@ -580,12 +581,13 @@ test("revoking agent access stops only the agent; revoking streaming stops the h
         streaming: false,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
     },
   );
   await withService(
     async ({ service }) => {
-      assert.deepEqual((await service.load()).consent, { streaming: false, agentAccess: false, peerSharing: false });
+      assert.deepEqual((await service.load()).consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
     },
     { consent: { streaming: false, agentAccess: true } },
   );
@@ -757,7 +759,7 @@ test("removing installed tools turns everything off, stops both helpers, and del
       await writeFile(path.join(baseDir, "hub.json"), "{}");
       assert.ok(service.agentShimDir());
       const state = await service.removeTools();
-      assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false });
+      assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
       assert.equal(state.hostStatus, "needs-consent");
       assert.equal(service.agentShimDir(), null);
       assert.equal(host.host.current(), null);
@@ -770,6 +772,7 @@ test("removing installed tools turns everything off, stops both helpers, and del
         streaming: false,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
     },
     { agentInstalled: false },
@@ -925,6 +928,7 @@ test("concurrent consent saves never collide on a temp file", async () => {
         streaming: false,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
       assert.deepEqual((await readdir(baseDir)).filter((name) => name.endsWith(".tmp")), []);
     },
@@ -1411,4 +1415,85 @@ test("paired Macs reach this Mac's simulators only while streaming and sharing a
     assert.equal(service.state().consent.peerSharing, false);
     await assert.rejects(service.grantConsent("peerSharing"), /Set up simulator streaming/u);
   });
+});
+
+test("phones reach this Mac's simulators only through their own consent", async () => {
+  await withService(
+    async ({ service, host }) => {
+      const desktop = service.shareHost();
+      const mobile = service.shareHost("mobile");
+      const mobileChanges: boolean[] = [];
+      const desktopChanges: boolean[] = [];
+      mobile.onSharingChanged((sharing) => mobileChanges.push(sharing));
+      desktop.onSharingChanged((sharing) => desktopChanges.push(sharing));
+      await service.load();
+      assert.equal(mobile.sharing(), false);
+      assert.deepEqual(await mobile.list(), { sharing: false, status: "stopped", devices: [] });
+      await assert.rejects(mobile.open(IPHONE), /sharing is off/u);
+
+      await service.grantConsent("mobileSharing");
+      assert.equal(service.state().consent.mobileSharing, true);
+      assert.equal(mobile.sharing(), true);
+      assert.equal(desktop.sharing(), false, "phone consent never shares with paired Macs");
+      // A chat-scoped listing answers from what is known and never starts the hub.
+      assert.deepEqual(await mobile.list({ chatId: "chat-1" }), {
+        sharing: true,
+        status: "stopped",
+        devices: [],
+        chatDeviceIds: [],
+        toolVersions: { hub: "0.12.0", agent: "0.21.12" },
+      });
+      assert.deepEqual(host.calls, []);
+
+      // An explicit listing starts the installed hub, as it does for paired Macs.
+      const listing = await mobile.list();
+      assert.equal(listing.devices.length, 3);
+      assert.deepEqual(listing.toolVersions, { hub: "0.12.0", agent: "0.21.12" });
+      assert.equal("chatDeviceIds" in listing, false);
+      assert.equal("toolVersions" in (await service.shareHost().list()), false);
+
+      await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+      await service.open({ chatId: "chat-2", deviceId: IPAD, openedBy: "user" });
+      assert.deepEqual((await mobile.list({ chatId: "chat-1" })).chatDeviceIds, [IPHONE_OLD]);
+      assert.deepEqual((await mobile.list({ chatId: "chat-3" })).chatDeviceIds, []);
+      assert.equal(mobile.isKnownDevice(IPHONE_OLD), true);
+      assert.equal(mobile.hubOrigin(), "http://127.0.0.1:52000");
+      assert.equal(desktop.hubOrigin(), null);
+
+      await service.revokeConsent("mobileSharing");
+      assert.equal(mobile.isKnownDevice(IPHONE_OLD), false);
+      assert.equal(mobile.hubOrigin(), null);
+      await service.grantConsent("peerSharing");
+      await service.grantConsent("mobileSharing");
+      await service.revokeConsent("streaming");
+      assert.deepEqual(mobileChanges, [true, false, true, false]);
+      assert.deepEqual(desktopChanges, [true, false]);
+      assert.equal(service.state().consent.mobileSharing, false);
+      await assert.rejects(service.grantConsent("mobileSharing"), /Set up simulator streaming/u);
+    },
+    { consent: { streaming: true } },
+  );
+});
+
+test("phones see shared Android emulators but open only iOS Simulators", async () => {
+  await withService(
+    async ({ service, hub }) => {
+      await service.load();
+      await service.grantConsent("mobileSharing");
+      const mobile = service.shareHost("mobile");
+      const listing = await mobile.list();
+      const emulator = listing.devices.find((device) => device.id === "emulator-5554");
+      assert.equal(emulator?.platform, "android", "Android emulators are listed for phones to show as Open on your Mac");
+      const before = hub.calls.length;
+      await assert.rejects(mobile.open("emulator-5554"), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "capability_denied");
+        return true;
+      });
+      assert.equal(hub.calls.length, before, "a refused phone open never reaches the hub");
+      const iphone = listing.devices.find((device) => device.platform === "ios");
+      assert.ok(iphone);
+      assert.equal((await mobile.open(iphone.id)).id, iphone.id);
+    },
+    { consent: { streaming: true }, android: true },
+  );
 });

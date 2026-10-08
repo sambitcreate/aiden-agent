@@ -169,7 +169,7 @@ export async function shutdownDevices(): Promise<void> {
 
 export function registerDeviceHandlers(): void {
   // Paired Macs reach this Mac's simulators only while the flag and the owner's sharing consent are on.
-  registerSimulatorShareHost(() => (devicesEnabled() ? defaultDeviceService().shareHost() : null));
+  registerSimulatorShareHost((audience) => (devicesEnabled() ? defaultDeviceService().shareHost(audience) : null));
   registerDeviceHandlersWith({
     handle: (channel, listener) =>
       ipcMain.handle(channel, (event, ...args) => listener(event, ...args)),

@@ -58,6 +58,12 @@ const CONSENT_ROWS: ReadonlyArray<{ kind: DeviceConsentKind; label: string; desc
     description:
       "Paired Macs that you granted simulator control can view and drive this Mac’s simulators. Nothing is shared until you turn this on.",
   },
+  {
+    kind: "mobileSharing",
+    label: "Share with Aiden On The Go",
+    description:
+      "Your paired iPhone and Android phones can watch, tap, and shut down this Mac’s simulators. They can’t change simulator settings. Turning this off disconnects them.",
+  },
 ];
 
 const CONFIRM_COPY = {
@@ -132,7 +138,8 @@ export function SimulatorSettingsView({
   const busy = pending !== null;
   const anyInstalled = toolchain?.tools.some((tool) => tool.installed.length > 0) ?? false;
   const stale = toolchain?.tools.some((tool) => tool.installed.some((version) => version !== tool.pinned)) ?? false;
-  const anyGranted = state.consent.streaming || state.consent.agentAccess || state.consent.peerSharing;
+  const anyGranted =
+    state.consent.streaming || state.consent.agentAccess || state.consent.peerSharing || state.consent.mobileSharing === true;
   const confirmCopy = confirming === "streaming" || confirming === "agentAccess" ? CONFIRM_COPY[confirming] : null;
   const localTools = state.hosts.find((host) => host.id === LOCAL_DEVICE_HOST_ID)?.tools;
 
@@ -141,6 +148,7 @@ export function SimulatorSettingsView({
       <FieldSet title="Permissions">
         {CONSENT_ROWS.map((row) => {
           const needsStreaming = row.kind !== "streaming" && !state.consent.streaming;
+          const granted = state.consent[row.kind] === true;
           return (
             <Field
               key={row.kind}
@@ -152,8 +160,8 @@ export function SimulatorSettingsView({
                   <LoaderCircle className="size-4 animate-spin text-secondary motion-reduce:animate-none" aria-hidden />
                 ) : null}
                 <Switch
-                  checked={state.consent[row.kind]}
-                  disabled={busy || state.hostStatus === "disabled" || (needsStreaming && !state.consent[row.kind])}
+                  checked={granted}
+                  disabled={busy || state.hostStatus === "disabled" || (needsStreaming && !granted)}
                   aria-label={row.label}
                   onCheckedChange={(granted) => onConsent(row.kind, granted)}
                 />

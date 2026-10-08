@@ -43,12 +43,17 @@ export const DEVICE_HOST_STATUSES = [
   "error",
 ] as const;
 export type DeviceHostStatus = (typeof DEVICE_HOST_STATUSES)[number];
-export type DeviceConsentKind = "streaming" | "agentAccess" | "peerSharing";
+export type DeviceConsentKind = "streaming" | "agentAccess" | "peerSharing" | "mobileSharing";
 export interface DeviceConsent {
   streaming: boolean;
   agentAccess: boolean;
   /** Lets paired desktops holding `simulators:control` watch and control this Mac's simulators. */
   peerSharing: boolean;
+  /**
+   * "Share with Aiden On The Go": lets paired phones holding `simulators:mobile`
+   * watch, tap and shut down this Mac's simulators. Off by default; absent reads as off.
+   */
+  mobileSharing?: boolean;
 }
 export interface DeviceSession {
   chatId: string;
@@ -233,7 +238,8 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
     !isRecord(consent) ||
     typeof consent.streaming !== "boolean" ||
     typeof consent.agentAccess !== "boolean" ||
-    typeof consent.peerSharing !== "boolean"
+    typeof consent.peerSharing !== "boolean" ||
+    (consent.mobileSharing !== undefined && typeof consent.mobileSharing !== "boolean")
   ) {
     return null;
   }
@@ -266,6 +272,7 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
       streaming: consent.streaming,
       agentAccess: consent.agentAccess,
       peerSharing: consent.peerSharing,
+      mobileSharing: consent.mobileSharing === true,
     },
     devices,
     sessions,

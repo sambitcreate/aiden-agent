@@ -146,3 +146,29 @@ test("downloads and removal each ask before they run", () => {
   assert.equal(source.match(/keepOpenOnConfirm\n\s*returnFocus=\{returnFocus\}/gu)?.length, 2);
   assert.doesNotMatch(source, /setInterval|setTimeout/u, "no background polling");
 });
+
+test("sharing with Aiden On The Go is its own switch, off by default and built on streaming", () => {
+  const before = view({});
+  const off = switchFor(before, "Share with Aiden On The Go");
+  assert.match(off, /aria-checked="false"/u);
+  assert.match(off, / disabled=""/u);
+
+  const streaming = view({
+    state: state({ hostStatus: "ready", consent: { streaming: true, agentAccess: false, peerSharing: true } }),
+  });
+  // Sharing with paired Macs never implies sharing with phones.
+  assert.match(switchFor(streaming, "Share with paired Macs"), /aria-checked="true"/u);
+  const available = switchFor(streaming, "Share with Aiden On The Go");
+  assert.match(available, /aria-checked="false"/u);
+  assert.doesNotMatch(available, / disabled=""/u);
+  assert.match(streaming, /can’t change simulator settings/u);
+
+  const shared = view({
+    state: state({
+      hostStatus: "ready",
+      consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: true },
+    }),
+  });
+  assert.match(switchFor(shared, "Share with Aiden On The Go"), /aria-checked="true"/u);
+  assert.match(switchFor(shared, "Share with paired Macs"), /aria-checked="false"/u);
+});

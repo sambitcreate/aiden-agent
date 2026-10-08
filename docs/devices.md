@@ -186,7 +186,7 @@ There are deliberately only four `device_*` tools (`device-tools.ts`). Driving h
 
 ### Paired Macs
 
-A paired desktop serves `/simulators*` through the Aiden Remote router (`aiden-remote-simulators.ts`). This needs both the desktop-only `simulators:control` capability and the owner's `peerSharing` consent. The client side (`peer-devices.ts`) relays streams over the pinned-TLS peer connection. The proxy resolves `?host=` to that relay, so the renderer's contract is the same for every host.
+A paired desktop serves `/simulators*` through the Aiden Remote router (`aiden-remote-simulators.ts`). This needs both the desktop-only `simulators:control` capability and the owner's `peerSharing` consent. Phones use their own grant and consent; see "Aiden On The Go viewer" below. The client side (`peer-devices.ts`) relays streams over the pinned-TLS peer connection. The proxy resolves `?host=` to that relay, so the renderer's contract is the same for every host.
 
 ### SSH hosts
 
@@ -216,3 +216,33 @@ The 3D frame (`renderer/lib/device-3d/`) is procedural. T3's Apple GLB models ha
 - `npm run test:devices`: unit and SSR suites.
 - `tests/e2e/environment-devices-*.spec.ts`: Electron E2E against `tests/e2e/device-hub-fake.mjs` and `agent-device-fake.mjs`. The Android spec also fakes the SDK's `adb` and `emulator`; the iOS specs pin `ANDROID_HOME` to an empty folder.
 - `scripts/devices-acceptance.mjs --allow-npm-install`: real-Mac acceptance.
+
+## Aiden On The Go viewer
+
+Aiden On The Go on iPhone and Android can watch and control a simulator that runs on the paired Mac. It is useful when an agent opened a device in a chat and you are away from the desk.
+
+### Turning it on
+
+Settings → Simulator → **Share with Aiden On The Go**. It is off by default, needs simulator streaming, and is separate from **Share with paired Macs**. Turning it off disconnects phones at once; paired Macs stay connected.
+
+### What a phone can do
+
+- See a device button above the composer when the chat has simulators. With several, the viewer has a picker.
+- Watch the simulator full screen, with the status bar hidden. Controls appear on demand: shake the phone (with a haptic) or tap the handle at the top. On Android, Back shows the controls first and leaves on the second press.
+- Tap and drag on the screen, press Home, open the app switcher, rotate, reload the stream, and shut the simulator down after a confirmation.
+- Read the hub and agent-device versions, and retry when the Mac's hub has stopped.
+
+A phone cannot change simulator settings, run device actions, take screenshots, read the accessibility tree or event log, or do anything the agent tools do. Those stay on the Mac.
+
+Android emulators are listed with "Open on your Mac to view". They stream H.264 only, and the phones have no native H.264 path yet.
+
+### How it works
+
+- **Contract.** Aiden Remote revision 25 adds the phone-only `simulators:mobile` grant behind the `mobile-simulators-v1` feature. Phones negotiate it after pairing. `aiden-remote-simulators.ts` serves phones as a separate audience with a narrower route set: list, open (iOS only), shut down, the MJPEG stream, the screen config and health reads, and the input socket. Details are in `docs/aiden-remote-api-v1.md` under "Phone simulator viewer".
+- **Consent per audience.** `device-service.ts` builds one share host per audience, each with its own consent and listeners. The relay closes only the affected audience's streams when consent changes. The 8-stream cap per paired device still applies.
+- **Chat devices.** `GET /simulators?chatId=` returns `chatDeviceIds` from the desktop's per-chat sessions after checking that the phone can read the chat. It never starts the hub. Phones call it when a chat opens, when the app returns to the foreground, and when the viewer closes. Nothing polls.
+- **Native viewers, no WebView.** WKWebView cannot easily honour Aiden's pinned self-signed TLS, so both apps stream natively:
+  - iOS (`ios/AidenOnTheGo/Networking/AidenSimulatorStream.swift`, `AidenMJPEGMultipartParser.swift`, `AidenSimulatorContract.swift`, `Features/Simulators/`). MJPEG arrives over a URLSession data task that uses the pinned-trust delegate. Input goes over a `URLSessionWebSocketTask` on the same pinned session.
+  - Android (`networking/AidenSimulatorStream.kt`, `models/AidenSimulators.kt`, `features/simulators/`). MJPEG is read with the pinned OkHttp client and input goes over an OkHttp WebSocket.
+  - On both, frames decode off the main thread and only the newest frame is kept.
+- **Input.** Both apps send the same packets as the Simulator tab: `0x03` touch normalised to the frame, `0x04` buttons and `0x07` orientation. The shared fixture's `mobileSimulators` vectors drive the iOS and Android tests, and `renderer/lib/device-stream-mobile-fixture.test.ts` checks the same vectors against the desktop encoder, so the three clients cannot drift apart.

@@ -3883,7 +3883,22 @@
       "get": {
         "operationId": "listSimulators",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Lists the serving Mac's iOS Simulators and Android Emulators. While the owner has not turned on Share with paired Macs, sharing is false and devices is empty.",
+        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "query",
+            "required": false,
+            "description": "Contract revision 25. A chat the device can read; adds chatDeviceIds to the listing.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
+          }
+        ],
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Lists the serving Mac's iOS Simulators and Android Emulators. While the owner has not turned on Share with paired Macs, sharing is false and devices is empty. Phones also need the owner's Share with Aiden On The Go consent. Phones may open iOS Simulators only; Android Emulators are listed for them as Open on your Mac to view. The optional chatId query (the only query accepted) also requires chat:read and a visible chat; the response then carries chatDeviceIds and the Mac never starts its hub for it. Phones also receive toolVersions.",
         "responses": {
           "200": {
             "description": "Simulator listing",
@@ -3910,7 +3925,8 @@
       "post": {
         "operationId": "openSimulator",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Boots a listed simulator and starts its stream on the serving Mac. Sharing must be on.",
+        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Boots a listed simulator and starts its stream on the serving Mac. Sharing must be on. Phones also need the owner's Share with Aiden On The Go consent. Phones may open only iOS Simulators; any other platform is capability_denied.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3947,7 +3963,8 @@
       "post": {
         "operationId": "shutdownSimulator",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Shuts down a listed simulator on the serving Mac.",
+        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Shuts down a listed simulator on the serving Mac. Phones also need the owner's Share with Aiden On The Go consent.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3984,7 +4001,7 @@
       "post": {
         "operationId": "getSimulatorSettings",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Reads a listed simulator's settings.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Reads a listed simulator's settings. Contract revision 25: phones holding simulators:mobile are refused with capability_denied.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4021,7 +4038,7 @@
       "post": {
         "operationId": "runSimulatorAction",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Runs one control action on a listed simulator.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Runs one control action on a listed simulator. Contract revision 25: phones holding simulators:mobile are refused with capability_denied.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4069,7 +4086,8 @@
       "get": {
         "operationId": "relaySimulatorHub",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper, serve-emu video and gesture, and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device.",
+        "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper, serve-emu video and gesture, and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device. Phones also need the owner's Share with Aiden On The Go consent. Phones reach only vendor/serve-sim/helper/{udid}/stream.mjpeg, .../config, .../health and the helper WebSocket vendor/serve-sim/helper/ws?device={udid}; every other hub path, including every serve-emu route, is capability_denied for them.",
         "responses": {
           "200": {
             "description": "Relayed hub content"
@@ -4085,7 +4103,7 @@
       "post": {
         "operationId": "captureSimulatorScreenshot",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Only hubPath vendor/serve-sim/api/screenshot, vendor/serve-emu/api/screenshot, and vendor/serve-emu/api/fold accept POST. The iOS screenshot body names one listed simulator; the Android screenshot names its emulator in ?device= and takes no body; the fold body names a posture. The relay rebuilds each body from those fields alone and bounds the request to 1 KiB. serve-emu stream tuning (PUT and PATCH) is never relayed.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Only hubPath vendor/serve-sim/api/screenshot, vendor/serve-emu/api/screenshot, and vendor/serve-emu/api/fold accept POST. The iOS screenshot body names one listed simulator; the Android screenshot names its emulator in ?device= and takes no body; the fold body names a posture. The relay rebuilds each body from those fields alone and bounds the request to 1 KiB. serve-emu stream tuning (PUT and PATCH) is never relayed. Contract revision 25: phones holding simulators:mobile are refused with capability_denied.",
         "requestBody": {
           "required": false,
           "content": {
@@ -5631,7 +5649,8 @@
                 "simulators:control",
                 "host:events",
                 "runs:observe",
-                "runs:control"
+                "runs:control",
+                "simulators:mobile"
               ]
             },
             "uniqueItems": true
@@ -5663,14 +5682,15 @@
                 "simulators:control",
                 "host:events",
                 "runs:observe",
-                "runs:control"
+                "runs:control",
+                "simulators:mobile"
               ]
             },
             "uniqueItems": true
           },
           "features": {
             "type": "array",
-            "description": "Bounded additive API feature advertisements independent of device grants or vocabulary opt-in. Clients recognize supported values and ignore other bounded values; feature tokens never grant authority.",
+            "description": "Bounded additive API feature advertisements independent of device grants or vocabulary opt-in. Clients recognize supported values and ignore other bounded values; feature tokens never grant authority. Contract revision 25: phones alone may see mobile-simulators-v1, which gates negotiating simulators:mobile.",
             "maxItems": 32,
             "items": {
               "type": "string",
@@ -5768,9 +5788,9 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only. Contract revision 25 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found.",
             "minItems": 1,
-            "maxItems": 8,
+            "maxItems": 9,
             "items": {
               "enum": [
                 "tasks:read",
@@ -5780,7 +5800,8 @@
                 "simulators:control",
                 "host:events",
                 "runs:observe",
-                "runs:control"
+                "runs:control",
+                "simulators:mobile"
               ]
             },
             "uniqueItems": true
@@ -5821,7 +5842,8 @@
                 "simulators:control",
                 "host:events",
                 "runs:observe",
-                "runs:control"
+                "runs:control",
+                "simulators:mobile"
               ]
             },
             "uniqueItems": true
@@ -5856,7 +5878,7 @@
               "ios",
               "android"
             ],
-            "description": "An Android emulator's id is its adb serial while it runs and its AVD name while it is off."
+            "description": "An Android emulator's id is its adb serial while it runs and its AVD name while it is off. Phones view only ios devices and show android ones as Open on your Mac to view, because only iOS Simulators serve MJPEG."
           },
           "version": {
             "type": "string",
@@ -5885,7 +5907,7 @@
         "properties": {
           "sharing": {
             "type": "boolean",
-            "description": "Whether the serving Mac's owner has turned on Share with paired Macs. devices is empty while false."
+            "description": "Whether the serving Mac's owner shares simulators with this device's audience: Share with paired Macs for desktops, Share with Aiden On The Go for phones (contract revision 25). devices is empty while false."
           },
           "status": {
             "enum": [
@@ -5909,6 +5931,27 @@
             "items": {
               "$ref": "#/components/schemas/SimulatorDevice"
             }
+          },
+          "chatDeviceIds": {
+            "type": "array",
+            "maxItems": 256,
+            "description": "Contract revision 25. Present only when the request named a chatId: the listed simulators the desktop attached to that chat.",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9-]+$"
+            }
+          },
+          "toolVersions": {
+            "type": "object",
+            "description": "Contract revision 25, phones only: the pinned helper versions on the serving Mac.",
+            "required": ["hub", "agent"],
+            "properties": {
+              "hub": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "agent": { "type": "string", "minLength": 1, "maxLength": 64 }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

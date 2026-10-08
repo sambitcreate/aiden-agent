@@ -165,6 +165,14 @@ discovery, the serve-emu proxy routes, and the Android fold controls in
 Code at commit `a6ec88f7`, under the same MIT license. The fold glyphs are
 Aiden's own.
 
+The Aiden On The Go simulator viewers (`ios/AidenOnTheGo/Features/Simulators/`,
+`ios/AidenOnTheGo/Networking/AidenSimulatorStream.swift` and
+`AidenMJPEGMultipartParser.swift`, and the Android
+`features/simulators/` and `networking/AidenSimulatorStream.kt`) adapt the
+on-demand controls, shake detector and device picker of T3 Code's
+`apps/mobile/src/features/devices`, under the same MIT license. Both apps ship
+the license as `ThirdPartyNotices/T3Code-LICENSE.txt`.
+
 ## three.js
 
 Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is
