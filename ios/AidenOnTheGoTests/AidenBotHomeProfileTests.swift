@@ -130,6 +130,19 @@ final class AidenBotHomeProfileTests: XCTestCase {
 
     // MARK: Delete
 
+    func testCharacterColoursMatchTheSharedDesktopPalette() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let palette = try XCTUnwrap(object["botAvatarPalette"] as? [String: Any])
+        let colors = try XCTUnwrap(palette["colors"] as? [String: String])
+        func hex(_ rgb: UInt32) -> String { String(format: "#%06X", rgb) }
+        XCTAssertEqual(Set(colors.keys), Set(AidenBotAvatarColor.allCases.map(\.rawValue)))
+        for color in AidenBotAvatarColor.allCases {
+            XCTAssertEqual(hex(color.rgb), colors[color.rawValue], "\(color.rawValue) differs from desktop")
+        }
+        XCTAssertEqual(hex(aidenBotAvatarFaceRGB), palette["face"] as? String)
+    }
+
     func testDeleteConfirmationUsesTheExactSharedCopy() {
         let copy = AidenBotDeleteConfirmation(botName: " Scout ")
 

@@ -3,6 +3,7 @@ import { createDecipheriv, hkdfSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import {
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
@@ -2103,4 +2104,14 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
   assert.deepEqual(parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom, rowLineage);
   assert.equal(parseAidenRemoteChatSummaryProjection(row).forkedFrom, undefined);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: lineage() }));
+});
+
+test("the shared Bot avatar palette fixture is exactly the desktop colour table", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botAvatarPalette?: unknown };
+  // iOS and Android test their palettes against this same fixture.
+  assert.deepEqual(raw.botAvatarPalette, { face: BOT_AVATAR_FACE_HEX, colors: BOT_AVATAR_COLOR_HEX });
+  assert.deepEqual(Object.keys(BOT_AVATAR_COLOR_HEX), [...BOT_AVATAR_COLORS]);
+  for (const value of [BOT_AVATAR_FACE_HEX, ...Object.values(BOT_AVATAR_COLOR_HEX)]) {
+    assert.match(value, /^#[0-9A-F]{6}$/u);
+  }
 });
