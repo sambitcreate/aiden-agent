@@ -11,24 +11,40 @@ func aidenBotAvatarPresentation(_ avatar: AidenBotSemanticAvatar) -> AidenBotAva
     .init(shape: avatar.recipe.shape, color: avatar.recipe.color)
 }
 
+/// The eye mark colour, shared with desktop (`BOT_AVATAR_FACE_HEX`).
+let aidenBotAvatarFaceRGB: UInt32 = 0x292735
+
+extension Color {
+    init(aidenRGB rgb: UInt32) {
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255,
+            green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255
+        )
+    }
+}
+
 extension AidenBotAvatarColor {
-    /// The fill shown for this character colour.
-    var swatch: Color {
+    /// The colour as 0xRRGGBB, exactly desktop's `BOT_AVATAR_COLOR_HEX`.
+    var rgb: UInt32 {
         switch self {
-        case .lilac: .purple
-        case .sky: .blue
-        case .mint: .mint
-        case .sun: .yellow
-        case .periwinkle: .indigo
-        case .coral: .pink
-        case .peach: .orange
-        case .aqua: .cyan
-        case .rose: Color(red: 0.93, green: 0.36, blue: 0.52)
-        case .lime: Color(red: 0.55, green: 0.78, blue: 0.20)
-        case .plum: Color(red: 0.55, green: 0.27, blue: 0.62)
-        case .graphite: .gray
+        case .lilac: 0xC6A9FF
+        case .sky: 0x83D8FF
+        case .mint: 0x88E8B1
+        case .sun: 0xFFDA7B
+        case .periwinkle: 0xB2BCFF
+        case .coral: 0xFF9F9B
+        case .peach: 0xFFC294
+        case .aqua: 0x78E8DF
+        case .rose: 0xFFA3C7
+        case .lime: 0xC6EC7E
+        case .plum: 0xDDA8F2
+        case .graphite: 0xC5C5CE
         }
     }
+
+    /// The fill shown for this character colour.
+    var swatch: Color { Color(aidenRGB: rgb) }
 
     var displayName: String {
         switch self {
@@ -108,7 +124,7 @@ private struct AidenBotEyeMark: View {
             Capsule().frame(width: size * 0.09, height: size * 0.2)
             Capsule().frame(width: size * 0.09, height: size * 0.2)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(Color(aidenRGB: aidenBotAvatarFaceRGB))
         .rotationEffect(.degrees(-12))
         .offset(x: size * 0.08, y: -size * 0.02)
         .accessibilityHidden(true)

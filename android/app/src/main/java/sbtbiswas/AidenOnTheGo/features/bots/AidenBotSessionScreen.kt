@@ -72,6 +72,7 @@ fun aidenBotConnectionGlyph(iconId: String): AidenBotConnectionGlyph = when (ico
 
 object AidenBotSessionTags {
     const val INTERRUPTED_CARD = "bot_session_interrupted_card"
+    const val FAILED_TURN_CARD = "bot_session_failed_turn_card"
     const val NEEDS_MODEL_CARD = "bot_session_needs_model_card"
     const val COMPOSER = "bot_session_composer"
 }
@@ -150,6 +151,29 @@ fun AidenBotSessionScreen(
             }
         }
     }
+    // Files live on the Bot's conversation chat; resolve it when the menu asks.
+    var filesChatId by remember(botId) { mutableStateOf<String?>(null) }
+    var openingFiles by remember { mutableStateOf(false) }
+    fun openFiles() {
+        if (openingFiles) return
+        openingFiles = true
+        scope.launch {
+            try {
+                val chatId = aidenBotFilesChatId(botId, cl.botConversations(botId = botId).conversations)
+                if (chatId == null) {
+                    coordinator.presentError(AidenBotSessionCopy.FILES_UNAVAILABLE)
+                } else {
+                    filesChatId = chatId
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                coordinator.presentError(AidenBotSessionCopy.FILES_UNAVAILABLE)
+            } finally {
+                openingFiles = false
+            }
+        }
+    }
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
     val canRequestConnections = serverInfo?.supportsBotConnectionRequests == true
     val listState = rememberLazyListState()
@@ -202,6 +226,10 @@ fun AidenBotSessionScreen(
         )
     }
 
+    filesChatId?.let { chatId ->
+        AidenBotFilesSheet(chatId = chatId, coordinator = coordinator, onDismiss = { filesChatId = null })
+    }
+
     Scaffold(
         containerColor = palette.canvas,
         contentWindowInsets = WindowInsets.statusBars,
@@ -209,12 +237,12 @@ fun AidenBotSessionScreen(
             AidenBotChatTopBar(
                 identity = identity,
                 coordinator = coordinator,
-                isStreaming = ui.isRunning,
+                isStreaming = ui.canStopTurn,
                 canStop = !ui.isStopping,
                 onStop = { scope.launch { controller.stop() } },
                 onBack = onNavigateBack,
                 onOpenProfile = { onNavigateToBotProfile(botId) },
-                onOpenFiles = null,
+                onOpenFiles = ::openFiles,
                 canDelete = canDelete,
                 onDelete = { confirmingDelete = true }
             )
@@ -259,6 +287,10 @@ fun AidenBotSessionScreen(
                             color = palette.secondary,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        )
+                        is AidenBotSessionEntry.FailedTurn -> AidenBotFailedTurnCard(
+                            canRetry = ui.retryableFailedTurn?.id == entry.id,
+                            onRetry = { scope.launch { controller.retry() } }
                         )
                     }
                 }
@@ -378,6 +410,20 @@ fun AidenBotInterruptedCard(
                     AidenPrimaryButton(text = AidenBotSessionCopy.RESUME, enabled = !busy, onClick = onResume)
                 }
                 AidenTonalButton(text = AidenBotSessionCopy.DISMISS, enabled = !busy, onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/** "I couldn't finish that reply." Retry shows only on the newest failed turn with text to resend. */
+@Composable
+fun AidenBotFailedTurnCard(canRetry: Boolean, onRetry: () -> Unit) {
+    val palette = AidenTheme.palette
+    Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.FAILED_TURN_CARD)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(AidenBotSessionCopy.FAILED_TURN, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
+            if (canRetry) {
+                AidenPrimaryButton(text = AidenBotSessionCopy.RETRY, onClick = onRetry)
             }
         }
     }

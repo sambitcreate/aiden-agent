@@ -12,6 +12,12 @@ export type BotRoutineSchedule =
 
 export type BotRoutineScheduleKind = BotRoutineSchedule["kind"];
 
+/**
+ * The last day a monthly routine may pick. Cron skips a day a month does not
+ * have (the 29th–31st), so monthly routines stop at the 28th everywhere.
+ */
+export const BOT_ROUTINE_MAX_MONTH_DAY = 28;
+
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/u;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
@@ -72,7 +78,7 @@ export function parseBotRoutineSchedule(value: unknown): BotRoutineSchedule {
         typeof record.day !== "number" ||
         !Number.isInteger(record.day) ||
         record.day < 1 ||
-        record.day > 31
+        record.day > BOT_ROUTINE_MAX_MONTH_DAY
       ) {
         invalid();
       }

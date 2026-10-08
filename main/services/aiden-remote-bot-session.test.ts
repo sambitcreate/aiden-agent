@@ -11,7 +11,6 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
-  BOT_REMOTE_FAILED_REPLY_TEXT,
   projectBotSessionEntries,
   projectBotSessionState,
   redactRemoteError,
@@ -19,7 +18,11 @@ import {
 } from "./aiden-remote-bot-session.js";
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
-import { parseAidenRemoteBotSession, parseAidenRemoteBotSessionEvent } from "./aiden-remote-protocol.js";
+import {
+  parseAidenRemoteBotSession,
+  parseAidenRemoteBotSessionEntry,
+  parseAidenRemoteBotSessionEvent,
+} from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
   createBotSessionService,
@@ -356,10 +359,16 @@ type RawEntry = { id: number; kind: string; model?: unknown[]; data?: unknown };
 const user = (id: number, text: string): RawEntry => ({
   id, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text }], timestamp: 1_700_000_000_000 }],
 });
-const assistant = (id: number, text: string, stopReason = "stop", content?: unknown[]): RawEntry => ({
+const assistant = (id: number, text: string, stopReason = "stop", content?: unknown[], errorMessage?: string): RawEntry => ({
   id,
   kind: "pi.assistant",
-  model: [{ role: "assistant", content: content ?? [{ type: "text", text }], stopReason, timestamp: 1_700_000_001_000 }],
+  model: [{
+    role: "assistant",
+    content: content ?? [{ type: "text", text }],
+    stopReason,
+    timestamp: 1_700_000_001_000,
+    ...(errorMessage === undefined ? {} : { errorMessage }),
+  }],
 });
 const notice = (id: number, data: unknown): RawEntry => ({ id, kind: BOT_NOTICE_ENTRY_KIND, data });
 const card = (id: number, pluginId: string, status = "pending"): RawEntry => ({
@@ -379,7 +388,7 @@ test("phones see what the Mac shows: no self-intro prompt, no [SILENT] turn, and
     assistant(9, "", "toolUse", [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
     assistant(10, "Here's the plan."),
     user(11, "Thanks!"),
-    assistant(12, "", "error"),
+    assistant(12, "", "error", undefined, "429 from provider at /Users/sam/key"),
   ] as never);
 
   assert.deepEqual(
@@ -389,7 +398,38 @@ test("phones see what the Mac shows: no self-intro prompt, no [SILENT] turn, and
       ["user", "Plan the week.", "Weekly plan"],
       ["assistant", "Here's the plan.", null],
       ["user", "Thanks!", null],
-      ["assistant", BOT_REMOTE_FAILED_REPLY_TEXT, null],
+      ["failed_turn"],
+    ],
+  );
+  // The failed turn carries the message Retry resends, and never the model's error.
+  const failed = entries[entries.length - 1]!;
+  assert.deepEqual(failed, {
+    type: "failed_turn",
+    id: "entry_12:failed",
+    createdAt: new Date(1_700_000_001_000).toISOString(),
+    retryText: "Thanks!",
+  });
+  assert.deepEqual(parseAidenRemoteBotSessionEntry(failed), failed);
+});
+
+test("a failed routine or self-intro turn has nothing to retry, and text written before the failure stays", () => {
+  const entries = projectBotSessionEntries([
+    notice(1, { notice: "routine", label: "Weekly plan", requestId: "routine:t:2" }),
+    user(2, `Plan the week.\n\n${BOT_ROUTINE_SILENT_INSTRUCTION}`),
+    assistant(3, "", "error"),
+    user(4, "Try a shorter plan"),
+    assistant(5, "Monday: soup", "error"),
+  ] as never);
+  assert.deepEqual(
+    entries.map((entry) =>
+      entry.type === "failed_turn" ? ["failed_turn", entry.retryText ?? null] : entry.type === "message" ? [entry.role, entry.text] : [entry.type],
+    ),
+    [
+      ["user", "Plan the week."],
+      ["failed_turn", null],
+      ["user", "Try a shorter plan"],
+      ["assistant", "Monday: soup"],
+      ["failed_turn", "Try a shorter plan"],
     ],
   );
 });
@@ -632,9 +672,9 @@ test("Start Chat from phones with different request keys and the Mac makes one B
   const sent: string[] = [];
   const store = new Map<string, BotDefinition>();
   const keys = new Map<string, string>();
-  const make = async (input: { name: string }, audience: string) => {
+  const make = async (input: { name: string }, audience: string, botId: string) => {
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const made = { ...bot(`bot_preset_${created.length + 1}`), name: input.name };
+    const made = { ...bot(botId), name: input.name };
     created.push(audience);
     store.set(made.id, made);
     return made;
@@ -644,14 +684,11 @@ test("Start Chat from phones with different request keys and the Mac makes one B
       const id = keys.get(key);
       return id ? store.get(id) ?? null : null;
     },
-    async createBot(input, _access, key) {
-      const made = await make(input, "desktop");
-      keys.set(key, made.id);
-      return made;
-    },
-    async rememberCreation(key, botId) {
+    mintBotId: () => `bot_preset_${keys.size + created.length + 1}`,
+    async reserveCreation(key, botId) {
       keys.set(key, botId);
     },
+    createBot: (input, _access, botId) => make(input, "desktop", botId),
     session: {
       state: async () => ({ kind: "idle" }),
       send: async (botId) => { sent.push(botId); return { submissionId: "1", deduped: false }; },
@@ -668,7 +705,7 @@ test("Start Chat from phones with different request keys and the Mac makes one B
     presets: {
       list: () => BOT_PRESETS,
       create: async (presetId, { audienceId }) => {
-        const result = await starter.startFromPreset(presetId, { createBot: (input) => make(input, audienceId) });
+        const result = await starter.startFromPreset(presetId, { createBot: (input, botId) => make(input, audienceId, botId) });
         return { botId: result.bot.id, created: result.created };
       },
     },

@@ -165,6 +165,38 @@ enum AidenBotDeletion {
             _ = await coordinator.handleCredentialRevocation(error, context: context)
             throw error
         }
+        await forget(botID: botID, context: context, coordinator: coordinator)
+    }
+
+    /// Deletes a Bot from a list row: reads its current revision, then deletes
+    /// it. A Bot that is already gone (deleted on another device) answers 404,
+    /// which counts as deleted: it is forgotten here and its row drops.
+    @MainActor
+    static func deleteListed(botID: String, coordinator: AidenRemoteCoordinator) async throws {
+        let context = try coordinator.requestContext()
+        do {
+            let detail = try await coordinator.remoteClient(for: context).bot(id: botID)
+            try await delete(botID: detail.id, revision: detail.revision, coordinator: coordinator)
+        } catch where isAlreadyGone(error) {
+            await forget(botID: botID, context: context, coordinator: coordinator)
+        } catch {
+            _ = await coordinator.handleCredentialRevocation(error, context: context)
+            throw error
+        }
+    }
+
+    /// True for the Mac's answer about a Bot that no longer exists.
+    static func isAlreadyGone(_ error: Error) -> Bool {
+        if case AidenRemoteClientError.server(let statusCode, _) = error { return statusCode == 404 }
+        return false
+    }
+
+    @MainActor
+    private static func forget(
+        botID: String,
+        context: AidenRemoteRequestContext,
+        coordinator: AidenRemoteCoordinator
+    ) async {
         guard coordinator.isCurrent(context) else { return }
         _ = await coordinator.withRetainedInstallationData(for: context) {
             _ = try? await AidenBotCache.shared.removeBotAndStore(

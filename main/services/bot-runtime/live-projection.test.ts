@@ -5,11 +5,17 @@ import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { applyBotLiveEvent, type BotLiveEvent, type BotLiveSnapshot } from "../../../renderer/shared/bot-live.js";
+import {
+  applyBotLiveEvent,
+  botRetryableFailedTurn,
+  type BotLiveEvent,
+  type BotLiveSnapshot,
+} from "../../../renderer/shared/bot-live.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
+  projectBotTranscript,
   type BotLiveProjection,
   type BotLiveProjectionDeps,
 } from "./live-projection.js";
@@ -264,6 +270,75 @@ test("a routine turn shows as its label, and a [SILENT] answer hides the whole t
   } finally {
     await live.close();
   }
+});
+
+test("a failed reply is a typed failed turn, and Retry as a new submission answers after it", async () => {
+  const failure = fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider is down" });
+  const fauxModels = createFauxModels([failure, fauxAssistantMessage("Here it is.")]);
+  const live = await start(fauxModels);
+  try {
+    const first = await live.service.send("bot:a", { text: "Plan dinner", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal).catch(() => undefined);
+    const tape = recorder();
+    const failed = await live.projection.subscribe("bot:a", tape.sink);
+    failed.unsubscribe();
+    const last = failed.snapshot.entries[failed.snapshot.entries.length - 1];
+    assert.equal(last?.type, "failed_turn");
+    assert.equal(last?.type === "failed_turn" && last.retryText, "Plan dinner");
+    assert.equal(last?.type === "failed_turn" && last.errorMessage, "provider is down");
+    assert.equal(botRetryableFailedTurn(failed.snapshot.entries), last);
+
+    // Retry: the same text, a new request id.
+    const retry = await live.service.send("bot:a", { text: last.type === "failed_turn" ? last.retryText! : "", requestId: "desk-2" });
+    assert.equal(retry.deduped, false);
+    await live.service.awaitReply("bot:a", retry.submissionId, new AbortController().signal);
+    const after = await live.projection.subscribe("bot:a", recorder().sink);
+    after.unsubscribe();
+    assert.deepEqual(visibleText(after.snapshot).slice(-2), ["user:Plan dinner", "assistant:Here it is."]);
+    assert.equal(botRetryableFailedTurn(after.snapshot.entries), null);
+  } finally {
+    await live.close();
+  }
+});
+
+test("files the Bot wrote in its folder and images it shared become chips; failed or elsewhere writes do not", () => {
+  const call = (id: string, name: string, args: Record<string, unknown>) => ({ type: "toolCall", id, name, arguments: args });
+  const result = (id: number, toolCallId: string, toolName: string, details: unknown, isError = false) => ({
+    id,
+    kind: "pi.tool-result",
+    model: [{ role: "toolResult", toolCallId, toolName, isError, details, content: [], timestamp: 5 }],
+  });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Write my list" }], timestamp: 1 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{
+        role: "assistant",
+        stopReason: "toolUse",
+        timestamp: 2,
+        content: [
+          call("c1", "write_file", { path: "lists/groceries.md", content: "eggs" }),
+          call("c2", "edit_file", { path: "notes.md", old: "a", new: "b" }),
+          call("c3", "write_file", { path: "Desktop/x.md", content: "x", location: "full-mac" }),
+          call("c4", "write_file", { path: "broken.md", content: "x" }),
+        ],
+      }],
+    },
+    result(3, "c1", "write_file", { producedFile: { relativePath: "lists/groceries.md", operation: "written", bytes: 4 } }),
+    result(4, "c2", "edit_file", { producedFile: { relativePath: "notes.md", operation: "edited", bytes: 9 } }),
+    result(5, "c3", "write_file", { producedFile: { relativePath: "Desktop/x.md", operation: "written", bytes: 1 } }),
+    result(6, "c4", "write_file", { producedFile: { relativePath: "broken.md", operation: "written", bytes: 1 } }, true),
+    { id: 7, kind: "aiden.bot-shared-image", data: { id: "img-1", name: "chart.png", mimeType: "image/png", size: 3, data: "AAAA" } },
+  ] as never);
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "file" || entry.type === "shared_image"),
+    [
+      { id: "3:file", type: "file", path: "lists/groceries.md", operation: "written", at: 5 },
+      { id: "4:file", type: "file", path: "notes.md", operation: "edited", at: 5 },
+      { id: "7", type: "shared_image", name: "chart.png", mimeType: "image/png", size: 3, data: "AAAA" },
+    ],
+  );
 });
 
 test("a hidden prompt never shows, but its reply does", async () => {

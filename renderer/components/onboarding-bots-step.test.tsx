@@ -38,10 +38,12 @@ function mountOnboarding({
   bots,
   botsCapability = true,
   overrides = {},
+  onOpenBotChat,
 }: {
   bots: ReturnType<typeof botFixture>[];
   botsCapability?: boolean;
   overrides?: Record<string, (...args: unknown[]) => unknown>;
+  onOpenBotChat?(botId: string): void;
 }) {
   let created = false;
   const calls: BotTestIpcCall[] = installBotTestIpc({
@@ -50,6 +52,7 @@ function mountOnboarding({
       ...resumeAfterProvider,
       lastSatisfiedStep: step === "bots" ? "bots" : resumeAfterProvider.lastSatisfiedStep,
     }),
+    "app:setOnboardingOutcome": () => ({ ...resumeAfterProvider, outcome: "completed", lastSatisfiedStep: "tour" }),
     "profile:get": () => ({ name: "Sam" }),
     "providers:list": () => [readyProvider],
     "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief of Staff" })] : bots),
@@ -66,7 +69,7 @@ function mountOnboarding({
       <AppCapabilitiesProvider
         capabilities={{ ...DISABLED_APP_CAPABILITIES, bots: botsCapability }}
       >
-        <OnboardingFlow />
+        <OnboardingFlow {...(onOpenBotChat ? { onOpenBotChat } : {})} />
       </AppCapabilitiesProvider>
     </QueryClientProvider>,
   );
@@ -96,6 +99,27 @@ test("Start Chat creates exactly one starter Bot and moves on to the tour", asyn
       (call) => call.channel === "app:setOnboardingProgress" && call.args[0] === "bots",
     ),
   );
+});
+
+test("finishing onboarding after Start Chat opens the new Bot's chat", async () => {
+  const opened: string[] = [];
+  mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
+  const starters = await screen.findByRole("list", { name: "Starter Bots" });
+  fireEvent.click(within(starters).getAllByRole("button", { name: "Start Chat" })[0]!);
+  assert.ok(await screen.findByRole("heading", { name: tourHeading }));
+  assert.deepEqual(opened, [], "the chat waits until onboarding is done");
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.deepEqual(opened, ["bot-chief"]));
+});
+
+test("finishing onboarding after Skip opens no Bot chat", async () => {
+  const opened: string[] = [];
+  const calls = mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
+  fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
+  assert.ok(await screen.findByRole("heading", { name: tourHeading }));
+  fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "app:setOnboardingOutcome")));
+  assert.deepEqual(opened, []);
 });
 
 test("Skip leaves onboarding on the tour without creating a Bot", async () => {

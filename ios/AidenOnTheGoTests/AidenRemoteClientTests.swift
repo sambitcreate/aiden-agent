@@ -1698,6 +1698,71 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(deletes, ["bot_revision_8"])
     }
 
+    @MainActor
+    func testDeletingABotAlreadyDeletedElsewhereSucceedsWithoutADeleteRequest() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-bot-gone",
+            deviceId: "device-bot-gone",
+            credential: String(repeating: "G", count: 43),
+            capabilities: [.serverRead, .workspaceRead, .botRead, .botWrite]
+        )
+        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Bot Mac")
+        let session = makeSession()
+        let botID = "bot_fixture_gone"
+        var deletes = 0
+        var detailStatus = 404
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            switch (request.httpMethod, path) {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"instance-bot-gone","name":"Bot Mac",
+                "appVersion":"1.0.0","capabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "serverCapabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "features":["bot-delete-v1"],
+                "connectionMode":"lan","serverTime":"2026-08-23T12:00:00.000Z"}
+                """)
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+            case ("GET", "/api/aiden/v1/bots/\(botID)"):
+                return Self.response(
+                    for: request,
+                    status: detailStatus,
+                    json: #"{"error":{"code":"not_found","message":"Gone","requestId":"request-1","retryable":false}}"#
+                )
+            case ("DELETE", "/api/aiden/v1/bots/\(botID)"):
+                deletes += 1
+                return Self.response(for: request, status: 204, data: Data())
+            default:
+                XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(path)")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+        XCTAssertEqual(deletes, 0, "A Bot the Mac no longer has needs no delete request.")
+
+        // Any other failure still reports that the Bot wasn't deleted.
+        detailStatus = 500
+        do {
+            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+            XCTFail("A server failure must not count as deleted.")
+        } catch {
+            XCTAssertFalse(AidenBotDeletion.isAlreadyGone(error))
+        }
+        XCTAssertEqual(deletes, 0)
+    }
+
     func testUsageReadsPrivacySafeMacAggregate() async throws {
         let client = makeClient()
         AidenRemoteMockURLProtocol.handler = { request in

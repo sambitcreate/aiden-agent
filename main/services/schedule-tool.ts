@@ -44,6 +44,7 @@ import {
   type ScheduledTaskApprovalDetails,
 } from "../../renderer/shared/assistant.js";
 import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task-presentation.js";
+import { BOT_ROUTINE_MAX_MONTH_DAY } from "../../renderer/shared/bot-routine-schedule.js";
 import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.js";
 import {
   parseBotRoutineCreate,
@@ -1799,7 +1800,7 @@ const BOT_ROUTINE_SCHEDULE = Type.Union(
     Type.Object(
       {
         kind: Type.Literal("monthly"),
-        day: Type.Integer({ minimum: 1, maximum: 31 }),
+        day: Type.Integer({ minimum: 1, maximum: BOT_ROUTINE_MAX_MONTH_DAY }),
         time: BOT_ROUTINE_TIME,
       },
       { additionalProperties: false },

@@ -143,6 +143,7 @@ import {
   stopAidenRemoteServiceAndSettle,
 } from "./services/aiden-remote-service-main.js";
 import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
+import { trackConnectionSetupFocus } from "./services/bot-connection-setup.js";
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
@@ -1925,6 +1926,7 @@ if (!ownsSingleInstanceLock) {
         }
       }
       if (hostPlatformCapabilities().bots) {
+        trackConnectionSetupFocus();
         try {
           await initializeBotApplicationService();
         } catch (error) {

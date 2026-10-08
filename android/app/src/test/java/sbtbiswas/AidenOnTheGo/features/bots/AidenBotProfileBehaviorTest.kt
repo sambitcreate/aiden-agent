@@ -1,6 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -65,6 +67,22 @@ class AidenBotProfileBehaviorTest {
     }
 
     // Character
+
+    @Test
+    fun characterColoursMatchTheSharedDesktopPalette() {
+        val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json" }
+            .bufferedReader().use { it.readText() }
+        val palette = Json.parseToJsonElement(text)
+            .jsonObject.getValue("botAvatarPalette").jsonObject
+        val colors = palette.getValue("colors").jsonObject
+        fun hex(rgb: Int) = "#%06X".format(rgb and 0xFFFFFF)
+        assertEquals(AidenBotAvatarColor.entries.size, colors.size)
+        for (color in AidenBotAvatarColor.entries) {
+            val name = color.name.lowercase()
+            assertEquals("$name differs from desktop", colors.getValue(name).jsonPrimitive.content, hex(AidenBotAvatarColors.rgb(color)))
+        }
+        assertEquals(palette.getValue("face").jsonPrimitive.content, hex(AidenBotAvatarColors.FACE_RGB))
+    }
 
     @Test
     fun characterResetRestoresTheDesktopDefaultLook() {

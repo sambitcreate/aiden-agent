@@ -1823,5 +1823,7 @@
       { "state": "failed", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "error": "The summary could not be generated." }
     ],
     "summaryCancel": { "cancelled": true }
-  }
+  },
+  "botAvatarPalette": {"face":"#292735","colors":{"lilac":"#C6A9FF","sky":"#83D8FF","mint":"#88E8B1","sun":"#FFDA7B","periwinkle":"#B2BCFF","coral":"#FF9F9B","peach":"#FFC294","aqua":"#78E8DF","rose":"#FFA3C7","lime":"#C6EC7E","plum":"#DDA8F2","graphite":"#C5C5CE"}},
+  "botSessionFailedTurns": [{"type":"failed_turn","id":"entry_14:failed","createdAt":"2026-08-19T16:00:05.000Z","retryText":"Plan my week, please."},{"type":"failed_turn","id":"entry_16:failed"}]
 }

@@ -36,23 +36,29 @@ fun aidenBotAvatarPresentation(avatar: AidenBotSemanticAvatar): AidenBotAvatarPr
 }
 
 object AidenBotAvatarColors {
-    fun getGradient(color: AidenBotAvatarColor): List<Color> = when (color) {
-        AidenBotAvatarColor.LILAC -> listOf(Color(0xFF8A63D2), Color(0xFF6B46C1))
-        AidenBotAvatarColor.SKY -> listOf(Color(0xFF0284C7), Color(0xFF0369A1))
-        AidenBotAvatarColor.MINT -> listOf(Color(0xFF059669), Color(0xFF047857))
-        AidenBotAvatarColor.SUN -> listOf(Color(0xFFD97706), Color(0xFFB45309))
-        AidenBotAvatarColor.PERIWINKLE -> listOf(Color(0xFF4F46E5), Color(0xFF4338CA))
-        AidenBotAvatarColor.CORAL -> listOf(Color(0xFFE11D48), Color(0xFFBE123C))
-        AidenBotAvatarColor.PEACH -> listOf(Color(0xFFEA580C), Color(0xFFC2410C))
-        AidenBotAvatarColor.AQUA -> listOf(Color(0xFF0891B2), Color(0xFF0E7490))
-        AidenBotAvatarColor.ROSE -> listOf(Color(0xFFDB2777), Color(0xFFBE185D))
-        AidenBotAvatarColor.LIME -> listOf(Color(0xFF65A30D), Color(0xFF4D7C0F))
-        AidenBotAvatarColor.PLUM -> listOf(Color(0xFF9333EA), Color(0xFF7E22CE))
-        AidenBotAvatarColor.GRAPHITE -> listOf(Color(0xFF52525B), Color(0xFF3F3F46))
+    /** The eye mark colour, shared with desktop (`BOT_AVATAR_FACE_HEX`). */
+    const val FACE_RGB: Int = 0x292735
+
+    /** The colour as 0xRRGGBB, exactly desktop's `BOT_AVATAR_COLOR_HEX`. */
+    fun rgb(color: AidenBotAvatarColor): Int = when (color) {
+        AidenBotAvatarColor.LILAC -> 0xC6A9FF
+        AidenBotAvatarColor.SKY -> 0x83D8FF
+        AidenBotAvatarColor.MINT -> 0x88E8B1
+        AidenBotAvatarColor.SUN -> 0xFFDA7B
+        AidenBotAvatarColor.PERIWINKLE -> 0xB2BCFF
+        AidenBotAvatarColor.CORAL -> 0xFF9F9B
+        AidenBotAvatarColor.PEACH -> 0xFFC294
+        AidenBotAvatarColor.AQUA -> 0x78E8DF
+        AidenBotAvatarColor.ROSE -> 0xFFA3C7
+        AidenBotAvatarColor.LIME -> 0xC6EC7E
+        AidenBotAvatarColor.PLUM -> 0xDDA8F2
+        AidenBotAvatarColor.GRAPHITE -> 0xC5C5CE
     }
 
-    /** The flat swatch colour used by the Character card. */
-    fun swatch(color: AidenBotAvatarColor): Color = getGradient(color).first()
+    /** The flat fill used by avatars and the Character card. */
+    fun swatch(color: AidenBotAvatarColor): Color = Color(0xFF000000.toInt() or rgb(color))
+
+    val face: Color get() = Color(0xFF000000.toInt() or FACE_RGB)
 }
 
 @Composable
@@ -76,14 +82,14 @@ fun AidenBotSemanticAvatarView(
             val shapePath = aidenBotShapePath(presentation.shape, w, h)
             drawPath(path = shapePath, color = fill)
 
-            // The one fixed eye mark: two slanted white pills.
+            // The one fixed eye mark: two slanted pills in the shared face colour.
             val eyeWidth = w * 0.11f
             val eyeHeight = h * 0.24f
             val eyeTop = h * 0.42f
             listOf(w * 0.40f, w * 0.58f).forEach { left ->
                 rotate(degrees = 12f, pivot = Offset(left + eyeWidth / 2f, eyeTop + eyeHeight / 2f)) {
                     drawRoundRect(
-                        color = Color.White,
+                        color = AidenBotAvatarColors.face,
                         topLeft = Offset(left, eyeTop),
                         size = Size(eyeWidth, eyeHeight),
                         cornerRadius = CornerRadius(eyeWidth / 2f, eyeWidth / 2f)

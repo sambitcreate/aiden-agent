@@ -52,6 +52,29 @@ export const BOT_AVATAR_COLOR_LABELS: Record<BotAvatarColor, string> = {
   graphite: "Graphite",
 };
 
+/**
+ * The one colour table for Bot characters, shared with Aiden On The Go: the
+ * `--bot-avatar-*` tokens in `styles.css`, the iOS and Android palettes, and
+ * the `botAvatarPalette` contract fixture all use exactly these values.
+ */
+export const BOT_AVATAR_COLOR_HEX: Record<BotAvatarColor, string> = {
+  lilac: "#C6A9FF",
+  sky: "#83D8FF",
+  mint: "#88E8B1",
+  sun: "#FFDA7B",
+  periwinkle: "#B2BCFF",
+  coral: "#FF9F9B",
+  peach: "#FFC294",
+  aqua: "#78E8DF",
+  rose: "#FFA3C7",
+  lime: "#C6EC7E",
+  plum: "#DDA8F2",
+  graphite: "#C5C5CE",
+};
+
+/** The eye mark drawn on every character colour. */
+export const BOT_AVATAR_FACE_HEX = "#292735";
+
 /** A bounded, theme-safe vector recipe: one colour and one shape, with one fixed eye mark. */
 export interface BotAvatarAppearance {
   version: 1;

@@ -78,6 +78,7 @@ class AidenBotRevision25ContractTest {
                     is AidenBotSessionEntry.Message -> "message"
                     is AidenBotSessionEntry.ConnectCard -> "connect_card"
                     is AidenBotSessionEntry.Notice -> "notice"
+                    is AidenBotSessionEntry.FailedTurn -> "failed_turn"
                 }
             }
         )
@@ -163,6 +164,16 @@ class AidenBotRevision25ContractTest {
         assertThrows(Exception::class.java) {
             json.decodeFromJsonElement(AidenBotRoutineSchedule.serializer(), json.parseToJsonElement("""{"kind":"daily","time":"24:00"}"""))
         }
+        // Cron skips the 29th–31st in shorter months, so monthly routines stop at the 28th.
+        assertEquals(
+            AidenBotRoutineSchedule.Monthly(28, "08:00"),
+            json.decodeFromJsonElement(AidenBotRoutineSchedule.serializer(), json.parseToJsonElement("""{"kind":"monthly","day":28,"time":"08:00"}""")),
+        )
+        for (day in 29..31) {
+            assertThrows(Exception::class.java) {
+                json.decodeFromJsonElement(AidenBotRoutineSchedule.serializer(), json.parseToJsonElement("""{"kind":"monthly","day":$day,"time":"08:00"}"""))
+            }
+        }
     }
 
     private fun JsonObject.with(vararg changes: Pair<String, JsonElement>) = JsonObject(this + changes)
@@ -204,6 +215,40 @@ class AidenBotRevision25ContractTest {
         rejects(AidenBotSession.serializer(), session.with("entries" to many))
         // A blank message is never sent.
         assertThrows(Exception::class.java) { AidenBotSessionSendRequest("   ") }
+    }
+
+    @Test
+    fun failedTurnsDecodeWithAndWithoutRetryText() {
+        val raw = fixture.getValue("botSessionFailedTurns").jsonArray
+        val entry = AidenBotSessionEntry.serializer()
+        val withText = roundTrip(entry, raw[0]) as AidenBotSessionEntry.FailedTurn
+        assertEquals("entry_14:failed", withText.id)
+        assertEquals("Plan my week, please.", withText.retryText)
+        assertEquals(java.time.Instant.parse("2026-08-19T16:00:05Z"), withText.createdAt)
+        // Only type and id: nothing to resend, and nothing is written back as null.
+        val bare = roundTrip(entry, raw[1]) as AidenBotSessionEntry.FailedTurn
+        assertEquals("entry_16:failed", bare.id)
+        assertNull(bare.retryText)
+        assertNull(bare.createdAt)
+        assertEquals(setOf("type", "id"), json.encodeToJsonElement(entry, bare).jsonObject.keys)
+
+        // A failed turn sits in the session alongside the older entry types.
+        val session = fixture.getValue("botSession").jsonObject
+        val decoded = json.decodeFromJsonElement(
+            AidenBotSession.serializer(),
+            session.with("entries" to JsonArray(session.getValue("entries").jsonArray + raw))
+        )
+        assertEquals(listOf(withText, bare), decoded.entries.takeLast(2))
+        assertTrue(decoded.entries.any { it is AidenBotSessionEntry.Message })
+        assertTrue(decoded.entries.any { it is AidenBotSessionEntry.ConnectCard })
+        assertTrue(decoded.entries.any { it is AidenBotSessionEntry.Notice })
+
+        val failed = raw[0].jsonObject
+        rejects(entry, failed.with("retryText" to JsonPrimitive("")))
+        rejects(entry, failed.with("retryText" to JsonPrimitive("x".repeat(AidenBotSessionWire.MAX_TEXT_LENGTH + 1))))
+        rejects(entry, failed.with("errorMessage" to JsonPrimitive("Provider timed out")))
+        rejects(entry, failed.with("id" to JsonPrimitive("entry 14")))
+        rejects(entry, failed.with("createdAt" to JsonPrimitive("yesterday")))
     }
 
     @Test

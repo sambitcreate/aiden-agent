@@ -717,8 +717,7 @@ struct AidenBotsHomeView: View {
     private func delete(_ bot: AidenBotSummary) async {
         pendingDelete = nil
         do {
-            let detail = try await coordinator.remoteClient(for: try coordinator.requestContext()).bot(id: bot.id)
-            try await AidenBotDeletion.delete(botID: detail.id, revision: detail.revision, coordinator: coordinator)
+            try await AidenBotDeletion.deleteListed(botID: bot.id, coordinator: coordinator)
             if selectedBot?.id == bot.id { selectedBot = nil }
             await load()
         } catch is CancellationError {

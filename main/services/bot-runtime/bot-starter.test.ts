@@ -22,34 +22,46 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-/** Bots and their creation keys, persisted like production so a restart keeps them. */
-function botDirectory(root: string) {
-  const bots = new Map<string, BotDefinition>();
+/**
+ * Bots and their creation keys, persisted like production so a restart keeps
+ * them. `crashAfterCreate` makes the next create commit its Bot and then fail
+ * as if the process died before anything else ran.
+ */
+function botDirectory(root: string, bots = new Map<string, BotDefinition>()) {
   const keys = createBotCreationKeyStore({ root: () => root });
   let next = 0;
   const created: BotCreateInput[] = [];
-  const make = async (input: BotCreateInput) => {
+  const control = { crashAfterCreate: false, crashBeforeCreate: false };
+  const make = async (input: BotCreateInput, botId: string) => {
     // Creating takes a moment, so concurrent taps really overlap.
     await new Promise((resolve) => setTimeout(resolve, 20));
-    next += 1;
-    const bot = { id: `bot:${next}`, ...input } as BotDefinition;
+    if (control.crashBeforeCreate) {
+      control.crashBeforeCreate = false;
+      throw new Error("simulated crash before create");
+    }
+    const bot = { id: botId, ...input } as BotDefinition;
     bots.set(bot.id, bot);
     created.push(input);
+    if (control.crashAfterCreate) {
+      control.crashAfterCreate = false;
+      throw new Error("simulated crash after create");
+    }
     return bot;
   };
-  const deps: Pick<BotStarterDeps, "findBotByCreationKey" | "createBot" | "rememberCreation"> = {
+  const deps: Pick<BotStarterDeps, "findBotByCreationKey" | "createBot" | "mintBotId" | "reserveCreation"> = {
     async findBotByCreationKey(key) {
       const botId = await keys.get(key);
-      return botId === null ? null : (bots.get(botId) ?? null);
+      if (botId === null) return null;
+      const bot = bots.get(botId);
+      if (bot) return bot;
+      await keys.forget(key);
+      return null;
     },
-    async createBot(input, _access, key) {
-      const bot = await make(input);
-      await keys.set(key, bot.id);
-      return bot;
-    },
-    rememberCreation: (key, botId) => keys.set(key, botId),
+    mintBotId: () => `bot:${(next += 1)}`,
+    reserveCreation: (key, botId) => keys.set(key, botId),
+    createBot: (input, _access, botId) => make(input, botId),
   };
-  return { deps, bots, created, make };
+  return { deps, bots, created, make, control };
 }
 
 async function sessionFor(profileDir: string, fauxModels: FauxModels, model = true): Promise<BotSessionRuntime> {
@@ -163,9 +175,9 @@ test("a phone's Start Chat and the Mac's converge on one Bot and one self-intro"
   try {
     const starter = createBotStarter({ ...directory.deps, session });
     const phoneAudience: BotCreateInput[] = [];
-    const fromPhone = (input: BotCreateInput) => {
+    const fromPhone = (input: BotCreateInput, botId: string) => {
       phoneAudience.push(input);
-      return directory.make(input);
+      return directory.make(input, botId);
     };
     const [phone, mac] = await Promise.all([
       starter.startFromPreset("chief-of-staff", { createBot: fromPhone }),
@@ -193,7 +205,7 @@ test("a Bot that is already talking is never asked to introduce itself", async (
   const fauxModels = createFauxModels([fauxAssistantMessage("Sure, here is a plan."), fauxAssistantMessage("never")]);
   const session = await sessionFor(profile, fauxModels);
   try {
-    const bot = await directory.make({ name: "Planner" } as BotCreateInput);
+    const bot = await directory.make({ name: "Planner" } as BotCreateInput, "bot:1");
     const sent = await session.send(bot.id, { text: "Plan my week", requestId: "desk-1" });
     await session.awaitReply(bot.id, sent.submissionId, new AbortController().signal);
 
@@ -205,4 +217,52 @@ test("a Bot that is already talking is never asked to introduce itself", async (
   } finally {
     await session.shutdown();
   }
+});
+
+test("a crash right after the starter Bot is created never makes a second Bot", async () => {
+  const profile = tempDir();
+  const bots = new Map<string, BotDefinition>();
+  const before = botDirectory(profile, bots);
+  const session = {
+    send: async () => ({ submissionId: "s", deduped: false }),
+    state: async () => ({ kind: "idle" as const }),
+    conversation: async () => ({ context: async () => ({ entries: [] }) }) as never,
+  };
+  before.control.crashAfterCreate = true;
+  await assert.rejects(
+    createBotStarter({ ...before.deps, session }).startFromPreset("meal-planner"),
+    /simulated crash after create/u,
+  );
+  assert.equal(bots.size, 1);
+
+  // Restart: a new starter over the same saved keys and Bots.
+  const after = botDirectory(profile, bots);
+  const again = await createBotStarter({ ...after.deps, session }).startFromPreset("meal-planner");
+  assert.equal(bots.size, 1, "the saved key finds the Bot the crashed run made");
+  assert.equal(again.bot.id, [...bots.keys()][0]);
+  assert.equal(again.created, false);
+});
+
+test("a crash before the starter Bot is created leaves one Bot after the next tap", async () => {
+  const profile = tempDir();
+  const bots = new Map<string, BotDefinition>();
+  const before = botDirectory(profile, bots);
+  const session = {
+    send: async () => ({ submissionId: "s", deduped: false }),
+    state: async () => ({ kind: "idle" as const }),
+    conversation: async () => ({ context: async () => ({ entries: [] }) }) as never,
+  };
+  before.control.crashBeforeCreate = true;
+  await assert.rejects(
+    createBotStarter({ ...before.deps, session }).startFromPreset("researcher"),
+    /simulated crash before create/u,
+  );
+  assert.equal(bots.size, 0);
+
+  const after = createBotStarter({ ...botDirectory(profile, bots).deps, session });
+  const first = await after.startFromPreset("researcher");
+  const second = await after.startFromPreset("researcher");
+  assert.equal(first.created, true);
+  assert.equal(second.bot.id, first.bot.id);
+  assert.equal(bots.size, 1);
 });

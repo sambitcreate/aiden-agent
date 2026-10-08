@@ -161,16 +161,14 @@ function isoOf(timestamp: number | undefined): string | undefined {
     : undefined;
 }
 
-/** Shown when a turn failed before writing any text; the details stay on the Mac. */
-export const BOT_REMOTE_FAILED_REPLY_TEXT = "I couldn't finish that reply. Try sending it again.";
-
 const wireEntryId = (id: string) => `entry_${id}`;
 
 /**
  * Displayable wire entries of a conversation, oldest first. Derived from the
  * desktop transcript (`projectBotTranscript`), so a phone shows exactly what
  * the Mac shows: the hidden self-intro prompt and whole `[SILENT]` routine
- * turns are left out, tool traffic stays on the Mac, a failed turn surfaces,
+ * turns are left out, tool traffic stays on the Mac, a failed turn is a typed
+ * `failed_turn` entry (with the message Retry resends),
  * and each plugin has one connect card (latest status at the first card's place).
  */
 export function projectBotSessionEntries(entries: readonly EntryRecord[]): AidenRemoteBotSessionEntry[] {
@@ -194,8 +192,7 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
         break;
       }
       case "assistant": {
-        const failed = entry.stopReason === "error";
-        const text = entry.text.trim() ? entry.text : failed ? BOT_REMOTE_FAILED_REPLY_TEXT : "";
+        const text = entry.text.trim() ? entry.text : "";
         // A tool-only step has no text to show; its activity stays on the Mac.
         if (!text) break;
         const createdAt = isoOf(entry.at);
@@ -206,6 +203,18 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
           text: bounded(text),
           ...(createdAt ? { createdAt } : {}),
           ...(entry.stopReason === "aborted" ? { interrupted: true as const } : {}),
+        });
+        break;
+      }
+      case "failed_turn": {
+        // The phone shows "I couldn't finish that reply." with Retry; the error stays on the Mac.
+        const createdAt = isoOf(entry.at);
+        const retryText = entry.retryText === null ? "" : bounded(entry.retryText);
+        output.push({
+          type: "failed_turn",
+          id,
+          ...(createdAt ? { createdAt } : {}),
+          ...(retryText.trim() ? { retryText } : {}),
         });
         break;
       }

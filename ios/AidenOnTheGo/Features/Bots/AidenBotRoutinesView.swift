@@ -336,7 +336,7 @@ struct AidenBotRoutineEditorView: View {
                         weekdayChips
                     case .monthly:
                         Picker("Day of the month", selection: $draft.dayOfMonth) {
-                            ForEach(1...31, id: \.self) { Text("\($0)").tag($0) }
+                            ForEach(1...28, id: \.self) { Text("\($0)").tag($0) }
                         }
                     case .daily, .weekdays:
                         EmptyView()

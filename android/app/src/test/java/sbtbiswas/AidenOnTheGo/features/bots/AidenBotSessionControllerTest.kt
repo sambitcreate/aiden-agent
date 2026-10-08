@@ -55,8 +55,12 @@ class AidenBotSessionControllerTest {
 
         override fun events(botId: String): Flow<AidenBotSessionEvent> = emptyFlow()
 
+        /** Failures the next sends throw, in order. */
+        val sendFailures = ArrayDeque<Exception>()
+
         override suspend fun send(botId: String, text: String, key: UUID): AidenBotSessionSendResponse {
             sends += text to key
+            sendFailures.removeFirstOrNull()?.let { throw it }
             return AidenBotSessionSendResponse("1", false, AidenBotSessionState.RUNNING, false)
         }
 
@@ -421,6 +425,131 @@ class AidenBotSessionControllerTest {
         // A second tap after it was sent posts nothing.
         controller.requestConnection("google-calendar")
         assertEquals(2, keys.size)
+    }
+
+    private val failedTurns by lazy {
+        json.decodeFromJsonElement(ListSerializer(AidenBotSessionEntry.serializer()), fixture.getValue("botSessionFailedTurns"))
+            .map { it as AidenBotSessionEntry.FailedTurn }
+    }
+
+    /** An idle session whose newest entries are [tail]. */
+    private fun sessionEndingWith(vararg tail: AidenBotSessionEntry) =
+        interruptedSession.copy(
+            state = AidenBotSessionState.IDLE,
+            interrupted = false,
+            blocked = null,
+            partial = null,
+            entries = interruptedSession.entries + tail
+        )
+
+    @Test
+    fun retryResendsTheFailedTurnsTextAsANewSubmissionWithAFreshKey() = runTest {
+        val failed = failedTurns[0]
+        val transport = FakeTransport(sessionEndingWith(failed))
+        val controller = AidenBotSessionController(transport.session.botId, transport, backgroundScope)
+        controller.refetch()
+        // The original message went out under its own key.
+        assertTrue(controller.send("Plan my week, please."))
+
+        assertEquals(failed, controller.state.value.retryableFailedTurn)
+        assertTrue(controller.retry())
+
+        assertEquals(listOf("Plan my week, please.", "Plan my week, please."), transport.sends.map { it.first })
+        assertNotEquals("a retry never reuses the original message's key", transport.sends[0].second, transport.sends[1].second)
+        assertEquals(AidenBotSessionState.RUNNING, controller.state.value.state)
+        assertFalse(controller.state.value.isSending)
+    }
+
+    @Test
+    fun anUnansweredRetryKeepsItsKeyAndAnotherFailedTurnGetsAFreshOne() = runTest {
+        val first = failedTurns[0]
+        val transport = FakeTransport(sessionEndingWith(first))
+        val controller = AidenBotSessionController(transport.session.botId, transport, backgroundScope)
+        controller.refetch()
+
+        transport.sendFailures += IOException("offline")
+        assertFalse(controller.retry())
+        assertEquals("Aiden couldn’t send that. Try again.", controller.state.value.actionError)
+        assertTrue(controller.retry())
+        assertEquals("the second tap replays the lost retry", transport.sends[0].second, transport.sends[1].second)
+
+        // The Mac answered the next attempt with an error: that retry is finished.
+        transport.sendFailures += serverError(500, AidenRemoteErrorCode.INTERNAL_ERROR)
+        assertFalse(controller.retry())
+        assertTrue(controller.retry())
+        assertNotEquals(transport.sends[2].second, transport.sends[3].second)
+
+        // A different failed turn, even with the same text, is a separate retry.
+        val second = first.copy(id = "entry_20:failed")
+        transport.session = sessionEndingWith(first, second)
+        controller.refetch()
+        assertTrue(controller.retry())
+        assertEquals(5, transport.sends.size)
+        assertTrue(transport.sends.take(4).none { it.second == transport.sends[4].second })
+    }
+
+    @Test
+    fun onlyTheNewestFailedTurnWithTextCanBeRetried() = runTest {
+        val withText = failedTurns[0]
+        val withoutText = failedTurns[1]
+        val laterMessage = AidenBotSessionEntry.Message("entry_15", AidenBotMessageRole.USER, "Something else")
+
+        for (session in listOf(sessionEndingWith(withText, laterMessage), sessionEndingWith(withoutText))) {
+            val transport = FakeTransport(session)
+            val controller = AidenBotSessionController(session.botId, transport, backgroundScope)
+            controller.refetch()
+            assertEquals(null, controller.state.value.retryableFailedTurn)
+            assertFalse(controller.retry())
+            assertTrue(transport.sends.isEmpty())
+        }
+
+        // Not while the Bot needs an AI model.
+        val noModel = sessionEndingWith(withText).copy(state = AidenBotSessionState.NEEDS_MODEL)
+        val transport = FakeTransport(noModel)
+        val controller = AidenBotSessionController(noModel.botId, transport, backgroundScope)
+        controller.refetch()
+        assertFalse(controller.retry())
+        assertTrue(transport.sends.isEmpty())
+    }
+
+    @Test
+    fun stopStaysAvailableWhileAQuestionCardIsUp() = runTest {
+        val transport = FakeTransport(sessionEndingWith().copy(question = colourQuestion))
+        val controller = AidenBotSessionController(transport.session.botId, transport, backgroundScope)
+        controller.refetch()
+        assertFalse(controller.state.value.isRunning)
+        assertTrue(controller.state.value.canStopTurn)
+
+        transport.session = sessionEndingWith()
+        controller.refetch()
+        assertFalse("an idle Bot with nothing waiting has nothing to stop", controller.state.value.canStopTurn)
+        transport.session = sessionEndingWith().copy(state = AidenBotSessionState.RUNNING)
+        controller.refetch()
+        assertTrue(controller.state.value.canStopTurn)
+    }
+
+    private fun conversation(chatId: String, botId: String, updatedAt: String) = AidenBotConversationItem(
+        chatId = chatId,
+        botId = botId,
+        title = "Chat",
+        activityState = AidenBotConversationActivityState.IDLE,
+        canRespondToApproval = false,
+        createdAt = java.time.Instant.parse("2026-08-01T00:00:00Z"),
+        updatedAt = java.time.Instant.parse(updatedAt),
+        revision = "r1"
+    )
+
+    @Test
+    fun filesOpenOnThisBotsConversation() {
+        val conversations = listOf(
+            conversation("chat_other", "bot_other", "2026-08-03T00:00:00Z"),
+            conversation("chat_old", "bot_1", "2026-08-01T00:00:00Z"),
+            conversation("chat_new", "bot_1", "2026-08-02T00:00:00Z")
+        )
+        assertEquals("chat_new", aidenBotFilesChatId("bot_1", conversations))
+        assertEquals("chat_other", aidenBotFilesChatId("bot_other", conversations))
+        assertEquals(null, aidenBotFilesChatId("bot_missing", conversations))
+        assertEquals(null, aidenBotFilesChatId("bot_1", emptyList()))
     }
 
     @Test

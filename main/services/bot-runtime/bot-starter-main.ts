@@ -3,6 +3,7 @@
 
 import { app, logger } from "../../platform.js";
 import { botApplicationService } from "../bot-application-service-main.js";
+import { newBotId } from "../bot-application-service.js";
 import { createBotCreationKeyStore } from "../bot-creation-keys.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../bot-runtime-authority-main.js";
 import { botStore } from "../bot-store.js";
@@ -22,16 +23,15 @@ export function botStarter(): BotStarter {
       await creationKeys.forget(key);
       return null;
     },
-    async createBot(input, access, creationKey) {
-      const bot = await botApplicationService.createBot({
+    mintBotId: newBotId,
+    reserveCreation: (creationKey, botId) => creationKeys.set(creationKey, botId),
+    createBot: (input, access, botId) =>
+      botApplicationService.createBot({
         audienceId: BOT_DESKTOP_AUDIENCE_ID,
+        botId,
         bot: input,
         ...(access === undefined ? {} : { access }),
-      });
-      await creationKeys.set(creationKey, bot.id);
-      return bot;
-    },
-    rememberCreation: (creationKey, botId) => creationKeys.set(creationKey, botId),
+      }),
     session: {
       send: async (botId, input) => (await botSessionRuntime()).send(botId, input),
       state: async (botId) => (await botSessionRuntime()).state(botId),

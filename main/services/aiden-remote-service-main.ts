@@ -867,7 +867,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                     const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
                     const result = await botStarter().startFromPreset(presetId, {
                       // Created for the phone's audience; the key is remembered by the shared starter.
-                      createBot: (bot) => botApplicationService.createBot({ audienceId, bot }),
+                      createBot: (bot, botId) => botApplicationService.createBot({ audienceId, botId, bot }),
                     });
                     return { botId: result.bot.id, created: result.created };
                   },

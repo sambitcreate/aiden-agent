@@ -15,6 +15,13 @@ struct AidenBotSessionChatView: View {
     @State private var draft = ""
     @State private var isShowingProfile = false
     @State private var isShowingAdvanced = false
+    @State private var isConfirmingDelete = false
+    @State private var isDeleting = false
+    @State private var deleteErrorMessage: String?
+    /// The Bot's conversation tools, loaded once it has a conversation; Files
+    /// is offered only when they grant file access.
+    @State private var filesTools: AidenBotChatToolsModel?
+    @State private var presentedFilesGrant: AidenBotConversationFileGrant?
     @FocusState private var composerFocused: Bool
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
@@ -39,6 +46,27 @@ struct AidenBotSessionChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { header }
+            ToolbarItem(placement: .topBarTrailing) { moreMenu }
+        }
+        .aidenBotDeleteConfirmation(
+            isPresented: $isConfirmingDelete,
+            botName: bot?.name ?? "this Bot",
+            onConfirm: deleteBot
+        )
+        .sheet(isPresented: Binding(
+            get: { presentedFilesGrant != nil },
+            set: { if !$0 { presentedFilesGrant = nil } }
+        )) {
+            if let grant = presentedFilesGrant {
+                NavigationStack {
+                    AidenBotConversationFilesView(coordinator: coordinator, grant: grant)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { presentedFilesGrant = nil }
+                            }
+                        }
+                }
+            }
         }
         .sheet(isPresented: $isShowingProfile) {
             if let bot {
@@ -64,17 +92,98 @@ struct AidenBotSessionChatView: View {
         .alert(
             "Something Went Wrong",
             isPresented: Binding(
-                get: { model?.errorMessage != nil && model?.hasLoaded == true },
-                set: { if !$0 { model?.errorMessage = nil } }
+                get: { deleteErrorMessage != nil || (model?.errorMessage != nil && model?.hasLoaded == true) },
+                set: { if !$0 { clearErrors() } }
             )
         ) {
-            Button("OK", role: .cancel) { model?.errorMessage = nil }
+            Button("OK", role: .cancel) { clearErrors() }
         } message: {
-            Text(model?.errorMessage ?? "Please try again.")
+            Text(deleteErrorMessage ?? model?.errorMessage ?? "Please try again.")
         }
         .task(id: coordinator.activeInstanceId) {
             await start()
         }
+        .task(id: filesLookupKey) {
+            await loadFilesTools()
+        }
+    }
+
+    private func clearErrors() {
+        deleteErrorMessage = nil
+        model?.errorMessage = nil
+    }
+
+    private var filesGrant: AidenBotConversationFileGrant? {
+        filesTools?.fileGrant(coordinator: coordinator, hostAllowsMutations: canWrite)
+    }
+
+    /// Looked up again once the chat has entries, since a brand-new Bot has
+    /// no conversation until its first message.
+    private var filesLookupKey: String {
+        "\(coordinator.activeInstanceId ?? "")|\(model?.entries.isEmpty == false)"
+    }
+
+    /// Profile, Files, and Delete for this Bot.
+    private var moreMenu: some View {
+        Menu {
+            Button {
+                isShowingProfile = true
+            } label: {
+                Label("Profile", systemImage: "person.crop.circle")
+            }
+            if let grant = filesGrant {
+                Button {
+                    presentedFilesGrant = grant
+                } label: {
+                    Label("Files", systemImage: "folder")
+                }
+            }
+            if AidenBotDeletion.isAvailable(coordinator: coordinator) {
+                Button(role: .destructive) {
+                    isConfirmingDelete = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .disabled(isDeleting)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .disabled(bot == nil)
+        .accessibilityLabel("More for \(bot?.name ?? "this Bot")")
+    }
+
+    private func deleteBot() {
+        let name = bot?.name ?? "This Bot"
+        isDeleting = true
+        Task {
+            defer { isDeleting = false }
+            do {
+                try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+                dismiss()
+            } catch is CancellationError {
+                return
+            } catch {
+                deleteErrorMessage = "\(name) wasn’t deleted. Please try again."
+            }
+        }
+    }
+
+    @MainActor
+    private func loadFilesTools() async {
+        guard let context = try? coordinator.requestContext(),
+              let client = try? coordinator.remoteClient(for: context),
+              let query = try? AidenBotConversationQuery(botId: botID),
+              let page = try? await client.botConversations(query: query),
+              coordinator.isCurrent(context),
+              let chatID = aidenBotSessionConversationChatID(botID: botID, conversations: page.conversations),
+              filesTools?.chatID != chatID else {
+            return
+        }
+        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID)
+        await tools.load(coordinator: coordinator)
+        guard coordinator.isCurrent(context) else { return }
+        filesTools = tools
     }
 
     private var header: some View {
@@ -181,6 +290,12 @@ struct AidenBotSessionChatView: View {
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
                 .frame(maxWidth: .infinity)
+        case let .failedTurn(turn):
+            AidenBotFailedTurnCard(
+                canRetry: model.retryableFailedTurn?.id == turn.id && canWrite && model.canSend,
+                isBusy: model.inFlight.contains(.retry),
+                onRetry: { Task { await model.retry() } }
+            )
         }
     }
 
@@ -299,6 +414,44 @@ struct AidenBotSessionChatView: View {
            coordinator.isCurrent(context) {
             summary = AidenBotSummary(detail: detail)
         }
+    }
+}
+
+/// The conversation a durable Bot chat's Files open: this Bot's canonical
+/// conversation (the same rule as Bots Home), or nil when it has none yet.
+/// Conversations owned by another Bot are ignored.
+func aidenBotSessionConversationChatID(
+    botID: String,
+    conversations: [AidenBotConversationItem]
+) -> String? {
+    aidenCanonicalBotConversations(conversations.filter { $0.botId == botID }).first?.chatId
+}
+
+/// `I couldn't finish that reply.`, with Retry on the newest failed turn.
+struct AidenBotFailedTurnCard: View {
+    let canRetry: Bool
+    let isBusy: Bool
+    let onRetry: () -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(AidenBotSessionCopy.failedTurn, systemImage: "exclamationmark.circle")
+                .foregroundStyle(palette.foreground)
+            if canRetry {
+                Button(AidenBotSessionCopy.retry, action: onRetry)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(palette.accent)
+                    .foregroundStyle(palette.onAccent)
+                    .disabled(isBusy)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .contain)
     }
 }
 

@@ -13851,6 +13851,34 @@
               }
             },
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A reply that failed. Clients show \"I couldn't finish that reply.\"; on the newest entry, Retry posts retryText to POST /bots/{botId}/messages with a new Idempotency-Key. retryText is omitted when there is nothing to resend.",
+            "required": [
+              "type",
+              "id"
+            ],
+            "properties": {
+              "type": {
+                "const": "failed_turn"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "retryText": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100000
+              }
+            },
+            "additionalProperties": false
           }
         ]
       },
@@ -14096,7 +14124,7 @@
               "day": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 31
+                "maximum": 28
               },
               "time": {
                 "type": "string"
