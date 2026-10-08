@@ -43,6 +43,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import androidx.compose.foundation.lazy.itemsIndexed
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
@@ -50,11 +51,16 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSectionLabel
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,6 +81,7 @@ fun AidenScheduledTasksScreen(
     val instanceId = activeInstallation?.instanceId
     val canReadSchedules = activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
     val canWriteSchedules = activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_WRITE) == true
+    val resources = LocalResources.current
 
     var tasks by remember(instanceId, canReadSchedules) {
         mutableStateOf(
@@ -89,6 +96,8 @@ fun AidenScheduledTasksScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var operationTaskId by remember { mutableStateOf<String?>(null) }
     var operationRequestId by remember { mutableStateOf<UUID?>(null) }
+    // A pending label for writes that wait for the desktop (Run now, Delete).
+    var operationLabel by remember { mutableStateOf<String?>(null) }
     var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     BackHandler(enabled = selectedTaskId != null) { selectedTaskId = null }
     var query by rememberSaveable { mutableStateOf("") }
@@ -145,35 +154,49 @@ fun AidenScheduledTasksScreen(
             instanceId?.let { notifier.deliver(it, activeClient) }
         } catch (error: Exception) {
             if (error !is CancellationException && isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_READ)) {
-                errorMessage = error.message ?: "Aiden couldn't load scheduled tasks."
+                errorMessage = error.message ?: resources.getString(R.string.scheduled_load_failed)
             }
         } finally {
             if (isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_READ)) isLoading = false
         }
     }
 
-    fun mutate(taskId: String, action: suspend () -> AidenScheduledTask) {
+    /**
+     * Sends one task write. [optimistic] shows its expected result at once; the desktop's
+     * answer replaces it, and a failure restores the task as it was before the refresh.
+     */
+    fun mutate(
+        taskId: String,
+        optimistic: ((AidenScheduledTask) -> AidenScheduledTask)? = null,
+        action: suspend () -> AidenScheduledTask
+    ) {
         val activeClient = client ?: return
         if (operationTaskId != null || !hasCurrentAccess(AidenRemoteCapability.SCHEDULE_WRITE)) return
         val requestId = UUID.randomUUID()
+        val previous = tasks.firstOrNull { it.id == taskId }
         operationTaskId = taskId
         operationRequestId = requestId
         errorMessage = null
+        if (optimistic != null && previous != null) {
+            tasks = aidenScheduledTasksReplacing(tasks, optimistic(previous))
+        }
         scope.launch {
             try {
                 val updated = action()
                 if (isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) {
-                    retainSnapshot(tasks.map { if (it.id == updated.id) updated else it })
+                    retainSnapshot(aidenScheduledTasksReplacing(tasks, updated))
                 }
             } catch (error: Exception) {
+                if (optimistic != null && previous != null) tasks = aidenScheduledTasksReplacing(tasks, previous)
                 if (error !is CancellationException && isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) {
-                    errorMessage = error.message ?: "Aiden couldn't update this scheduled task."
+                    errorMessage = error.message ?: resources.getString(R.string.scheduled_update_failed)
                     refresh()
                 }
             } finally {
                 if (aidenScheduledOperationCanClear(operationRequestId, requestId)) {
                     operationTaskId = null
                     operationRequestId = null
+                    operationLabel = null
                 }
             }
         }
@@ -212,10 +235,12 @@ fun AidenScheduledTasksScreen(
         val activeClient = client ?: return
         if (!hasCurrentAccess(AidenRemoteCapability.SCHEDULE_WRITE)) return
         val revision = task.revision
+        // Pause and Resume flip at once; the switch is the pending state.
+        val flipped: (AidenScheduledTask) -> AidenScheduledTask = { it.copy(enabled = !task.enabled) }
         if (task.enabled) {
-            mutate(task.id) { activeClient.pauseScheduledTask(task.id, revision) }
+            mutate(task.id, flipped) { activeClient.pauseScheduledTask(task.id, revision) }
         } else {
-            mutate(task.id) { activeClient.resumeScheduledTask(task.id, revision) }
+            mutate(task.id, flipped) { activeClient.resumeScheduledTask(task.id, revision) }
         }
     }
 
@@ -262,7 +287,7 @@ fun AidenScheduledTasksScreen(
             TopAppBar(
                 title = {
                     Text(
-                        selectedTask?.name ?: "Scheduled Tasks",
+                        selectedTask?.name ?: stringResource(R.string.scheduled_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
@@ -273,7 +298,7 @@ fun AidenScheduledTasksScreen(
                     IconButton(onClick = {
                         if (selectedTaskId != null) selectedTaskId = null else onNavigateBack()
                     }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
@@ -282,7 +307,7 @@ fun AidenScheduledTasksScreen(
                             onClick = { scope.launch { refresh(showSpinner = tasks.isEmpty()) } },
                             enabled = !isLoading
                         ) {
-                            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh scheduled tasks", tint = palette.foreground)
+                            Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.scheduled_refresh_cd), tint = palette.foreground)
                         }
                     }
                 },
@@ -297,8 +322,8 @@ fun AidenScheduledTasksScreen(
         if (!canReadSchedules) {
             AidenEmptyState(
                 icon = Icons.Outlined.Lock,
-                title = "Scheduled task access unavailable",
-                body = "This paired device doesn't have schedule read access.",
+                title = stringResource(R.string.scheduled_access_unavailable_title),
+                body = stringResource(R.string.scheduled_access_unavailable_body),
                 modifier = Modifier.fillMaxSize().padding(padding)
             )
         } else if (selectedTask != null) {
@@ -309,6 +334,7 @@ fun AidenScheduledTasksScreen(
                 isConnected = client != null && connectionState == AidenConnectionState.CONNECTED,
                 canManage = client != null && connectionState == AidenConnectionState.CONNECTED && canWriteSchedules,
                 operationInProgress = operationTaskId == selectedTask.id,
+                pendingLabel = operationLabel.takeIf { operationTaskId == selectedTask.id },
                 errorMessage = errorMessage,
                 onToggleEnabled = { toggle(selectedTask) },
                 onRunNow = {
@@ -317,6 +343,7 @@ fun AidenScheduledTasksScreen(
                     val requestId = UUID.randomUUID()
                     operationTaskId = selectedTask.id
                     operationRequestId = requestId
+                    operationLabel = resources.getString(R.string.scheduled_starting)
                     errorMessage = null
                     val runKey = pendingRunKeys.keyFor(selectedTask.id)
                     scope.launch {
@@ -331,18 +358,19 @@ fun AidenScheduledTasksScreen(
                         } catch (error: Exception) {
                             pendingRunKeys.failed(selectedTask.id, error)
                             if (isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) {
-                                errorMessage = error.message ?: "Aiden couldn't start this task."
+                                errorMessage = error.message ?: resources.getString(R.string.scheduled_start_failed)
                             }
                         } finally {
                             if (aidenScheduledOperationCanClear(operationRequestId, requestId)) {
                                 operationTaskId = null
                                 operationRequestId = null
+                                operationLabel = null
                             }
                         }
                     }
                 },
                 onDelete = { showDeleteConfirmation = true },
-                modifier = Modifier.padding(padding)
+                modifier = Modifier.padding(padding).aidenReadableWidth()
             )
         } else {
             AidenScheduledTaskList(
@@ -360,7 +388,7 @@ fun AidenScheduledTasksScreen(
                 onSelectTask = { selectedTaskId = it.id },
                 onToggleEnabled = ::toggle,
                 onRetry = { scope.launch { refresh(showSpinner = tasks.isEmpty()) } },
-                modifier = Modifier.padding(padding)
+                modifier = Modifier.padding(padding).aidenReadableWidth()
             )
         }
     }
@@ -368,18 +396,19 @@ fun AidenScheduledTasksScreen(
     if (showDeleteConfirmation && selectedTask != null) {
         AlertDialog(
             onDismissRequest = { if (operationTaskId == null) showDeleteConfirmation = false },
-            title = { Text("Delete ${selectedTask.name}?") },
-            text = { Text("This removes the automation and its saved run history from Aiden.") },
+            title = { Text(stringResource(R.string.scheduled_delete_title, selectedTask.name)) },
+            text = { Text(stringResource(R.string.scheduled_delete_body)) },
             dismissButton = {
                 AidenTonalButton(
-                    text = "Cancel",
+                    text = stringResource(R.string.action_cancel),
                     onClick = { showDeleteConfirmation = false },
                     enabled = operationTaskId == null
                 )
             },
             confirmButton = {
                 AidenDialogConfirmButton(
-                    text = "Delete",
+                    // Deleting waits for the desktop; the button holds the pending label.
+                    text = if (operationTaskId == selectedTask.id && operationLabel != null) operationLabel!! else stringResource(R.string.action_delete),
                     destructive = true,
                     enabled = operationTaskId == null && canWriteSchedules,
                     onClick = confirmDelete@{
@@ -388,6 +417,7 @@ fun AidenScheduledTasksScreen(
                         val requestId = UUID.randomUUID()
                         operationTaskId = selectedTask.id
                         operationRequestId = requestId
+                        operationLabel = resources.getString(R.string.scheduled_deleting)
                         scope.launch {
                             try {
                                 activeClient.removeScheduledTask(selectedTask.id, selectedTask.revision)
@@ -396,7 +426,7 @@ fun AidenScheduledTasksScreen(
                                 showDeleteConfirmation = false
                             } catch (error: Exception) {
                                 if (error !is CancellationException && isCurrentRequest(activeClient, AidenRemoteCapability.SCHEDULE_WRITE)) {
-                                    errorMessage = error.message ?: "Aiden couldn't delete this task."
+                                    errorMessage = error.message ?: resources.getString(R.string.scheduled_delete_failed)
                                     showDeleteConfirmation = false
                                     refresh()
                                 }
@@ -404,6 +434,7 @@ fun AidenScheduledTasksScreen(
                                 if (aidenScheduledOperationCanClear(operationRequestId, requestId)) {
                                     operationTaskId = null
                                     operationRequestId = null
+                                    operationLabel = null
                                 }
                             }
                         }
@@ -419,7 +450,7 @@ fun AidenScheduledTasksScreen(
 }
 
 @Composable
-private fun AidenScheduledTaskList(
+internal fun AidenScheduledTaskList(
     tasks: List<AidenScheduledTask>,
     hasAnyTasks: Boolean,
     query: String,
@@ -444,26 +475,26 @@ private fun AidenScheduledTaskList(
         item {
             Column(modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)) {
                 Text(
-                    "Ask Aiden in any chat to create or change an automation.",
+                    stringResource(R.string.scheduled_intro),
                     style = MaterialTheme.typography.bodyLarge,
                     color = palette.foreground
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    "Aiden shows a permission review before saving unattended work. If a proposal can't be fully reviewed here, Aiden asks you to confirm it on your paired desktop.",
+                    stringResource(R.string.scheduled_intro_review),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )
                 if (!isConnected) {
                     Spacer(Modifier.height(12.dp))
-                    Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+                    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(Icons.Outlined.CloudOff, null, tint = palette.secondary, modifier = Modifier.size(17.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Offline — showing the last saved task list.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                            Text(stringResource(R.string.scheduled_offline), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                         }
                     }
                 }
@@ -479,7 +510,7 @@ private fun AidenScheduledTaskList(
             item {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
                 ) {
                     Row(
@@ -487,27 +518,30 @@ private fun AidenScheduledTaskList(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(errorMessage, style = MaterialTheme.typography.bodySmall, color = palette.danger, modifier = Modifier.weight(1f))
-                        if (isConnected) TextButton(onClick = onRetry) { Text("Retry") }
+                        if (isConnected) TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
                     }
                 }
             }
         }
 
         if (isLoading && !hasAnyTasks) {
-            item {
-                Box(modifier = Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-                }
+            // Only a first read with nothing saved; saved tasks stay while they refresh.
+            item(key = "scheduled-tasks-skeleton") {
+                AidenSkeletonList(
+                    count = 4,
+                    loadingDescription = stringResource(R.string.scheduled_loading),
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
         } else if (tasks.isEmpty()) {
             item {
                 AidenEmptyState(
                     icon = if (hasAnyTasks) Icons.Outlined.SearchOff else Icons.Outlined.Schedule,
-                    title = if (hasAnyTasks) "No matching tasks" else "No scheduled tasks",
+                    title = if (hasAnyTasks) stringResource(R.string.scheduled_empty_filtered_title) else stringResource(R.string.scheduled_empty_title),
                     body = if (hasAnyTasks) {
-                        "Try another search or status."
+                        stringResource(R.string.scheduled_empty_filtered_body)
                     } else {
-                        "Open any Aiden chat and ask it to schedule, remind, or monitor something."
+                        stringResource(R.string.scheduled_empty_body)
                     },
                     modifier = Modifier.fillParentMaxHeight()
                 )
@@ -537,23 +571,27 @@ internal fun AidenScheduledTaskFilterRow(
     filter: AidenScheduledTaskFilter,
     onFilterChanged: (AidenScheduledTaskFilter) -> Unit
 ) {
+    val segmentDescriptions = AidenScheduledTaskFilter.entries.associateWith {
+        stringResource(R.string.scheduled_filter_cd, it.title)
+    }
     AidenSegmentedPillRow(
         options = AidenScheduledTaskFilter.entries,
         selected = filter,
         onSelect = onFilterChanged,
         label = { it.title },
-        segmentContentDescription = { "${it.title} scheduled tasks" }
+        segmentContentDescription = { segmentDescriptions.getValue(it) }
     )
 }
 
 @Composable
 internal fun AidenScheduleSearchField(value: String, onValueChanged: (String) -> Unit) {
     val palette = AidenTheme.palette
+    val searchLabel = stringResource(R.string.scheduled_search)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = AidenUi.MinimumTouchTarget)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -568,17 +606,17 @@ internal fun AidenScheduleSearchField(value: String, onValueChanged: (String) ->
             cursorBrush = SolidColor(palette.accent),
             modifier = Modifier
                 .weight(1f)
-                .semantics { contentDescription = "Search scheduled tasks" },
+                .semantics { contentDescription = searchLabel },
             decorationBox = { inner ->
                 Box {
-                    if (value.isEmpty()) Text("Search scheduled tasks", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                    if (value.isEmpty()) Text(searchLabel, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                     inner()
                 }
             }
         )
         if (value.isNotEmpty()) {
             IconButton(onClick = { onValueChanged("") }, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Clear search", tint = palette.secondary, modifier = Modifier.size(17.dp))
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_clear_search), tint = palette.secondary, modifier = Modifier.size(17.dp))
             }
         }
     }
@@ -609,7 +647,7 @@ private fun AidenScheduledTaskRow(
             contentAlignment = Alignment.Center
         ) {
             if (operationInProgress) {
-                CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp)
+                AidenActivityDot(color = palette.accent)
             } else {
                 Icon(
                     if (task.enabled) Icons.Outlined.Schedule else Icons.Outlined.PauseCircle,
@@ -632,7 +670,7 @@ private fun AidenScheduledTaskRow(
                 )
                 if (task.running) {
                     Spacer(Modifier.width(7.dp))
-                    Text("Running", style = MaterialTheme.typography.labelSmall, color = palette.accent)
+                    Text(stringResource(R.string.scheduled_running), style = MaterialTheme.typography.labelSmall, color = palette.accent)
                 }
             }
             Spacer(Modifier.height(3.dp))
@@ -645,12 +683,17 @@ private fun AidenScheduledTaskRow(
             )
         }
         Spacer(Modifier.width(8.dp))
+        val toggleDescription = if (task.enabled) {
+            stringResource(R.string.scheduled_pause_cd, task.name)
+        } else {
+            stringResource(R.string.scheduled_resume_cd, task.name)
+        }
         Switch(
             checked = task.enabled,
             onCheckedChange = { onToggleEnabled() },
             enabled = enabled,
             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = palette.accent),
-            modifier = Modifier.semantics { contentDescription = if (task.enabled) "Pause ${task.name}" else "Resume ${task.name}" }
+            modifier = Modifier.semantics { contentDescription = toggleDescription }
         )
     }
 }
@@ -663,6 +706,7 @@ private fun AidenScheduledTaskDetail(
     isConnected: Boolean,
     canManage: Boolean,
     operationInProgress: Boolean,
+    pendingLabel: String?,
     errorMessage: String?,
     onToggleEnabled: () -> Unit,
     onRunNow: () -> Unit,
@@ -676,39 +720,43 @@ private fun AidenScheduledTaskDetail(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = AidenUi.ScreenGutter, vertical = 10.dp)
     ) {
-        Surface(color = palette.raised, shape = RoundedCornerShape(16.dp)) {
+        Surface(color = palette.raised, shape = MaterialTheme.shapes.large) {
             Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                AidenTaskMetadataRow("Status", AidenScheduledTaskPresentation.status(task))
-                AidenTaskMetadataRow("Schedule", AidenScheduledTaskPresentation.schedule(task))
-                AidenTaskMetadataRow("Timezone", task.timezone)
-                AidenTaskMetadataRow("Access", task.permission.title)
-                if (task.mode == AidenScheduledTaskMode.LLM) AidenTaskMetadataRow("Type", "Ask Aiden")
-                AidenScheduledTaskPresentation.timestamp(task.nextRunAt)?.let { AidenTaskMetadataRow("Next run", it) }
-                AidenScheduledTaskPresentation.timestamp(task.lastRunAt)?.let { AidenTaskMetadataRow("Last run", it) }
+                AidenTaskMetadataRow(stringResource(R.string.scheduled_meta_status), AidenScheduledTaskPresentation.status(task))
+                AidenTaskMetadataRow(stringResource(R.string.scheduled_meta_schedule), AidenScheduledTaskPresentation.schedule(task))
+                AidenTaskMetadataRow(stringResource(R.string.scheduled_meta_timezone), task.timezone)
+                AidenTaskMetadataRow(stringResource(R.string.scheduled_meta_access), task.permission.title)
+                if (task.mode == AidenScheduledTaskMode.LLM) AidenTaskMetadataRow(stringResource(R.string.scheduled_meta_type), stringResource(R.string.scheduled_type_ask_aiden))
+                AidenScheduledTaskPresentation.timestamp(task.nextRunAt)?.let { AidenTaskMetadataRow(stringResource(R.string.scheduled_meta_next_run), it) }
+                AidenScheduledTaskPresentation.timestamp(task.lastRunAt)?.let { AidenTaskMetadataRow(stringResource(R.string.scheduled_meta_last_run), it) }
             }
         }
 
         task.prompt?.takeIf { it.isNotBlank() }?.let { prompt ->
             Spacer(Modifier.height(AidenUi.SectionGap))
-            AidenSectionLabel("Instructions")
+            AidenSectionLabel(stringResource(R.string.scheduled_section_instructions))
             Spacer(Modifier.height(9.dp))
-            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(14.dp)) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium) {
                 Text(prompt, style = MaterialTheme.typography.bodyMedium, color = palette.foreground, modifier = Modifier.fillMaxWidth().padding(14.dp))
             }
         }
 
         Spacer(Modifier.height(AidenUi.SectionGap))
-        AidenSectionLabel("Controls")
+        AidenSectionLabel(stringResource(R.string.scheduled_section_controls))
         Spacer(Modifier.height(9.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AidenPrimaryButton(
-                text = if (task.running) "Running" else "Run now",
+                text = when {
+                    pendingLabel != null && operationInProgress -> pendingLabel
+                    task.running -> stringResource(R.string.scheduled_running)
+                    else -> stringResource(R.string.scheduled_run_now)
+                },
                 onClick = onRunNow,
                 enabled = canManage && !operationInProgress && !task.running,
                 leadingIcon = Icons.Default.PlayArrow
             )
             AidenTonalButton(
-                text = if (task.enabled) "Pause" else "Resume",
+                text = if (task.enabled) stringResource(R.string.scheduled_pause) else stringResource(R.string.scheduled_resume),
                 onClick = onToggleEnabled,
                 enabled = canManage && !operationInProgress,
                 leadingIcon = if (task.enabled) Icons.Default.Pause else Icons.Default.PlayArrow
@@ -720,12 +768,12 @@ private fun AidenScheduledTaskDetail(
             shape = AidenShape.Button,
             colors = ButtonDefaults.textButtonColors(contentColor = palette.danger),
             contentPadding = PaddingValues(horizontal = 0.dp)
-        ) { Text("Delete automation") }
+        ) { Text(stringResource(R.string.scheduled_delete_automation)) }
 
         if (!isConnected) {
-            Text("Connect to your paired desktop to run or change this task.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+            Text(stringResource(R.string.scheduled_connect_to_manage), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         } else if (!canManage) {
-            Text("This paired device has read-only scheduled task access.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+            Text(stringResource(R.string.scheduled_read_only), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         }
         if (errorMessage != null) {
             Spacer(Modifier.height(8.dp))
@@ -733,15 +781,15 @@ private fun AidenScheduledTaskDetail(
         }
 
         Spacer(Modifier.height(AidenUi.SectionGap))
-        AidenSectionLabel("Recent runs")
+        AidenSectionLabel(stringResource(R.string.scheduled_section_recent_runs))
         Spacer(Modifier.height(9.dp))
         if (runsLoading && runs.isEmpty()) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            AidenSkeletonList(count = 3, leading = false, loadingDescription = stringResource(R.string.scheduled_loading_runs))
         } else if (runs.isEmpty()) {
-            Text("No runs yet.", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+            Text(stringResource(R.string.scheduled_no_runs), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
         } else {
             runs.take(20).forEach { run ->
-                Surface(color = Color.Transparent, shape = RoundedCornerShape(12.dp)) {
+                Surface(color = Color.Transparent, shape = MaterialTheme.shapes.medium) {
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.Top) {
                         Icon(
                             if (run.status == "succeeded") Icons.Outlined.CheckCircle else Icons.Outlined.ErrorOutline,
@@ -768,6 +816,12 @@ private fun AidenScheduledTaskDetail(
         Spacer(Modifier.height(28.dp))
     }
 }
+
+/** [tasks] with the task sharing [replacement]'s id swapped for it, order kept. */
+internal fun aidenScheduledTasksReplacing(
+    tasks: List<AidenScheduledTask>,
+    replacement: AidenScheduledTask
+): List<AidenScheduledTask> = tasks.map { if (it.id == replacement.id) replacement else it }
 
 @Composable
 private fun AidenTaskMetadataRow(label: String, value: String) {

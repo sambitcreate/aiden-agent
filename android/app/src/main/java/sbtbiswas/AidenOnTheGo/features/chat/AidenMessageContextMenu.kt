@@ -15,6 +15,8 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * The fork actions a message offers. Each is null when it does not apply:
@@ -51,11 +53,17 @@ fun AidenMessageActionContainer(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
+    val messageActionsLabel = stringResource(R.string.chat_message_actions)
+    val selectTextLabel = stringResource(R.string.chat_message_select_text_action)
+    val askAboutLabel = stringResource(R.string.chat_message_ask_about)
+    val forkHereLabel = stringResource(R.string.chat_message_fork_here)
+    val forkSummaryLabel = stringResource(R.string.chat_message_fork_summary_action)
+    val editInForkLabel = stringResource(R.string.chat_message_edit_in_fork)
 
     Box(
         modifier = modifier
             .combinedClickable(
-                onLongClickLabel = "Message actions",
+                onLongClickLabel = messageActionsLabel,
                 onLongClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     menuExpanded = true
@@ -64,13 +72,13 @@ fun AidenMessageActionContainer(
             )
             .semantics {
                 customActions = listOfNotNull(
-                    CustomAccessibilityAction("Select text") { onSelectText(); true },
-                    onAskAbout?.let { ask -> CustomAccessibilityAction("Ask about this") { ask(); true } },
-                    forkActions?.onForkFromHere?.let { fork -> CustomAccessibilityAction("Fork from here") { fork(); true } },
+                    CustomAccessibilityAction(selectTextLabel) { onSelectText(); true },
+                    onAskAbout?.let { ask -> CustomAccessibilityAction(askAboutLabel) { ask(); true } },
+                    forkActions?.onForkFromHere?.let { fork -> CustomAccessibilityAction(forkHereLabel) { fork(); true } },
                     forkActions?.onForkWithSummary?.let { fork ->
-                        CustomAccessibilityAction("Fork with summary") { fork(); true }
+                        CustomAccessibilityAction(forkSummaryLabel) { fork(); true }
                     },
-                    forkActions?.onEditInFork?.let { edit -> CustomAccessibilityAction("Edit in fork") { edit(); true } }
+                    forkActions?.onEditInFork?.let { edit -> CustomAccessibilityAction(editInForkLabel) { edit(); true } }
                 )
             }
     ) {
@@ -81,7 +89,7 @@ fun AidenMessageActionContainer(
             onDismissRequest = { menuExpanded = false }
         ) {
             DropdownMenuItem(
-                text = { Text("Copy Text") },
+                text = { Text(stringResource(R.string.chat_message_copy_text)) },
                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                 onClick = {
                     onCopy()
@@ -89,7 +97,7 @@ fun AidenMessageActionContainer(
                 }
             )
             DropdownMenuItem(
-                text = { Text("Select Text") },
+                text = { Text(stringResource(R.string.chat_message_select_text)) },
                 leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
                 onClick = {
                     menuExpanded = false
@@ -98,7 +106,7 @@ fun AidenMessageActionContainer(
             )
             if (onAskAbout != null) {
                 DropdownMenuItem(
-                    text = { Text("Ask about this") },
+                    text = { Text(askAboutLabel) },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
                     onClick = {
                         menuExpanded = false
@@ -107,7 +115,7 @@ fun AidenMessageActionContainer(
                 )
             }
             DropdownMenuItem(
-                text = { Text("Share") },
+                text = { Text(stringResource(R.string.action_share)) },
                 leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
                 onClick = {
                     onShare()
@@ -118,7 +126,7 @@ fun AidenMessageActionContainer(
                 HorizontalDivider()
                 forkActions.onForkFromHere?.let { fork ->
                     DropdownMenuItem(
-                        text = { Text("Fork from here") },
+                        text = { Text(forkHereLabel) },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null) },
                         onClick = {
                             menuExpanded = false
@@ -128,7 +136,7 @@ fun AidenMessageActionContainer(
                 }
                 forkActions.onForkWithSummary?.let { fork ->
                     DropdownMenuItem(
-                        text = { Text("Fork with summary…") },
+                        text = { Text(stringResource(R.string.chat_message_fork_summary_menu)) },
                         leadingIcon = { Icon(Icons.Default.Summarize, contentDescription = null) },
                         onClick = {
                             menuExpanded = false
@@ -138,7 +146,7 @@ fun AidenMessageActionContainer(
                 }
                 forkActions.onEditInFork?.let { edit ->
                     DropdownMenuItem(
-                        text = { Text("Edit in fork") },
+                        text = { Text(editInForkLabel) },
                         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                         onClick = {
                             menuExpanded = false

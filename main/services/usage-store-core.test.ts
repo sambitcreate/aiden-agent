@@ -653,3 +653,14 @@ test("design run charges survive reload under their own source", async () => {
   assert.equal(summary.totals.hostedCostUsd, 0.25);
   assert.equal(persistence.read().buckets[0]?.source, "design");
 });
+
+test("Create Images requests persist as their own privacy-safe usage source", async () => {
+  const persistence = memoryPersistence();
+  await createUsageStore(persistence, () => NOW).record(
+    record({ source: "create-images", providerId: "openrouter", modelId: "google/gemini-3.1-flash-image", costStatus: "reported", costUsd: 0.039 }),
+  );
+  const reloaded = await createUsageStore(persistence, () => NOW).summary("7d");
+  assert.equal(reloaded.totals.requests, 1);
+  assert.equal(reloaded.totals.hostedCostUsd, 0.039);
+  assert.equal(persistence.read().buckets[0]?.source, "create-images");
+});

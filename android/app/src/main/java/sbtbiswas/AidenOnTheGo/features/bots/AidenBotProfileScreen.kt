@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.Role
@@ -30,7 +32,11 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
@@ -38,11 +44,15 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
 
 sealed class AidenBotProfileLifecycleAction {
     object Archive : AidenBotProfileLifecycleAction()
@@ -119,31 +129,111 @@ fun AidenBotProfileScreen(
     onBotMutated: () -> Unit = {}
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
 
-    var botDetail by remember { mutableStateOf<AidenBotDetail?>(null) }
-    var favorites by remember { mutableStateOf<AidenBotFavorites?>(null) }
-    var conversations by remember { mutableStateOf<List<AidenBotConversationItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    // The saved profile, Favorites and chats render at once and refresh underneath.
+    var botDetail by remember(botId) { mutableStateOf(coordinator.botCache.getBotDetail(botId)) }
+    var favorites by remember { mutableStateOf(coordinator.botCache.botList.value?.favorites) }
+    var conversations by remember(botId) {
+        mutableStateOf(
+            aidenCanonicalBotConversations(
+                coordinator.botCache.botConversations.value?.conversations.orEmpty().filter { it.botId == botId }
+            )
+        )
+    }
+    var isLoading by remember { mutableStateOf(false) }
+    var loadFailed by remember { mutableStateOf(false) }
     var isConfirmingArchive by remember { mutableStateOf(false) }
+    var lifecyclePending by remember { mutableStateOf<String?>(null) }
+    var favoritesInFlight by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
 
     fun refresh() {
         val cl = client ?: return
+        // The pairing this read belongs to; a removed or switched pairing never gets it back.
+        val requestInstance = coordinator.activeInstanceId
         scope.launch {
             isLoading = true
+            loadFailed = false
             try {
                 val b = cl.bot(botId)
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
                 botDetail = b
+                coordinator.botCache.putBotDetail(b)
+                // Favorites stay as shown while a pin or reorder is still being written.
                 val fav = cl.botFavorites()
-                favorites = fav
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
+                if (!favoritesInFlight) favorites = fav
                 val page = cl.botConversations(botId = botId)
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
                 conversations = aidenCanonicalBotConversations(page.conversations)
-            } catch (_: Exception) {} finally {
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                loadFailed = true
+            } finally {
                 isLoading = false
+            }
+        }
+    }
+
+    /**
+     * Pinning and reordering apply at once, then reconcile with the desktop's Favorites
+     * or roll back with an error. One write runs at a time so each carries the revision
+     * the previous one returned.
+     */
+    fun writeFavorites(next: List<String>) {
+        val cl = client ?: return
+        val previous = favorites ?: return
+        if (favoritesInFlight || next == previous.botIds) return
+        favoritesInFlight = true
+        actionError = null
+        favorites = previous.copy(botIds = next)
+        scope.launch {
+            try {
+                favorites = cl.updateFavorites(next, previous.revision)
+                onBotMutated()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                favorites = previous
+                throw error
+            } catch (error: Exception) {
+                favorites = previous
+                actionError = error.message ?: resources.getString(R.string.bot_profile_favorites_failed)
+            } finally {
+                favoritesInFlight = false
+            }
+        }
+    }
+
+    /** Archive and Restore wait for the desktop; the menu shows them pending meanwhile. */
+    fun updateLifecycle(action: AidenBotProfileLifecycleAction, pendingLabel: String) {
+        val cl = client ?: return
+        val b = botDetail ?: return
+        if (lifecyclePending != null) return
+        lifecyclePending = pendingLabel
+        actionError = null
+        scope.launch {
+            try {
+                val res = aidenBotProfileLifecycleUpdate(
+                    client = cl,
+                    botId = botId,
+                    revision = b.revision,
+                    action = action
+                )
+                botDetail = res.detail
+                favorites = res.favorites
+                coordinator.botCache.putBotDetail(res.detail)
+                onBotMutated()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                actionError = error.message ?: resources.getString(R.string.bot_profile_update_failed)
+            } finally {
+                lifecyclePending = null
             }
         }
     }
@@ -163,15 +253,15 @@ fun AidenBotProfileScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Bot Profile", fontWeight = FontWeight.Bold) },
+                title = { Text(stringResource(R.string.bot_profile_title), fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
                     IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = palette.foreground)
+                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.action_options), tint = palette.foreground)
                     }
                     DropdownMenu(
                         expanded = showMenu,
@@ -180,7 +270,8 @@ fun AidenBotProfileScreen(
                     ) {
                         if (!isArchived) {
                             DropdownMenuItem(
-                                text = { Text("Archive Bot", color = palette.danger) },
+                                text = { Text(lifecyclePending ?: stringResource(R.string.bot_profile_archive), color = palette.danger) },
+                                enabled = lifecyclePending == null,
                                 onClick = {
                                     showMenu = false
                                     isConfirmingArchive = true
@@ -191,27 +282,11 @@ fun AidenBotProfileScreen(
                             )
                         } else {
                             DropdownMenuItem(
-                                text = { Text("Restore Bot", color = palette.accent) },
+                                text = { Text(lifecyclePending ?: stringResource(R.string.bot_profile_restore), color = palette.accent) },
+                                enabled = lifecyclePending == null,
                                 onClick = {
                                     showMenu = false
-                                    val cl = client ?: return@DropdownMenuItem
-                                    val b = bot ?: return@DropdownMenuItem
-                                    scope.launch {
-                                        try {
-                                            val res = aidenBotProfileLifecycleUpdate(
-                                                client = cl,
-                                                botId = botId,
-                                                revision = b.revision,
-                                                action = AidenBotProfileLifecycleAction.Restore()
-                                            )
-                                            botDetail = res.detail
-                                            favorites = res.favorites
-                                            coordinator.botCache.putBotDetail(res.detail)
-                                            onBotMutated()
-                                        } catch (e: Exception) {
-                                            actionError = e.message
-                                        }
-                                    }
+                                    updateLifecycle(AidenBotProfileLifecycleAction.Restore(), resources.getString(R.string.bot_profile_restoring))
                                 },
                                 leadingIcon = {
                                     Icon(Icons.Default.Unarchive, contentDescription = null, tint = palette.accent)
@@ -228,15 +303,30 @@ fun AidenBotProfileScreen(
         },
         containerColor = palette.canvas
     ) { padding ->
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = palette.accent)
-            }
+        val presentation = AidenReadPresentation.of(
+            hasContent = bot != null,
+            isFetching = isLoading,
+            hasSettled = loadFailed || client == null,
+            failed = loadFailed
+        )
+        if (presentation == AidenReadPresentation.SKELETON) {
+            AidenBotProfileSkeleton(Modifier.padding(padding))
+        } else if (presentation == AidenReadPresentation.FAILED || presentation == AidenReadPresentation.EMPTY) {
+            AidenEmptyState(
+                icon = Icons.Default.CloudOff,
+                title = stringResource(R.string.bot_profile_unavailable_title),
+                body = if (client == null) stringResource(R.string.bot_profile_unavailable_connect) else stringResource(R.string.bot_profile_unavailable_failed),
+                modifier = Modifier.fillMaxSize().padding(padding),
+                action = if (client != null) {
+                    { AidenTonalButton(text = stringResource(R.string.action_try_again), onClick = { refresh() }) }
+                } else null
+            )
         } else if (bot != null) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .aidenReadableWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -279,7 +369,7 @@ fun AidenBotProfileScreen(
                         ) {
                             Icon(Icons.Default.Archive, contentDescription = null, tint = palette.warning, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Archived — chats are read-only", style = MaterialTheme.typography.bodySmall, color = palette.warning)
+                            Text(stringResource(R.string.bot_profile_archived_banner), style = MaterialTheme.typography.bodySmall, color = palette.warning)
                         }
                     }
                 }
@@ -287,7 +377,7 @@ fun AidenBotProfileScreen(
                 AidenBotProfileActionBar(
                     actions = listOf(
                         AidenBotProfileAction(
-                            label = "Chat",
+                            label = stringResource(R.string.bot_profile_action_chat),
                             icon = Icons.Default.Chat,
                             enabled = bot.health == AidenBotHealth.READY,
                             emphasized = true,
@@ -301,18 +391,22 @@ fun AidenBotProfileScreen(
                                         try {
                                             val created = cl.createBotChat(bot.id)
                                             onNavigateToChat(created.id)
-                                        } catch (_: Exception) {}
+                                        } catch (error: kotlinx.coroutines.CancellationException) {
+                                            throw error
+                                        } catch (error: Exception) {
+                                            actionError = error.message ?: resources.getString(R.string.bot_profile_open_chat_failed)
+                                        }
                                     }
                                 }
                             }
                         ),
                         AidenBotProfileAction(
-                            label = "Edit",
+                            label = stringResource(R.string.action_edit),
                             icon = Icons.Default.Edit,
                             onClick = { onNavigateToEditBot(botId) }
                         ),
                         AidenBotProfileAction(
-                            label = "Access",
+                            label = stringResource(R.string.bot_profile_action_access),
                             icon = Icons.Default.Shield,
                             onClick = {
                                 if (onNavigateToCustomAccess != null) {
@@ -323,26 +417,18 @@ fun AidenBotProfileScreen(
                             }
                         ),
                         AidenBotProfileAction(
-                            label = if (isFavorite) "Unpin" else "Pin",
+                            label = if (isFavorite) stringResource(R.string.bot_profile_action_unpin) else stringResource(R.string.bot_profile_action_pin),
                             icon = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                             iconTint = if (isFavorite) palette.accent else null,
-                            onClick = onClick@{
-                                val cl = client ?: return@onClick
-                                val favs = favorites ?: return@onClick
-                                scope.launch {
-                                    val next = if (isFavorite) {
+                            enabled = !favoritesInFlight,
+                            onClick = {
+                                writeFavorites(
+                                    if (isFavorite) {
                                         favoriteList.filter { it != botId }
                                     } else {
                                         (favoriteList + botId).take(AidenBotWire.MAX_FAVORITES)
                                     }
-                                    try {
-                                        val updated = cl.updateFavorites(next, favs.revision)
-                                        favorites = updated
-                                        onBotMutated()
-                                    } catch (e: Exception) {
-                                        actionError = e.message
-                                    }
-                                }
+                                )
                             }
                         )
                     )
@@ -353,19 +439,19 @@ fun AidenBotProfileScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "Favorite Order",
+                                    text = stringResource(R.string.bot_profile_favorite_order),
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = palette.foreground,
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
-                                    text = "${favoriteIndex + 1} of ${favoriteList.size}",
+                                    text = stringResource(R.string.bot_profile_favorite_position, favoriteIndex + 1, favoriteList.size),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = palette.secondary
                                 )
@@ -377,45 +463,27 @@ fun AidenBotProfileScreen(
                                 OutlinedButton(
                                     border = null,
                                     onClick = {
-                                        val cl = client ?: return@OutlinedButton
-                                        val favs = favorites ?: return@OutlinedButton
-                                        val next = aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.EARLIER)
-                                        scope.launch {
-                                            try {
-                                                val updated = cl.updateFavorites(next, favs.revision)
-                                                favorites = updated
-                                                onBotMutated()
-                                            } catch (_: Exception) {}
-                                        }
+                                        writeFavorites(aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.EARLIER))
                                     },
-                                    enabled = favoriteIndex > 0,
+                                    enabled = favoriteIndex > 0 && !favoritesInFlight,
                                     modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = MaterialTheme.shapes.small
                                 ) {
                                     Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Move Earlier")
+                                    Text(stringResource(R.string.bot_profile_move_earlier))
                                 }
 
                                 OutlinedButton(
                                     border = null,
                                     onClick = {
-                                        val cl = client ?: return@OutlinedButton
-                                        val favs = favorites ?: return@OutlinedButton
-                                        val next = aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.LATER)
-                                        scope.launch {
-                                            try {
-                                                val updated = cl.updateFavorites(next, favs.revision)
-                                                favorites = updated
-                                                onBotMutated()
-                                            } catch (_: Exception) {}
-                                        }
+                                        writeFavorites(aidenBotFavoriteOrder(favoriteList, botId, AidenBotFavoriteOrderMove.LATER))
                                     },
-                                    enabled = favoriteIndex < favoriteList.size - 1,
+                                    enabled = favoriteIndex < favoriteList.size - 1 && !favoritesInFlight,
                                     modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = MaterialTheme.shapes.small
                                 ) {
-                                    Text("Move Later")
+                                    Text(stringResource(R.string.bot_profile_move_later))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                                 }
@@ -429,7 +497,7 @@ fun AidenBotProfileScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Recent Chats",
+                        text = stringResource(R.string.bot_profile_recent_chats),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = palette.secondary,
@@ -440,7 +508,7 @@ fun AidenBotProfileScreen(
                         if (conversations.isEmpty()) {
                             AidenGroupCard(index = 0, count = 1, role = null) {
                                 Text(
-                                    text = "No conversation history yet.",
+                                    text = stringResource(R.string.bot_profile_no_history),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = palette.secondary
                                 )
@@ -457,7 +525,7 @@ fun AidenBotProfileScreen(
                                     Icon(Icons.Default.ChatBubbleOutline, contentDescription = null, tint = palette.accent, modifier = Modifier.size(20.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = conv.title.ifEmpty { "Chat" },
+                                            text = conv.title.ifEmpty { stringResource(R.string.bot_profile_chat_fallback_title) },
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = palette.foreground,
@@ -490,10 +558,10 @@ fun AidenBotProfileScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("Greeting", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                                Text(stringResource(R.string.bot_profile_greeting), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                                 Text(greeting, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
                             }
                         }
@@ -503,10 +571,10 @@ fun AidenBotProfileScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = MaterialTheme.shapes.medium
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Instructions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_profile_instructions), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Text(bot.instructions, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
                     }
                 }
@@ -521,32 +589,15 @@ fun AidenBotProfileScreen(
     if (isConfirmingArchive) {
         AlertDialog(
             onDismissRequest = { isConfirmingArchive = false },
-            title = { Text("Archive ${bot?.name ?: "Bot"}?") },
-            text = { Text("Its chats stay available to read. Restore the Bot later to edit it or start new work.") },
+            title = { Text(stringResource(R.string.bot_profile_archive_title, bot?.name ?: stringResource(R.string.bot_profile_bot_fallback))) },
+            text = { Text(stringResource(R.string.bot_profile_archive_body)) },
             confirmButton = {
                 AidenDialogConfirmButton(
-                    text = "Archive Bot",
+                    text = stringResource(R.string.bot_profile_archive),
                     destructive = true,
-                    onClick = onClick@{
+                    onClick = {
                         isConfirmingArchive = false
-                        val cl = client ?: return@onClick
-                        val b = bot ?: return@onClick
-                        scope.launch {
-                            try {
-                                val res = aidenBotProfileLifecycleUpdate(
-                                    client = cl,
-                                    botId = botId,
-                                    revision = b.revision,
-                                    action = AidenBotProfileLifecycleAction.Archive
-                                )
-                                botDetail = res.detail
-                                favorites = res.favorites
-                                coordinator.botCache.putBotDetail(res.detail)
-                                onBotMutated()
-                            } catch (e: Exception) {
-                                actionError = e.message
-                            }
-                        }
+                        updateLifecycle(AidenBotProfileLifecycleAction.Archive, resources.getString(R.string.bot_profile_archiving))
                     }
                 )
             },
@@ -556,6 +607,28 @@ fun AidenBotProfileScreen(
             shape = AidenShape.Dialog,
             containerColor = palette.raised
         )
+    }
+}
+
+/** Profile-shaped placeholders for a Bot opened with nothing saved on this phone. */
+@Composable
+private fun AidenBotProfileSkeleton(modifier: Modifier = Modifier) {
+    val loadingDescription = stringResource(R.string.bot_profile_loading)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .padding(20.dp)
+            .clearAndSetSemantics { contentDescription = loadingDescription }
+    ) {
+        AidenSkeletonBlock(width = 112.dp, height = 112.dp, shape = CircleShape)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AidenSkeletonBlock(width = 160.dp, height = 24.dp)
+            AidenSkeletonBlock(width = 220.dp, height = 14.dp)
+        }
+        AidenSkeletonBlock(height = 72.dp, shape = MaterialTheme.shapes.large)
+        AidenSkeletonBlock(height = 120.dp, shape = MaterialTheme.shapes.large)
     }
 }
 

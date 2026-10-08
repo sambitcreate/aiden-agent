@@ -6,7 +6,7 @@ import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
-import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
@@ -159,6 +159,7 @@ import type {
   Chat,
   ChatStartParams,
   WorkspacePermission,
+  StoredProvider,
 } from "./types.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
@@ -758,6 +759,7 @@ function savedGenerationThinkingLevel(
   settings: Awaited<ReturnType<typeof configStore.getSettings>>,
   providerId: string,
   model: string,
+  provider: Pick<StoredProvider, "isBuiltin" | "kind" | "modelMetadata">,
 ) {
   return providerId === GOOGLE_PROVIDER_ID
     ? settings.googleThinkingByModel?.[model]
@@ -765,7 +767,11 @@ function savedGenerationThinkingLevel(
       ? settings.codexThinkingByModel?.[model]
       : providerId === ANTHROPIC_PROVIDER_ID
         ? settings.anthropicThinkingByModel?.[model]
-        : settings.providerThinkingByModel?.[providerId]?.[model];
+        : provider.isBuiltin ||
+            (provider.kind === "openai" &&
+              customModelThinkingLevels(provider.modelMetadata?.[model]?.overrides))
+          ? settings.providerThinkingByModel?.[providerId]?.[model]
+          : undefined;
 }
 
 async function prepareGeneration(
@@ -848,7 +854,7 @@ async function prepareGeneration(
       thinkingLevel: resolveGenerationThinkingLevel(
         params.providerId,
         designModel,
-        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model),
+        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model, runtime.provider),
       ),
       computerUse: undefined,
       formFill: undefined,
@@ -980,7 +986,7 @@ async function prepareGeneration(
   };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
-  const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model);
+  const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
