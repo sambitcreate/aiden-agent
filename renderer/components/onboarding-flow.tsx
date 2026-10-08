@@ -166,12 +166,12 @@ const providerChoices: Array<{
   {
     id: "custom",
     title: "Other Custom Provider",
-    description: "Connect your endpoint, then enable the capabilities your server supports.",
+    description: "Connect your endpoint, then set its capabilities and effort selector in Model options.",
   },
   {
     id: "tailscale",
     title: "Tailscale custom model",
-    description: "Connect a private server. Choose its capabilities in Model options.",
+    description: "Connect a private server. Set its capabilities and effort selector in Model options.",
     iconProviderId: "tailscale",
   },
 ];
@@ -317,7 +317,7 @@ const featureBentos: FeatureBento[] = [
     id: "thinking",
     group: "extend",
     title: "Thinking Controls",
-    description: "Tune supported models' reasoning effort and follow thinking as it streams.",
+    description: "Tune reasoning effort, including configured custom models, and follow thinking as it streams.",
     icon: Lightbulb,
     imageUrl: FEATURE_ILLUSTRATIONS.thinking,
     size: "standard",

@@ -6,7 +6,7 @@ import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
-import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
@@ -911,7 +911,10 @@ async function prepareGeneration(
         ? settings.codexThinkingByModel?.[params.model]
         : params.providerId === ANTHROPIC_PROVIDER_ID
           ? settings.anthropicThinkingByModel?.[params.model]
-          : settings.providerThinkingByModel?.[params.providerId]?.[params.model];
+          : runtime.provider.isBuiltin || (runtime.provider.kind === "openai" &&
+              customModelThinkingLevels(runtime.provider.modelMetadata?.[params.model]?.overrides))
+            ? settings.providerThinkingByModel?.[params.providerId]?.[params.model]
+            : undefined;
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,

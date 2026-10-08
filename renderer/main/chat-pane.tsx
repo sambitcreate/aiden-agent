@@ -155,6 +155,7 @@ import {
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
 import { normalizeProviderThinkingLevel } from "../shared/provider-thinking";
+import { customModelThinkingLevels } from "../shared/custom-model-options";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -454,11 +455,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     storedAnthropicThinkingLevel,
   );
   const providerThinkingLevels = React.useMemo<GenerationThinkingLevel[]>(() => {
+    if (selectedProvider?.kind === "openai") {
+      const custom = customModelThinkingLevels(thinkingMetadata?.overrides);
+      if (custom) return custom;
+    }
     const declared = thinkingMetadata?.thinkingLevels;
     return declared?.filter(isGenerationThinkingLevel) ?? [];
-  }, [thinkingMetadata?.thinkingLevels]);
+  }, [selectedProvider?.kind, thinkingMetadata?.overrides, thinkingMetadata?.thinkingLevels]);
   const providerThinkingSupported =
-    selectedProvider?.isBuiltin === true &&
+    (selectedProvider?.isBuiltin === true ||
+      (selectedProvider?.kind === "openai" &&
+        customModelThinkingLevels(thinkingMetadata?.overrides) !== undefined)) &&
     providerId !== GOOGLE_PROVIDER_ID &&
     providerId !== OPENAI_CODEX_PROVIDER_ID &&
     providerId !== ANTHROPIC_PROVIDER_ID &&
@@ -2820,7 +2827,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       providerLabel={selectedProvider?.label ?? "Model"}
                       level={providerThinkingLevel}
                       levels={providerThinkingLevels}
-                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
+                        ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
