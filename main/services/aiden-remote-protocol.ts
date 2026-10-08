@@ -13,6 +13,7 @@ import {
   type AskUserQuestionV1,
 } from "../../renderer/shared/ask-user-question.js";
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
+import { DEVICE_ID_PATTERN } from "../../renderer/shared/devices.js";
 import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   MAX_FORK_SUMMARY_TEXT_CHARS,
@@ -5739,7 +5740,6 @@ function parseChatForkFixture(value: unknown): AidenRemoteChatForkFixture {
   return { features: [...features], fork, editFork, summaryStates, summaryCancel: { cancelled: cancel.cancelled } };
 }
 
-const MOBILE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9-]{1,128}$/u;
 const MOBILE_SIMULATOR_HUB_ROUTE_PREFIX = "/simulators/hub/vendor/serve-sim/helper/";
 /** Tags a phone may send through the input socket: touch, button, orientation, hardware keyboard. */
 const MOBILE_SIMULATOR_INPUT_TAGS = new Set([0x03, 0x04, 0x07, 0x0d]);
@@ -5765,7 +5765,7 @@ function parseMobileSimulatorListing(value: unknown, label: string): Record<stri
       "kind",
     ]);
     const id = requiredString(device, "id");
-    if (!MOBILE_SIMULATOR_DEVICE_ID.test(id)) throw new Error(`${label} device ${index} id is invalid.`);
+    if (!DEVICE_ID_PATTERN.test(id)) throw new Error(`${label} device ${index} id is invalid.`);
     assertBoundedString(device, "name", 256);
     if (device.platform !== "ios" && device.platform !== "android") {
       throw new Error(`${label} device ${index} platform must be ios or android.`);

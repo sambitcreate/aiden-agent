@@ -1492,7 +1492,8 @@
       "devices": [
         { "id": "5A0C1F3E-0000-4000-8000-000000000001", "name": "iPhone 17 Pro", "platform": "ios", "version": "26.0", "booted": true, "kind": "iphone" },
         { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": false, "kind": "ipad" },
-        { "id": "emulator-5554", "name": "Pixel 9", "platform": "android", "version": "16", "booted": true, "kind": "other" }
+        { "id": "emulator-5554", "name": "Pixel 9", "platform": "android", "version": "16", "booted": true, "kind": "other" },
+        { "id": "Pixel_9_API_35", "name": "Pixel 9 API 35", "platform": "android", "version": "15", "booted": false, "kind": "other" }
       ],
       "chatDeviceIds": ["5A0C1F3E-0000-4000-8000-000000000001", "emulator-5554"],
       "toolVersions": { "hub": "0.12.0", "agent": "0.21.12" }

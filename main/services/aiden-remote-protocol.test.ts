@@ -2146,10 +2146,16 @@ test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG 
   const section = parseAidenRemoteContractFixture(raw).mobileSimulators;
   assert.ok(section);
   assert.equal(section.capability, "simulators:mobile");
-  // The listing carries an Android emulator a phone shows as "Open on your Mac to view".
+  // The listing carries a running Android emulator and a stopped AVD (listed by
+  // its AVD name), both shown on a phone as "Open on your Mac to view".
   assert.deepEqual(
-    (section.listing.devices as Array<{ platform: string }>).map((device) => device.platform),
-    ["ios", "ios", "android"],
+    (section.listing.devices as Array<{ id: string; platform: string }>).map(({ id, platform }) => [id, platform]),
+    [
+      ["5A0C1F3E-0000-4000-8000-000000000001", "ios"],
+      ["5A0C1F3E-0000-4000-8000-000000000002", "ios"],
+      ["emulator-5554", "android"],
+      ["Pixel_9_API_35", "android"],
+    ],
   );
   // The second sample frame contains the boundary bytes, so only Content-Length frames it.
   const second = Buffer.from(section.mjpeg.framesBase64[1]!, "base64");
@@ -2167,6 +2173,16 @@ test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG 
     }),
     /missing platform/u,
   );
+  // The fixture admits exactly the ids the desktop lists: a leading dot or a path separator never parses.
+  for (const id of [".hidden", "../hub/admin", "a b", "x".repeat(129)]) {
+    assert.throws(
+      mutate((copy) => {
+        (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[3]!.id = id;
+      }),
+      /device 3 id is invalid/u,
+      id,
+    );
+  }
   assert.throws(
     mutate((copy) => {
       record(mobile(copy).listing, "listing").chatDeviceIds = ["NOT-LISTED"];

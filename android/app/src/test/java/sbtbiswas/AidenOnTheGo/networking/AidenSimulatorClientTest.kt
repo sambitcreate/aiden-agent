@@ -31,6 +31,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenInstallation
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorHostStatus
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorListing
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorPlatform
+import sbtbiswas.AidenOnTheGo.models.AidenSimulators
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
@@ -84,6 +85,19 @@ class AidenSimulatorClientTest {
         assertEquals(AidenSimulatorPlatform.ANDROID, listing.chatDevices[1].platform)
         assertEquals("0.12.0", listing.toolVersions?.hub)
         assertEquals("0.21.12", listing.toolVersions?.agent)
+        // A stopped emulator is listed by its AVD name, as the desktop lists it.
+        assertEquals("Pixel_9_API_35", listing.devices.last().id)
+        assertEquals(4, listing.devices.size)
+    }
+
+    @Test
+    fun deviceIdsFollowTheDesktopDevicePattern() {
+        for (id in listOf(iphoneId, "emulator-5554", "Pixel_9_API_35", "Pixel.9", "a")) {
+            assertTrue(id, AidenSimulators.isValidDeviceId(id))
+        }
+        for (id in listOf("", ".hidden", "_x", "-flag", "../hub/admin", "bad id", "a/b", "a".repeat(129))) {
+            assertFalse(id, AidenSimulators.isValidDeviceId(id))
+        }
     }
 
     @Test
@@ -105,22 +119,33 @@ class AidenSimulatorClientTest {
         val listing = json.decodeFromString<AidenSimulatorListing>(text)
         assertEquals(AidenSimulatorHostStatus.UNAVAILABLE, listing.status.effective)
         assertFalse(listing.status.offersRetry)
-        assertEquals(3, listing.devices.size)
+        assertEquals(4, listing.devices.size)
         assertFalse(listing.devices.single { it.id == "emulator-5554" }.isViewableOnPhone)
         assertTrue(AidenSimulatorHostStatus("error").offersRetry)
         assertTrue(AidenSimulatorHostStatus("stopped").offersRetry)
     }
 
     @Test
-    fun badDeviceIdsAndMissingFieldsAreRejected() {
+    fun devicesThePhoneCannotUseAreSkippedWithoutFailingTheListing() {
+        val badId = json.decodeFromString<AidenSimulatorListing>(listingJson().replace("emulator-5554", "../hub/admin"))
+        assertEquals(listOf(iphoneId, "5A0C1F3E-0000-4000-8000-000000000002", "Pixel_9_API_35"), badId.devices.map { it.id })
+        // The skipped device leaves the chat; the iPhone keeps the button.
+        assertEquals(listOf(iphoneId), badId.chatDevices.map { it.id })
+
+        val missingField = json.decodeFromString<AidenSimulatorListing>(listingJson().replace("\"booted\":false,", ""))
+        assertFalse(missingField.devices.any { it.id == "5A0C1F3E-0000-4000-8000-000000000002" })
+        assertEquals(listOf(iphoneId, "emulator-5554"), missingField.chatDevices.map { it.id })
+
+        val duplicate = json.decodeFromString<AidenSimulatorListing>(
+            listingJson().replace("\"devices\":[", "\"devices\":[{\"id\":\"emulator-5554\",\"name\":\"Copy\",\"platform\":\"android\",\"version\":\"16\",\"booted\":true,\"kind\":\"other\"},")
+        )
+        assertEquals(1, duplicate.devices.count { it.id == "emulator-5554" })
+
+        val badChatId = json.decodeFromString<AidenSimulatorListing>(listingJson().replace("\"emulator-5554\"]", "\"bad id\"]"))
+        assertEquals(listOf(iphoneId), badChatId.chatDevices.map { it.id })
+
         assertThrows(Exception::class.java) {
-            json.decodeFromString<AidenSimulatorListing>(listingJson().replace("emulator-5554", "../hub/admin"))
-        }
-        assertThrows(Exception::class.java) {
-            json.decodeFromString<AidenSimulatorListing>(listingJson().replace("\"booted\":false,", ""))
-        }
-        assertThrows(Exception::class.java) {
-            json.decodeFromString<AidenSimulatorListing>(listingJson().replace("\"emulator-5554\"]", "\"bad id\"]"))
+            json.decodeFromString<AidenSimulatorListing>(listingJson().replace("\"sharing\":true,", ""))
         }
     }
 

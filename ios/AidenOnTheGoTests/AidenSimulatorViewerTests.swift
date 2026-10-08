@@ -254,9 +254,11 @@ final class AidenSimulatorViewerTests: XCTestCase {
         let listing = try AidenRemoteJSONDecoder.decode(AidenSimulatorListing.self, from: fixtureData("listing"))
         XCTAssertTrue(listing.sharing)
         XCTAssertEqual(listing.status, .ready)
-        XCTAssertEqual(listing.devices.map(\.platform), [.ios, .ios, .android])
-        XCTAssertEqual(listing.devices.map(\.kind), [.iphone, .ipad, .other])
-        XCTAssertEqual(listing.devices.map(\.booted), [true, false, true])
+        XCTAssertEqual(listing.devices.map(\.platform), [.ios, .ios, .android, .android])
+        XCTAssertEqual(listing.devices.map(\.kind), [.iphone, .ipad, .other, .other])
+        XCTAssertEqual(listing.devices.map(\.booted), [true, false, true, false])
+        // A stopped emulator is listed by its AVD name, as the desktop lists it.
+        XCTAssertEqual(listing.devices.last?.id, "Pixel_9_API_35")
         XCTAssertEqual(listing.devices.filter(\.platform.isViewableOnPhone).count, 2)
         XCTAssertEqual(listing.chatDevices.map(\.name), ["iPhone 17 Pro", "Pixel 9"])
         XCTAssertEqual(listing.toolVersions, AidenSimulatorToolVersions(hub: "0.12.0", agent: "0.21.12"))
@@ -309,24 +311,61 @@ final class AidenSimulatorViewerTests: XCTestCase {
         XCTAssertEqual(listing.devices[0].platform, .other("visionos"))
         XCTAssertFalse(listing.devices[0].platform.isViewableOnPhone)
         XCTAssertEqual(listing.devices[0].kind, .other)
-        XCTAssertEqual(listing.devices.count, 3)
+        XCTAssertEqual(listing.devices.count, 4)
     }
 
-    func testListingRejectsUnsafeIdentitiesAndMissingFields() throws {
-        let rejected: [(String, Data)] = [
+    func testIdentifiersFollowTheDesktopDevicePattern() {
+        for id in ["5A0C1F3E-0000-4000-8000-000000000001", "emulator-5554", "Pixel_9_API_35", "Pixel.9", "a"] {
+            XCTAssertTrue(AidenSimulatorDevice.isValidIdentifier(id), id)
+        }
+        for id in ["", ".hidden", "_x", "-flag", "../etc/passwd", "bad id", "a/b", String(repeating: "a", count: 129)] {
+            XCTAssertFalse(AidenSimulatorDevice.isValidIdentifier(id), id)
+        }
+    }
+
+    func testListingSkipsDevicesItCannotUseAndKeepsTheRest() throws {
+        let skipped: [(String, Data)] = [
             ("bad id", try mutatedListing { listing in mutateFirstDevice(&listing) { $0["id"] = "../etc/passwd" } }),
             ("long id", try mutatedListing { listing in
                 mutateFirstDevice(&listing) { $0["id"] = String(repeating: "a", count: 129) }
             }),
             ("missing platform", try mutatedListing { listing in mutateFirstDevice(&listing) { $0["platform"] = nil } }),
             ("missing booted", try mutatedListing { listing in mutateFirstDevice(&listing) { $0["booted"] = nil } }),
+        ]
+        for (label, data) in skipped {
+            let listing = try AidenRemoteJSONDecoder.decode(AidenSimulatorListing.self, from: data)
+            XCTAssertEqual(
+                listing.devices.map(\.id),
+                ["5A0C1F3E-0000-4000-8000-000000000002", "emulator-5554", "Pixel_9_API_35"],
+                label
+            )
+            // The skipped device leaves the chat; the emulator keeps the button.
+            XCTAssertEqual(listing.chatDeviceIds, ["emulator-5554"], label)
+            XCTAssertTrue(listing.showsChatDeviceButton, label)
+        }
+        let duplicate = try AidenRemoteJSONDecoder.decode(
+            AidenSimulatorListing.self,
+            from: mutatedListing { listing in
+                var devices = listing["devices"] as? [[String: Any]] ?? []
+                devices.append(devices[0])
+                listing["devices"] = devices
+            }
+        )
+        XCTAssertEqual(duplicate.devices.count, 4)
+
+        let rejected: [(String, Data)] = [
             ("missing sharing", try mutatedListing { $0["sharing"] = nil }),
             ("devices while sharing off", try mutatedListing { $0["sharing"] = false }),
-            ("bad chat id", try mutatedListing { $0["chatDeviceIds"] = ["bad id"] }),
         ]
         for (label, data) in rejected {
             XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenSimulatorListing.self, from: data), label)
         }
+        // A chat id that is not a listed device is dropped, not trusted.
+        let badChatId = try AidenRemoteJSONDecoder.decode(
+            AidenSimulatorListing.self,
+            from: mutatedListing { $0["chatDeviceIds"] = ["bad id", "emulator-5554"] }
+        )
+        XCTAssertEqual(badChatId.chatDeviceIds, ["emulator-5554"])
         // A chat id the listing does not contain is dropped, not trusted.
         let stray = try AidenRemoteJSONDecoder.decode(
             AidenSimulatorListing.self,
