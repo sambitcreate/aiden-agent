@@ -4,18 +4,28 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorDisplayRotation
 
 /** How much to subsample a simulator frame for the viewer, as BitmapFactory's power-of-two `inSampleSize`. */
 object AidenSimulatorFrameSampling {
     /**
      * The largest power of two that still leaves the frame at least as large as
-     * it is drawn when aspect-fit into a [viewWidth] × [viewHeight] viewer, so
-     * subsampling never shows as blur. An unknown view size decodes at full size.
+     * it is drawn when turned by [rotation] and aspect-fit into a [viewWidth] ×
+     * [viewHeight] viewer, so subsampling never shows as blur. An unknown view
+     * size decodes at full size.
      */
-    fun inSampleSize(frameWidth: Int, frameHeight: Int, viewWidth: Int, viewHeight: Int): Int {
+    fun inSampleSize(
+        frameWidth: Int,
+        frameHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+        rotation: AidenSimulatorDisplayRotation = AidenSimulatorDisplayRotation.NONE
+    ): Int {
         if (frameWidth <= 0 || frameHeight <= 0 || viewWidth <= 0 || viewHeight <= 0) return 1
+        // A quarter turn lays the frame's width along the viewer's height.
+        val (alongWidth, alongHeight) = if (rotation.isSideways) viewHeight to viewWidth else viewWidth to viewHeight
         // Aspect-fit draws the frame at min(view / frame) of its size, so it may shrink by the larger ratio.
-        val shrink = maxOf(frameWidth.toDouble() / viewWidth, frameHeight.toDouble() / viewHeight)
+        val shrink = maxOf(frameWidth.toDouble() / alongWidth, frameHeight.toDouble() / alongHeight)
         var sample = 1
         while (sample * 2 <= shrink) sample *= 2
         return sample
@@ -71,9 +81,13 @@ class AidenFrameReusePolicy<T : Any>(
 
 /**
  * Decodes MJPEG parts for one stream session: bounds first, then subsampled to
- * the viewer's size into a reused mutable bitmap when one fits.
+ * the viewer's size (as the frame is turned for display) into a reused mutable
+ * bitmap when one fits.
  */
-class AidenSimulatorFrameDecoder(private val viewSize: () -> Pair<Int, Int>?) {
+class AidenSimulatorFrameDecoder(
+    private val viewSize: () -> Pair<Int, Int>?,
+    private val rotation: () -> AidenSimulatorDisplayRotation = { AidenSimulatorDisplayRotation.NONE }
+) {
     private val pool = AidenFrameReusePolicy<Bitmap>()
 
     fun decode(jpeg: ByteArray): ImageBitmap? {
@@ -81,7 +95,9 @@ class AidenSimulatorFrameDecoder(private val viewSize: () -> Pair<Int, Int>?) {
         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         val (viewWidth, viewHeight) = viewSize() ?: (0 to 0)
-        val sample = AidenSimulatorFrameSampling.inSampleSize(bounds.outWidth, bounds.outHeight, viewWidth, viewHeight)
+        val sample = AidenSimulatorFrameSampling.inSampleSize(
+            bounds.outWidth, bounds.outHeight, viewWidth, viewHeight, rotation()
+        )
         val width = (bounds.outWidth + sample - 1) / sample
         val height = (bounds.outHeight + sample - 1) / sample
         val needed = width.toLong() * height * 4

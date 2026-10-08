@@ -16,5 +16,8 @@ Phones (iOS and Android Aiden On The Go) can watch and control a simulator on th
 ## Android emulators
 Listed on phones with "Open on your Mac to view". No native H.264 (VideoToolbox/MediaCodec) path yet; `open` refuses non-iOS for the phone audience.
 
+## Display orientation
+`AidenSimulatorDisplayRotation` (iOS contract, Android `AidenSimulatorStream.kt`) is the one predicate for both drawing and the touch remap: rotate only when the screen config is portrait-sized (`width <= height`) and reports landscape/upside down. The viewers draw the raw frame turned (iOS `rotationEffect`, Android `drawBehind` + `rotate`), aspect-fit the turned size, and normalize taps against that rect before `rawPoint`/`mapTouch`. Android also subsamples against the turned size. The desktop Simulator tab (`device-viewer.tsx`) does not turn the canvas yet; T3's `DeviceStreamView.tsx` does.
+
 ## Mobile clients
 See the iOS and Android sections in `docs/devices.md` ("Aiden On The Go viewer").

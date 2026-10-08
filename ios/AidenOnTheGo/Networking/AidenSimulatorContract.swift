@@ -283,6 +283,48 @@ struct AidenSimulatorScreenConfig: Equatable, Sendable {
     let orientation: AidenSimulatorOrientation
 }
 
+/// How the viewer turns a frame for display. serve-sim streams the raw
+/// portrait framebuffer: a device that reports landscape or upside down while
+/// its screen config stays portrait-sized is drawn turned into that
+/// orientation, so what the user sees and where a touch lands share one space.
+/// Adapted from t3code apps/web/src/components/device/DeviceStreamView.tsx (MIT).
+enum AidenSimulatorDisplayRotation: Equatable, Sendable {
+    case none
+    /// A quarter turn clockwise (`landscape_left`).
+    case clockwise
+    /// A quarter turn counterclockwise (`landscape_right`).
+    case counterClockwise
+    /// `portrait_upside_down`.
+    case halfTurn
+
+    init(screen: AidenSimulatorScreenConfig?) {
+        // A landscape-sized config means the frames already arrive rotated.
+        guard let screen, screen.width <= screen.height else {
+            self = .none
+            return
+        }
+        switch screen.orientation {
+        case .portrait: self = .none
+        case .landscapeLeft: self = .clockwise
+        case .landscapeRight: self = .counterClockwise
+        case .portraitUpsideDown: self = .halfTurn
+        }
+    }
+
+    /// Clockwise degrees, as SwiftUI's `rotationEffect` reads them.
+    var degrees: Double {
+        switch self {
+        case .none: 0
+        case .clockwise: 90
+        case .counterClockwise: -90
+        case .halfTurn: 180
+        }
+    }
+
+    /// A quarter turn swaps the frame's width and height on screen.
+    var isSideways: Bool { self == .clockwise || self == .counterClockwise }
+}
+
 enum AidenSimulatorTouchPhase: String, Equatable, Sendable {
     case begin, move, end
 }
@@ -329,18 +371,18 @@ enum AidenSimulatorHelperMessage {
     }
 
     /// serve-sim streams the raw portrait framebuffer, so a rotated device
-    /// needs touches remapped into that raw space.
+    /// needs touches remapped into that raw space. `x` and `y` are in the
+    /// displayed space, which the viewer turns by `AidenSimulatorDisplayRotation`.
     static func rawPoint(
         x: Double,
         y: Double,
         screen: AidenSimulatorScreenConfig?
     ) -> (x: Double, y: Double) {
-        guard let screen, screen.width <= screen.height else { return (x, y) }
-        switch screen.orientation {
-        case .landscapeLeft: return (y, 1 - x)
-        case .landscapeRight: return (1 - y, x)
-        case .portraitUpsideDown: return (1 - x, 1 - y)
-        case .portrait: return (x, y)
+        switch AidenSimulatorDisplayRotation(screen: screen) {
+        case .clockwise: return (y, 1 - x)
+        case .counterClockwise: return (1 - y, x)
+        case .halfTurn: return (1 - x, 1 - y)
+        case .none: return (x, y)
         }
     }
 

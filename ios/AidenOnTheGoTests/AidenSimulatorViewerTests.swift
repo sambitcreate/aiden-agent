@@ -727,6 +727,98 @@ final class AidenSimulatorViewerTests: XCTestCase {
         ))
     }
 
+    func testRawPortraitFramesAreShownTurnedToTheDeviceOrientation() {
+        // serve-sim's raw portrait framebuffer, 1:2, in a square 400-point viewer.
+        let raw = CGSize(width: 100, height: 200)
+        let container = CGSize(width: 400, height: 400)
+        let upright = CGRect(x: 100, y: 0, width: 200, height: 400)
+        let sideways = CGRect(x: 0, y: 100, width: 400, height: 200)
+        let cases: [(AidenSimulatorOrientation, AidenSimulatorDisplayRotation, CGRect)] = [
+            (.portrait, .none, upright),
+            (.landscapeLeft, .clockwise, sideways),
+            (.portraitUpsideDown, .halfTurn, upright),
+            (.landscapeRight, .counterClockwise, sideways),
+        ]
+        for (orientation, rotation, rect) in cases {
+            let screen = AidenSimulatorScreenConfig(width: 1206, height: 2622, orientation: orientation)
+            XCTAssertEqual(AidenSimulatorDisplayRotation(screen: screen), rotation, "\(orientation)")
+            XCTAssertEqual(
+                AidenSimulatorTouchMapping.displayRect(imageSize: raw, rotation: rotation, in: container),
+                rect,
+                "\(orientation)"
+            )
+        }
+        // A landscape-sized config already streams landscape frames: nothing turns.
+        let rotated = AidenSimulatorScreenConfig(width: 2622, height: 1206, orientation: .landscapeLeft)
+        XCTAssertEqual(AidenSimulatorDisplayRotation(screen: rotated), .none)
+        XCTAssertEqual(
+            AidenSimulatorTouchMapping.displayRect(
+                imageSize: CGSize(width: 200, height: 100), rotation: .none, in: container
+            ),
+            sideways
+        )
+        XCTAssertEqual(AidenSimulatorDisplayRotation(screen: nil), .none)
+    }
+
+    func testATapLandsOnTheRawPixelShownUnderIt() throws {
+        // Draw raw pixels the way the viewer does (unturned size, turned about the
+        // shown rect's center), then tap there: the encoded touch must name the
+        // same raw pixel.
+        let raw = CGSize(width: 1206, height: 2622)
+        let container = CGSize(width: 390, height: 700)
+        let rawPoints = [CGPoint(x: 0.25, y: 0.75), CGPoint(x: 0.1, y: 0.2), CGPoint(x: 0.9, y: 0.6)]
+        for orientation in AidenSimulatorOrientation.allCases {
+            let screen = AidenSimulatorScreenConfig(width: raw.width, height: raw.height, orientation: orientation)
+            let rotation = AidenSimulatorDisplayRotation(screen: screen)
+            let shown = AidenSimulatorTouchMapping.displayRect(imageSize: raw, rotation: rotation, in: container)
+            let drawn = rotation.isSideways
+                ? CGSize(width: shown.height, height: shown.width)
+                : shown.size
+            let turn = CGAffineTransform(rotationAngle: rotation.degrees * .pi / 180)
+            for rawPoint in rawPoints {
+                let offset = CGPoint(x: (rawPoint.x - 0.5) * drawn.width, y: (rawPoint.y - 0.5) * drawn.height)
+                    .applying(turn)
+                let location = CGPoint(x: shown.midX + offset.x, y: shown.midY + offset.y)
+                let tap = try XCTUnwrap(AidenSimulatorTouchMapping.normalizedPoint(
+                    location, imageSize: raw, rotation: rotation, container: container
+                ), "\(orientation) \(rawPoint)")
+                let encoded = AidenSimulatorHelperMessage.touch(.begin, x: tap.x, y: tap.y, screen: screen)
+                let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded.dropFirst()) as? [String: Any])
+                XCTAssertEqual(try XCTUnwrap(payload["x"] as? Double), rawPoint.x, accuracy: 0.0001, "\(orientation)")
+                XCTAssertEqual(try XCTUnwrap(payload["y"] as? Double), rawPoint.y, accuracy: 0.0001, "\(orientation)")
+            }
+        }
+    }
+
+    func testFixtureTouchVectorsTappedOnTheShownFrameEncodeTheirPayloads() throws {
+        let vectors = try XCTUnwrap(fixture()["inputMessages"] as? [[String: Any]])
+        let container = CGSize(width: 390, height: 700)
+        var checked = 0
+        for vector in vectors {
+            let command = try XCTUnwrap(vector["command"] as? [String: Any])
+            guard command["kind"] as? String == "touch", let screen = try screen(from: vector["screen"]) else { continue }
+            let phase = try XCTUnwrap(AidenSimulatorTouchPhase(rawValue: XCTUnwrap(command["phase"] as? String)))
+            // The fixture's command point is in the displayed frame.
+            let imageSize = CGSize(width: screen.width, height: screen.height)
+            let rotation = AidenSimulatorDisplayRotation(screen: screen)
+            let shown = AidenSimulatorTouchMapping.displayRect(imageSize: imageSize, rotation: rotation, in: container)
+            let shownX = try XCTUnwrap(command["x"] as? Double)
+            let shownY = try XCTUnwrap(command["y"] as? Double)
+            let location = CGPoint(x: shown.minX + shownX * shown.width, y: shown.minY + shownY * shown.height)
+            let tap = try XCTUnwrap(AidenSimulatorTouchMapping.normalizedPoint(
+                location, imageSize: imageSize, rotation: rotation, container: container
+            ))
+            let encoded = AidenSimulatorHelperMessage.touch(phase, x: tap.x, y: tap.y, screen: screen)
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded.dropFirst()) as? [String: Any])
+            let expected = try XCTUnwrap(vector["payload"] as? [String: Any])
+            XCTAssertEqual(payload["type"] as? String, expected["type"] as? String)
+            XCTAssertEqual(try XCTUnwrap(payload["x"] as? Double), try XCTUnwrap(expected["x"] as? Double), accuracy: 0.0001)
+            XCTAssertEqual(try XCTUnwrap(payload["y"] as? Double), try XCTUnwrap(expected["y"] as? Double), accuracy: 0.0001)
+            checked += 1
+        }
+        XCTAssertGreaterThanOrEqual(checked, 5, "every orientation vector is exercised")
+    }
+
     func testRotationCyclesThroughTheFourOrientations() {
         XCTAssertEqual(
             AidenSimulatorOrientation.allCases.map(\.next),

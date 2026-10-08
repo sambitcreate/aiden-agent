@@ -15,7 +15,6 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -68,11 +67,14 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -81,9 +83,12 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -96,12 +101,15 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.currentStateAsState
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorDevice
 import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorButton
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorDisplayRotation
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorStreamState
 import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorTouchPhase
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
@@ -172,6 +180,14 @@ private fun AidenSimulatorViewerContent(viewModel: AidenSimulatorsViewModel, sta
             viewModel.frameShown(it)
         }
     }
+    // The orientation the frame is shown in follows the last screen config, kept with the last frame.
+    val streamFlow: StateFlow<AidenSimulatorStreamState?> =
+        remember(session) { session?.state ?: MutableStateFlow<AidenSimulatorStreamState?>(null) }
+    val streamScreen = streamFlow.collectAsStateWithLifecycle().value?.screen
+    var shownRotation by remember(state.selectedDeviceId) { mutableStateOf(AidenSimulatorDisplayRotation.NONE) }
+    LaunchedEffect(streamScreen) {
+        streamScreen?.let { shownRotation = AidenSimulatorDisplayRotation.of(it) }
+    }
 
     ImmersiveWindow(reduceMotion)
     StreamLifecycle(viewModel)
@@ -192,6 +208,7 @@ private fun AidenSimulatorViewerContent(viewModel: AidenSimulatorsViewModel, sta
         if (frame != null && device != null && device.isViewableOnPhone && state.error == null) {
             SimulatorFrame(
                 frame = frame,
+                rotation = shownRotation,
                 deviceName = device.name,
                 inputConnected = controls.inputConnected,
                 onTouch = viewModel::touch
@@ -295,9 +312,15 @@ private fun AidenSimulatorViewerContent(viewModel: AidenSimulatorsViewModel, sta
     }
 }
 
+/**
+ * The newest frame, turned to the device's orientation ([rotation]) and
+ * aspect-fit. Touches are normalized to the frame as shown; the input encoder
+ * maps them back into the raw framebuffer.
+ */
 @Composable
 private fun SimulatorFrame(
     frame: ImageBitmap,
+    rotation: AidenSimulatorDisplayRotation,
     deviceName: String,
     inputConnected: Boolean,
     onTouch: (AidenSimulatorTouchPhase, Double, Double) -> Unit
@@ -305,18 +328,40 @@ private fun SimulatorFrame(
     val connected by rememberUpdatedState(inputConnected)
     val currentOnTouch by rememberUpdatedState(onTouch)
     val description = stringResource(R.string.simulator_screen_description, deviceName)
-    Image(
-        bitmap = frame,
-        contentDescription = description,
-        contentScale = ContentScale.Fit,
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(frame.width, frame.height) {
+            .semantics {
+                contentDescription = description
+                role = Role.Image
+            }
+            .drawBehind {
+                val shown = AidenFittedRect.displayed(
+                    size.width, size.height, frame.width.toFloat(), frame.height.toFloat(), rotation
+                )
+                if (shown.width <= 0f || shown.height <= 0f) return@drawBehind
+                // The frame takes the unturned size of the shown rect and turns about its center.
+                val drawnWidth = if (rotation.isSideways) shown.height else shown.width
+                val drawnHeight = if (rotation.isSideways) shown.width else shown.height
+                val center = Offset(shown.left + shown.width / 2f, shown.top + shown.height / 2f)
+                rotate(rotation.degrees, pivot = center) {
+                    drawImage(
+                        image = frame,
+                        dstOffset = IntOffset(
+                            (center.x - drawnWidth / 2f).roundToInt(),
+                            (center.y - drawnHeight / 2f).roundToInt()
+                        ),
+                        dstSize = IntSize(drawnWidth.roundToInt(), drawnHeight.roundToInt()),
+                        filterQuality = FilterQuality.Medium
+                    )
+                }
+            }
+            .pointerInput(frame.width, frame.height, rotation) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    val rect = AidenFittedRect.aspectFit(
+                    val rect = AidenFittedRect.displayed(
                         size.width.toFloat(), size.height.toFloat(),
-                        frame.width.toFloat(), frame.height.toFloat()
+                        frame.width.toFloat(), frame.height.toFloat(), rotation
                     )
                     // Touches outside the fitted frame, or before input connects, are ignored.
                     val start = rect.normalized(down.position.x, down.position.y) ?: return@awaitEachGesture
