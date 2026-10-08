@@ -20,6 +20,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotRoutineWriteFailure
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -117,6 +118,26 @@ class AidenBotRevision25ClientTest {
         assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
         assertEquals("""{"presetId":"chief-of-staff"}""", request.body.readUtf8())
         assertEquals(key.toString(), server.takeRequest().getHeader("Idempotency-Key"))
+    }
+
+    @Test
+    fun deletingFromTheHomeABotAlreadyDeletedElsewhereSucceedsWithoutADeleteRequest() = runBlocking {
+        // The Bot was deleted on the Mac or another phone: reading its revision answers 404.
+        server.enqueue(error(404, "not_found"))
+        AidenRemoteBotDeleter.delete(client, "bot_fixture_01")
+        val read = server.takeRequest()
+        assertEquals("GET", read.method)
+        assertEquals("/api/aiden/v1/bots/bot_fixture_01", read.path)
+        assertEquals(1, server.requestCount)
+
+        // Any other failure is still shown as not deleted.
+        server.enqueue(error(500, "internal_error"))
+        try {
+            AidenRemoteBotDeleter.delete(client, "bot_fixture_01")
+            fail("A server failure must not count as deleted")
+        } catch (e: AidenRemoteClientException.Server) {
+            assertEquals(500, e.statusCode)
+        }
     }
 
     @Test
