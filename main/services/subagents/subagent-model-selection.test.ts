@@ -353,3 +353,51 @@ test("a large earlier catalog does not erase a later provider or its allowlisted
   assert.equal(planned.ok, true);
   assert.equal(planned.ok && planned.value.candidate.providerId, "second");
 });
+
+test("a full allowlist does not drop a connected locked role model", () => {
+  const firstModels = Array.from({ length: 128 }, (_, index) => `model-${index}`);
+  const roleKey = "second/role-model";
+  const settings: SubagentModelSettings = {
+    allowedModels: firstModels.map((modelId) => `first/${modelId}`),
+    roles: { implementer: { model: roleKey, locked: true } },
+  };
+  const providers = [
+    {
+      id: "first",
+      label: "First",
+      needsKey: true,
+      hasKey: true,
+      models: firstModels,
+      defaultModel: "model-0",
+    },
+    {
+      id: "second",
+      label: "Second",
+      needsKey: true,
+      hasKey: true,
+      models: ["role-model"],
+      defaultModel: "role-model",
+    },
+  ];
+  const candidates = subagentModelCandidatesFromSettings(providers, settings);
+  assert.ok(candidates.some((candidate) => subagentModelKey(candidate) === roleKey));
+  const planned = planSubagentModel(
+    {
+      parent: {
+        providerId: "first",
+        providerLabel: "First",
+        modelId: "model-0",
+        modelLabel: "model-0",
+        effort: "high",
+      },
+      candidates,
+      overridesAllowed: true,
+      settings,
+    },
+    { role: "implementer", model: "first/model-1" },
+  );
+  assert.equal(planned.ok, true);
+  assert.equal(planned.ok && planned.value.modelSource, "role_locked");
+  assert.equal(planned.ok && subagentModelKey(planned.value.candidate), roleKey);
+  assert.equal(planned.ok && planned.value.warnings.some((warning) => /not connected/u.test(warning)), false);
+});

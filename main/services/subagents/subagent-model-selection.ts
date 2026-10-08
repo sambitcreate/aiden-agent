@@ -159,10 +159,12 @@ export function preferredSubagentModelKeys(settings?: SubagentModelSettings): st
   if (!settings) return [];
   const keys: string[] = [];
   if (settings.defaultModel) keys.push(settings.defaultModel);
-  if (settings.allowedModels) keys.push(...settings.allowedModels);
   for (const role of Object.values(settings.roles ?? {})) {
     if (role?.model) keys.push(role.model);
   }
+  // Role and default models come before the optional allowlist so a 128-entry
+  // allowlist cannot crowd a connected configured choice out of discovery.
+  if (settings.allowedModels) keys.push(...settings.allowedModels);
   return [...new Set(keys)];
 }
 
