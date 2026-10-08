@@ -53,4 +53,20 @@ class AidenComposerPresentationTest {
         assertEquals("medium", aidenComposerSelectedThinkingLevel(model, "xhigh"))
         assertEquals("medium", aidenComposerSelectedThinkingLevel(model, null))
     }
+
+    @Test
+    fun customGLMEffortLadderPreservesOffAndMaxInTheComposer() {
+        val model = AidenModel(id = "glm", label = "GLM", thinkingLevels = listOf("off", "low", "high", "max"), defaultThinkingLevel = "max")
+        assertEquals(AidenComposerThinkingSelector.SEGMENTED, aidenComposerThinkingSelector(model.thinkingLevels.orEmpty()))
+        assertEquals("max", aidenComposerSelectedThinkingLevel(model, null))
+        assertEquals("off", aidenComposerSelectedThinkingLevel(model, "off"))
+        assertEquals("low", aidenComposerSelectedThinkingLevel(model, "low"))
+        assertEquals("max", aidenComposerSelectedThinkingLevel(model, "medium"))
+        val allLevels = model.copy(thinkingLevels = listOf("off", "low", "medium", "high", "xhigh", "max"))
+        assertEquals(AidenComposerThinkingSelector.LIST, aidenComposerThinkingSelector(allLevels.thinkingLevels.orEmpty()))
+        assertEquals("xhigh", aidenComposerSelectedThinkingLevel(allLevels, "xhigh"))
+        assertEquals("medium", aidenComposerSelectedThinkingLevel(allLevels, "medium"))
+        val subset = model.copy(thinkingLevels = listOf("medium", "xhigh", "max"), thinkingCanDisable = false)
+        assertEquals("max", aidenComposerSelectedThinkingLevel(subset, "off"))
+    }
 }

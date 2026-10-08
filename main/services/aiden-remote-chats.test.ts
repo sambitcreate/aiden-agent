@@ -2398,3 +2398,20 @@ test("a fork too large to send from a paired device is refused without creating 
   await assert.rejects(fork(), hasCode("internal_error", 409));
   assert.equal((await store.list()).length, 1);
 });
+
+test("Remote classification refuses feature-owned chats before any payload read", async () => {
+  let payloadReads = 0;
+  const { service } = fixture(
+    chat({ owner: { kind: "design-project", projectId: "project-1" } }),
+    { onPayloadGet: () => { payloadReads += 1; } },
+  );
+
+  await assert.rejects(
+    service.classify("chat-1"),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      (error as { code?: string; status?: number }).code === "not_found" &&
+      (error as { status?: number }).status === 404,
+  );
+  assert.equal(payloadReads, 0);
+});

@@ -45,6 +45,7 @@ import {
   type SubagentProcessDiagnostic,
   writeSubagentRuntimeFailure,
 } from "./subagent-runtime-diagnostics.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 
 function mergeHeaders(
   base: ProviderHeaders | undefined,
@@ -528,6 +529,9 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
         let observeResult:
           | ((message: AssistantMessage, metadata?: { authenticationFailure?: boolean }) => void)
           | undefined;
+        if (isAcpHarnessProvider(model.provider)) {
+          throw new Error("Subagents are not available for agent-backed providers.");
+        }
         if (model.provider === OPENAI_CODEX_PROVIDER_ID) {
           if (!runtime.prepareIsolatedStream) {
             throw new Error("OpenAI Codex isolated dispatch is unavailable.");

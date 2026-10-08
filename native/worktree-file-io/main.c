@@ -485,10 +485,71 @@ static int editor_file(int argc, char **argv, int edit) {
   return ferror(stdout) ? fail("io_failed") : 0;
 }
 
+#define MAX_CREATE_BYTES (8U * 1024U * 1024U)
+
+/* create <root> <root-dev> <root-ino> <relative> <bytes>
+ * Create a new regular file beneath descriptors opened one component at a
+ * time (creating missing directories with mkdirat), never following a
+ * symlink, and write exactly <bytes> read from stdin. A renamed or replaced
+ * ancestor cannot redirect the creation. Prints "c <dev> <ino>". */
+static int create_file(int argc, char **argv) {
+  uint64_t device, inode, bytes;
+  if (argc != 7 || !decimal(argv[3], &device) || !decimal(argv[4], &inode) ||
+      !valid_relative(argv[5]) || !decimal(argv[6], &bytes) ||
+      bytes > MAX_CREATE_BYTES) {
+    return fail("invalid_input");
+  }
+  int root = open_root(argv[2], device, inode);
+  if (root < 0) return fail("unsafe_destination");
+  char leaf[MAX_RELATIVE_PATH + 1];
+  int parent = parent_at(root, argv[5], 1, leaf);
+  close(root);
+  if (parent < 0) return fail("unsafe_destination");
+  int descriptor = openat(parent, leaf,
+                          O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                          0644);
+  if (descriptor < 0) {
+    int error = errno;
+    close(parent);
+    return fail(error == EEXIST ? "destination_exists" : "unsafe_destination");
+  }
+  char buffer[BUFFER_BYTES];
+  uint64_t copied = 0;
+  while (copied < bytes) {
+    size_t want = (size_t)((bytes - copied) < BUFFER_BYTES ? (bytes - copied) : BUFFER_BYTES);
+    ssize_t got = read(STDIN_FILENO, buffer, want);
+    if (got < 0 && errno == EINTR) continue;
+    if (got <= 0) break;
+    size_t offset = 0;
+    while (offset < (size_t)got) {
+      ssize_t put = write(descriptor, buffer + offset, (size_t)got - offset);
+      if (put < 0 && errno == EINTR) continue;
+      if (put <= 0) break;
+      offset += (size_t)put;
+    }
+    if (offset != (size_t)got) break;
+    copied += (uint64_t)got;
+  }
+  struct stat metadata;
+  int ok = copied == bytes && fsync(descriptor) == 0 && fstat(descriptor, &metadata) == 0 &&
+           S_ISREG(metadata.st_mode);
+  close(descriptor);
+  if (!ok) {
+    /* Remove only the file this call created, through the held parent. */
+    unlinkat(parent, leaf, 0);
+    close(parent);
+    return fail("io_failed");
+  }
+  close(parent);
+  printf("c %" PRIu64 " %" PRIu64 "\n", (uint64_t)metadata.st_dev, (uint64_t)metadata.st_ino);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "list") == 0) return list_directory(argc, argv);
   if (argc >= 2 && strcmp(argv[1], "read") == 0) return editor_file(argc, argv, 0);
   if (argc >= 2 && strcmp(argv[1], "edit") == 0) return editor_file(argc, argv, 1);
+  if (argc >= 2 && strcmp(argv[1], "create") == 0) return create_file(argc, argv);
   if (argc != 13 ||
       (strcmp(argv[1], "copy") != 0 && strcmp(argv[1], "restore") != 0) ||
       !valid_relative(argv[5]) || !valid_relative(argv[9])) return fail("invalid_input");

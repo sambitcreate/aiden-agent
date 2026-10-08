@@ -1,5 +1,7 @@
 export interface SubagentEligibilityInput {
   assistantMode: boolean;
+  /** The parent's provider; children inherit it. */
+  providerId?: string;
   allowSubagents?: boolean;
   usageSource?: string;
   excludedToolNames?: ReadonlySet<string>;
@@ -12,6 +14,8 @@ export interface SubagentEligibilityInput {
 export function subagentsAllowedForGeneration(input: SubagentEligibilityInput): boolean {
   return (
     !input.assistantMode &&
+    // Agent harnesses have their own subagents and cannot run unattended children.
+    !(input.providerId && isAcpHarnessProvider(input.providerId)) &&
     input.allowSubagents === true &&
     input.usageSource === "chat" &&
     !input.excludedToolNames?.has("subagent") &&
@@ -41,3 +45,4 @@ export function subagentWorkspaceWriteAllowedForGeneration(
   );
 }
 import type { WorkspacePermission } from "../types.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";

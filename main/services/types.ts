@@ -1,3 +1,4 @@
+import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
@@ -437,6 +438,8 @@ export interface ChatMeta {
   lastAssistantSequence?: number;
   /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
   forkedFrom?: ChatForkLineageV1;
+  /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
+  owner?: ChatOwnerV1;
   createdAt: number;
   updatedAt: number;
 }

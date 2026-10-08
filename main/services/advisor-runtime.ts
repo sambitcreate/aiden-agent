@@ -28,6 +28,7 @@ import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
 import type { Provider } from "./types.js";
+import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 
 export const ADVISOR_EXTENSION_ID = "aiden.rpiv.advisor";
 export const ADVISOR_TOOL_NAME = "advisor";
@@ -90,6 +91,7 @@ export function advisorCandidatesFromProviders(providers: readonly Provider[]): 
   const seen = new Set<string>();
   for (const provider of providers) {
     if (provider.needsKey && !provider.hasKey) continue;
+    if (isAcpHarnessProvider(provider.id)) continue;
     const models = [...provider.models].sort((left, right) => {
       if (left === provider.defaultModel) return -1;
       if (right === provider.defaultModel) return 1;
@@ -539,6 +541,9 @@ export class AdvisorRuntime {
 
           let runtime: ResolvedModelRuntime;
           try {
+            if (isAcpHarnessProvider(selection.providerId)) {
+              throw new Error("Agent-backed models cannot review another model's work.");
+            }
             runtime = await this.dependencies.resolveRuntime(
               selection.providerId,
               selection.modelId,

@@ -18,6 +18,7 @@ import { RemoteNewChatView } from "./remote-new-chat-view";
 import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { StudioCapabilityRoute } from "./studio-capability-route";
 
 // Chat is the startup surface, so only its shell and pane are in the entry
 // chunk. Every other route loads its own chunk; the router awaits the chunk
@@ -31,6 +32,8 @@ const ScheduledTasksView = lazyRouteComponent(
 );
 const BotsView = lazyRouteComponent(() => import("./bots-view"), "BotsView");
 const BotChatRouteView = lazyRouteComponent(() => import("./bot-chat-route"), "BotChatRoute");
+const DesignView = lazyRouteComponent(() => import("../design/design-route"), "DesignRoute");
+const ImagesView = lazyRouteComponent(() => import("../images/images-route"), "ImagesRoute");
 
 /** Let the router preload the lazy view a wrapper route component renders. */
 function preloadsWith<P>(
@@ -170,6 +173,62 @@ const hostNewChatRoute = createRoute({
   staticData: { title: "New remote chat" },
 });
 
+// Studio surfaces keep the chat shell's sidebar. ChatLayout suppresses the
+// Environment workbench and terminal on these paths (isStudioPath).
+const designRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design",
+  component: preloadsWith(function DesignStudioRoute() {
+    return (
+      <StudioCapabilityRoute feature="designStudio">
+        <DesignView />
+      </StudioCapabilityRoute>
+    );
+  }, DesignView),
+  staticData: { title: "Design" },
+});
+
+const designProjectRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design/$projectId",
+  component: preloadsWith(function DesignStudioProjectRoute() {
+    const { projectId } = designProjectRoute.useParams();
+    return (
+      <StudioCapabilityRoute feature="designStudio">
+        <DesignView projectId={projectId} />
+      </StudioCapabilityRoute>
+    );
+  }, DesignView),
+  staticData: { title: "Design project" },
+});
+
+const imagesRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/images",
+  component: preloadsWith(function CreateImagesRoute() {
+    return (
+      <StudioCapabilityRoute feature="createImages">
+        <ImagesView />
+      </StudioCapabilityRoute>
+    );
+  }, ImagesView),
+  staticData: { title: "Images" },
+});
+
+const imagesWorkflowRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/images/$workflowId",
+  component: preloadsWith(function CreateImagesWorkflowRoute() {
+    const { workflowId } = imagesWorkflowRoute.useParams();
+    return (
+      <StudioCapabilityRoute feature="createImages">
+        <ImagesView workflowId={workflowId} />
+      </StudioCapabilityRoute>
+    );
+  }, ImagesView),
+  staticData: { title: "Image workflow" },
+});
+
 // Full-screen settings (outside the chat shell).
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -193,6 +252,10 @@ const routeTree = rootRoute.addChildren([
     botChatRoute,
     hostChatRoute,
     hostNewChatRoute,
+    designRoute,
+    designProjectRoute,
+    imagesRoute,
+    imagesWorkflowRoute,
   ]),
   settingsRoute,
 ]);
