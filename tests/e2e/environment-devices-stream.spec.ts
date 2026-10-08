@@ -244,12 +244,16 @@ test.describe("Simulator stream", () => {
 
     // Dragging stays inside the chat; a drop near the top-left corner snaps into it.
     const start = await handle.boundingBox();
-    expect(start).not.toBeNull();
-    await page.mouse.move(start!.x + 40, start!.y + start!.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(start!.x - 4_000, start!.y + 20, { steps: 8 });
-    await page.mouse.up();
+    const box = await player.boundingBox();
     const viewport = await page.locator("[data-browser-floating-container] [data-scroll-top]").first().boundingBox();
+    expect(start && box && viewport).toBeTruthy();
+    // Grab the handle and drop the player just inside the chat's top-left corner, the way a person would.
+    const grabX = start!.x + 40;
+    const grabY = start!.y + start!.height / 2;
+    await page.mouse.move(grabX, grabY);
+    await page.mouse.down();
+    await page.mouse.move(viewport!.x + 20 + (grabX - box!.x), viewport!.y + 30 + (grabY - box!.y), { steps: 12 });
+    await page.mouse.up();
     await expect
       .poll(async () => Math.round((await player.boundingBox())!.x - viewport!.x))
       .toBe(12);
