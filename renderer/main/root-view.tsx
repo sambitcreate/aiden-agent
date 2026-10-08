@@ -20,6 +20,7 @@ import { CommandSystemProvider, useCommandHandler } from "../lib/command-system"
 import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
@@ -62,6 +63,7 @@ function RootContent() {
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
   const terminal = useWorkspaceTerminal();
+  const capabilities = useAppCapabilities();
   const { activeId } = useActiveWorkspace();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -163,6 +165,18 @@ function RootContent() {
     }
     void navigate({ to: "/settings" });
   });
+  const openStudio = React.useCallback(
+    (to: "/design" | "/images") => {
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return;
+      }
+      void navigate({ to });
+    },
+    [navigate, navigationBlockedReason],
+  );
+  useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
+  useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
   const openNewChat = React.useCallback(
     async (initialText?: string) => {
       if (!activeId) {

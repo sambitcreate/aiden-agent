@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.config
 
 import android.content.Context
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +25,20 @@ enum class AidenThemePresetID(val title: String) {
     GRAPHITE("Graphite"),
     DUSK("Dusk"),
     MIDNIGHT("Midnight"),
-    MONOCHROME("Monochrome")
+    MONOCHROME("Monochrome"),
+
+    /** Material You: the palette follows the device wallpaper colors (Android 12+). */
+    DYNAMIC("System");
+
+    val isDynamic: Boolean get() = this == DYNAMIC
+
+    companion object {
+        const val DYNAMIC_MIN_SDK = 31
+
+        /** Presets offered on a device running [sdkInt]; dynamic color needs Android 12. */
+        fun available(sdkInt: Int): List<AidenThemePresetID> =
+            entries.filter { !it.isDynamic || sdkInt >= DYNAMIC_MIN_SDK }
+    }
 }
 
 @Serializable
@@ -59,23 +73,22 @@ data class AidenPalette(
     val warningHex: String,
     val dangerHex: String
 ) {
-    val canvas: Color get() = hexToColor(canvasHex)
-    val sidebar: Color get() = hexToColor(sidebarHex)
-    val raised: Color get() = hexToColor(raisedHex)
-    val foreground: Color get() = hexToColor(foregroundHex)
-    val secondary: Color get() = hexToColor(secondaryHex)
-    val accent: Color get() = hexToColor(accentHex)
-    val success: Color get() = hexToColor(successHex)
-    val warning: Color get() = hexToColor(warningHex)
-    val danger: Color get() = hexToColor(dangerHex)
+    // Parsed once per palette: these are read on every recomposition across the app.
+    val canvas: Color = hexToColor(canvasHex)
+    val sidebar: Color = hexToColor(sidebarHex)
+    val raised: Color = hexToColor(raisedHex)
+    val foreground: Color = hexToColor(foregroundHex)
+    val secondary: Color = hexToColor(secondaryHex)
+    val accent: Color = hexToColor(accentHex)
+    val success: Color = hexToColor(successHex)
+    val warning: Color = hexToColor(warningHex)
+    val danger: Color = hexToColor(dangerHex)
 
     /**
-     * Content color for text and icons drawn on an accent fill. Matches iOS
-     * (`onAccent = canvas`): light schemes keep light labels on their deep
-     * accents, dark schemes use the dark canvas on their bright accents, so
-     * Monochrome's white dark-mode accent never carries white text.
+     * Readable text and icon color on an accent fill: white or black, whichever has the
+     * higher WCAG contrast, matching the desktop's `accentForeground`.
      */
-    val onAccent: Color get() = canvas
+    val onAccent: Color = readableOn(accent)
 
     fun applyingContrast(contrast: Int, baseline: Int = 50): AidenPalette {
         if (contrast == baseline) return this
@@ -97,6 +110,17 @@ data class AidenPalette(
                 Color(colorInt)
             }
         }
+
+        /** WCAG 2.x contrast ratio between two opaque colors. */
+        fun contrastRatio(a: Color, b: Color): Float {
+            val la = a.luminance()
+            val lb = b.luminance()
+            return (maxOf(la, lb) + 0.05f) / (minOf(la, lb) + 0.05f)
+        }
+
+        /** White or black, whichever reads better on [fill]. */
+        fun readableOn(fill: Color): Color =
+            if (contrastRatio(fill, Color.White) >= contrastRatio(fill, Color.Black)) Color.White else Color.Black
 
         fun mixHex(hexA: String, hexB: String, fraction: Float): String {
             val a = hexToColor(hexA)

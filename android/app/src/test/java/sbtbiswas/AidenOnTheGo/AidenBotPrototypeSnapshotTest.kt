@@ -27,7 +27,11 @@ class AidenBotPrototypeSnapshotTest {
 
     @Test
     fun testAllPresetThemePalettesAreDefined() {
-        assertEquals(10, AidenThemePresetID.values().size)
+        // Every fixed preset ships its own light and dark palettes; only the dynamic
+        // (Material You) preset is derived at runtime and borrows Aiden's as a fallback.
+        val fixed = AidenThemePresetID.entries.filterNot { it.isDynamic }
+        assertEquals(10, fixed.size)
+        assertEquals(fixed.toSet(), AidenThemeCatalog.palettes.filterValues { it.size == 2 }.keys)
 
         for (preset in AidenThemePresetID.values()) {
             val lightPalette = AidenThemeCatalog.palette(preset, false)
@@ -85,8 +89,9 @@ class AidenBotPrototypeSnapshotTest {
             .map { File(it, "protocol/aiden-appearance-v1.json") }
             .first { it.isFile }
         val presets = Json.parseToJsonElement(fixtureFile.readText()).jsonObject["presets"]!!.jsonArray
+        // The dynamic (Material You) preset is Android-only and has no fixed palette.
         assertEquals(
-            AidenThemePresetID.values().map { it.name.lowercase() },
+            AidenThemePresetID.entries.filterNot { it.isDynamic }.map { it.name.lowercase() },
             presets.map { it.jsonObject["id"]!!.jsonPrimitive.content }
         )
         for (entry in presets.map { it.jsonObject }) {

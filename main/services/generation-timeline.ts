@@ -261,6 +261,19 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Ask a question" };
     case "todo":
       return { label: "Update task list" };
+    // Activity an ACP agent (for example, Google Antigravity) ran itself.
+    case "delete_file":
+      return { label: "Delete file", target: path };
+    case "move_file":
+      return { label: "Move file", target: path };
+    case "web_fetch":
+      return { label: "Fetch web page" };
+    case "agent_subagents":
+      return { label: "Run subagents" };
+    case "agent_tool":
+      return { label: "Use agent tool" };
+    case "agent_context_rebuilt":
+      return { label: "Started a fresh agent session from this chat" };
     default:
       return { label: titleCaseToolName(toolName) || "Use tool" };
   }

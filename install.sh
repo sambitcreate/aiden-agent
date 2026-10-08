@@ -257,6 +257,12 @@ fi
 
 if [ "$os" = "linux" ]; then
   has gh || fail "GitHub CLI is required to authenticate Linux release provenance. Install gh and retry."
+  # Distribution packages can lag far behind; the pinned-commit policy needs gh 2.68 or newer.
+  gh_verify_help=$(gh attestation verify --help 2>/dev/null) || gh_verify_help=""
+  case "$gh_verify_help" in
+    *--signer-digest*) ;;
+    *) fail "the installed GitHub CLI ($(gh --version 2>/dev/null | awk 'NR == 1')) is too old to verify Linux release provenance. Install gh 2.68 or newer from https://github.com/cli/cli/blob/trunk/docs/install_linux.md and retry." ;;
+  esac
   if [ -z "$expected_commit" ]; then
     expected_commit=$(gh api "repos/${repository}/releases/tags/v${requested_version}" --jq .target_commitish) ||
       fail "could not resolve the release source commit."
@@ -268,8 +274,6 @@ if [ "$os" = "linux" ]; then
   gh attestation verify "$asset_path" \
     --hostname github.com \
     --repo "$repository" \
-    --signer-repo "$repository" \
-    --signer-workflow "${repository}/.github/workflows/release.yml" \
     --cert-identity "https://github.com/${repository}/.github/workflows/release.yml@refs/heads/main" \
     --cert-oidc-issuer https://token.actions.githubusercontent.com \
     --source-ref refs/heads/main \

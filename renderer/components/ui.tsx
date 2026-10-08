@@ -390,6 +390,11 @@ const SplitContext = React.createContext<{
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
 
+/** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
+export function useSplitViewCollapsed(): boolean {
+  return React.useContext(SplitContext)?.collapsed === true;
+}
+
 type SplitViewProps = React.PropsWithChildren<{
   sidebar: React.ReactNode;
   storageKey: string;

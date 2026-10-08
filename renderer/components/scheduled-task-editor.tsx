@@ -37,6 +37,7 @@ import type {
   ScheduledTaskPermission,
   Workspace,
 } from "../lib/types";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
 
 function upcomingLabel(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -243,7 +244,8 @@ export function ScheduledTaskEditor({
     return [...new Set([localTimezone, draft.timezone ?? localTimezone, "UTC", ...supported])];
   }, [draft.timezone, localTimezone]);
 
-  const usableProviders = providers.filter(isUsable);
+  // Agent harnesses need someone watching to answer approvals; schedules run unattended.
+  const usableProviders = providers.filter((provider) => isUsable(provider) && !isAcpHarnessProvider(provider.id));
   const pinnedProvider = usableProviders.find((provider) => provider.id === draft.providerId);
   const providerModelOptions = pinnedProvider
     ? scheduledTaskProviderModelOptions(

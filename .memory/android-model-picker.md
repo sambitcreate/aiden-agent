@@ -1,0 +1,11 @@
+# Android shared model picker
+
+Android has one model picker, `features/shared/AidenModelPicker.kt`, with pure presentation in `AidenModelPickerPresentation.kt` (unit-tested in `test/.../features/shared/AidenModelPickerPresentationTest.kt`, UI-tested in `androidTest/.../features/shared/AidenModelPickerUiTest.kt`).
+
+- Inputs are mapped to `AidenModelPickerProvider` / `AidenModelPickerModel` (`AidenProvider.toModelPickerProvider()` for Workspace catalogs, `AidenBotProviderOption.toModelPickerProvider()` for Bot capability catalogs, which carry no artwork or capability detail; unavailable Bot providers/models stay listed but disabled).
+- Routes are provider/model pairs. The same model id under two providers is two rows with distinct LazyColumn keys (`"$providerId/$modelId"`); duplicates inside one provider or a repeated provider are dropped so keys stay unique.
+- Layout: summary of the current choice (or the Mac default) and an optional header slot (the composer's thinking selector) stay pinned above a search field; the lazy list holds the Default row, Recent, and collapsible provider groups under sticky headers. Rows are whole-row `selectable(Role.RadioButton)` inside `selectableGroup`, selected = secondaryContainer fill + check. Tapping the checked row only confirms (closes the sheet) so it never resets the thinking level.
+- Default: the composer passes `allowsDefault = true` and the catalog's `defaults` route. When the selection matches no visible row, a checked Default row names what the default resolves to (or says the Mac chooses). Bot screens always carry an explicit pair and never show Default.
+- Recent: `AidenModelPreferenceStore.recentRoutes(instanceId)` returns up to five distinct explicit picks per paired Mac (newest first), recorded by `remember()` and purged with the pairing. The picker shows at most three that are still offered, excluding the current pick.
+- `AidenComposerModelSheet` wraps `AidenModelPickerSheet`; Bot editor and Bot custom access use `AidenModelPickerField` (a row that opens the sheet) because those screens already scroll. `AidenStillBottomSheet` (reduced motion) now lives in the shared picker file.
+- Chat top bar subtitle shows the catalog label (falling back to `aidenHumanizedModelId`) plus a small provider icon; for Workspace chats it follows the composer's selected route.

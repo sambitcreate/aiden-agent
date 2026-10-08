@@ -6,6 +6,7 @@
 
 import { appHandlers } from "./app.js";
 import { registerProviderHandlers } from "./providers.js";
+import { registerAcpHarnessHandlers } from "./acp-harnesses.js";
 import { registerChatHistoryHandlers } from "./chats.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
@@ -35,6 +36,7 @@ import { hostPlatformCapabilities } from "../services/host-platform-capabilities
 import { registerBtwHandlers } from "./btw.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
+import { registerCreateImagesIpc } from "./create-images/index.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 
@@ -54,6 +56,7 @@ export function registerHandlers(): void {
 
   // AI chat client handlers
   registerProviderHandlers();
+  registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
@@ -81,6 +84,7 @@ export function registerHandlers(): void {
   registerBtwHandlers();
   registerTtsHandlers();
   registerDeviceHandlers();
+  registerCreateImagesIpc();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { createChatProgressAuthorizer } from "./aiden-remote-chat-progress-authorize.js";
 import { ChatProgressEvents } from "./chat-progress-events.js";
 import type { Chat, ChatMeta } from "./types.js";
@@ -31,6 +32,14 @@ const chat: Chat = {
     },
   ],
 };
+
+function notFound(error: unknown): boolean {
+  return (
+    error instanceof AidenRemoteServiceError &&
+    error.code === "not_found" &&
+    (error as { status?: number }).status === 404
+  );
+}
 
 function fixture(overrides: {
   device?: Partial<{
@@ -181,4 +190,28 @@ test("the authorization fence releases on success and failure", async () => {
   });
   await assert.rejects(denied.authorize("d", "chat-1", "tasks:read"));
   assert.equal(denied.held(), 0);
+});
+
+test("feature-owned chats report not found to progress readers", async () => {
+  let chatsRead = 0;
+  const owned = fixture({
+    metadata: [{ ...meta, owner: { kind: "design-project", projectId: "project-1" } }],
+    readChat: async () => { chatsRead += 1; return chat; },
+  });
+  await assert.rejects(owned.authorize("device-1", "chat-1", "tasks:read"), notFound);
+  await assert.rejects(owned.authorize("device-1", "chat-1", "agents:read"), notFound);
+  assert.equal(chatsRead, 0);
+  assert.equal(owned.held(), 0);
+});
+
+test("Bot-tagged chats in the Assistant workspace still report not found", async () => {
+  const assistantBot = fixture({
+    device: {
+      capabilities: ["chat:read", "tasks:read", "agents:read", "bot:read"],
+      acceptsProgressCapabilities: true,
+    },
+    metadata: [{ ...meta, workspaceId: "assistant", botId: "bot-1" }],
+    authorizeBot: async () => true,
+  });
+  await assert.rejects(assistantBot.authorize("device-1", "chat-1", "tasks:read"), notFound);
 });
