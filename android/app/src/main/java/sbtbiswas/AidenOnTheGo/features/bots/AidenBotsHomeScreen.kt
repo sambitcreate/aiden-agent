@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -29,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -36,9 +36,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
@@ -46,6 +50,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import java.time.Instant
 import java.time.ZoneId
@@ -134,14 +139,15 @@ fun aidenBotRowTime(
     instant: Instant,
     now: Instant = Instant.now(),
     zone: ZoneId = ZoneId.systemDefault(),
-    locale: Locale = Locale.getDefault()
+    locale: Locale = Locale.getDefault(),
+    yesterday: String = "Yesterday"
 ): String {
     val day = instant.atZone(zone).toLocalDate()
     val today = now.atZone(zone).toLocalDate()
     val daysAgo = ChronoUnit.DAYS.between(day, today)
     val pattern = when {
         daysAgo <= 0L -> "h:mm a"
-        daysAgo == 1L -> return "Yesterday"
+        daysAgo == 1L -> return yesterday
         daysAgo < 7L -> "EEEE"
         day.year == today.year -> "MMM d"
         else -> "MMM d, yyyy"
@@ -150,7 +156,7 @@ fun aidenBotRowTime(
 }
 
 @Composable
-private fun AidenBotSkeletonBlock(width: Dp?, height: Dp, radius: Dp, reduceMotion: Boolean) {
+private fun AidenBotSkeletonBlock(width: Dp?, height: Dp, shape: Shape, reduceMotion: Boolean) {
     val palette = AidenTheme.palette
     val brush = if (!reduceMotion) {
         val shimmer by rememberInfiniteTransition(label = "bot_home_shimmer").animateFloat(
@@ -171,7 +177,7 @@ private fun AidenBotSkeletonBlock(width: Dp?, height: Dp, radius: Dp, reduceMoti
         Modifier
             .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
             .height(height)
-            .clip(RoundedCornerShape(radius))
+            .clip(shape)
             .background(brush)
     )
 }
@@ -185,10 +191,10 @@ private fun AidenBotHomeSkeleton(reduceMotion: Boolean) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                AidenBotSkeletonBlock(52.dp, 52.dp, 26.dp, reduceMotion)
+                AidenBotSkeletonBlock(52.dp, 52.dp, CircleShape, reduceMotion)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AidenBotSkeletonBlock(if (index % 2 == 0) 120.dp else 96.dp, 15.dp, 7.dp, reduceMotion)
-                    AidenBotSkeletonBlock(null, 12.dp, 6.dp, reduceMotion)
+                    AidenBotSkeletonBlock(if (index % 2 == 0) 120.dp else 96.dp, 15.dp, MaterialTheme.shapes.small, reduceMotion)
+                    AidenBotSkeletonBlock(null, 12.dp, MaterialTheme.shapes.small, reduceMotion)
                 }
             }
         }
@@ -227,6 +233,8 @@ fun AidenBotsHomeScreen(
     LaunchedEffect(client, connectionState) {
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.loadBots()
     }
+    // Coming back to the app rereads stale Bots underneath what is already shown.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.revalidate() }
 
     val allBots = botList?.bots.orEmpty()
     val rows = remember(allBots, conversations, searchQuery, remoteSearchResults) {
@@ -269,7 +277,7 @@ fun AidenBotsHomeScreen(
     }
 
     LazyColumn(
-        modifier = modifier.fillMaxSize().background(palette.canvas),
+        modifier = modifier.fillMaxSize().background(palette.canvas).aidenReadableWidth(),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
         if (contentState != AidenBotsHomeContentState.EMPTY && contentState != AidenBotsHomeContentState.LOADING) {
@@ -285,13 +293,13 @@ fun AidenBotsHomeScreen(
             item(key = "offline") {
                 Surface(
                     color = palette.raised,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = AidenUi.ScreenGutter, vertical = 4.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                         Icon(Icons.Default.WifiOff, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Offline. Showing your saved Bots.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                        Text(stringResource(R.string.bots_offline), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                     }
                 }
             }
@@ -301,10 +309,10 @@ fun AidenBotsHomeScreen(
             AidenBotsHomeContentState.ERROR -> item(key = "error") {
                 AidenEmptyState(
                     icon = Icons.Default.WifiOff,
-                    title = "Bots couldn’t load",
-                    body = "Make sure your Mac is on and nearby, then try again.",
+                    title = stringResource(R.string.bots_load_failed_title),
+                    body = stringResource(R.string.bots_load_failed_body),
                     modifier = Modifier.padding(top = 36.dp),
-                    action = { AidenPrimaryButton(text = "Try Again", onClick = { viewModel.loadBots(force = true) }) }
+                    action = { AidenPrimaryButton(text = stringResource(R.string.action_try_again), onClick = { viewModel.loadBots(force = true) }) }
                 )
             }
             AidenBotsHomeContentState.EMPTY -> item(key = "empty") {
@@ -329,12 +337,12 @@ fun AidenBotsHomeScreen(
                 }
                 AidenEmptyState(
                     icon = Icons.Default.SmartToy,
-                    title = if (connected) "Make your first Bot" else "No saved Bots",
-                    body = if (connected) "A Bot is a helper with its own chat. Give it a name and tell it what to help with."
-                    else "Connect to your Mac to see your Bots.",
+                    title = if (connected) stringResource(R.string.bots_empty_title) else stringResource(R.string.bots_empty_offline_title),
+                    body = if (connected) stringResource(R.string.bots_empty_body)
+                    else stringResource(R.string.bots_empty_offline_body),
                     modifier = Modifier.padding(top = 36.dp),
                     action = if (connected) {
-                        { AidenPrimaryButton(text = "New Bot", onClick = onNavigateToCreateBot) }
+                        { AidenPrimaryButton(text = stringResource(R.string.bots_new), onClick = onNavigateToCreateBot) }
                     } else null
                 )
             }
@@ -345,7 +353,7 @@ fun AidenBotsHomeScreen(
                 ) {
                     Icon(Icons.Default.SearchOff, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(40.dp))
                     Spacer(Modifier.height(12.dp))
-                    Text("No Bots match “${searchQuery.trim()}”", style = MaterialTheme.typography.titleMedium, color = palette.secondary)
+                    Text(stringResource(R.string.bots_no_results, searchQuery.trim()), style = MaterialTheme.typography.titleMedium, color = palette.secondary)
                 }
             }
             AidenBotsHomeContentState.CONTENT -> items(rows, key = { it.bot.id }) { row ->
@@ -381,7 +389,7 @@ fun AidenBotsHomeScreen(
         AlertDialog(
             onDismissRequest = { deleteError = null },
             text = { Text(message) },
-            confirmButton = { TextButton(onClick = { deleteError = null }) { Text("OK", color = palette.accent) } },
+            confirmButton = { TextButton(onClick = { deleteError = null }) { Text(stringResource(R.string.action_ok), color = palette.accent) } },
             containerColor = palette.raised
         )
     }
@@ -390,8 +398,9 @@ fun AidenBotsHomeScreen(
 @Composable
 private fun AidenBotSearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
     val palette = AidenTheme.palette
+    val searchLabel = stringResource(R.string.bots_search_placeholder)
     Surface(
-        shape = RoundedCornerShape(22.dp),
+        shape = MaterialTheme.shapes.extraLarge,
         color = palette.raised,
         modifier = modifier.fillMaxWidth().height(44.dp)
     ) {
@@ -400,7 +409,7 @@ private fun AidenBotSearchField(query: String, onQueryChange: (String) -> Unit, 
             Spacer(Modifier.width(8.dp))
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                 if (query.isEmpty()) {
-                    Text("Search Bots", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                    Text(searchLabel, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                 }
                 BasicTextField(
                     value = query,
@@ -408,12 +417,12 @@ private fun AidenBotSearchField(query: String, onQueryChange: (String) -> Unit, 
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.foreground),
                     cursorBrush = SolidColor(palette.accent),
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Search Bots" }
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = searchLabel }
                 )
             }
             if (query.isNotEmpty()) {
                 IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(AidenUi.MinimumTouchTarget)) {
-                    Icon(Icons.Default.Close, contentDescription = "Clear search", tint = palette.secondary, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_clear_search), tint = palette.secondary, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -432,17 +441,18 @@ private fun AidenBotHomeRowView(
 ) {
     val palette = AidenTheme.palette
     var menuOpen by remember { mutableStateOf(false) }
+    val workingLabel = stringResource(R.string.bots_status_working)
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .clip(MaterialTheme.shapes.large)
                 .combinedClickable(
                     role = Role.Button,
-                    onClickLabel = "Open chat",
-                    onLongClickLabel = "More options",
+                    onClickLabel = stringResource(R.string.bots_row_open_chat),
+                    onLongClickLabel = stringResource(R.string.action_more_options),
                     onClick = onOpen,
                     onLongClick = { menuOpen = true }
                 )
@@ -466,7 +476,7 @@ private fun AidenBotHomeRowView(
                             .padding(2.dp)
                             .clip(CircleShape)
                             .background(palette.success)
-                            .semantics { contentDescription = "Working" }
+                            .semantics { contentDescription = workingLabel }
                     )
                 }
             }
@@ -487,7 +497,7 @@ private fun AidenBotHomeRowView(
                             Spacer(Modifier.width(8.dp))
                             Surface(
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                shape = RoundedCornerShape(8.dp),
+                                shape = MaterialTheme.shapes.small,
                                 modifier = Modifier.weight(1f, fill = false)
                             ) {
                                 Text(
@@ -503,7 +513,7 @@ private fun AidenBotHomeRowView(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = aidenBotRowTime(row.updatedAt),
+                        text = aidenBotRowTime(row.updatedAt, yesterday = stringResource(R.string.bots_row_yesterday)),
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.secondary
                     )
@@ -524,7 +534,7 @@ private fun AidenBotHomeRowView(
             containerColor = palette.raised
         ) {
             DropdownMenuItem(
-                text = { Text("Profile") },
+                text = { Text(stringResource(R.string.bot_menu_profile)) },
                 leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                 onClick = {
                     menuOpen = false
@@ -533,7 +543,7 @@ private fun AidenBotHomeRowView(
             )
             if (canDelete) {
                 DropdownMenuItem(
-                    text = { Text("Delete", color = palette.danger) },
+                    text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                     onClick = {
                         menuOpen = false

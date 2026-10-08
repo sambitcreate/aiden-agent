@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
@@ -15,22 +14,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.AidenBotPreset
 import sbtbiswas.AidenOnTheGo.models.AidenBotSemanticAvatar
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
-
-object AidenBotPresetCopy {
-    const val TITLE = "Meet Your First Bot"
-    const val START_CHAT = "Start Chat"
-    const val CREATE_MY_OWN = "Create My Own"
-}
 
 /** Empty Bots home: a paged carousel of starter Bots with Start Chat and Create My Own. */
 @Composable
@@ -45,7 +40,7 @@ fun AidenMeetYourFirstBot(
     val pager = rememberPagerState { presets.size }
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
-            AidenBotPresetCopy.TITLE,
+            stringResource(R.string.bot_presets_title),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.SemiBold,
             color = palette.foreground
@@ -77,13 +72,13 @@ fun AidenMeetYourFirstBot(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             AidenPrimaryButton(
-                text = AidenBotPresetCopy.START_CHAT,
+                text = stringResource(R.string.bot_presets_start_chat),
                 enabled = current != null && startingPresetId == null,
                 onClick = { current?.let(onStartChat) },
                 modifier = Modifier.fillMaxWidth()
             )
             AidenTonalButton(
-                text = AidenBotPresetCopy.CREATE_MY_OWN,
+                text = stringResource(R.string.bot_presets_create_my_own),
                 onClick = onCreateMyOwn,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -94,7 +89,7 @@ fun AidenMeetYourFirstBot(
 @Composable
 private fun AidenBotPresetCard(preset: AidenBotPreset) {
     val palette = AidenTheme.palette
-    Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(20.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -120,7 +115,7 @@ private fun AidenBotPresetCard(preset: AidenBotPreset) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Schedule, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("${routine.name} · ${routine.label}", style = MaterialTheme.typography.labelMedium, color = palette.secondary)
+                    Text(stringResource(R.string.bot_presets_routine, routine.name, routine.label), style = MaterialTheme.typography.labelMedium, color = palette.secondary)
                 }
             }
         }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -15,6 +16,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.*
 
 /**
@@ -70,11 +72,12 @@ fun AidenBotSemanticAvatarView(
 ) {
     val presentation = aidenBotAvatarPresentation(avatar)
     val fill = AidenBotAvatarColors.swatch(presentation.color)
+    val avatarLabel = if (name.isNotEmpty()) stringResource(R.string.bots_avatar_cd, name) else null
 
     Box(
         modifier = modifier
             .size(size)
-            .semantics { if (name.isNotEmpty()) contentDescription = "$name avatar" }
+            .semantics { if (avatarLabel != null) contentDescription = avatarLabel }
     ) {
         Canvas(modifier = Modifier.matchParentSize()) {
             val w = this.size.width

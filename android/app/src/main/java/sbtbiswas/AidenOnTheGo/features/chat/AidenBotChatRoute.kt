@@ -8,8 +8,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotSessionScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
@@ -58,8 +60,11 @@ fun AidenBotChatRoute(
     var failed by remember(botId) { mutableStateOf(false) }
     LaunchedEffect(botId, client) {
         val cl = client ?: return@LaunchedEffect
+        // The pairing this read belongs to; a removed or switched pairing never gets it back.
+        val requestInstance = coordinator.activeInstanceId
         try {
             val page = cl.botConversations(botId = botId)
+            if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@LaunchedEffect
             chatId = aidenCanonicalBotConversations(page.conversations).firstOrNull { it.botId == botId }?.chatId
                 ?: cl.createBotChat(botId).id
         } catch (e: CancellationException) {
@@ -86,7 +91,7 @@ fun AidenBotChatRoute(
     } else {
         Box(Modifier.fillMaxSize().background(palette.canvas), contentAlignment = Alignment.Center) {
             if (failed) {
-                Text("Aiden couldn’t open this Bot’s chat. Try again.", color = palette.secondary)
+                Text(stringResource(R.string.bot_chat_open_failed), color = palette.secondary)
             } else {
                 CircularProgressIndicator(color = palette.accent)
             }

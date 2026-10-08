@@ -10,7 +10,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -18,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.HideImage
@@ -33,6 +33,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -45,10 +48,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 
 /**
  * The patch that saves an inline name or subtitle edit, or null when nothing changed or
@@ -95,6 +104,7 @@ fun AidenBotProfileScreen(
     onBotDeleted: () -> Unit = onNavigateBack
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -103,7 +113,9 @@ fun AidenBotProfileScreen(
     val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
 
     var bot by remember(botId) { mutableStateOf(coordinator.botCache.getBotDetail(botId)) }
-    var isLoading by remember(botId) { mutableStateOf(bot == null) }
+    var isLoading by remember(botId) { mutableStateOf(false) }
+    // Bumped by Try Again to rerun the read.
+    var readAttempt by remember(botId) { mutableIntStateOf(0) }
     var loadFailed by remember(botId) { mutableStateOf(false) }
     var nameText by remember(botId) { mutableStateOf(bot?.name.orEmpty()) }
     var subtitleText by remember(botId) { mutableStateOf(bot?.purpose.orEmpty()) }
@@ -127,13 +139,18 @@ fun AidenBotProfileScreen(
         onBotMutated()
     }
 
-    LaunchedEffect(client, botId, connectionState) {
+    LaunchedEffect(client, botId, connectionState, readAttempt) {
         val cl = client ?: run {
             isLoading = false
             return@LaunchedEffect
         }
+        // The pairing this read belongs to; a removed or switched pairing never gets it back.
+        val requestInstance = coordinator.activeInstanceId
+        isLoading = true
+        loadFailed = false
         try {
             val fresh = cl.bot(botId)
+            if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@LaunchedEffect
             bot = fresh
             nameText = fresh.name
             subtitleText = fresh.purpose
@@ -156,7 +173,7 @@ fun AidenBotProfileScreen(
             return
         }
         val cl = client ?: run {
-            actionError = "Connect to your Mac to save changes."
+            actionError = resources.getString(R.string.bot_profile_connect_to_save)
             return
         }
         scope.launch {
@@ -166,7 +183,7 @@ fun AidenBotProfileScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                actionError = "Aiden couldn’t save. Try again."
+                actionError = resources.getString(R.string.bot_save_failed)
             }
         }
     }
@@ -175,7 +192,7 @@ fun AidenBotProfileScreen(
         val current = bot ?: return
         val patch = aidenBotCharacterPatch(current, recipe) ?: return
         val cl = client ?: run {
-            actionError = "Connect to your Mac to save changes."
+            actionError = resources.getString(R.string.bot_profile_connect_to_save)
             return
         }
         // Show the new look right away; roll back if the Mac says no.
@@ -189,7 +206,7 @@ fun AidenBotProfileScreen(
                 throw e
             } catch (_: Exception) {
                 bot = current
-                actionError = "Aiden couldn’t save the new look. Try again."
+                actionError = resources.getString(R.string.bot_profile_character_save_failed)
             } finally {
                 isSavingCharacter = false
             }
@@ -226,17 +243,17 @@ fun AidenBotProfileScreen(
                 title = {},
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
                     Box {
                         IconButton(onClick = { showMenu = true }, enabled = bot != null) {
-                            Icon(Icons.Default.MoreHoriz, contentDescription = "More options", tint = palette.foreground)
+                            Icon(Icons.Default.MoreHoriz, contentDescription = stringResource(R.string.action_more_options), tint = palette.foreground)
                         }
                         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = palette.raised) {
                             DropdownMenuItem(
-                                text = { Text("Advanced") },
+                                text = { Text(stringResource(R.string.bot_advanced_title)) },
                                 leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
                                 onClick = {
                                     showMenu = false
@@ -245,7 +262,7 @@ fun AidenBotProfileScreen(
                             )
                             if (canDelete) {
                                 DropdownMenuItem(
-                                    text = { Text("Delete Bot", color = palette.danger) },
+                                    text = { Text(stringResource(R.string.bot_delete_confirm), color = palette.danger) },
                                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                                     onClick = {
                                         showMenu = false
@@ -261,31 +278,41 @@ fun AidenBotProfileScreen(
         }
     ) { padding ->
         val current = bot
+        val presentation = AidenReadPresentation.of(
+            hasContent = current != null,
+            isFetching = isLoading,
+            hasSettled = loadFailed || client == null,
+            failed = loadFailed
+        )
         when {
-            current == null && isLoading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = palette.accent)
-            }
-            current == null -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text(
-                    if (loadFailed) "Aiden couldn’t load this Bot." else "Connect to your Mac to see this Bot.",
-                    color = palette.secondary
-                )
-            }
+            current == null && presentation == AidenReadPresentation.SKELETON -> AidenBotProfileSkeleton(Modifier.padding(padding))
+            current == null -> AidenEmptyState(
+                icon = Icons.Default.CloudOff,
+                title = stringResource(R.string.bot_profile_unavailable_title),
+                body = if (client == null) stringResource(R.string.bot_profile_unavailable_connect) else stringResource(R.string.bot_profile_unavailable_failed),
+                modifier = Modifier.fillMaxSize().padding(padding),
+                action = if (client != null) {
+                    { AidenTonalButton(text = stringResource(R.string.action_try_again), onClick = { readAttempt += 1 }) }
+                } else null
+            )
             else -> Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .aidenReadableWidth()
                     .imePadding()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
+                val changePhotoLabel = stringResource(R.string.bot_profile_change_photo)
+                val photoOptionsLabel = stringResource(R.string.bot_profile_photo_options)
                 Box {
                     Box(
                         Modifier
                             .clip(CircleShape)
-                            .clickable(onClickLabel = "Change photo") { showPhotoMenu = true }
+                            .clickable(onClickLabel = changePhotoLabel) { showPhotoMenu = true }
                     ) {
                         AidenBotCanonicalAvatarView(
                             coordinator = coordinator,
@@ -302,7 +329,7 @@ fun AidenBotProfileScreen(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .size(36.dp)
-                            .semantics { contentDescription = "Photo options" }
+                            .semantics { contentDescription = photoOptionsLabel }
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
@@ -310,7 +337,7 @@ fun AidenBotProfileScreen(
                     }
                     DropdownMenu(expanded = showPhotoMenu, onDismissRequest = { showPhotoMenu = false }, containerColor = palette.raised) {
                         DropdownMenuItem(
-                            text = { Text("Choose from Gallery") },
+                            text = { Text(stringResource(R.string.bot_profile_choose_photo)) },
                             leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
                             onClick = {
                                 showPhotoMenu = false
@@ -319,7 +346,7 @@ fun AidenBotProfileScreen(
                         )
                         if (current.avatar.asset != null) {
                             DropdownMenuItem(
-                                text = { Text("Remove photo") },
+                                text = { Text(stringResource(R.string.bot_profile_remove_photo)) },
                                 leadingIcon = { Icon(Icons.Default.HideImage, contentDescription = null) },
                                 onClick = {
                                     showPhotoMenu = false
@@ -338,12 +365,12 @@ fun AidenBotProfileScreen(
                 }
                 photoError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
 
-                Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
                     Column {
                         AidenBotInlineField(
                             value = nameText,
                             onValueChange = { nameText = it.take(AidenBotWire.MAX_NAME_LENGTH) },
-                            placeholder = "Name",
+                            placeholder = stringResource(R.string.bot_field_name),
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold, color = palette.foreground),
                             onCommit = { saveText() },
                             onDone = { focusManager.clearFocus() }
@@ -352,7 +379,7 @@ fun AidenBotProfileScreen(
                         AidenBotInlineField(
                             value = subtitleText,
                             onValueChange = { subtitleText = it.take(AidenBotWire.MAX_PURPOSE_LENGTH) },
-                            placeholder = "What it helps with",
+                            placeholder = stringResource(R.string.bot_profile_subtitle_placeholder),
                             style = MaterialTheme.typography.bodyLarge.copy(color = palette.secondary),
                             onCommit = { saveText() },
                             onDone = { focusManager.clearFocus() }
@@ -369,7 +396,7 @@ fun AidenBotProfileScreen(
                 Surface(
                     onClick = { onNavigateToEditBot(current.id) },
                     color = palette.raised,
-                    shape = RoundedCornerShape(20.dp),
+                    shape = MaterialTheme.shapes.large,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -378,7 +405,7 @@ fun AidenBotProfileScreen(
                     ) {
                         Icon(Icons.Default.Description, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("Instructions", style = MaterialTheme.typography.bodyLarge, color = palette.foreground, modifier = Modifier.weight(1f))
+                        Text(stringResource(R.string.bot_profile_instructions), style = MaterialTheme.typography.bodyLarge, color = palette.foreground, modifier = Modifier.weight(1f))
                         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
                     }
                 }
@@ -415,7 +442,7 @@ fun AidenBotProfileScreen(
                 val deleter = botDeleter
                 if (cl == null || deleter == null) {
                     confirmingDelete = false
-                    actionError = "Connect to your Mac to delete this Bot."
+                    actionError = resources.getString(R.string.bot_delete_connect)
                     return@AidenBotDeleteDialog
                 }
                 scope.launch {
@@ -429,13 +456,33 @@ fun AidenBotProfileScreen(
                         throw e
                     } catch (_: Exception) {
                         confirmingDelete = false
-                        actionError = "Aiden couldn’t delete this Bot. Try again."
+                        actionError = resources.getString(R.string.bot_delete_failed)
                     } finally {
                         isDeleting = false
                     }
                 }
             }
         )
+    }
+}
+
+/** Profile-shaped placeholders for a Bot opened with nothing saved on this phone. */
+@Composable
+private fun AidenBotProfileSkeleton(modifier: Modifier = Modifier) {
+    val loadingDescription = stringResource(R.string.bot_profile_loading)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .aidenReadableWidth()
+            .padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
+            .clearAndSetSemantics { contentDescription = loadingDescription }
+    ) {
+        AidenSkeletonBlock(width = 120.dp, height = 120.dp, shape = CircleShape)
+        AidenSkeletonBlock(height = 112.dp, shape = MaterialTheme.shapes.large)
+        AidenSkeletonBlock(height = 160.dp, shape = MaterialTheme.shapes.large)
+        AidenSkeletonBlock(height = 56.dp, shape = MaterialTheme.shapes.large)
     }
 }
 

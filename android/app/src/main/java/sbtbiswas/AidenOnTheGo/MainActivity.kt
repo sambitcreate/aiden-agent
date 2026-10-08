@@ -16,7 +16,9 @@ import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
 import sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter
 import sbtbiswas.AidenOnTheGo.features.chat.AidenBotChatRoute
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatDetailScreen
-import sbtbiswas.AidenOnTheGo.features.remote.AidenProductShellScreen
+import sbtbiswas.AidenOnTheGo.features.remote.AidenInstallationsScreen
+import sbtbiswas.AidenOnTheGo.features.remote.AidenPairDesktopScreen
+import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsDestination
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenGitScreen
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceEnvironmentScreen
 import sbtbiswas.AidenOnTheGo.models.AidenBotDeepLinkResolution
@@ -47,6 +49,7 @@ class MainActivity : ComponentActivity() {
         val navigationStore = container.navigationStore
         val appearanceStore = container.appearanceStore
         val voiceInputStore = container.voiceInputStore
+        val settingsStore = container.settingsStore
         val liveNotificationManager = container.liveNotificationManager
         val networkAvailability = container.networkAvailability
         val coordinator = container.coordinator
@@ -199,7 +202,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     AidenNavigationHost(
                         navigator = navigator,
-                        reduceMotion = appearanceConfig.reduceMotion
+                        reduceMotion = sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion()
                     ) { screen ->
                         when (screen) {
                             is AidenScreen.ProductShell -> {
@@ -208,15 +211,15 @@ class MainActivity : ComponentActivity() {
                                     navigationStore = navigationStore,
                                     installationStore = installationStore,
                                     chatCache = chatCache,
-                                    appearanceStore = appearanceStore,
-                                    voiceInputStore = voiceInputStore,
                                     botsViewModel = botsViewModel,
-                                    onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
+                                    onNavigateToChat = { chatId -> navigator.openFromShell(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateToBotProfile = { botId -> push(AidenScreen.BotProfile(botId)) },
                                     onNavigateToBotChat = { botId -> push(AidenScreen.BotChat(botId)) },
                                     onNavigateToBotEditor = { botId -> push(AidenScreen.BotEditor(botId)) },
                                     onNavigateToWorkspaceFiles = { wsId -> push(AidenScreen.WorkspaceFiles(wsId)) },
-                                    onNavigateToWorkspaceGit = { wsId -> push(AidenScreen.WorkspaceGit(wsId)) }
+                                    onNavigateToWorkspaceGit = { wsId -> push(AidenScreen.WorkspaceGit(wsId)) },
+                                    onOpenSettings = { push(AidenScreen.Settings()) },
+                                    onOpenInstallations = { push(AidenScreen.Installations) }
                                 )
                             }
                             is AidenScreen.ChatDetail -> {
@@ -298,6 +301,34 @@ class MainActivity : ComponentActivity() {
                                 AidenGitScreen(
                                     workspaceId = screen.workspaceId,
                                     coordinator = coordinator,
+                                    onNavigateBack = navigator::back
+                                )
+                            }
+                            is AidenScreen.Settings -> {
+                                AidenSettingsDestination(
+                                    page = screen.page,
+                                    settingsStore = settingsStore,
+                                    appearanceStore = appearanceStore,
+                                    voiceInputStore = voiceInputStore,
+                                    installationStore = installationStore,
+                                    onNavigate = { page -> push(AidenScreen.Settings(page)) },
+                                    onOpenInstallations = { push(AidenScreen.Installations) },
+                                    onNavigateBack = navigator::back
+                                )
+                            }
+                            AidenScreen.Installations -> {
+                                AidenInstallationsScreen(
+                                    coordinator = coordinator,
+                                    installationStore = installationStore,
+                                    onPairDesktop = { push(AidenScreen.PairDesktop) },
+                                    onNavigateBack = navigator::back
+                                )
+                            }
+                            AidenScreen.PairDesktop -> {
+                                AidenPairDesktopScreen(
+                                    coordinator = coordinator,
+                                    firstRun = false,
+                                    onPaired = navigator::back,
                                     onNavigateBack = navigator::back
                                 )
                             }

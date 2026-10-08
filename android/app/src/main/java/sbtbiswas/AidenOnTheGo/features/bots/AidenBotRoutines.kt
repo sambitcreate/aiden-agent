@@ -2,7 +2,6 @@ package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -11,7 +10,10 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.annotation.StringRes
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -20,6 +22,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
@@ -37,16 +40,24 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 /** The routine editor's first choice. */
-enum class AidenBotRoutineFrequency(val label: String) {
-    ONCE("Once"),
-    DAILY("Every day"),
-    WEEKDAYS("Weekdays"),
-    WEEKLY("Weekly"),
-    MONTHLY("Monthly")
+enum class AidenBotRoutineFrequency(@StringRes val label: Int) {
+    ONCE(R.string.bot_routine_once),
+    DAILY(R.string.bot_routine_daily),
+    WEEKDAYS(R.string.bot_routine_weekdays),
+    WEEKLY(R.string.bot_routine_weekly),
+    MONTHLY(R.string.bot_routine_monthly)
 }
 
 /** Sunday-first short day names; the index is the wire day (Sunday = 0). */
-val AIDEN_BOT_ROUTINE_DAY_LABELS = listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+val AIDEN_BOT_ROUTINE_DAY_LABELS = listOf(
+    R.string.bot_routine_day_sun,
+    R.string.bot_routine_day_mon,
+    R.string.bot_routine_day_tue,
+    R.string.bot_routine_day_wed,
+    R.string.bot_routine_day_thu,
+    R.string.bot_routine_day_fri,
+    R.string.bot_routine_day_sat
+)
 
 /** Editable form of one routine, frequency first. */
 data class AidenBotRoutineDraft(
@@ -146,6 +157,7 @@ fun aidenBotRoutineWriteFailure(error: Exception, fallback: String): AidenBotRou
 @Composable
 fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var routines by remember(botId) { mutableStateOf<List<AidenBotRoutine>?>(null) }
     var error by remember(botId) { mutableStateOf<String?>(null) }
@@ -163,7 +175,7 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            error = "Aiden couldn’t load routines."
+            error = resources.getString(R.string.bot_routines_load_failed)
         }
     }
 
@@ -177,11 +189,12 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
     }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Routines", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = palette.secondary, modifier = Modifier.padding(horizontal = 4.dp))
-        Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.bot_routines_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = palette.secondary, modifier = Modifier.padding(horizontal = 4.dp))
+        Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
             Column {
                 routines.orEmpty().forEachIndexed { index, routine ->
                     if (index > 0) HorizontalDivider(color = palette.canvas, modifier = Modifier.padding(start = 16.dp))
+                    val toggleLabel = stringResource(R.string.bot_routine_toggle_cd, routine.name)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 4.dp, end = 16.dp)
@@ -205,7 +218,7 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (e: Exception) {
-                                        val failure = aidenBotRoutineWriteFailure(e, "Aiden couldn’t update this routine. Try again.")
+                                        val failure = aidenBotRoutineWriteFailure(e, resources.getString(R.string.bot_routine_update_failed))
                                         error = failure.message
                                         if (failure.reload) reload(cl, keepError = true)
                                     } finally {
@@ -213,7 +226,7 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
                                     }
                                 }
                             },
-                            modifier = Modifier.semantics { contentDescription = "${routine.name} on" }
+                            modifier = Modifier.semantics { contentDescription = toggleLabel }
                         )
                     }
                 }
@@ -226,7 +239,7 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Add routine", color = palette.accent, modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.bot_routine_add), color = palette.accent, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -268,6 +281,7 @@ private fun AidenBotRoutineEditorDialog(
     onStale: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var draft by remember(routine?.id) { mutableStateOf(routine?.let(AidenBotRoutineDraft::from) ?: AidenBotRoutineDraft()) }
     var busy by remember { mutableStateOf(false) }
@@ -278,29 +292,31 @@ private fun AidenBotRoutineEditorDialog(
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text(if (routine == null) "New routine" else "Edit routine") },
+        title = { Text(if (routine == null) stringResource(R.string.bot_routine_new) else stringResource(R.string.bot_routine_edit)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 TextField(
                     value = draft.name,
                     onValueChange = { draft = draft.copy(name = it.take(AidenBotRoutineWire.MAX_NAME_LENGTH)) },
-                    placeholder = { Text("Name") },
+                    placeholder = { Text(stringResource(R.string.bot_field_name)) },
                     singleLine = true,
                     colors = aidenTextFieldColors(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.large,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("How often?", style = MaterialTheme.typography.labelLarge, color = palette.secondary)
+                Text(stringResource(R.string.bot_routine_how_often), style = MaterialTheme.typography.labelLarge, color = palette.secondary)
+                val frequencyLabels = AidenBotRoutineFrequency.entries.associateWith { stringResource(it.label) }
                 AidenSegmentedPillRow(
                     options = AidenBotRoutineFrequency.entries,
                     selected = draft.frequency,
-                    label = { it.label },
+                    label = { frequencyLabels.getValue(it) },
                     onSelect = { draft = draft.copy(frequency = it) }
                 )
                 when (draft.frequency) {
                     AidenBotRoutineFrequency.WEEKLY -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        AIDEN_BOT_ROUTINE_DAY_LABELS.forEachIndexed { day, label ->
+                        AIDEN_BOT_ROUTINE_DAY_LABELS.forEachIndexed { day, labelRes ->
+                            val label = stringResource(labelRes)
                             val selected = day in draft.weekdays
                             FilterChip(
                                 selected = selected,
@@ -314,14 +330,14 @@ private fun AidenBotRoutineEditorDialog(
                         }
                     }
                     AidenBotRoutineFrequency.MONTHLY -> AidenBotRoutineStepper(
-                        label = "Day of the month",
+                        label = stringResource(R.string.bot_routine_day_of_month),
                         value = draft.dayOfMonth,
                         range = 1..28,
                         format = { it.toString() },
                         onChange = { draft = draft.copy(dayOfMonth = it) }
                     )
                     AidenBotRoutineFrequency.ONCE -> AidenBotRoutineStepper(
-                        label = "Date",
+                        label = stringResource(R.string.bot_routine_date),
                         value = draft.date.toEpochDay().toInt(),
                         range = LocalDate.now().toEpochDay().toInt()..LocalDate.now().plusYears(2).toEpochDay().toInt(),
                         format = { LocalDate.ofEpochDay(it.toLong()).toString() },
@@ -330,27 +346,27 @@ private fun AidenBotRoutineEditorDialog(
                     else -> {}
                 }
                 AidenBotRoutineStepper(
-                    label = "Time",
+                    label = stringResource(R.string.bot_routine_time),
                     value = draft.hour * 60 + draft.minute,
                     range = 0..(23 * 60 + 45),
                     step = 15,
                     format = { "%02d:%02d".format(it / 60, it % 60) },
                     onChange = { draft = draft.copy(hour = it / 60, minute = it % 60) }
                 )
-                Text("What should it do?", style = MaterialTheme.typography.labelLarge, color = palette.secondary)
+                Text(stringResource(R.string.bot_routine_message_label), style = MaterialTheme.typography.labelLarge, color = palette.secondary)
                 TextField(
                     value = draft.message,
                     onValueChange = { draft = draft.copy(message = it.take(AidenBotRoutineWire.MAX_MESSAGE_LENGTH)) },
-                    placeholder = { Text("Give me a short brief for today") },
+                    placeholder = { Text(stringResource(R.string.bot_routine_message_placeholder)) },
                     minLines = 3,
                     colors = aidenTextFieldColors(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.large,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (routine != null) {
                     AidenTonalButton(
-                        text = "Delete routine",
+                        text = stringResource(R.string.bot_routine_delete),
                         destructive = true,
                         enabled = !busy,
                         onClick = {
@@ -362,7 +378,7 @@ private fun AidenBotRoutineEditorDialog(
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
-                                    val failure = aidenBotRoutineWriteFailure(e, "Aiden couldn’t delete this routine. Try again.")
+                                    val failure = aidenBotRoutineWriteFailure(e, resources.getString(R.string.bot_routine_delete_failed))
                                     error = failure.message
                                     if (failure.reload) onStale()
                                 } finally {
@@ -377,7 +393,7 @@ private fun AidenBotRoutineEditorDialog(
         },
         confirmButton = {
             AidenDialogConfirmButton(
-                text = if (busy) "Saving…" else "Save",
+                text = if (busy) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
                 enabled = !busy && draft.canSave,
                 onClick = {
                     busy = true
@@ -404,7 +420,7 @@ private fun AidenBotRoutineEditorDialog(
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            val failure = aidenBotRoutineWriteFailure(e, "Aiden couldn’t save this routine. Try again.")
+                            val failure = aidenBotRoutineWriteFailure(e, resources.getString(R.string.bot_routine_save_failed))
                             error = failure.message
                             if (failure.reload) onStale()
                         } finally {
@@ -433,11 +449,11 @@ private fun AidenBotRoutineStepper(
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground, modifier = Modifier.weight(1f))
         IconButton(onClick = { onChange((value - step).coerceIn(range)) }, enabled = value - step >= range.first) {
-            Icon(Icons.Default.Remove, contentDescription = "Earlier $label")
+            Icon(Icons.Default.Remove, contentDescription = stringResource(R.string.bot_routine_earlier_cd, label))
         }
         Text(format(value), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = palette.foreground)
         IconButton(onClick = { onChange((value + step).coerceIn(range)) }, enabled = value + step <= range.last) {
-            Icon(Icons.Default.Add, contentDescription = "Later $label")
+            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.bot_routine_later_cd, label))
         }
     }
 }

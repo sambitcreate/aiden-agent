@@ -18,7 +18,7 @@ test.describe("Simulator tab", () => {
     await expect(page.locator("#environment-devices-panel")).toHaveCount(0);
   });
 
-  test("is the last keyboard-reachable Environment tab, persists, and hides without the flag", async ({
+  test("is the last keyboard-reachable Environment tab, persists, and hides behind the kill switch", async ({
     aiden,
   }) => {
     test.skip(process.platform !== "darwin", "iOS Simulator devices are macOS-only");
@@ -71,7 +71,7 @@ test.describe("Simulator tab", () => {
     await expect(tab("Simulator")).toHaveAttribute("aria-selected", "true");
     await expect(page.locator("#environment-devices-panel")).toBeVisible();
 
-    page = await aiden.relaunch(undefined, {});
+    page = await aiden.relaunch(undefined, { AIDEN_EXPERIMENTAL_DEVICES: "0" });
     await expect(tools()).toBeVisible();
     await expect(tab("Simulator")).toHaveCount(0);
     await expect(page.locator("#environment-devices-panel")).toHaveCount(0);

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.HorizontalDivider
@@ -26,7 +25,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.annotation.StringRes
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
@@ -35,6 +36,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarColor
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarRecipe
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarShape
@@ -108,18 +110,32 @@ fun aidenBotCharacterPatch(bot: AidenBotDetail, next: AidenBotAvatarRecipe): Aid
     return AidenBotIdentityPatch(avatar = avatar)
 }
 
-fun aidenBotAvatarColorLabel(color: AidenBotAvatarColor): String =
-    color.name.lowercase().replaceFirstChar { it.uppercase() }
+@StringRes
+fun aidenBotAvatarColorLabel(color: AidenBotAvatarColor): Int = when (color) {
+    AidenBotAvatarColor.LILAC -> R.string.bot_color_lilac
+    AidenBotAvatarColor.SKY -> R.string.bot_color_sky
+    AidenBotAvatarColor.MINT -> R.string.bot_color_mint
+    AidenBotAvatarColor.SUN -> R.string.bot_color_sun
+    AidenBotAvatarColor.PERIWINKLE -> R.string.bot_color_periwinkle
+    AidenBotAvatarColor.CORAL -> R.string.bot_color_coral
+    AidenBotAvatarColor.PEACH -> R.string.bot_color_peach
+    AidenBotAvatarColor.AQUA -> R.string.bot_color_aqua
+    AidenBotAvatarColor.ROSE -> R.string.bot_color_rose
+    AidenBotAvatarColor.LIME -> R.string.bot_color_lime
+    AidenBotAvatarColor.PLUM -> R.string.bot_color_plum
+    AidenBotAvatarColor.GRAPHITE -> R.string.bot_color_graphite
+}
 
-fun aidenBotAvatarShapeLabel(shape: AidenBotAvatarShape): String = when (shape) {
-    AidenBotAvatarShape.ORB -> "Circle"
-    AidenBotAvatarShape.WISP -> "Wisp"
-    AidenBotAvatarShape.SQUIRCLE -> "Rounded square"
-    AidenBotAvatarShape.CAPSULE -> "Pill"
-    AidenBotAvatarShape.PEAK -> "Triangle"
-    AidenBotAvatarShape.HEX -> "Hexagon"
-    AidenBotAvatarShape.CLOUD -> "Cloud"
-    AidenBotAvatarShape.DROP -> "Drop"
+@StringRes
+fun aidenBotAvatarShapeLabel(shape: AidenBotAvatarShape): Int = when (shape) {
+    AidenBotAvatarShape.ORB -> R.string.bot_shape_orb
+    AidenBotAvatarShape.WISP -> R.string.bot_shape_wisp
+    AidenBotAvatarShape.SQUIRCLE -> R.string.bot_shape_squircle
+    AidenBotAvatarShape.CAPSULE -> R.string.bot_shape_capsule
+    AidenBotAvatarShape.PEAK -> R.string.bot_shape_peak
+    AidenBotAvatarShape.HEX -> R.string.bot_shape_hex
+    AidenBotAvatarShape.CLOUD -> R.string.bot_shape_cloud
+    AidenBotAvatarShape.DROP -> R.string.bot_shape_drop
 }
 
 object AidenBotCharacterTags {
@@ -141,14 +157,14 @@ fun AidenBotCharacterCard(
     val palette = AidenTheme.palette
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            text = "Character",
+            text = stringResource(R.string.bot_character_title),
             style = MaterialTheme.typography.labelLarge,
             color = palette.secondary,
             modifier = Modifier.padding(horizontal = 4.dp)
         )
         Surface(
             color = palette.raised,
-            shape = RoundedCornerShape(20.dp),
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
@@ -196,7 +212,7 @@ fun AidenBotCharacterCard(
                         .padding(horizontal = 4.dp)
                         .testTag(AidenBotCharacterTags.RESET)
                 ) {
-                    Text("Reset to default", color = palette.accent)
+                    Text(stringResource(R.string.bot_character_reset), color = palette.accent)
                 }
             }
         }
@@ -213,6 +229,7 @@ fun AidenBotColorSwatch(
     enabled: Boolean = true
 ) {
     val interaction = remember { MutableInteractionSource() }
+    val label = stringResource(aidenBotAvatarColorLabel(color))
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
@@ -228,7 +245,7 @@ fun AidenBotColorSwatch(
                 role = Role.RadioButton,
                 onClick = onClick
             )
-            .semantics { contentDescription = aidenBotAvatarColorLabel(color) }
+            .semantics { contentDescription = label }
     ) {
         if (selected) {
             Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
@@ -248,12 +265,13 @@ fun AidenBotShapeChoice(
 ) {
     val palette = AidenTheme.palette
     val interaction = remember { MutableInteractionSource() }
+    val label = stringResource(aidenBotAvatarShapeLabel(shape))
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .size(48.dp)
             .tactilePress(interaction)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(if (selected) palette.accent.copy(alpha = 0.14f) else Color.Transparent)
             .selectable(
                 selected = selected,
@@ -263,7 +281,7 @@ fun AidenBotShapeChoice(
                 role = Role.RadioButton,
                 onClick = onClick
             )
-            .semantics { contentDescription = aidenBotAvatarShapeLabel(shape) }
+            .semantics { contentDescription = label }
     ) {
         Canvas(modifier = Modifier.size(30.dp)) {
             drawPath(aidenBotShapePath(shape, size.width, size.height), color = color)

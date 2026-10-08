@@ -2,7 +2,6 @@ package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -11,17 +10,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import java.util.UUID
 
@@ -95,7 +98,7 @@ private fun AidenBotEditorScaffold(
                 title = { Text(title, fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
@@ -114,6 +117,7 @@ private fun AidenBotEditorScaffold(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .aidenReadableWidth()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = AidenUi.ScreenGutter, vertical = 12.dp),
@@ -130,6 +134,7 @@ private fun AidenBotCreateScreen(
     onBotSaved: (String) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf(AidenBotCreateDraft()) }
@@ -139,8 +144,8 @@ private fun AidenBotCreateScreen(
     val botKey = remember { UUID.randomUUID() }
 
     AidenBotEditorScaffold(
-        title = "New Bot",
-        actionLabel = if (isSaving) "Creating…" else "Create",
+        title = stringResource(R.string.bot_editor_new_title),
+        actionLabel = if (isSaving) stringResource(R.string.bot_editor_creating) else stringResource(R.string.action_create),
         actionEnabled = !isSaving && client != null && draft.request() != null,
         onNavigateBack = onNavigateBack,
         onAction = {
@@ -156,7 +161,7 @@ private fun AidenBotCreateScreen(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
-                    error = "Aiden couldn’t create this Bot. Try again."
+                    error = resources.getString(R.string.bot_editor_create_failed)
                 } finally {
                     isSaving = false
                 }
@@ -170,21 +175,21 @@ private fun AidenBotCreateScreen(
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
         AidenBotLabeledField(
-            label = "Name",
+            label = stringResource(R.string.bot_field_name),
             value = draft.name,
             onValueChange = { draft = draft.copy(name = it.take(AidenBotWire.MAX_NAME_LENGTH)) },
-            placeholder = "Like Meal Planner or Chief of Staff",
+            placeholder = stringResource(R.string.bot_editor_name_placeholder),
             singleLine = true
         )
         AidenBotLabeledField(
-            label = "What should it help with?",
+            label = stringResource(R.string.bot_editor_help_label),
             value = draft.help,
             onValueChange = { draft = draft.copy(help = it.take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH)) },
-            placeholder = "Plan my meals and make a grocery list every week",
+            placeholder = stringResource(R.string.bot_editor_help_placeholder),
             singleLine = false
         )
         Text(
-            text = "You can change its look, instructions and what it can use later.",
+            text = stringResource(R.string.bot_editor_later_hint),
             style = MaterialTheme.typography.bodySmall,
             color = palette.secondary
         )
@@ -200,6 +205,7 @@ private fun AidenBotInstructionsEditorScreen(
     onBotSaved: (String) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
     var bot by remember { mutableStateOf<AidenBotDetail?>(coordinator.botCache.getBotDetail(botId)) }
@@ -210,8 +216,11 @@ private fun AidenBotInstructionsEditorScreen(
 
     LaunchedEffect(botId, client) {
         val cl = client ?: return@LaunchedEffect
+        // The pairing this read belongs to; a removed or switched pairing never gets it back.
+        val requestInstance = coordinator.activeInstanceId
         try {
             val fresh = cl.bot(botId)
+            if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@LaunchedEffect
             // Keep what the person already typed; only fill an untouched editor.
             if (!loaded || text == bot?.instructions) text = fresh.instructions
             bot = fresh
@@ -219,15 +228,15 @@ private fun AidenBotInstructionsEditorScreen(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            if (!loaded) error = "Aiden couldn’t load the instructions. Try again."
+            if (!loaded) error = resources.getString(R.string.bot_editor_instructions_load_failed)
         }
     }
 
     val current = bot
     val trimmed = text.trim()
     AidenBotEditorScaffold(
-        title = "Instructions",
-        actionLabel = if (isSaving) "Saving…" else "Save",
+        title = stringResource(R.string.bot_profile_instructions),
+        actionLabel = if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
         actionEnabled = !isSaving && current != null && trimmed.isNotEmpty(),
         onNavigateBack = onNavigateBack,
         onAction = {
@@ -247,7 +256,7 @@ private fun AidenBotInstructionsEditorScreen(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
-                    error = "Aiden couldn’t save. Try again."
+                    error = resources.getString(R.string.bot_save_failed)
                 } finally {
                     isSaving = false
                 }
@@ -258,9 +267,9 @@ private fun AidenBotInstructionsEditorScreen(
             value = text,
             onValueChange = { text = it.take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH) },
             enabled = loaded,
-            placeholder = { Text("Tell ${current?.name ?: "your Bot"} how to help you") },
+            placeholder = { Text(stringResource(R.string.bot_editor_instructions_placeholder, current?.name ?: stringResource(R.string.bot_name_fallback_your_bot))) },
             colors = aidenTextFieldColors(),
-            shape = RoundedCornerShape(20.dp),
+            shape = MaterialTheme.shapes.large,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             minLines = 8,
             modifier = Modifier.fillMaxWidth()
@@ -287,7 +296,7 @@ private fun AidenBotLabeledField(
             singleLine = singleLine,
             minLines = if (singleLine) 1 else 3,
             colors = aidenTextFieldColors(),
-            shape = RoundedCornerShape(16.dp),
+            shape = MaterialTheme.shapes.large,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             modifier = Modifier.fillMaxWidth()
         )

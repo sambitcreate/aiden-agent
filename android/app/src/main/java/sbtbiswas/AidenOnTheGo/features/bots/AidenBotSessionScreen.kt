@@ -23,6 +23,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -35,14 +38,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.chat.AidenQuestionCard
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import java.time.Instant
 
@@ -107,6 +113,7 @@ fun AidenBotSessionScreen(
     onBotDeleted: () -> Unit = onNavigateBack
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
     val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
@@ -116,7 +123,7 @@ fun AidenBotSessionScreen(
     val cl = client
     if (cl == null) {
         Box(Modifier.fillMaxSize().background(palette.canvas), contentAlignment = Alignment.Center) {
-            Text("Connect to your Mac to open this chat.", color = palette.secondary)
+            Text(stringResource(R.string.bot_session_connect), color = palette.secondary)
         }
         return
     }
@@ -145,7 +152,7 @@ fun AidenBotSessionScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                coordinator.presentError("Aiden couldn’t reach your Mac. Try again.")
+                coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
             } finally {
                 openingAdvanced = false
             }
@@ -161,14 +168,14 @@ fun AidenBotSessionScreen(
             try {
                 val chatId = aidenBotFilesChatId(botId, cl.botConversations(botId = botId).conversations)
                 if (chatId == null) {
-                    coordinator.presentError(AidenBotSessionCopy.FILES_UNAVAILABLE)
+                    coordinator.presentError(resources.getString(R.string.bot_files_unavailable))
                 } else {
                     filesChatId = chatId
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                coordinator.presentError(AidenBotSessionCopy.FILES_UNAVAILABLE)
+                coordinator.presentError(resources.getString(R.string.bot_files_unavailable))
             } finally {
                 openingFiles = false
             }
@@ -204,7 +211,7 @@ fun AidenBotSessionScreen(
                         throw e
                     } catch (_: Exception) {
                         confirmingDelete = false
-                        coordinator.presentError("Aiden couldn’t delete this Bot. Try again.")
+                        coordinator.presentError(resources.getString(R.string.bot_delete_failed))
                     } finally {
                         isDeleting = false
                     }
@@ -248,7 +255,7 @@ fun AidenBotSessionScreen(
             )
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+        Column(Modifier.fillMaxSize().padding(padding).aidenReadableWidth().imePadding()) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -256,16 +263,12 @@ fun AidenBotSessionScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (ui.isLoading && ui.session == null) {
-                    item(key = "loading") {
-                        Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = palette.accent)
-                        }
-                    }
+                    item(key = "loading") { AidenBotSessionSkeleton() }
                 } else if (ui.loadFailed && ui.session == null && !ui.needsModel) {
                     item(key = "failed") {
                         Text(
-                            if (ui.botMissing) "This Bot is no longer on your Mac."
-                            else "Aiden couldn’t load this chat. Make sure your Mac is on and nearby.",
+                            if (ui.botMissing) stringResource(R.string.bot_session_missing)
+                            else stringResource(R.string.bot_session_load_failed),
                             color = palette.secondary,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth().padding(top = 48.dp)
@@ -282,7 +285,7 @@ fun AidenBotSessionScreen(
                             onRequest = { scope.launch { controller.requestConnection(entry.pluginId) } }
                         )
                         is AidenBotSessionEntry.Notice -> Text(
-                            AidenBotSessionCopy.SESSION_RESET,
+                            stringResource(R.string.bot_session_reset),
                             style = MaterialTheme.typography.labelMedium,
                             color = palette.secondary,
                             textAlign = TextAlign.Center,
@@ -350,6 +353,28 @@ fun AidenBotSessionScreen(
     }
 }
 
+/** The person's bubble: rounded on every corner but the one nearest the composer. */
+private val AidenBotUserBubbleShape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
+
+/** Transcript-shaped placeholders while a Bot chat's first read is on its way. */
+@Composable
+private fun AidenBotSessionSkeleton() {
+    val loadingDescription = stringResource(R.string.bot_session_loading)
+    Column(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .clearAndSetSemantics { contentDescription = loadingDescription }
+    ) {
+        AidenSkeletonBlock(width = 220.dp, height = 44.dp, shape = MaterialTheme.shapes.large, modifier = Modifier.align(Alignment.End))
+        AidenSkeletonBlock(height = 14.dp)
+        AidenSkeletonBlock(width = 240.dp, height = 14.dp)
+        AidenSkeletonBlock(width = 180.dp, height = 44.dp, shape = MaterialTheme.shapes.large, modifier = Modifier.align(Alignment.End))
+        AidenSkeletonBlock(height = 14.dp)
+    }
+}
+
 @Composable
 private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
     val palette = AidenTheme.palette
@@ -358,7 +383,7 @@ private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
             message.label?.let { label ->
                 Text(label, style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp))
             }
-            Surface(color = palette.accent, shape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp), modifier = Modifier.widthIn(max = 320.dp)) {
+            Surface(color = palette.accent, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
                 Text(
                     message.text,
                     style = MaterialTheme.typography.bodyLarge,
@@ -370,7 +395,7 @@ private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
         AidenBotMessageRole.ASSISTANT -> Column(Modifier.fillMaxWidth()) {
             AidenBotAssistantBubble(text = message.text, streaming = false)
             if (message.interrupted == true) {
-                Text("Stopped", style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+                Text(stringResource(R.string.bot_session_stopped), style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(start = 4.dp, top = 2.dp))
             }
         }
     }
@@ -397,19 +422,19 @@ fun AidenBotInterruptedCard(
     onOpenAdvanced: () -> Unit = {}
 ) {
     val palette = AidenTheme.palette
-    Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.INTERRUPTED_CARD)) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.INTERRUPTED_CARD)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(AidenBotSessionCopy.INTERRUPTED, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
+            Text(stringResource(R.string.bot_session_interrupted), style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
             if (blocked == AidenBotSessionBlock.ACCESS_CHANGED) {
-                Text(AidenBotSessionCopy.ACCESS_CHANGED, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                Text(stringResource(R.string.bot_session_access_changed), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (blocked == AidenBotSessionBlock.ACCESS_CHANGED) {
-                    AidenPrimaryButton(text = AidenBotSessionCopy.REVIEW_ADVANCED, enabled = !busy, onClick = onOpenAdvanced)
+                    AidenPrimaryButton(text = stringResource(R.string.bot_advanced_title), enabled = !busy, onClick = onOpenAdvanced)
                 } else {
-                    AidenPrimaryButton(text = AidenBotSessionCopy.RESUME, enabled = !busy, onClick = onResume)
+                    AidenPrimaryButton(text = stringResource(R.string.bot_session_resume), enabled = !busy, onClick = onResume)
                 }
-                AidenTonalButton(text = AidenBotSessionCopy.DISMISS, enabled = !busy, onClick = onDismiss)
+                AidenTonalButton(text = stringResource(R.string.bot_session_dismiss), enabled = !busy, onClick = onDismiss)
             }
         }
     }
@@ -419,11 +444,11 @@ fun AidenBotInterruptedCard(
 @Composable
 fun AidenBotFailedTurnCard(canRetry: Boolean, onRetry: () -> Unit) {
     val palette = AidenTheme.palette
-    Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.FAILED_TURN_CARD)) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.FAILED_TURN_CARD)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(AidenBotSessionCopy.FAILED_TURN, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
+            Text(stringResource(R.string.bot_session_failed_turn), style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
             if (canRetry) {
-                AidenPrimaryButton(text = AidenBotSessionCopy.RETRY, onClick = onRetry)
+                AidenPrimaryButton(text = stringResource(R.string.action_retry), onClick = onRetry)
             }
         }
     }
@@ -433,7 +458,7 @@ fun AidenBotFailedTurnCard(canRetry: Boolean, onRetry: () -> Unit) {
 @Composable
 fun AidenBotNeedsModelCard(busy: Boolean = false, onSetUp: () -> Unit = {}) {
     val palette = AidenTheme.palette
-    Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.NEEDS_MODEL_CARD)) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.NEEDS_MODEL_CARD)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(36.dp).clip(AidenShape.Button).background(palette.warning.copy(alpha = 0.14f)),
@@ -443,14 +468,14 @@ fun AidenBotNeedsModelCard(busy: Boolean = false, onSetUp: () -> Unit = {}) {
             }
             Spacer(Modifier.width(12.dp))
             Text(
-                AidenBotSessionCopy.NEEDS_MODEL,
+                stringResource(R.string.bot_session_needs_model),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = palette.foreground,
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(12.dp))
-            AidenPrimaryButton(text = AidenBotSessionCopy.SET_UP, enabled = !busy, onClick = onSetUp)
+            AidenPrimaryButton(text = stringResource(R.string.bot_session_set_up), enabled = !busy, onClick = onSetUp)
         }
     }
 }
@@ -464,13 +489,13 @@ fun AidenBotConnectCard(
 ) {
     if (card.status == AidenBotConnectCardStatus.DISMISSED) return
     val palette = AidenTheme.palette
-    Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AidenBotConnectionIcon(card.iconId, card.name)
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    AidenBotSessionCopy.connectTitle(card.name),
+                    stringResource(R.string.bot_session_connect_title, card.name),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.foreground
@@ -481,19 +506,19 @@ fun AidenBotConnectCard(
             }
             when {
                 card.status == AidenBotConnectCardStatus.CONNECTED ->
-                    Text(AidenBotSessionCopy.CONNECTED, style = MaterialTheme.typography.labelLarge, color = palette.success)
+                    Text(stringResource(R.string.bot_session_connected), style = MaterialTheme.typography.labelLarge, color = palette.success)
                 !canRequest ->
-                    Text(AidenBotSessionCopy.FINISH_READ_ONLY, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                    Text(stringResource(R.string.bot_session_finish_read_only), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                 phase == AidenBotConnectRequestPhase.SENT ->
-                    AidenTonalButton(text = AidenBotSessionCopy.CHECK_MAC, enabled = false, onClick = {})
+                    AidenTonalButton(text = stringResource(R.string.bot_session_check_mac), enabled = false, onClick = {})
                 else -> {
                     AidenPrimaryButton(
-                        text = AidenBotSessionCopy.FINISH_ON_MAC,
+                        text = stringResource(R.string.bot_session_finish_on_mac),
                         enabled = phase != AidenBotConnectRequestPhase.SENDING,
                         onClick = onRequest
                     )
                     if (phase == AidenBotConnectRequestPhase.FAILED) {
-                        Text("Aiden couldn’t reach your Mac. Try again.", style = MaterialTheme.typography.bodySmall, color = palette.danger)
+                        Text(stringResource(R.string.bot_session_unreachable), style = MaterialTheme.typography.bodySmall, color = palette.danger)
                     }
                 }
             }
@@ -537,7 +562,7 @@ private fun AidenBotSessionComposer(
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = palette.accent, contentColor = MaterialTheme.colorScheme.onPrimary),
             modifier = Modifier.size(AidenUi.MinimumTouchTarget)
         ) {
-            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.bot_session_send))
         }
     }
 }

@@ -30,6 +30,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Compact jump-to-latest affordance that stays visually subordinate to the composer:
@@ -42,6 +44,7 @@ fun AidenJumpToBottom(
     modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
+    val jumpDescription = stringResource(R.string.chat_jump_to_latest)
     val reduceMotion = aidenReduceMotion()
 
     AnimatedVisibility(
@@ -68,7 +71,7 @@ fun AidenJumpToBottom(
                     .tactilePress(interaction, targetScale = 0.92f)
                     .semantics {
                         role = Role.Button
-                        contentDescription = "Jump to latest"
+                        contentDescription = jumpDescription
                     }
             ) {
                 Box(contentAlignment = Alignment.Center) {

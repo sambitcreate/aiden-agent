@@ -459,24 +459,11 @@ class AidenBotSessionController(
     }
 }
 
-/** Interrupted-card copy (exact). */
+/**
+ * Bot row copy built by the JVM-tested [AidenBotHomeRow] presentation. Screen copy lives in
+ * `strings.xml` (`bot_session_*`).
+ */
 object AidenBotSessionCopy {
-    const val INTERRUPTED = "I got interrupted while working on this."
-    const val RESUME = "Resume"
-    const val DISMISS = "Dismiss"
-    const val ACCESS_CHANGED = "This Bot's access changed. Review it in Advanced."
-    const val REVIEW_ADVANCED = "Advanced"
     const val NEEDS_MODEL = "Needs an AI model"
-    const val SET_UP = "Set up"
     const val PAUSED_ROW = "Paused — tap to resume"
-    const val SESSION_RESET = "This chat was restarted."
-    const val FINISH_ON_MAC = "Finish on your Mac"
-    const val CHECK_MAC = "Check your Mac to finish."
-    const val FINISH_READ_ONLY = "Finish this on your Mac."
-    const val CONNECTED = "Connected ✓"
-    const val FAILED_TURN = "I couldn't finish that reply."
-    const val RETRY = "Retry"
-    const val FILES_UNAVAILABLE = "Files aren’t available for this Bot right now."
-
-    fun connectTitle(name: String) = "Connect $name"
 }

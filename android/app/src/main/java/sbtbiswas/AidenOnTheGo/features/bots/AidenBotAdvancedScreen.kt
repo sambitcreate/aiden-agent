@@ -3,14 +3,16 @@ package sbtbiswas.AidenOnTheGo.features.bots
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.annotation.StringRes
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -18,6 +20,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -28,6 +31,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 
 /** The Custom access choices, seeded from the Mac's current catalog. */
@@ -169,9 +173,9 @@ suspend fun aidenBotSaveAdvanced(
     return current
 }
 
-enum class AidenBotAccessChoice(val label: String) {
-    FULL("Everything"),
-    CUSTOM("Only what I pick")
+enum class AidenBotAccessChoice(@StringRes val label: Int) {
+    FULL(R.string.bot_access_choice_full),
+    CUSTOM(R.string.bot_access_choice_custom)
 }
 
 /** Connected choice between Full and Custom access. */
@@ -181,11 +185,12 @@ fun AidenBotAccessChoiceSelector(
     onUsesFullAccessChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val labels = AidenBotAccessChoice.entries.associateWith { stringResource(it.label) }
     AidenSegmentedPillRow(
         options = AidenBotAccessChoice.entries,
         selected = if (usesFullAccess) AidenBotAccessChoice.FULL else AidenBotAccessChoice.CUSTOM,
         onSelect = { onUsesFullAccessChange(it == AidenBotAccessChoice.FULL) },
-        label = { it.label },
+        label = { labels.getValue(it) },
         modifier = modifier
     )
 }
@@ -199,6 +204,7 @@ fun AidenBotAdvancedSheet(
     onSaved: (AidenBotDetail) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     var draft by remember { mutableStateOf<AidenBotAdvancedDraft?>(null) }
@@ -208,18 +214,18 @@ fun AidenBotAdvancedSheet(
 
     LaunchedEffect(bot.id, client) {
         val cl = client ?: run {
-            loadError = "Connect to your Mac to change these settings."
+            loadError = resources.getString(R.string.bot_advanced_connect)
             return@LaunchedEffect
         }
         try {
             val cat = cl.botCapabilityCatalog(bot.id)
             catalog = cat
             draft = AidenBotAdvancedDraft.fromDetail(bot, cat)
-            if (draft == null) loadError = "Set up an AI model on your Mac first."
+            if (draft == null) loadError = resources.getString(R.string.bot_advanced_needs_model)
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            loadError = "Aiden couldn’t load these settings. Try again."
+            loadError = resources.getString(R.string.bot_advanced_load_failed)
         }
     }
 
@@ -228,17 +234,17 @@ fun AidenBotAdvancedSheet(
             containerColor = palette.canvas,
             topBar = {
                 TopAppBar(
-                    title = { Text("Advanced", fontWeight = FontWeight.SemiBold) },
+                    title = { Text(stringResource(R.string.bot_advanced_title), fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
                         IconButton(onClick = onDismiss) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                         }
                     },
                     actions = {
                         val cat = catalog
                         val current = draft
                         AidenPrimaryButton(
-                            text = if (isSaving) "Saving…" else "Save",
+                            text = if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
                             enabled = !isSaving && cat != null && current != null && current.isSaveable(cat),
                             onClick = {
                                 val cl = client ?: return@AidenPrimaryButton
@@ -251,7 +257,7 @@ fun AidenBotAdvancedSheet(
                                     } catch (error: CancellationException) {
                                         throw error
                                     } catch (_: Exception) {
-                                        saveError = "Aiden couldn’t save. Try again."
+                                        saveError = resources.getString(R.string.bot_save_failed)
                                     } finally {
                                         isSaving = false
                                     }
@@ -266,21 +272,27 @@ fun AidenBotAdvancedSheet(
         ) { padding ->
             val cat = catalog
             val current = draft
+            if (loadError == null && (cat == null || current == null)) {
+                AidenBotFormSkeleton(
+                    loadingDescription = stringResource(R.string.bot_advanced_loading),
+                    modifier = Modifier.padding(padding).aidenReadableWidth()
+                )
+                return@Scaffold
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .aidenReadableWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = AidenUi.ScreenGutter, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(AidenUi.SectionGap)
             ) {
                 when {
                     loadError != null -> Text(loadError.orEmpty(), color = palette.secondary)
-                    cat == null || current == null -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = palette.accent)
-                    }
+                    cat == null || current == null -> Unit
                     else -> {
-                        AidenBotAdvancedSection(title = "AI model") {
+                        AidenBotAdvancedSection(title = stringResource(R.string.bot_advanced_model)) {
                             AidenConnectedColumn {
                                 val models = cat.providers.flatMap { provider ->
                                     provider.models.filter { it.available }.map { provider to it }
@@ -303,16 +315,16 @@ fun AidenBotAdvancedSheet(
                                 }
                             }
                             TextButton(onClick = { draft = current.withRecommendedModel(cat) }) {
-                                Text("Use recommended", color = palette.accent)
+                                Text(stringResource(R.string.bot_advanced_use_recommended), color = palette.accent)
                             }
                         }
 
                         AidenBotAdvancedSection(
-                            title = "What it can use",
+                            title = stringResource(R.string.bot_advanced_access),
                             footer = if (current.usesFullAccess)
-                                "It can use everything Aiden can on your Mac. It still asks before anything risky."
+                                stringResource(R.string.bot_advanced_access_full_footer)
                             else
-                                "It can only use what you turn on here."
+                                stringResource(R.string.bot_advanced_access_custom_footer)
                         ) {
                             AidenBotAccessChoiceSelector(
                                 usesFullAccess = current.usesFullAccess,
@@ -328,8 +340,8 @@ fun AidenBotAdvancedSheet(
                         }
 
                         AidenBotAdvancedSection(
-                            title = "Opening greeting",
-                            footer = "The first thing it says in a new chat. Leave empty for none."
+                            title = stringResource(R.string.bot_advanced_greeting),
+                            footer = stringResource(R.string.bot_advanced_greeting_footer)
                         ) {
                             TextField(
                                 value = current.openingGreeting,
@@ -337,7 +349,7 @@ fun AidenBotAdvancedSheet(
                                 colors = aidenTextFieldColors(),
                                 minLines = 2,
                                 maxLines = 5,
-                                shape = RoundedCornerShape(16.dp),
+                                shape = MaterialTheme.shapes.large,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -378,7 +390,7 @@ private fun AidenBotCustomAccessSections(
         val folders = catalog.fileScopes.filter { it.available || draft.fileScopeIDs.contains(it.id) }
         if (folders.isNotEmpty()) {
             AidenBotToggleGroup(
-                title = "Folders",
+                title = stringResource(R.string.bot_advanced_folders),
                 items = folders.map { it.id to it.label },
                 checked = draft.fileScopeIDs,
                 onToggle = { id, on -> onChange(draft.copy(fileScopeIDs = if (on) draft.fileScopeIDs + id else draft.fileScopeIDs - id)) }
@@ -392,7 +404,7 @@ private fun AidenBotCustomAccessSections(
                 enabled = catalog.shellAvailable,
                 onClick = { onChange(draft.copy(shellEnabled = !draft.shellEnabled)) }
             ) {
-                Text("Run commands on your Mac", color = palette.foreground, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.bot_advanced_run_commands), color = palette.foreground, modifier = Modifier.weight(1f))
                 Switch(
                     checked = draft.shellEnabled,
                     onCheckedChange = null,
@@ -404,7 +416,7 @@ private fun AidenBotCustomAccessSections(
         val apps = catalog.connections.filter { it.available || draft.connectionIDs.contains(it.id) }
         if (apps.isNotEmpty()) {
             AidenBotToggleGroup(
-                title = "Connected apps",
+                title = stringResource(R.string.bot_advanced_connected_apps),
                 items = apps.map { it.id to it.label },
                 checked = draft.connectionIDs,
                 onToggle = { id, on -> onChange(draft.copy(connectionIDs = if (on) draft.connectionIDs + id else draft.connectionIDs - id)) }
