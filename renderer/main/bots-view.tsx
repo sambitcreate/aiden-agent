@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { EmptyState, Text, toast } from "../components/ui";
+import { EmptyState, Text } from "../components/ui";
 import { botsApi, onNotification } from "../lib/ipc";
 import { useBot, useBots } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
@@ -56,9 +56,7 @@ function BotsHome() {
   React.useEffect(
     () =>
       onNotification("bots:connections:setup", (payload: { pluginId: string }) => {
-        if (!openSetup(payload.pluginId)) {
-          toast.error("This connection can't be set up from here.");
-        }
+        openSetup(payload.pluginId);
       }),
     [openSetup],
   );
