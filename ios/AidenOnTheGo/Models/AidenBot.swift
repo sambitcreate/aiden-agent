@@ -348,6 +348,11 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
             from: values,
             forKey: .sessionState
         )
+        // Archive was replaced by Delete in revision 25 (as the host parser).
+        guard try decoder.container(keyedBy: AidenBotDynamicCodingKey.self)
+            .allKeys.contains(where: { $0.stringValue == "archivedAt" }) == false else {
+            throw AidenBotContractError.invalidField("archivedAt")
+        }
         let createdTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
         createdAt = createdTimestamp.date
         let updatedTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)

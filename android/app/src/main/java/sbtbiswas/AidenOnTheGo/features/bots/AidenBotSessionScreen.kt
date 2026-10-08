@@ -24,7 +24,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -129,6 +128,26 @@ fun AidenBotSessionScreen(
     var draft by rememberSaveable(botId) { mutableStateOf("") }
     var confirmingDelete by remember { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
+    // "Set up" (no AI model) and "Advanced" (access changed) open the Bot's Advanced settings.
+    var advancedBot by remember { mutableStateOf<AidenBotDetail?>(null) }
+    var openingAdvanced by remember { mutableStateOf(false) }
+    fun openAdvanced() {
+        if (openingAdvanced) return
+        openingAdvanced = true
+        scope.launch {
+            try {
+                val detail = cl.bot(botId)
+                coordinator.botCache.putBotDetail(detail)
+                advancedBot = detail
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                coordinator.presentError("Aiden couldn’t reach your Mac. Try again.")
+            } finally {
+                openingAdvanced = false
+            }
+        }
+    }
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
     val canRequestConnections = serverInfo?.supportsBotConnectionRequests == true
     val listState = rememberLazyListState()
@@ -151,6 +170,8 @@ fun AidenBotSessionScreen(
                     isDeleting = true
                     try {
                         deleter.delete(cl, botId)
+                        // The Bot and its feed are gone: stop following before leaving.
+                        controller.stopFollowing()
                         confirmingDelete = false
                         onBotDeleted()
                     } catch (e: CancellationException) {
@@ -162,6 +183,19 @@ fun AidenBotSessionScreen(
                         isDeleting = false
                     }
                 }
+            }
+        )
+    }
+
+    advancedBot?.let { bot ->
+        AidenBotAdvancedSheet(
+            bot = bot,
+            client = cl,
+            onDismiss = { advancedBot = null },
+            onSaved = { saved ->
+                coordinator.botCache.putBotDetail(saved)
+                advancedBot = null
+                scope.launch { controller.refetch() }
             }
         )
     }
@@ -200,7 +234,8 @@ fun AidenBotSessionScreen(
                 } else if (ui.loadFailed && ui.session == null && !ui.needsModel) {
                     item(key = "failed") {
                         Text(
-                            "Aiden couldn’t load this chat. Make sure your Mac is on and nearby.",
+                            if (ui.botMissing) "This Bot is no longer on your Mac."
+                            else "Aiden couldn’t load this chat. Make sure your Mac is on and nearby.",
                             color = palette.secondary,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth().padding(top = 48.dp)
@@ -236,12 +271,13 @@ fun AidenBotSessionScreen(
                             blocked = ui.session?.blocked,
                             busy = ui.isResuming || ui.isDismissing,
                             onResume = { scope.launch { controller.resume() } },
-                            onDismiss = { scope.launch { controller.dismiss() } }
+                            onDismiss = { scope.launch { controller.dismiss() } },
+                            onOpenAdvanced = ::openAdvanced
                         )
                     }
                 }
                 if (ui.needsModel) {
-                    item(key = "needs-model") { AidenBotNeedsModelCard() }
+                    item(key = "needs-model") { AidenBotNeedsModelCard(busy = openingAdvanced, onSetUp = ::openAdvanced) }
                 }
                 ui.actionError?.let { message ->
                     item(key = "error") {
@@ -277,7 +313,7 @@ private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
                 Text(
                     message.text,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
                 )
             }
@@ -308,7 +344,8 @@ fun AidenBotInterruptedCard(
     blocked: AidenBotSessionBlock?,
     busy: Boolean,
     onResume: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onOpenAdvanced: () -> Unit = {}
 ) {
     val palette = AidenTheme.palette
     Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.INTERRUPTED_CARD)) {
@@ -318,7 +355,9 @@ fun AidenBotInterruptedCard(
                 Text(AidenBotSessionCopy.ACCESS_CHANGED, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (blocked != AidenBotSessionBlock.ACCESS_CHANGED) {
+                if (blocked == AidenBotSessionBlock.ACCESS_CHANGED) {
+                    AidenPrimaryButton(text = AidenBotSessionCopy.REVIEW_ADVANCED, enabled = !busy, onClick = onOpenAdvanced)
+                } else {
                     AidenPrimaryButton(text = AidenBotSessionCopy.RESUME, enabled = !busy, onClick = onResume)
                 }
                 AidenTonalButton(text = AidenBotSessionCopy.DISMISS, enabled = !busy, onClick = onDismiss)
@@ -327,9 +366,9 @@ fun AidenBotInterruptedCard(
     }
 }
 
-/** Shown instead of sending while the Bot has no AI model. */
+/** Shown instead of sending while the Bot has no AI model; Set up opens Advanced. */
 @Composable
-fun AidenBotNeedsModelCard() {
+fun AidenBotNeedsModelCard(busy: Boolean = false, onSetUp: () -> Unit = {}) {
     val palette = AidenTheme.palette
     Surface(color = palette.raised, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.NEEDS_MODEL_CARD)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -340,10 +379,15 @@ fun AidenBotNeedsModelCard() {
                 Icon(Icons.Default.Memory, contentDescription = null, tint = palette.warning, modifier = Modifier.size(20.dp))
             }
             Spacer(Modifier.width(12.dp))
-            Column {
-                Text(AidenBotSessionCopy.NEEDS_MODEL, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                Text(AidenBotSessionCopy.NEEDS_MODEL_HINT, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
-            }
+            Text(
+                AidenBotSessionCopy.NEEDS_MODEL,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.foreground,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(12.dp))
+            AidenPrimaryButton(text = AidenBotSessionCopy.SET_UP, enabled = !busy, onClick = onSetUp)
         }
     }
 }
@@ -427,7 +471,7 @@ private fun AidenBotSessionComposer(
             onClick = onSend,
             enabled = enabled && draft.isNotBlank(),
             shape = AidenShape.Button,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = palette.accent, contentColor = Color.White),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = palette.accent, contentColor = MaterialTheme.colorScheme.onPrimary),
             modifier = Modifier.size(AidenUi.MinimumTouchTarget)
         ) {
             Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")

@@ -23,6 +23,8 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
@@ -33,7 +35,6 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import java.time.LocalDate
 import java.time.ZoneId
-import java.util.UUID
 
 /** The routine editor's first choice. */
 enum class AidenBotRoutineFrequency(val label: String) {
@@ -120,6 +121,24 @@ data class AidenBotRoutineDraft(
     }
 }
 
+/** What a failed routine write means for the person, and whether the list is stale. */
+data class AidenBotRoutineWriteFailure(val message: String, val reload: Boolean)
+
+/**
+ * A stale `If-Match` (`409 revision_conflict`) or a routine removed on the Mac means this
+ * phone's copy is out of date: say so and reload, instead of failing every retry.
+ */
+fun aidenBotRoutineWriteFailure(error: Exception, fallback: String): AidenBotRoutineWriteFailure {
+    val server = error as? AidenRemoteClientException.Server ?: return AidenBotRoutineWriteFailure(fallback, false)
+    return when {
+        server.statusCode == 409 && server.body.code == AidenRemoteErrorCode.REVISION_CONFLICT ->
+            AidenBotRoutineWriteFailure("This routine changed on your Mac. Check it and try again.", true)
+        server.statusCode == 404 ->
+            AidenBotRoutineWriteFailure("This routine is no longer on your Mac.", true)
+        else -> AidenBotRoutineWriteFailure(fallback, false)
+    }
+}
+
 /**
  * Profile → Routines: each row shows the name and the Mac's own schedule label with an
  * enabled toggle, plus "+ Add routine".
@@ -134,16 +153,23 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
     var adding by remember(botId) { mutableStateOf(false) }
     val togglingIds = remember(botId) { mutableStateListOf<String>() }
 
-    LaunchedEffect(botId, client) {
-        val cl = client ?: return@LaunchedEffect
+    /** Reloads the list; an open editor follows its routine's new revision. */
+    suspend fun reload(cl: AidenRemoteClient, keepError: Boolean = false) {
         try {
-            routines = cl.botRoutines(botId).routines
-            error = null
+            val fresh = cl.botRoutines(botId).routines
+            routines = fresh
+            editing = editing?.let { open -> fresh.firstOrNull { it.id == open.id } }
+            if (!keepError) error = null
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             error = "Aiden couldn’t load routines."
         }
+    }
+
+    LaunchedEffect(botId, client) {
+        val cl = client ?: return@LaunchedEffect
+        reload(cl)
     }
 
     fun replace(updated: AidenBotRoutine) {
@@ -178,8 +204,10 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
                                         error = null
                                     } catch (e: CancellationException) {
                                         throw e
-                                    } catch (_: Exception) {
-                                        error = "Aiden couldn’t update this routine. Try again."
+                                    } catch (e: Exception) {
+                                        val failure = aidenBotRoutineWriteFailure(e, "Aiden couldn’t update this routine. Try again.")
+                                        error = failure.message
+                                        if (failure.reload) reload(cl, keepError = true)
                                     } finally {
                                         togglingIds.remove(routine.id)
                                     }
@@ -223,7 +251,8 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
             onDeleted = { deletedId ->
                 routines = routines.orEmpty().filterNot { it.id == deletedId }
                 editing = null
-            }
+            },
+            onStale = { scope.launch { reload(cl, keepError = true) } }
         )
     }
 }
@@ -235,15 +264,17 @@ private fun AidenBotRoutineEditorDialog(
     routine: AidenBotRoutine?,
     onDismiss: () -> Unit,
     onSaved: (AidenBotRoutine) -> Unit,
-    onDeleted: (String) -> Unit
+    onDeleted: (String) -> Unit,
+    onStale: () -> Unit
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
     var draft by remember(routine?.id) { mutableStateOf(routine?.let(AidenBotRoutineDraft::from) ?: AidenBotRoutineDraft()) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    // One key per editor session so a retried Add never makes two routines.
-    val createKey = remember { UUID.randomUUID() }
+    // A retried Add of the same routine reuses its key, so it never makes two; a changed
+    // routine is a new request with a new key.
+    val createKeys = remember { AidenBotActionKeys() }
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -330,8 +361,10 @@ private fun AidenBotRoutineEditorDialog(
                                     onDeleted(routine.id)
                                 } catch (e: CancellationException) {
                                     throw e
-                                } catch (_: Exception) {
-                                    error = "Aiden couldn’t delete this routine. Try again."
+                                } catch (e: Exception) {
+                                    val failure = aidenBotRoutineWriteFailure(e, "Aiden couldn’t delete this routine. Try again.")
+                                    error = failure.message
+                                    if (failure.reload) onStale()
                                 } finally {
                                     busy = false
                                 }
@@ -353,15 +386,27 @@ private fun AidenBotRoutineEditorDialog(
                         try {
                             if (routine == null) {
                                 val request = draft.createRequest(ZoneId.systemDefault().id) ?: return@launch
-                                onSaved(client.createBotRoutine(botId, request, createKey))
+                                val action = request.toString()
+                                try {
+                                    val created = client.createBotRoutine(botId, request, createKeys.key(action))
+                                    createKeys.complete(action)
+                                    onSaved(created)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    createKeys.failed(action, e)
+                                    throw e
+                                }
                             } else {
                                 val update = draft.updateRequest(routine)
                                 onSaved(if (update == null) routine else client.updateBotRoutine(botId, routine.id, routine.revision, update))
                             }
                         } catch (e: CancellationException) {
                             throw e
-                        } catch (_: Exception) {
-                            error = "Aiden couldn’t save this routine. Try again."
+                        } catch (e: Exception) {
+                            val failure = aidenBotRoutineWriteFailure(e, "Aiden couldn’t save this routine. Try again.")
+                            error = failure.message
+                            if (failure.reload) onStale()
                         } finally {
                             busy = false
                         }

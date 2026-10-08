@@ -161,6 +161,11 @@ struct AidenBotRoutinesSection: View {
                     routines.append(routine)
                 case let .deleted(id):
                     routines.removeAll { $0.id == id }
+                case let .stale(message):
+                    Task {
+                        await load()
+                        errorMessage = message
+                    }
                 }
             }
         }
@@ -226,9 +231,12 @@ struct AidenBotRoutinesSection: View {
             )
             guard let index = routines.firstIndex(where: { $0.id == updated.id }) else { return }
             routines[index] = updated
+        } catch is CancellationError {
+            return
         } catch {
-            errorMessage = "That change wasn’t saved. Please try again."
+            let failure = AidenBotRoutineFailure(error)
             await load()
+            errorMessage = failure.needsReload ? failure.message : "That change wasn’t saved. Please try again."
         }
     }
 }
@@ -253,6 +261,44 @@ enum AidenBotRoutineEditorTarget: Identifiable {
 enum AidenBotRoutineChange {
     case saved(AidenBotRoutine)
     case deleted(String)
+    /// The routine changed or vanished on the Mac; the list must reload.
+    case stale(String)
+}
+
+/// How a routine save or delete failed. A stale `If-Match` (409
+/// `revision_conflict`) or a routine removed on the Mac (404) cannot be fixed
+/// by retrying with the same revision, so the list reloads instead.
+enum AidenBotRoutineFailure: Equatable {
+    case changedOnMac
+    case removedOnMac
+    case other(String)
+
+    init(_ error: Error) {
+        if case let AidenRemoteClientError.server(status, body) = error {
+            if status == 409 || body.code == AidenRemoteErrorCode(rawValue: "revision_conflict") {
+                self = .changedOnMac
+                return
+            }
+            if status == 404 {
+                self = .removedOnMac
+                return
+            }
+        }
+        self = .other(error.localizedDescription)
+    }
+
+    var message: String {
+        switch self {
+        case .changedOnMac: "This routine changed on your Mac. Review it and try again."
+        case .removedOnMac: "This routine was removed on your Mac."
+        case let .other(message): message
+        }
+    }
+
+    var needsReload: Bool {
+        if case .other = self { return false }
+        return true
+    }
 }
 
 /// Name, then frequency first, then the day and time, then what to do.
@@ -404,9 +450,18 @@ struct AidenBotRoutineEditorView: View {
                 onChange(.saved(created))
             }
             dismiss()
+        } catch is CancellationError {
+            return
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { createKey = UUID() }
-            errorMessage = error.localizedDescription
+            let failure = AidenBotRoutineFailure(error)
+            if routine != nil, failure.needsReload {
+                // Retrying with this revision can only fail again.
+                onChange(.stale(failure.message))
+                dismiss()
+            } else {
+                errorMessage = failure.message
+            }
         }
     }
 
@@ -420,8 +475,16 @@ struct AidenBotRoutineEditorView: View {
             try await client.deleteBotRoutine(botId: botID, routineId: routine.id, revision: routine.revision)
             onChange(.deleted(routine.id))
             dismiss()
+        } catch is CancellationError {
+            return
         } catch {
-            errorMessage = error.localizedDescription
+            let failure = AidenBotRoutineFailure(error)
+            if failure.needsReload {
+                onChange(.stale(failure.message))
+                dismiss()
+            } else {
+                errorMessage = failure.message
+            }
         }
     }
 }

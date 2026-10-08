@@ -206,7 +206,8 @@ class AidenBotsViewModel(
             result.bot.id
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            presetKeys.failed(action, error)
             _errorMessage.value = "Aiden couldn’t start this Bot. Try again."
             null
         }

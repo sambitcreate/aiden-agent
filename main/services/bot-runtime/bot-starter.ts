@@ -4,9 +4,9 @@
 // `startFromPreset` is idempotent per preset (`preset:<id>`): repeat and
 // concurrent taps return the same Bot, and only the call that created it sends
 // the self-intro. Desktop IPC and the Remote `POST /bots/from-preset` route
-// share this one instance (`botStarter()` in `bot-starter-main.ts`, reached by
-// Remote through `createBotPresetCreatorFor` in `bot-preset-store.ts`), so a
-// tap on the Mac and a tap on a phone converge on one Bot and one key store.
+// share this one instance (`botStarter()` in `bot-starter-main.ts`; Remote
+// passes a `createBot` for the phone's audience), so a tap on the Mac and a tap
+// on a phone converge on one Bot, one key store and one in-flight lane.
 
 import type { BotAccessUpdate } from "../../../renderer/shared/bot-capabilities.js";
 import {

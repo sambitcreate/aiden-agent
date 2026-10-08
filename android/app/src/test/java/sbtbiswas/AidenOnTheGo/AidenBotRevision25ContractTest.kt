@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -149,5 +150,80 @@ class AidenBotRevision25ContractTest {
         assertThrows(Exception::class.java) {
             json.decodeFromJsonElement(AidenBotRoutineSchedule.serializer(), json.parseToJsonElement("""{"kind":"daily","time":"24:00"}"""))
         }
+    }
+
+    private fun JsonObject.with(vararg changes: Pair<String, JsonElement>) = JsonObject(this + changes)
+
+    private fun <T> rejects(serializer: KSerializer<T>, element: JsonElement) {
+        assertThrows(Exception::class.java) { json.decodeFromJsonElement(serializer, element) }
+    }
+
+    /** Values the host parsers in `aiden-remote-protocol.ts` refuse are refused here too. */
+    @Test
+    fun sessionEntriesFollowTheHostGrammar() {
+        val session = fixture.getValue("botSession").jsonObject
+        val entries = session.getValue("entries").jsonArray
+        val message = entries.first { it.jsonObject["type"] == JsonPrimitive("message") }.jsonObject
+        val card = entries.first { it.jsonObject["type"] == JsonPrimitive("connect_card") }.jsonObject
+        val entry = AidenBotSessionEntry.serializer()
+
+        // Only an assistant answer can be cut off, and only as `true`.
+        rejects(entry, message.with("role" to JsonPrimitive("assistant"), "interrupted" to JsonPrimitive(false)))
+        rejects(entry, message.with("role" to JsonPrimitive("user"), "interrupted" to JsonPrimitive(true)))
+        // Entry ids use the identifier grammar; routine labels stop at 120 characters.
+        rejects(entry, message.with("id" to JsonPrimitive("entry 1")))
+        rejects(entry, message.with("label" to JsonPrimitive("x".repeat(121))))
+        assertEquals("x".repeat(120), (json.decodeFromJsonElement(entry, message.with("label" to JsonPrimitive("x".repeat(120)))) as AidenBotSessionEntry.Message).label)
+        // Connect cards: lowercase plugin and icon ids, and a 1–280 character reason.
+        rejects(entry, card.with("pluginId" to JsonPrimitive("Google_Calendar")))
+        rejects(entry, card.with("iconId" to JsonPrimitive("-gmail")))
+        rejects(entry, card.with("reason" to JsonPrimitive("")))
+        rejects(entry, card.with("reason" to JsonPrimitive("r".repeat(281))))
+        rejects(entry, card.with("status" to JsonPrimitive("failed")))
+        // Epochs are 1–64 of `[A-Za-z0-9_-]`; seq is a non-negative safe integer.
+        rejects(AidenBotSession.serializer(), session.with("epoch" to JsonPrimitive("epoch:1")))
+        rejects(AidenBotSession.serializer(), session.with("epoch" to JsonPrimitive("e".repeat(65))))
+        rejects(AidenBotSession.serializer(), session.with("seq" to JsonPrimitive(-1)))
+        rejects(AidenBotSession.serializer(), session.with("seq" to JsonPrimitive("12")))
+        rejects(AidenBotSession.serializer(), session.with("hasOlder" to JsonPrimitive("false")))
+        // More than 200 entries is out of bounds.
+        val many = JsonArray((0..200).map { message.with("id" to JsonPrimitive("m_$it")) })
+        rejects(AidenBotSession.serializer(), session.with("entries" to many))
+        // A blank message is never sent.
+        assertThrows(Exception::class.java) { AidenBotSessionSendRequest("   ") }
+    }
+
+    @Test
+    fun routinesAndPresetsFollowTheHostBounds() {
+        val routine = fixture.getValue("botRoutines").jsonObject.getValue("routines").jsonArray[0].jsonObject
+        val serializer = AidenBotRoutine.serializer()
+        // The host stores up to 32,768 characters and may return an empty message.
+        assertEquals("", json.decodeFromJsonElement(serializer, routine.with("message" to JsonPrimitive(""))).message)
+        assertEquals(32_768, json.decodeFromJsonElement(serializer, routine.with("message" to JsonPrimitive("m".repeat(32_768)))).message.length)
+        rejects(serializer, routine.with("message" to JsonPrimitive("m".repeat(32_769))))
+        // Long IANA zones are fine; padded ones are not.
+        val zone = "America/Argentina/ComodRivadavia/" + "x".repeat(60)
+        assertEquals(zone, json.decodeFromJsonElement(serializer, routine.with("timezone" to JsonPrimitive(zone))).timezone)
+        rejects(serializer, routine.with("timezone" to JsonPrimitive(" UTC")))
+        rejects(serializer, routine.with("lastError" to JsonPrimitive("e".repeat(501))))
+        rejects(serializer, routine.with("lastResult" to JsonPrimitive("failed")))
+        rejects(serializer, routine.with("id" to JsonPrimitive("routine 1")))
+        // The host refuses blank names and messages.
+        val schedule = AidenBotRoutineSchedule.Daily("08:00")
+        assertThrows(Exception::class.java) { AidenBotRoutineCreateRequest(name = " ", schedule = schedule, message = "Brief me") }
+        assertThrows(Exception::class.java) { AidenBotRoutineUpdateRequest(message = "  ") }
+
+        val presets = fixture.getValue("botPresets").jsonObject
+        val preset = presets.getValue("presets").jsonArray[0].jsonObject
+        val chip = preset.getValue("suggestedConnections").jsonArray[0].jsonObject
+        fun withPreset(changed: JsonObject) = presets.with("presets" to JsonArray(listOf(changed)))
+        rejects(AidenBotPresetList.serializer(), withPreset(preset.with("id" to JsonPrimitive("Chief Of Staff"))))
+        rejects(AidenBotPresetList.serializer(), withPreset(preset.with("subtitle" to JsonPrimitive(""))))
+        rejects(
+            AidenBotPresetList.serializer(),
+            withPreset(preset.with("suggestedConnections" to JsonArray((0..8).map { chip.with("pluginId" to JsonPrimitive("p$it")) })))
+        )
+        assertThrows(Exception::class.java) { AidenBotPresetCreateRequest("Chief") }
+        assertThrows(Exception::class.java) { AidenBotConnectionRequest("Google Calendar") }
     }
 }

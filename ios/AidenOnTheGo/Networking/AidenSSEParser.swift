@@ -170,7 +170,8 @@ enum AidenSSELineDecoder {
 
 /// Parses `GET /bots/{botId}/session/events` (contract revision 25). Order is
 /// carried by each frame's `(epoch, seq)`, so an SSE `id:` line is optional;
-/// when present it must equal `seq`, and an `event:` name must equal `type`.
+/// when present it must be the host's `<epoch>:<seq>` cursor for that frame,
+/// and an `event:` name must equal `type`.
 struct AidenBotSessionSSEParser: AidenSSEEventParsing {
     private var eventID: String?
     private var eventName: String?
@@ -221,7 +222,7 @@ struct AidenBotSessionSSEParser: AidenSSEEventParsing {
             from: Data(dataLines.joined(separator: "\n").utf8),
             maximumBytes: AidenRemoteProtocol.maxSSEFrameBytes
         )
-        if let eventID, Int(eventID) != event.seq { throw AidenSSEParserError.eventIDMismatch }
+        if let eventID, eventID != "\(event.epoch):\(event.seq)" { throw AidenSSEParserError.eventIDMismatch }
         if let eventName, eventName != event.wireType { throw AidenSSEParserError.eventNameMismatch }
         return event
     }

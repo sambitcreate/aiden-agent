@@ -37,7 +37,9 @@ fun AidenBotChatRoute(
     networkAvailability: AidenNetworkAvailability,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    /** After a Delete from this chat; defaults to going back. */
+    onBotDeleted: () -> Unit = onNavigateBack
 ) {
     val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
     val client by coordinator.client.collectAsStateWithLifecycle()
@@ -47,7 +49,8 @@ fun AidenBotChatRoute(
             botId = botId,
             coordinator = coordinator,
             onNavigateBack = onNavigateBack,
-            onNavigateToBotProfile = onNavigateToBotProfile
+            onNavigateToBotProfile = onNavigateToBotProfile,
+            onBotDeleted = onBotDeleted
         )
         return
     }

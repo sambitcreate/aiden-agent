@@ -13,7 +13,11 @@ import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView, EntryRecord } from "@earendil-works/pi-durable";
-import { connectionSuggestionFor, type ConnectCardEntry } from "../../renderer/shared/bot-connections.js";
+import {
+  connectionSuggestionFor,
+  type ConnectCardEntry,
+  type ConnectCardStatus,
+} from "../../renderer/shared/bot-connections.js";
 import type { BotPreset } from "../../renderer/shared/bot-presets.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
 import { botRoutineCron } from "../../renderer/shared/bot-routine-schedule.js";
@@ -48,21 +52,16 @@ import {
   type AidenRemoteBotSummary,
 } from "./aiden-remote-protocol.js";
 import { openCursorSse, sseFrame, type CursorSseHandle } from "./aiden-remote-sse.js";
-import {
-  BOT_NOTICE_ENTRY_KIND,
-  BotSessionError,
-  type BotNotice,
-  type BotSessionState,
-} from "./bot-runtime/bot-session-service.js";
+import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
+import { livePartialText, projectBotTranscript } from "./bot-runtime/live-projection.js";
 import {
   BOT_ROUTINE_SILENT_INSTRUCTION,
-  BOT_ROUTINE_SILENT_TOKEN,
   type BotRoutine,
   type BotRoutineService,
 } from "./scheduled-bot-routines.js";
 
 /** Kind of the typed connect card entry `suggest_connection` appends. */
-export const BOT_CONNECT_CARD_ENTRY_KIND = "aiden.connect-card";
+export { BOT_CONNECT_CARD_ENTRY_KIND } from "./bot-runtime/live-projection.js";
 const ctx = BACKGROUND_CONTEXT;
 const MAX_SESSION_JSON_BYTES = 768 * 1_024;
 const MAX_PENDING_FRAMES = 256;
@@ -75,6 +74,8 @@ export interface AidenRemoteBotSessionRuntime {
   ): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
+  /** Ends a running turn (serialized with send/resume/dismiss); a paused turn is left for Dismiss. */
+  stop(botId: string): Promise<BotSessionState>;
   state(botId: string): Promise<BotSessionState>;
   conversation(botId: string): Promise<Conversation>;
 }
@@ -94,8 +95,18 @@ export interface AidenRemoteBotSessionServiceOptions {
   routines?: Pick<BotRoutineService, "list" | "create" | "update" | "delete">;
   presets?: {
     list(): readonly BotPreset[];
-    create(presetId: string): Promise<{ botId: string; created: boolean }>;
+    /**
+     * Start Chat on a starter Bot. Must be the process-wide starter the desktop
+     * uses too (`botStarter()`), so a Mac tap and a phone tap converge on one
+     * Bot and only the creating call sends the self-intro.
+     */
+    create(presetId: string, options: { audienceId: string }): Promise<{ botId: string; created: boolean }>;
   };
+  /**
+   * What a connect card shows now (connected, or answered with Not now since
+   * it was offered). The desktop live view uses the same resolver.
+   */
+  connectCardStatus?(botId: string, card: ConnectCardEntry): Promise<ConnectCardStatus>;
   /** Raise the Mac notification that opens connection setup for `pluginId`. */
   connectionRequested?(input: { botId: string; pluginId: string; name: string }): Promise<void>;
   defaultTimezone?(): string;
@@ -108,22 +119,22 @@ export interface AidenRemoteBotSessionServiceOptions {
 // Projection
 // ---------------------------------------------------------------------------
 
-type TextPart = { type: "text"; text: string };
-
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part): part is TextPart => Boolean(part) && (part as TextPart).type === "text" &&
-      typeof (part as TextPart).text === "string")
-    .map((part) => part.text)
-    .join("");
+/**
+ * Wire-safe text: lone UTF-16 surrogates (which the strict parsers reject, and
+ * which would make the whole snapshot unservable) become U+FFFD, and the text
+ * is cut by code point so a cut never splits a surrogate pair.
+ */
+function wireText(text: string, maximum: number): string {
+  const wellFormed = text.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/gu,
+    "�",
+  );
+  const points = [...wellFormed];
+  return points.length > maximum ? points.slice(0, maximum).join("") : wellFormed;
 }
 
 function bounded(text: string): string {
-  return [...text].length > AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS
-    ? [...text].slice(0, AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS).join("")
-    : text;
+  return wireText(text, AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS);
 }
 
 function stripRoutineInstruction(text: string): string {
@@ -134,89 +145,99 @@ function stripRoutineInstruction(text: string): string {
     : text;
 }
 
-function timestampOf(message: unknown): string | undefined {
-  const timestamp = (message as { timestamp?: unknown } | undefined)?.timestamp;
+function isoOf(timestamp: number | undefined): string | undefined {
   return typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0
     ? new Date(timestamp).toISOString()
     : undefined;
 }
 
-const wireEntryId = (entry: EntryRecord) => `entry_${String(entry.id)}`;
+/** Shown when a turn failed before writing any text; the details stay on the Mac. */
+export const BOT_REMOTE_FAILED_REPLY_TEXT = "I couldn't finish that reply. Try sending it again.";
+
+const wireEntryId = (id: string) => `entry_${id}`;
 
 /**
- * Displayable wire entries of a conversation view, oldest first: user and
- * assistant text, one connect card per plugin (latest status at the first
- * card's place), and a reset notice. Tool traffic, prompts and `[SILENT]`
- * routine answers stay on the Mac.
+ * Displayable wire entries of a conversation, oldest first. Derived from the
+ * desktop transcript (`projectBotTranscript`), so a phone shows exactly what
+ * the Mac shows: the hidden self-intro prompt and whole `[SILENT]` routine
+ * turns are left out, tool traffic stays on the Mac, a failed turn surfaces,
+ * and each plugin has one connect card (latest status at the first card's place).
  */
 export function projectBotSessionEntries(entries: readonly EntryRecord[]): AidenRemoteBotSessionEntry[] {
   const output: AidenRemoteBotSessionEntry[] = [];
   const cards = new Map<string, number>();
-  let pendingLabel: string | undefined;
-  for (const entry of entries) {
-    const message = entry.model?.[0] as { role?: string; content?: unknown; stopReason?: string } | undefined;
-    if (entry.kind === "pi.user" && message) {
-      const text = bounded(stripRoutineInstruction(textOf(message.content)));
-      const createdAt = timestampOf(message);
-      output.push({
-        type: "message",
-        id: wireEntryId(entry),
-        role: "user",
-        text,
-        ...(createdAt ? { createdAt } : {}),
-        ...(pendingLabel ? { label: pendingLabel } : {}),
-      });
-      pendingLabel = undefined;
-    } else if (entry.kind === "pi.assistant" && message) {
-      const text = textOf(message.content);
-      if (!text.trim() || text.trim() === BOT_ROUTINE_SILENT_TOKEN) continue;
-      const createdAt = timestampOf(message);
-      output.push({
-        type: "message",
-        id: wireEntryId(entry),
-        role: "assistant",
-        text: bounded(text),
-        ...(createdAt ? { createdAt } : {}),
-        ...(message.stopReason === "aborted" ? { interrupted: true as const } : {}),
-      });
-    } else if (entry.kind === BOT_NOTICE_ENTRY_KIND) {
-      const notice = entry.data as BotNotice | undefined;
-      if (notice?.notice === "routine") pendingLabel = notice.label.slice(0, 120);
-      else if (notice?.notice === "session_reset") {
-        output.push({ type: "notice", id: wireEntryId(entry), notice: "session_reset" });
-      } else if (notice?.notice === "interrupted") {
-        const last = [...output].reverse().find((item) => item.type === "message");
-        if (last?.type === "message" && last.role === "assistant") last.interrupted = true;
+  for (const entry of projectBotTranscript(entries)) {
+    const id = wireEntryId(entry.id);
+    switch (entry.type) {
+      case "user":
+      case "routine": {
+        const createdAt = isoOf(entry.at);
+        const label = entry.type === "routine" ? wireText(entry.label, 120).trim() : "";
+        output.push({
+          type: "message",
+          id,
+          role: "user",
+          text: bounded(entry.type === "routine" ? stripRoutineInstruction(entry.text) : entry.text),
+          ...(createdAt ? { createdAt } : {}),
+          ...(label ? { label } : {}),
+        });
+        break;
       }
-    } else if (entry.kind === BOT_CONNECT_CARD_ENTRY_KIND) {
-      const card = entry.data as Partial<ConnectCardEntry> | undefined;
-      const suggestion = card?.pluginId ? connectionSuggestionFor(card.pluginId) : null;
-      if (!card || !suggestion || !["pending", "connected", "dismissed"].includes(card.status ?? "")) continue;
-      const projected: AidenRemoteBotSessionEntry = {
-        type: "connect_card",
-        id: wireEntryId(entry),
-        pluginId: suggestion.pluginId,
-        name: suggestion.name,
-        iconId: suggestion.iconId,
-        reason: (card.reason ?? "").trim().slice(0, 280) || `Connect ${suggestion.name}.`,
-        status: card.status as ConnectCardEntry["status"],
-      };
-      const index = cards.get(suggestion.pluginId);
-      if (index === undefined) {
-        cards.set(suggestion.pluginId, output.length);
-        output.push(projected);
-      } else {
-        output[index] = { ...projected, id: output[index]!.id };
+      case "assistant": {
+        const failed = entry.stopReason === "error";
+        const text = entry.text.trim() ? entry.text : failed ? BOT_REMOTE_FAILED_REPLY_TEXT : "";
+        // A tool-only step has no text to show; its activity stays on the Mac.
+        if (!text) break;
+        const createdAt = isoOf(entry.at);
+        output.push({
+          type: "message",
+          id,
+          role: "assistant",
+          text: bounded(text),
+          ...(createdAt ? { createdAt } : {}),
+          ...(entry.stopReason === "aborted" ? { interrupted: true as const } : {}),
+        });
+        break;
       }
+      case "notice":
+        if (entry.notice === "session_reset") {
+          output.push({ type: "notice", id, notice: "session_reset" });
+        } else {
+          const last = [...output].reverse().find((item) => item.type === "message");
+          if (last?.type === "message" && last.role === "assistant") last.interrupted = true;
+        }
+        break;
+      case "connect_card": {
+        const suggestion = connectionSuggestionFor(entry.card.pluginId);
+        if (!suggestion) break;
+        const projected: AidenRemoteBotSessionEntry = {
+          type: "connect_card",
+          id,
+          pluginId: suggestion.pluginId,
+          name: suggestion.name,
+          iconId: suggestion.iconId,
+          reason: wireText(entry.card.reason.trim(), 280) || `Connect ${suggestion.name}.`,
+          status: entry.card.status,
+        };
+        const index = cards.get(suggestion.pluginId);
+        if (index === undefined) {
+          cards.set(suggestion.pluginId, output.length);
+          output.push(projected);
+        } else {
+          output[index] = { ...projected, id: output[index]!.id };
+        }
+        break;
+      }
+      default:
+        break;
     }
   }
   return output;
 }
 
-/** Text of the in-flight (or paused) assistant partial, if any. */
+/** Text of the in-flight (or paused) assistant partial, if any. A reply heading for `[SILENT]` is never shown. */
 export function projectBotSessionPartial(view: Pick<ConversationView, "docs">): string | undefined {
-  const live = view.docs["pi.live"] as { generation?: { message?: { content?: unknown } } } | undefined;
-  const text = textOf(live?.generation?.message?.content);
+  const text = livePartialText(view.docs);
   return text ? bounded(text) : undefined;
 }
 
@@ -257,13 +278,16 @@ class BotLiveProjector {
   partial: string | undefined;
   state: AidenRemoteBotSessionStateView = { state: "idle", interrupted: false };
   readonly subscribers = new Set<Subscriber>();
+  private view: ConversationView | undefined;
   private stopWatch: (() => Promise<unknown>) | undefined;
+  private lane: Promise<void> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   closed = false;
 
   constructor(
     readonly botId: string,
     private readonly readState: () => Promise<AidenRemoteBotSessionStateView>,
+    private readonly resolveEntries: (entries: AidenRemoteBotSessionEntry[]) => Promise<AidenRemoteBotSessionEntry[]>,
     private readonly idleMs: number,
     private readonly onClosed: () => void,
   ) {}
@@ -271,7 +295,8 @@ class BotLiveProjector {
   async attach(conversation: Conversation): Promise<void> {
     const watch = await conversation.watch(ctx);
     this.stopWatch = () => watch.stop();
-    this.entries = projectBotSessionEntries(watch.value.entries);
+    this.view = watch.value;
+    this.entries = await this.resolveEntries(projectBotSessionEntries(watch.value.entries));
     this.partial = projectBotSessionPartial(watch.value);
     this.state = await this.readState();
     watch.start(async (view) => {
@@ -292,16 +317,20 @@ class BotLiveProjector {
     });
   }
 
-  private frame(event: Omit<AidenRemoteBotSessionEvent, "protocolVersion" | "botId" | "epoch" | "seq">): void {
-    this.seq += 1;
-    const data = {
+  /** The `snapshot` frame for the current seq (first frame of a stream, or a history rewrite). */
+  snapshotFrame(): string {
+    const session = this.snapshot();
+    return sseFrame(`${session.epoch}:${session.seq}`, "snapshot", {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
-      botId: this.botId,
-      epoch: this.epoch,
-      seq: this.seq,
-      ...event,
-    };
-    const text = sseFrame(`${this.epoch}:${this.seq}`, event.type, data);
+      botId: session.botId,
+      epoch: session.epoch,
+      seq: session.seq,
+      type: "snapshot",
+      payload: { session },
+    });
+  }
+
+  private broadcast(text: string): void {
     for (const subscriber of this.subscribers) {
       if (subscriber.frames.length >= MAX_PENDING_FRAMES) {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
@@ -313,34 +342,81 @@ class BotLiveProjector {
     }
   }
 
-  async advance(view: ConversationView): Promise<void> {
-    if (this.closed) return;
-    const next = projectBotSessionEntries(view.entries);
-    const previous = new Map(this.entries.map((entry) => [entry.id, JSON.stringify(entry)]));
-    this.entries = next;
-    let appended = false;
-    for (const entry of next) {
-      const before = previous.get(entry.id);
-      if (before === JSON.stringify(entry)) continue;
-      appended = true;
-      this.frame({ type: "entry", payload: { entry } });
-    }
-    const partial = projectBotSessionPartial(view);
-    if (partial !== this.partial) {
-      this.partial = partial;
-      // An appended answer replaces the partial; an empty partial clears it.
-      if (!(appended && partial === undefined)) this.frame({ type: "partial", payload: { text: partial ?? "" } });
-    }
-    const state = await this.readState().catch(() => this.state);
-    if (JSON.stringify(state) !== JSON.stringify(this.state)) {
-      this.state = state;
-      this.frame({ type: "state", payload: state });
-    }
+  private frame(event: Omit<AidenRemoteBotSessionEvent, "protocolVersion" | "botId" | "epoch" | "seq">): void {
+    this.seq += 1;
+    const data = {
+      protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
+      botId: this.botId,
+      epoch: this.epoch,
+      seq: this.seq,
+      ...event,
+    };
+    this.broadcast(sseFrame(`${this.epoch}:${this.seq}`, event.type, data));
   }
 
-  /** Re-read the session state (Resume, Dismiss and Stop change it without a commit). */
-  async refreshState(): Promise<void> {
+  /**
+   * Watch callbacks and refreshes both project asynchronously. They run one at
+   * a time so a slow, older read can never publish after a newer one: frames
+   * stay in causal order and every seq is exactly one more than the last.
+   */
+  private serial<Result>(action: () => Promise<Result>): Promise<Result> {
+    const run = this.lane.then(action, action);
+    this.lane = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  advance(view: ConversationView): Promise<void> {
+    return this.serial(async () => {
+      this.view = view;
+      await this.publish(view);
+    });
+  }
+
+  /**
+   * Re-project the latest view and re-read the state: Resume, Dismiss, Stop,
+   * a lock change or a connection finished on the Mac change what a client
+   * should see without committing to the conversation.
+   */
+  refresh(): Promise<void> {
+    return this.serial(async () => {
+      if (this.view) await this.publish(this.view);
+    });
+  }
+
+  private async publish(view: ConversationView): Promise<void> {
+    if (this.closed) return;
+    const next = await this.resolveEntries(projectBotSessionEntries(view.entries));
+    const partial = projectBotSessionPartial(view);
     const state = await this.readState().catch(() => this.state);
+    if (this.closed) return;
+
+    const previous = this.entries;
+    const previousById = new Map(previous.map((entry) => [entry.id, JSON.stringify(entry)]));
+    const nextIds = new Set(next.map((entry) => entry.id));
+    // Appends and in-place updates are entry events; anything that removes or
+    // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
+    const kept = previous.filter((entry) => nextIds.has(entry.id)).map((entry) => entry.id);
+    const order = next.filter((entry) => previousById.has(entry.id)).map((entry) => entry.id);
+    const rewritten = kept.length !== previous.length || kept.some((id, index) => order[index] !== id);
+
+    this.entries = next;
+    if (rewritten) {
+      this.partial = partial;
+      this.state = state;
+      this.seq += 1;
+      this.broadcast(this.snapshotFrame());
+      return;
+    }
+    for (const entry of next) {
+      if (previousById.get(entry.id) === JSON.stringify(entry)) continue;
+      this.frame({ type: "entry", payload: { entry } });
+    }
+    if (partial !== this.partial) {
+      this.partial = partial;
+      // Always explicit: an empty text clears the partial, so a client never
+      // has to guess whether an appended entry replaced it.
+      this.frame({ type: "partial", payload: { text: partial ?? "" } });
+    }
     if (JSON.stringify(state) !== JSON.stringify(this.state)) {
       this.state = state;
       this.frame({ type: "state", payload: state });
@@ -395,6 +471,19 @@ function mapSessionError(error: unknown): never {
   throw error;
 }
 
+/**
+ * A routine failure message for a phone: local file paths are replaced (they
+ * name the Mac user and Aiden's private folders), as is anything shaped like
+ * an API key, and the text is cut to the wire bound.
+ */
+export function redactRemoteError(message: string): string {
+  const redacted = message
+    .replace(/(?:file:\/\/)?(?:~|\/(?:Users|home|private|var|tmp|Volumes|Library|opt))(?:\/[^\s'"`)\]]*)+/gu, "[path]")
+    .replace(/\b[A-Za-z]:\\[^\s'"`)\]]+/gu, "[path]")
+    .replace(/\b(?:sk|pk|rk|xox[abpr]|gh[pousr]|AIza)[-_A-Za-z0-9]{12,}/gu, "[redacted]");
+  return wireText(redacted, 500).trim() || "This routine failed.";
+}
+
 function routineRevision(routine: BotRoutine): string {
   return `routine_revision_${routine.updatedAt}`;
 }
@@ -418,7 +507,7 @@ export function projectAidenRemoteBotRoutine(routine: BotRoutine): AidenRemoteBo
     ...(nextRunAt ? { nextRunAt } : {}),
     ...(lastRunAt ? { lastRunAt } : {}),
     ...(routine.lastResult ? { lastResult: routine.lastResult } : {}),
-    ...(routine.lastError ? { lastError: routine.lastError.slice(0, 500) } : {}),
+    ...(routine.lastError ? { lastError: redactRemoteError(routine.lastError) } : {}),
     updatedAt: new Date(routine.updatedAt).toISOString(),
     revision: routineRevision(routine),
   });
@@ -473,6 +562,21 @@ export class AidenRemoteBotSessionService {
     return projectBotSessionState(await (await this.options.runtime()).state(botId));
   }
 
+  /** Pending connect cards show what is true now (connected, or Not now). */
+  private async resolveCards(
+    botId: string,
+    entries: AidenRemoteBotSessionEntry[],
+  ): Promise<AidenRemoteBotSessionEntry[]> {
+    const resolve = this.options.connectCardStatus;
+    if (!resolve) return entries;
+    return Promise.all(entries.map(async (entry) => {
+      if (entry.type !== "connect_card" || entry.status !== "pending") return entry;
+      const status = await resolve(botId, { type: "connect_card", pluginId: entry.pluginId, reason: entry.reason, status: "pending" })
+        .catch(() => entry.status);
+      return status === entry.status ? entry : { ...entry, status };
+    }));
+  }
+
   private projector(botId: string): Promise<BotLiveProjector> {
     const existing = this.projectors.get(botId);
     if (existing) return existing;
@@ -482,6 +586,7 @@ export class AidenRemoteBotSessionService {
       const projector = new BotLiveProjector(
         botId,
         () => this.stateView(botId),
+        (entries) => this.resolveCards(botId, entries),
         this.options.projectorIdleMs ?? PROJECTOR_IDLE_MS,
         () => {
           if (this.projectors.get(botId) === created) this.projectors.delete(botId);
@@ -513,7 +618,11 @@ export class AidenRemoteBotSessionService {
           botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false,
         });
       }
-      return (await this.liveProjector(bot.id)).snapshot();
+      const projector = await this.liveProjector(bot.id);
+      // A state change without a commit (a desktop Stop, a lock change) is not
+      // seen by the watch; a fetch always reports the current state.
+      await projector.refresh();
+      return projector.snapshot();
     } catch (error) {
       return mapSessionError(error);
     }
@@ -533,19 +642,15 @@ export class AidenRemoteBotSessionService {
     } catch (error) {
       return mapSessionError(error);
     }
+    // A new subscriber sees current card statuses and state, not the last commit's.
+    await projector.refresh();
+    if (projector.closed) {
+      // Deleted while attaching: a 404 tells the client to leave the chat.
+      await this.options.bots.bot(bot.id);
+      throw new AidenRemoteServiceError("operation_stale", "This Bot's chat closed. Try again.", 409, true);
+    }
     admit();
-    const snapshot = projector.snapshot();
-    const subscriber: Subscriber = {
-      frames: [sseFrame(`${snapshot.epoch}:${snapshot.seq}`, "snapshot", {
-        protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
-        botId: snapshot.botId,
-        epoch: snapshot.epoch,
-        seq: snapshot.seq,
-        type: "snapshot",
-        payload: { session: snapshot },
-      })],
-      overflowed: false,
-    };
+    const subscriber: Subscriber = { frames: [projector.snapshotFrame()], overflowed: false };
     const unsubscribe = projector.subscribe(subscriber);
     const handle = openCursorSse(response, {
       pull: () => {
@@ -584,7 +689,7 @@ export class AidenRemoteBotSessionService {
 
   private async afterAction(botId: string): Promise<void> {
     const projector = await this.projectors.get(botId)?.catch(() => undefined);
-    await projector?.refreshState();
+    await projector?.refresh();
     this.options.notifyBotsChanged?.(botId);
   }
 
@@ -627,10 +732,8 @@ export class AidenRemoteBotSessionService {
           const requestId = `remote:${deviceId}:${key}`;
           if (action === "resume") return projectBotSessionState(await runtime.resume(bot.id, requestId));
           if (action === "dismiss") return projectBotSessionState(await runtime.dismiss(bot.id, requestId));
-          const state = await runtime.state(bot.id);
           // Stop ends a running turn; a paused one belongs to Dismiss.
-          if (state.kind === "running") await (await runtime.conversation(bot.id)).abort(ctx);
-          return projectBotSessionState(await runtime.state(bot.id));
+          return projectBotSessionState(await runtime.stop(bot.id));
         },
       );
       await this.afterAction(bot.id);
@@ -819,7 +922,9 @@ export class AidenRemoteBotSessionService {
     const { botId, created } = await this.options.bots.executeIdempotent(
       { deviceId, route: "POST /bots/from-preset", resourceId: parsed.presetId, key },
       parsed,
-      () => this.options.presets!.create(parsed.presetId),
+      // Remote creations resolve access against the requesting device's audience,
+      // like `POST /bots`.
+      () => this.options.presets!.create(parsed.presetId, { audienceId: deviceId }),
     );
     if (created) this.options.notifyBotsChanged?.(botId);
     return { created, bot: await this.options.bots.summaryOf(botId) };
