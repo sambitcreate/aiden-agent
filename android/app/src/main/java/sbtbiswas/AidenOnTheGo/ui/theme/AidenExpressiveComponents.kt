@@ -479,7 +479,11 @@ fun AidenSnackbar(data: SnackbarData) {
         dismissActionContentColor = palette.secondary,
         action = data.visuals.actionLabel?.let { label ->
             {
-                TextButton(onClick = { data.performAction() }, shape = AidenShape.Button) {
+                TextButton(
+                    onClick = { data.performAction() },
+                    shape = AidenShape.Button,
+                    contentPadding = AidenButtonDefaults.TextContentPadding
+                ) {
                     Text(label, color = palette.accent, style = MaterialTheme.typography.labelLarge)
                 }
             }

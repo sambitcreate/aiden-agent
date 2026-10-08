@@ -30,6 +30,16 @@ Their individual hover and focus fills meet at straight seams, while the group
 and its end buttons share the outer squircle. Leave the group overflow visible
 so each button's keyboard outline and portaled menus remain unobstructed.
 
+## Untitled structure
+
+Aiden adopts the structural layer of the Untitled theme (`GUI.md`, `gui/`) while keeping its own radii and preset palettes:
+
+- **Motion.** Controls, menus, and popovers use `--motion-duration` (200ms) with `--motion-easing`; popovers enter from `--motion-popup-scale` (0.96). Shared buttons settle by `--motion-press-distance` (1px) while held. Tailwind exposes the curves as `ease-standard` and `ease-emphasized`. Shared dialogs keep their deliberate near-instant entrance and the sidebar keeps its 300ms width timing with the emphasized curve. Every motion is removed under Reduce Motion.
+- **Surfaces.** Cards, sheets, popovers, and floating panels have no outline: fill and the existing elevation tokens define their edge. Inset row separators and header separators remain.
+- **Fields.** Inputs, textareas, and select triggers rest on the `--surface-input` fill with their neutral resting border; focus deepens the fill to `--surface-control`. No accent border or ring.
+- **Buttons.** Labeled buttons use roomier horizontal padding (12/16/20px for small/medium/large) at the existing heights.
+- **Type.** Text tokens follow Untitled's step ratios anchored to the UI font-size preference (at 14px: mini 10/14, small 12/16, regular 14/20, large-strong 16/24, heading1 24/32; heading2 stays 18/24).
+
 ## Color, state, and accessibility
 
 Reuse semantic surface, text, accent, status, and elevation tokens from

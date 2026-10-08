@@ -149,7 +149,7 @@ export function PresetSetupDialog({
         <span className="flex items-center gap-2.5">
           <span
             aria-hidden
-            className="flex size-7 shrink-0 items-center justify-center rounded-md border border-separator bg-well text-strong"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md bg-well text-strong"
           >
             <McpPresetIcon presetId={preset.id} name={preset.name} className="size-3.5" />
           </span>

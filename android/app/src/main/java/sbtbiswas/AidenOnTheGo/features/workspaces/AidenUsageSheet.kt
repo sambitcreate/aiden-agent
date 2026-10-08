@@ -54,6 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import sbtbiswas.AidenOnTheGo.R
 import androidx.annotation.StringRes
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 data class AidenUsageHeatmapDay(val date: String, val tokens: Int)
 
@@ -168,7 +169,7 @@ fun AidenUsageSheet(
                     color = palette.foreground,
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text(stringResource(R.string.action_done), color = palette.accent)
                 }
             }

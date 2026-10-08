@@ -47,6 +47,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -259,7 +260,7 @@ fun AidenGitScreen(
                                 modifier = Modifier.weight(1f)
                             )
                             if (lastFailedOperation != null) {
-                                TextButton(
+                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
                                     onClick = {
                                         lastFailedOperation?.invoke()
                                     }
@@ -637,7 +638,7 @@ fun AidenGitScreen(
                         color = palette.foreground,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = { showNewBranchDialog = true }) {
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showNewBranchDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = null, tint = palette.accent)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(stringResource(R.string.git_new_branch), color = palette.accent, fontWeight = FontWeight.Bold)
@@ -965,7 +966,7 @@ fun AidenGitScreen(
                         color = palette.foreground,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = { showNewWorktreeDialog = true }) {
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { showNewWorktreeDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = null, tint = palette.accent)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(stringResource(R.string.git_new_worktree), color = palette.accent, fontWeight = FontWeight.Bold)

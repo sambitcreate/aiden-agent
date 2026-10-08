@@ -49,6 +49,7 @@ import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalResources
 import androidx.annotation.StringRes
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 enum class AidenBotEditorDefaultAccess {
     RECOMMENDED,
@@ -425,7 +426,7 @@ fun AidenBotEditorScreen(
                     }
                 },
                 actions = {
-                    TextButton(
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
                         onClick = {
                             val curDraft = draft ?: return@TextButton
                             val curCat = catalog ?: return@TextButton

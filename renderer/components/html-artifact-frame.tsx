@@ -223,7 +223,7 @@ function HtmlArtifactFrameImpl({
       aria-modal={expanded || undefined}
       aria-labelledby={expanded ? expandedTitleId : undefined}
       className={cn(
-        "aiden-html-artifact-popover max-w-[42rem] overflow-hidden rounded-xl border border-separator bg-control p-0 text-primary",
+        "aiden-html-artifact-popover max-w-[42rem] overflow-hidden rounded-xl bg-control p-0 text-primary",
         expanded && "flex max-w-none flex-col rounded-dialog bg-popover shadow-modal",
       )}
       data-html-artifact={artifact.mediaId}

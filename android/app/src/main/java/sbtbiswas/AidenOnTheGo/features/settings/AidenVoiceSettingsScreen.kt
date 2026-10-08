@@ -44,6 +44,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenSpeechModel
 import sbtbiswas.AidenOnTheGo.models.AidenSpeechStatus
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 /**
  * Voice input: where speech is transcribed, plus the status of that engine. Desktop speech
@@ -257,7 +258,7 @@ private fun AidenSpeechModelRow(
         },
         trailing = {
             when {
-                download != null -> TextButton(onClick = onCancel, enabled = enabled, shape = AidenShape.Button) {
+                download != null -> TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onCancel, enabled = enabled, shape = AidenShape.Button) {
                     Text(stringResource(R.string.action_cancel))
                 }
                 model.installed && status.selectedModelId == model.id -> Row(
@@ -267,10 +268,10 @@ private fun AidenSpeechModelRow(
                     Icon(Icons.Default.Check, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
                     Text(stringResource(R.string.voice_selected), style = MaterialTheme.typography.labelLarge, color = palette.accent)
                 }
-                model.installed -> TextButton(onClick = onSelect, enabled = enabled, shape = AidenShape.Button) {
+                model.installed -> TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onSelect, enabled = enabled, shape = AidenShape.Button) {
                     Text(stringResource(R.string.voice_use))
                 }
-                else -> TextButton(onClick = onDownload, enabled = enabled, shape = AidenShape.Button) {
+                else -> TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onDownload, enabled = enabled, shape = AidenShape.Button) {
                     Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text(stringResource(R.string.voice_download), modifier = Modifier.padding(start = 4.dp))
                 }

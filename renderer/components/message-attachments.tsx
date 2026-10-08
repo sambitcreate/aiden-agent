@@ -27,7 +27,7 @@ function fileSize(size: number): string {
 function AttachmentCard({ attachment }: { attachment: Attachment }) {
   const Icon = attachment.kind === "image" ? FileImage : FileText;
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-separator bg-control px-2.5 py-2">
+    <div className="flex min-w-0 items-center gap-2 rounded-lg bg-control px-2.5 py-2">
       <Icon aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
       <div className="min-w-0">
         <div className="max-w-[14rem] truncate text-small text-primary">{attachment.name}</div>
@@ -124,7 +124,7 @@ export function MessageAttachmentPreviewProvider({ children }: React.PropsWithCh
             onError={() => {
               if (preview) markDecodeFailed(preview);
             }}
-            className="mx-auto max-h-[65vh] max-w-full rounded-xl border border-separator bg-control object-contain"
+            className="mx-auto max-h-[65vh] max-w-full rounded-xl bg-control object-contain"
           />
         ) : null}
       </Dialog>
@@ -206,7 +206,7 @@ function MessageAttachmentsContent({
                   data-attachment-preview-id={attachment.id}
                   aria-label={`Open ${attachment.name} preview`}
                   className={cn(
-                    "group/image relative block max-w-full overflow-hidden rounded-xl border border-separator bg-control text-left outline-none transition-colors hover:border-tertiary motion-reduce:transition-none",
+                    "group/image relative block max-w-full overflow-hidden rounded-xl bg-control text-left outline-none transition-colors hover:bg-control-hover motion-reduce:transition-none",
                     role === "assistant" && "w-full",
                   )}
                   onClick={(event) => {
