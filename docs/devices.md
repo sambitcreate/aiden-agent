@@ -28,6 +28,20 @@ A Mac you paired as an Aiden desktop can share its simulators. On the Mac that h
 
 The paired Mac's simulators then appear under their own heading in your tab. Aiden checks paired Macs only when you open the tab or choose refresh. It never polls in the background. Agent tools use this Mac's simulators only.
 
+### Device power features
+
+These work on this Mac's simulators. A paired Mac's simulator gets only the screenshot options, the overlay, and the event log.
+
+- **Screenshots.** The rail's screenshot control has two halves. The camera sends a screenshot to the chat, as before. The menu beside it offers **Screenshot to chat** and **Save screenshot…**. Saving opens the system save dialog in Downloads with a name like `iPhone-17-Pro-2026-10-08-142530.png`, and the confirmation toast has **Reveal in Finder**.
+- **Screen recording.** **Record screen** in the rail starts `simctl io recordVideo` (H.264). While it runs, the button turns into a red indicator with the elapsed time. Selecting it stops the recording with SIGINT so the file is finalized. Recordings stop by themselves after 10 minutes. On stop, the save dialog opens in Downloads (`<device>-<time>.mp4`). Cancelling the dialog deletes the recording. Deleting the chat, quitting Aiden, or shutting the simulator down stops a recording and deletes it. Aiden's composer has no video attachments, so recordings are not attached to the chat.
+- **Accessibility overlay.** Turn on **Overlay element frames** in the device tools drawer to outline every accessibility element on the flat screen. Hover an element to see its label and role. The frames follow rotation. While they show, the flat screen is used instead of the 3D frame. On this Mac the tree is re-read every two seconds. On a paired Mac it is read once, and a refresh button reads it again.
+- **Event log.** Expand **Event log** in the drawer for serve-sim's live record of touches, keys, buttons, and launches. You can filter, pause (new events keep buffering), clear, and copy it. It keeps the newest 500 entries and is connected only while the section is expanded.
+- **Clipboard.** **Paste to device** in the drawer puts the Mac clipboard's text on the simulator's pasteboard (`simctl pbcopy`, text on stdin) and then presses Cmd+V on the device so the focused field receives it. Cmd+V on the focused screen does the same. **Copy from device** (`simctl pbpaste`) copies the simulator's text to the Mac. Only text up to 64 KB is accepted, and images and files are refused.
+- **Multi-touch.** On the flat screen, Option-drag places two touches mirrored around the screen centre. Moving toward or away from the centre pinches, and moving around it rotates. Option+Shift-drag moves both touches together for a two-finger pan. Touch dots show both fingers while Option is held. A trackpad pinch over the flat screen pinches the device. The 3D frame keeps its own gestures.
+- **Erase.** **Erase all content and settings…** in the drawer first shows a destructive confirmation that names the simulator. It then shuts the simulator down if it is running, runs `simctl erase`, and offers **Boot** to start it again, or **Close simulator**. Agents have no erase tool, and the always-on guidance still forbids erasing a watched simulator unless the user asks.
+
+The agent's `device_screenshot` takes an optional `saveTo` that also writes the PNG to a path. The path must be inside the chat's workspace (a relative path is relative to the workspace) or the Downloads folder. A folder path gets a dated file name. Paths are checked as written and again after resolving symlinks. A final symlink is never followed, and the path is checked before the screenshot is taken. Under ask permission, a screenshot with `saveTo` asks first.
+
 ## Settings → Simulator
 
 Settings → **Simulator** appears in the settings list and command palette only when the feature flag is on. It contains:
@@ -94,6 +108,15 @@ serve-sim's own Tools panel sends shell commands over that exec channel. Aiden n
 ### Agents drive through the CLI
 
 There are deliberately only four `device_*` tools (`device-tools.ts`). Driving happens through the `agent-device` CLI. `run_command` gets a pinned shim directory on its PATH, read fresh for every command, so a revoke mid-generation drops it. How to drive a device comes back in the `device_open` result instead of an always-loaded prompt. The always-on prompt block is four lines that point at the tools and ask the agent to prefer them (and `agent-device`) for anything on the device the user is watching. Shell tools such as `xcrun simctl`, `xcodebuild` and `adb` stay allowed for builds, installs, logs, port forwarding and diagnostics the device tools do not cover, but the block also forbids shutting down or erasing a watched simulator or stopping `serve-sim` unless the user asks, since the prompt is loaded before any `device_open`. The `device_open` quick start repeats that preference, allows `xcrun simctl` for gaps on the same UDID, and repeats the no-teardown guardrail.
+
+### Device power features
+
+- Erase, clipboard, and recording are argv builders in `device-actions.ts` (`deviceEraseCommands`, `deviceClipboardWriteCommand`, `deviceClipboardReadCommand`, `deviceRecordVideoCommand`, `eraseDevice`). Each one takes the target's `platform`, and a platform without a variant is refused before anything runs, so adb variants can be added beside iOS. They reach a simulator only through `DeviceService.localTarget`, which accepts only this Mac's simulators that the last listing reported. Clipboard and recording also require the simulator to be booted.
+- `device-recording.ts` supervises `simctl io recordVideo` children. It runs one recorder per simulator. Stop sends SIGINT, then SIGKILL after 15 s, which fails the recording. The cap is 10 minutes. Temp files go in `userData/devices/recordings/`.
+- `device-features.ts` composes the features, discards recordings when their simulator stops being booted or listed, and remembers the files it saved so that only those can be revealed.
+- The IPC is `device-feature-ipc.ts`. Channels: `devices:erase`, `devices:clipboard-paste`, `devices:clipboard-copy`, `devices:recordings-list`, `devices:recording-start`, `devices:recording-stop`, `devices:recording-save`, `devices:recording-discard`, `devices:screenshot-save`, `devices:reveal-saved`, plus the `devices:recordings` notification. Inputs are parsed by `renderer/shared/device-features.ts`.
+- serve-sim's input socket takes two contacts as message `0x05` (`{ type, x1, y1, x2, y2 }`, normalized like `0x03`). The stream client's `sendMultiTouch` applies the same rotation remap as single touches. The gesture geometry is in `renderer/lib/device-multitouch.ts`, so the 3D view can reuse it.
+- The accessibility overlay reads `GET /vendor/serve-sim/helper/<udid>/ax`, and the event log reads `GET /vendor/serve-sim/api/event-log/events`. Both are already on the proxy's read-only allowlist. They draw short-lived grants from `renderer/lib/device-grant.ts`, because they can outlive the stream's one-minute grant.
 
 ### Paired Macs
 
