@@ -118,7 +118,22 @@ export function createPhoneViewer(options: {
   rim.position.set(3, 1, -3);
   const fill = new DirectionalLight(0xc7dcff, 1.2);
   fill.position.set(-2, -2, -4);
-  scene.add(new AmbientLight(0xffffff, environment ? 0.6 : 2.4), key, rim, fill);
+  const ambient = new AmbientLight(0xffffff, environment ? 0.6 : 2.4);
+  scene.add(ambient, key, rim, fill);
+  /**
+   * T3's GLB bodies were authored for T3's lights alone; the room reflections
+   * the procedural PBR bodies need wash their glossy black parts (the Dynamic
+   * Island, the bezel) out to grey. Each body gets the lighting it was made for.
+   */
+  const lightFor = (bundled: boolean) => {
+    scene.environment = bundled ? null : (environment?.texture ?? null);
+    ambient.intensity = bundled || !environment ? 2.4 : 0.6;
+    key.intensity = bundled ? 5 : 3.2;
+    rim.intensity = bundled ? 4 : 2.2;
+    fill.intensity = bundled ? 2 : 1.2;
+    fill.color.set(bundled ? 0x9facd4 : 0xc7dcff);
+    key.color.set(bundled ? 0xe4edff : 0xffffff);
+  };
 
   let screen: DeviceScreenSize | null = null;
   /** The source canvas is 300×150 until the first frame lands; its size means nothing before that. */
@@ -320,6 +335,7 @@ export function createPhoneViewer(options: {
     modelAsset = procedural;
     phone = next;
     scene.add(phone.root);
+    lightFor(glb !== null);
     if (accessory) {
       if (glb) phone.orientation.add(accessory.asset);
       else accessory.asset.removeFromParent();

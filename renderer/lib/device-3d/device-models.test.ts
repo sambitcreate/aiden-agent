@@ -211,6 +211,11 @@ test("the procedural body shows at once, and the bundled GLB replaces it in plac
   draw();
   assert.ok(root() !== procedural, "a new body is drawn");
   assert.ok(contains(root(), glb.asset), "the GLB body is drawn");
+  // T3's bodies are lit by its lights alone; room reflections would grey their glossy black parts.
+  assert.equal(last(renderers[0]!.frames)!.scene.environment, null);
+  viewer.setAsset(null);
+  draw();
+  assert.ok(last(renderers[0]!.frames)!.scene.environment, "the procedural body gets its reflections back");
   assert.equal(renderers.length, 1);
   assert.deepEqual(errors, []);
   viewer.dispose();
