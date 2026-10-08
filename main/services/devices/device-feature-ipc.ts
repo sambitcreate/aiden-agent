@@ -48,6 +48,33 @@ function requireRecordingId(value: unknown): string {
   return id;
 }
 
+function requireSaveTarget(request: Record<string, unknown>): { hostId: string; deviceId: string } {
+  const { hostId, deviceId } = request;
+  if (typeof hostId !== "string" || !DEVICE_HOST_ID_PATTERN.test(hostId)) {
+    throw new Error("A valid device host is required.");
+  }
+  if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) {
+    throw new Error("A valid simulator is required.");
+  }
+  return { hostId, deviceId };
+}
+
+/** The 3D view's framed capture is drawn in the renderer; accept only a bounded PNG. */
+export const MAX_FRAMED_SCREENSHOT_BYTES = 32 * 1024 * 1024;
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+function requirePng(value: unknown): Uint8Array {
+  if (
+    !(value instanceof Uint8Array) ||
+    value.byteLength <= PNG_SIGNATURE.length ||
+    value.byteLength > MAX_FRAMED_SCREENSHOT_BYTES ||
+    PNG_SIGNATURE.some((byte, index) => value[index] !== byte)
+  ) {
+    throw new Error("The framed screenshot was not a valid image.");
+  }
+  return value;
+}
+
 export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps): void {
   const subscribers = new Set<RendererDocumentOwner>();
   let unsubscribe: (() => void) | null = null;
@@ -138,6 +165,14 @@ export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps
         throw new Error("A valid simulator is required.");
       }
       return features.saveScreenshot({ hostId, deviceId }, chooser(event, owner, "png"));
+    }),
+  );
+  deps.handle(
+    "devices:framed-screenshot-save",
+    guarded(async (features, [input], event, owner) => {
+      const request = requireRecord(input);
+      const target = requireSaveTarget(request);
+      return features.saveFramedScreenshot(target, requirePng(request.png), chooser(event, owner, "png"));
     }),
   );
   deps.handle(

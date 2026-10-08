@@ -194,11 +194,14 @@ test.describe("Simulator stream", () => {
     for (const origin of streamOrigins) expect([undefined, "file://"]).toContain(origin);
 
     // The compatibility stream cannot be framed in 3D; the reason stays reachable by keyboard.
-    const frameToggle = panel.getByRole("button", { name: "3D frame" });
+    const frameToggle = panel.getByRole("button", { name: "3D view" });
     await expect(frameToggle).toHaveAttribute("aria-disabled", "true");
-    await expect(frameToggle).toHaveAccessibleDescription("3D frame unavailable with the compatibility stream");
+    await expect(frameToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(frameToggle).toHaveAccessibleDescription("3D view unavailable with the compatibility stream");
     await frameToggle.focus();
     await expect(frameToggle).toBeFocused();
+    // The flat view is what is showing.
+    await expect(panel.getByRole("button", { name: "Flat view" })).toHaveAttribute("aria-pressed", "true");
 
     // The tools drawer takes focus on open and hands it back on Escape.
     const toolsToggle = panel.getByRole("button", { name: "Device tools" });

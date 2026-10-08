@@ -898,6 +898,8 @@ export const devicesApi = {
       const state = parseDeviceServiceState(payload);
       if (state) handler(state);
     }),
+  /** The native trackpad gesture ended (Electron's `gestureScrollEnd`), so a 3D orbit can settle. */
+  onTrackpadScrollEnd: (handler: () => void) => onNotification<unknown>("devices:trackpad-scroll-end", () => handler()),
   /** An agent opened a device for this chat; it floats over the chat or its tab comes forward. */
   onReveal: (handler: (chatId: string, target?: { hostId: string; deviceId: string }) => void) =>
     onNotification<unknown>("devices:reveal", (payload) => {
@@ -934,6 +936,9 @@ export const devicesApi = {
   saveRecording: (id: string) => invokeDeviceSave("devices:recording-save", { id }),
   discardRecording: (id: string) => invoke<void>("devices:recording-discard", { id }),
   saveScreenshot: (input: { hostId: string; deviceId: string }) => invokeDeviceSave("devices:screenshot-save", input),
+  /** Saves the 3D view's framed-device PNG through the same save dialog. */
+  saveFramedScreenshot: (input: { hostId: string; deviceId: string; png: Uint8Array }) =>
+    invokeDeviceSave("devices:framed-screenshot-save", input),
   /** Reveals a file this launch saved from the Simulator tab. */
   revealSaved: (path: string) => invoke<void>("devices:reveal-saved", { path }),
   onRecordings: (handler: (recordings: DeviceRecordingInfo[]) => void) =>

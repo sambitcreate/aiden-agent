@@ -16,6 +16,7 @@ import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { shutdownDevices } from "./handlers/devices.js";
+import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
@@ -1184,6 +1185,8 @@ async function createMainWindow(
   });
   const createdWebContentsId = createdWindow.webContents.id;
   const mainWindowUrl = getWindowUrl("main-window.html");
+  // The Simulator tab's 3D view settles a trackpad orbit when the fingers lift.
+  forwardTrackpadScrollEnd(createdWindow.webContents);
   createdWindow.webContents.on("did-start-loading", () => {
     resetRendererReadiness();
     terminalService.closeForWebContents(createdWebContentsId);

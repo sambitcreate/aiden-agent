@@ -236,3 +236,20 @@ test("screenshots save to the chosen file and can then be revealed", async () =>
     status: "cancelled",
   });
 });
+
+test("a framed 3D screenshot saves the renderer's image under a distinct name and can be revealed", async () => {
+  const h = harness();
+  const offered: string[] = [];
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const saved = await h.features.saveFramedScreenshot({ hostId: "local", deviceId: UDID }, png, async (name) => {
+    offered.push(name);
+    return "/Users/me/Downloads/framed.png";
+  });
+  assert.deepEqual(offered, ["iPhone-17-Pro-framed-2026-10-08-093000.png"]);
+  assert.deepEqual(saved, { status: "saved", path: "/Users/me/Downloads/framed.png" });
+  assert.deepEqual([...(h.files.get("/Users/me/Downloads/framed.png") as Uint8Array)], [...png]);
+  assert.equal(h.features.isSavedPath("/Users/me/Downloads/framed.png"), true);
+  assert.deepEqual(await h.features.saveFramedScreenshot({ hostId: "local", deviceId: UDID }, png, async () => null), {
+    status: "cancelled",
+  });
+});

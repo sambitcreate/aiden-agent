@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { DeviceRecordingInfo } from "../../../renderer/shared/device-features.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
-import { registerDeviceFeatureHandlersWith } from "./device-feature-ipc.js";
+import { MAX_FRAMED_SCREENSHOT_BYTES, registerDeviceFeatureHandlersWith } from "./device-feature-ipc.js";
 import type { DeviceFeatures } from "./device-features.js";
 import type { DeviceIpcEvent } from "./device-ipc.js";
 
@@ -16,6 +16,7 @@ const CHANNELS = [
   "devices:recording-save",
   "devices:recording-discard",
   "devices:screenshot-save",
+  "devices:framed-screenshot-save",
   "devices:reveal-saved",
 ];
 const UDID = "5C1E4B7A-0000-4000-8000-000000000001";
@@ -72,6 +73,11 @@ function harness(options: { enabled?: boolean; ownerError?: boolean; dialog?: st
     async saveScreenshot(target: unknown, choose: (name: string) => Promise<string | null>) {
       const path = await choose("iPhone-2026.png");
       calls.push(["saveScreenshot", target, path]);
+      return path ? { status: "saved", path } : { status: "cancelled" };
+    },
+    async saveFramedScreenshot(target: unknown, png: Uint8Array, choose: (name: string) => Promise<string | null>) {
+      const path = await choose("iPhone-framed-2026.png");
+      calls.push(["saveFramedScreenshot", target, png, path]);
       return path ? { status: "saved", path } : { status: "cancelled" };
     },
     isSavedPath: (file: string) => file === "/Users/me/Downloads/shot.png",
@@ -164,6 +170,26 @@ test("saves go through the user's dialog, and a document that went away gets no 
   assert.deepEqual(await cancelled.invoke("devices:screenshot-save", { hostId: "local", deviceId: UDID }), {
     status: "cancelled",
   });
+});
+
+test("a framed screenshot accepts only a bounded PNG for a valid device, then uses the save dialog", async () => {
+  const ipc = harness();
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+  const target = { hostId: "local", deviceId: UDID };
+  for (const bad of [undefined, "data:image/png;base64,AAAA", new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]), png.slice(0, 8)]) {
+    await assert.rejects(ipc.invoke("devices:framed-screenshot-save", { ...target, png: bad }), /not a valid image/u);
+  }
+  const huge = new Uint8Array(MAX_FRAMED_SCREENSHOT_BYTES + 1);
+  huge.set(png.subarray(0, 8));
+  await assert.rejects(ipc.invoke("devices:framed-screenshot-save", { ...target, png: huge }), /not a valid image/u);
+  await assert.rejects(ipc.invoke("devices:framed-screenshot-save", { hostId: "local", deviceId: "a/b", png }), /valid simulator/u);
+  assert.deepEqual(ipc.calls, []);
+  assert.deepEqual(await ipc.invoke("devices:framed-screenshot-save", { ...target, png }), {
+    status: "saved",
+    path: "/Users/me/Downloads/chosen",
+  });
+  assert.deepEqual(ipc.calls, [["saveFramedScreenshot", target, png, "/Users/me/Downloads/chosen"]]);
+  assert.deepEqual(ipc.dialogs, [{ defaultName: "iPhone-framed-2026.png", kind: "png" }]);
 });
 
 test("only files saved from the Simulator tab can be revealed", async () => {

@@ -60,6 +60,12 @@ export interface DeviceFeatures {
   recordings(): DeviceRecordingInfo[];
   onRecordings(listener: (recordings: DeviceRecordingInfo[]) => void): () => void;
   saveScreenshot(target: { hostId: string; deviceId: string }, choose: ChooseSavePath): Promise<DeviceSaveResult>;
+  /** Saves a PNG the renderer drew, such as the framed 3D device, through the same dialog. */
+  saveFramedScreenshot(
+    target: { hostId: string; deviceId: string },
+    png: Uint8Array,
+    choose: ChooseSavePath,
+  ): Promise<DeviceSaveResult>;
   /** Only files this launch saved can be revealed in Finder. */
   isSavedPath(file: string): boolean;
   /** A deleted chat's recordings are stopped and deleted. */
@@ -178,6 +184,14 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       const destination = await choose(deviceCaptureFileName(deviceName(service.state(), target), deps.now(), "png"));
       if (!destination) return { status: "cancelled" };
       await deps.writeFile(destination, new Uint8Array(png));
+      remember(destination);
+      return { status: "saved", path: destination };
+    },
+    async saveFramedScreenshot(target, png, choose) {
+      const name = `${deviceName(service.state(), target)} framed`;
+      const destination = await choose(deviceCaptureFileName(name, deps.now(), "png"));
+      if (!destination) return { status: "cancelled" };
+      await deps.writeFile(destination, png);
       remember(destination);
       return { status: "saved", path: destination };
     },

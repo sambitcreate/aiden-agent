@@ -139,6 +139,9 @@ test.describe("Simulator power features", () => {
     const options = panel.getByRole("button", { name: "Screenshot options" });
     await options.focus();
     await page.keyboard.press("Enter");
+    // The framed capture is offered only while the 3D view shows; this stream is flat.
+    await expect(page.getByRole("menuitem", { name: "Save screenshot…" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Save framed screenshot…" })).toHaveCount(0);
     await page.getByRole("menuitem", { name: "Save screenshot…" }).click();
     await expect(page.getByText("Saved simulator-shot.png.")).toBeVisible();
     const png = await readFile(savedScreenshot);
