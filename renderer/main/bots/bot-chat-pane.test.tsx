@@ -367,7 +367,7 @@ test("an approval whose answer fails to send comes back so it can be answered ag
     summary: "Share the chart.",
   });
   const card = await screen.findByRole("group", { name: "Planner needs approval" });
-  assert.ok(within(card).getByText("Planner wants to use share image."));
+  assert.ok(within(card).getByText("Planner wants to use Share image."));
   fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
   const back = await screen.findByRole("group", { name: "Planner needs approval" });
   assert.ok(within(back).getByRole("button", { name: "Allow" }));

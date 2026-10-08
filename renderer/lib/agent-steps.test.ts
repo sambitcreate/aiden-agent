@@ -54,6 +54,24 @@ test("all browser actions have readable activity labels", () => {
   }
 });
 
+test("simulator device tools read as compact timeline rows", () => {
+  const rows = [
+    ["device_list", "List simulators", "Listed simulators"],
+    ["device_open", "Open simulator", "Opened simulator"],
+    ["device_screenshot", "Screenshot simulator", "Took simulator screenshot"],
+    ["device_close", "Close simulator", "Closed simulator"],
+  ];
+  for (const [name, label, complete] of rows) {
+    assert.equal(activityLineText(step(name, 0, name, "completed", { label })), complete);
+    // Failures and approval waits keep the tool's own label, so the row still names the device action.
+    assert.equal(activityLineText(step(name, 0, name, "failed", { label })), `${label} failed`);
+  }
+  assert.equal(
+    activityLineText(step("close", 0, "device_close", "awaiting_approval", { label: "Shut down simulator" })),
+    "Shut down simulator needs approval",
+  );
+});
+
 function thinking(id: string, order: number, durationMs?: number): AgentThinkingStep {
   return {
     id,

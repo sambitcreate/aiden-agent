@@ -584,6 +584,10 @@ enum AidenAgentActivityPresentation {
         "browser_wait_for": ("Waiting for page", "Waited for page"),
         "browser_recording_start": ("Starting browser recording", "Started browser recording"),
         "browser_recording_stop": ("Stopping browser recording", "Stopped browser recording"),
+        "device_list": ("Listing simulators", "Listed simulators"),
+        "device_open": ("Opening simulator", "Opened simulator"),
+        "device_screenshot": ("Taking simulator screenshot", "Took simulator screenshot"),
+        "device_close": ("Closing simulator", "Closed simulator"),
         "vcc_recall": ("Recalling chat history", "Recalled chat history"),
         "compact_context": ("Compacting context", "Compacted context"),
         // Activity an ACP agent (for example, Google Antigravity) ran itself.

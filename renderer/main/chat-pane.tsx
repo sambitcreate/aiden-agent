@@ -245,7 +245,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
   // Agent-backed models need someone answering approvals in an ordinary chat.
   const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
-    chat.data?.botId || bot.data ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
+    chat.data?.botId ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
   const sideQuestionBlockedReason = draft
     ? "Send the first message before asking a side question."
     : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID

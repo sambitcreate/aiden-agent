@@ -14,6 +14,7 @@ import {
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 
 const endpoint = "https://aiden.example.test/api/aiden/v1";
@@ -310,6 +311,7 @@ test("pairing grants progress authority only to clients that explicitly accept i
     AIDEN_REMOTE_CAPABILITIES.filter(
       (capability) =>
         !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
+        !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
         !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability),
     ),
   );

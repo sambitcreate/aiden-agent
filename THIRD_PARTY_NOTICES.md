@@ -122,8 +122,61 @@ agent device tools, and agent-device PATH shim (`main/services/devices/`), and
 its stream client, simulator controls, and procedural 3D device frame
 (`renderer/lib/device-3d/`), are adapted from T3 Code at commit
 `1c127066`, under the same MIT license as the T3 Code browser entry above.
-Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
-not included; the device-motion spring is Aiden's own.
+The 3D viewer code (device motion, view snapping, framing, interaction,
+trackpad, iPhone Duo scene, viewer, controls and display feeds, Android fold
+scene, and the trackpad-scroll-end window hook) is adapted from T3 Code at
+commit `a6ec88f7` under the same license.
+Copyright (c) 2026 T3 Tools Inc. T3's Simulator-derived glyph art is not
+included; Aiden's Duo glyphs and procedural fallback bodies
+(`hardware-models.ts`, `duo-model.ts`) are original work.
+
+### Bundled device models (Apple Inc.)
+
+`renderer/assets/devices/models/` ships T3 Code's device models unchanged:
+`iphone-18-pro.glb`, `iphone-18-pro-max.glb`, `ipad-pro-13-m5.glb`,
+`ipad-pro-13-m5-magic-keyboard.glb` and `iphone-duo.glb`. They were converted
+by T3 Code from Apple Inc.'s public AR Quick Look (USDZ) product files.
+`sources.json` beside them records each source URL, its SHA-256 hash, and the
+conversion steps. Author: Apple Inc. No open-source or redistribution licence
+has been established for these assets; the owner chose on 2026-10-08 to ship
+them as T3 Code does. The models are loaded only when a matching device is
+shown in 3D.
+
+The per-device workspace tabs (`renderer/lib/device-tabs.ts`), the floating
+device player and its layout (`renderer/components/device-mini-player.tsx`,
+`renderer/lib/device-mini-player-layout.ts`), and Quick View docking beside the
+chat (`resolveChatCardInset` in `renderer/lib/environment-panel-layout.ts`) are
+adapted from T3 Code's right-panel device surfaces and commits `8bbe2bf660`
+(floating device streams) and `429c625a85` (workspace card beside chat), under
+the same MIT license. Copyright (c) 2026 T3 Tools Inc.
+
+The accessibility-tree overlay (`renderer/lib/device-ax.ts`,
+`renderer/components/device-ax-overlay.tsx`) and the iOS event log
+(`renderer/lib/device-event-log.ts`, `renderer/components/device-event-log-panel.tsx`)
+are adapted from T3 Code at commit `a6ec88f7`, under the same MIT license.
+
+SSH device hosts (`ssh-device-host.ts`, `ssh-device-script.ts`,
+`local-ssh-target.ts`), locked helper-version maintenance
+(`device-tool-maintenance.ts`), and the SSH hosts, tool-version, and host
+diagnostics UI (`renderer/components/settings/simulator-ssh-hosts.tsx`,
+`renderer/components/device-host-diagnostics.tsx`) are adapted from T3 Code at
+commit `a6ec88f7`, under the same MIT license.
+
+The Android Emulator support (`main/services/devices/android-device-actions.ts`,
+the serve-emu stream path in `renderer/lib/device-stream.ts`, Android SDK
+discovery, the serve-emu proxy routes, and the Android fold controls in
+`renderer/lib/device-fold.ts` and
+`renderer/components/device-android-fold-controls.tsx`) is adapted from T3
+Code at commit `a6ec88f7`, under the same MIT license. The fold glyphs are
+Aiden's own.
+
+The Aiden On The Go simulator viewers (`ios/AidenOnTheGo/Features/Simulators/`,
+`ios/AidenOnTheGo/Networking/AidenSimulatorStream.swift` and
+`AidenMJPEGMultipartParser.swift`, and the Android
+`features/simulators/` and `networking/AidenSimulatorStream.kt`) adapt the
+on-demand controls, shake detector and device picker of T3 Code's
+`apps/mobile/src/features/devices`, under the same MIT license. Both apps ship
+the license as `ThirdPartyNotices/T3Code-LICENSE.txt`.
 
 ## three.js
 

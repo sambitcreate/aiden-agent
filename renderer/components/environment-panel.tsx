@@ -41,6 +41,7 @@ import {
   MIN_PANEL_WIDTH,
   resolveEnvironmentPanelLayout,
   resolveEnvironmentPanelResizeBounds,
+  resolveChatCardInset,
   resolveQuickViewLayout,
 } from "../lib/environment-panel-layout";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
@@ -93,6 +94,18 @@ import {
   replaceSubagentStopPendingOwner,
   type SubagentStopPendingState,
 } from "../lib/subagent-stop-pending";
+import {
+  deviceRevealAction,
+  deviceTabKey,
+  openDeviceTab,
+  selectDeviceTab,
+} from "../lib/device-tabs";
+import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-store";
+import {
+  DeviceTabContextMenu,
+  DeviceTabRenameInput,
+  useDeviceTabs,
+} from "./device-workspace-tabs";
 
 // The browser and simulator tabs carry their own heavy dependencies and are
 // rarely opened, so their code loads with the panel instead of at startup.
@@ -101,6 +114,9 @@ const BrowserPanel = React.lazy(() =>
 );
 const DevicesPanel = React.lazy(() =>
   import("./devices-panel").then((module) => ({ default: module.DevicesPanel })),
+);
+const DeviceMiniPlayerHost = React.lazy(() =>
+  import("./device-mini-player").then((module) => ({ default: module.DeviceMiniPlayerHost })),
 );
 
 export type { EnvironmentPanelTab } from "../lib/environment-panel-state";
@@ -564,8 +580,20 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const revealChatId = activeChat.chatId;
   React.useEffect(() => {
     if (!devicesEnabled) return undefined;
-    return devicesApi.onReveal((chatId) => {
-      if (chatId === revealChatId) showTools("devices");
+    // An agent-opened device gets its tab back and floats over the chat, or
+    // brings its tab forward when auto-show is off.
+    return devicesApi.onReveal((chatId, target) => {
+      const action = deviceRevealAction({
+        chatId,
+        activeChatId: revealChatId,
+        target: target ?? null,
+        autoFloat: deviceWorkspace.autoFloat(),
+        canFloat: true,
+      });
+      if (action === "ignore") return;
+      if (target) deviceWorkspace.updateTabs(chatId, (tabs) => openDeviceTab(tabs, deviceTabKey(target)));
+      if (action === "float" && target) deviceWorkspace.setFloating(chatId, deviceTabKey(target));
+      else showTools("devices");
     });
   }, [devicesEnabled, revealChatId, showTools]);
 
@@ -1249,17 +1277,31 @@ function EnvironmentPanelSurface({
     if (current?.workspaceId !== owner) return;
     return { ...result, state: current };
   };
+  const chatId = panel.activeChat.chatId;
+  const devices = useDeviceTabs(chatId, panel.devicesEnabled && fullOpen && panelTabs.includes("devices"));
+  const [renamingDevice, setRenamingDevice] = React.useState<string | null>(null);
   const openTool = (tool: EnvironmentPanelTab) => {
     navigationIntentRef.current++;
     setBrowserFocusRequest(null);
     if (tool === "terminal") terminal.moveTo("side");
-    else panel.setTab(tool);
+    else {
+      // "+ → Device" opens the picker; choosing a device there adds its tab.
+      if (tool === "devices") devices.openPicker();
+      panel.setTab(tool);
+    }
   };
-  const stripTabs = panelTabs.flatMap<{ id: string; kind: EnvironmentPanelTab; label: string; selected: boolean }>((kind) => kind === "browser" && browser?.tabs.length
+  type StripTab = { id: string; kind: EnvironmentPanelTab; label: string; selected: boolean; deviceKey?: string | null };
+  const stripTabs = panelTabs.flatMap<StripTab>((kind) => kind === "browser" && browser?.tabs.length
     ? browser.tabs.map((page) => ({ id: page.id, kind, label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
-    : [{ id: kind, kind, label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
-  const selectStripTab = (entry: typeof stripTabs[number]) => {
-    if (entry.kind === "browser" && entry.id !== "browser") {
+    : kind === "devices"
+      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", kind, label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
+      : [{ id: kind, kind, label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
+  const selectStripTab = (entry: StripTab) => {
+    if (entry.deviceKey !== undefined) {
+      navigationIntentRef.current++;
+      devices.select(entry.deviceKey);
+      panel.setTab("devices");
+    } else if (entry.kind === "browser" && entry.id !== "browser") {
       const intent = ++navigationIntentRef.current;
       void runBrowser({ action: "select", tabId: entry.id }).then((result) => {
         if (!result || intent !== navigationIntentRef.current || result.state.activeTabId !== entry.id || !result.state.tabs.some((page) => page.id === entry.id)) return;
@@ -1268,10 +1310,13 @@ function EnvironmentPanelSurface({
       }).catch(() => toast.error("Could not select browser tab."));
     } else openTool(entry.kind);
   };
-  const closeStripTab = (entry: typeof stripTabs[number]) => {
+  const closeStripTab = (entry: StripTab) => {
     const intent = ++navigationIntentRef.current;
     requestAnimationFrame(() => activeTabRef.current?.focus());
-    if (entry.kind === "browser" && entry.id !== "browser") {
+    if (entry.deviceKey !== undefined) {
+      // Closing a device tab ends its viewer session; the simulator keeps running.
+      if (devices.close(entry.deviceKey)) panel.closeTab("devices");
+    } else if (entry.kind === "browser" && entry.id !== "browser") {
       void runBrowser({ action: "close", tabId: entry.id }).then((result) => {
         if (!result || intent !== navigationIntentRef.current || result.state.tabs.some((page) => page.id === entry.id)) return;
         if (!result.state.tabs.length) panel.closeTab("browser");
@@ -1424,14 +1469,23 @@ function EnvironmentPanelSurface({
         <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label="Environment views">
           {stripTabs.map((entry, index) => {
             const Icon = WORKSPACE_TOOLS.find((tool) => tool.id === entry.kind)?.icon ?? Plus;
-            return <div key={entry.id} className={cn("flex min-w-0 shrink-0 items-center rounded-control", entry.selected && "bg-list-selection")}>
-              <Button ref={entry.selected ? activeTabRef : undefined} id={entry.selected ? `environment-${entry.kind}-tab` : undefined} variant="transparent" size="small" role="tab" tabIndex={entry.selected ? 0 : -1} aria-selected={entry.selected} aria-controls={`environment-${entry.kind}-panel`} title={entry.label} disabled={panel.gitOperationBusy} onClick={() => selectStripTab(entry)} onKeyDown={(event) => {
+            const deviceKey = entry.deviceKey;
+            const tabButton = <Button ref={entry.selected ? activeTabRef : undefined} id={entry.selected ? `environment-${entry.kind}-tab` : undefined} variant="transparent" size="small" role="tab" tabIndex={entry.selected ? 0 : -1} aria-selected={entry.selected} aria-controls={`environment-${entry.kind}-panel`} title={deviceKey ? `${entry.label} — double-click to rename` : entry.label} disabled={panel.gitOperationBusy} onClick={() => selectStripTab(entry)} onDoubleClick={deviceKey ? () => setRenamingDevice(deviceKey) : undefined} onKeyDown={(event) => {
                 if (event.key === "Delete") { event.preventDefault(); closeStripTab(entry); return; }
+                if (event.key === "F2" && deviceKey) { event.preventDefault(); setRenamingDevice(deviceKey); return; }
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                 event.preventDefault();
                 const next = event.key === "Home" ? 0 : event.key === "End" ? stripTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + stripTabs.length) % stripTabs.length;
                 selectStripTab(stripTabs[next]);
-              }}><Icon className="size-4 shrink-0" /><span className="max-w-32 truncate">{entry.label}</span></Button>
+              }}><Icon className="size-4 shrink-0" /><span className="max-w-32 truncate">{entry.label}</span></Button>;
+            const renaming = deviceKey && renamingDevice === deviceKey;
+            const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
+            return <div key={entry.id} data-device-tab={deviceKey ?? undefined} className={cn("flex min-w-0 shrink-0 items-center rounded-control", entry.selected && "bg-list-selection")}>
+              {renaming
+                ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
+                : deviceKey
+                  ? <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>
+                  : tabButton}
               <Button variant="transparent" size="small" iconOnly disabled={panel.gitOperationBusy} aria-label={`Close ${entry.label} tab`} onClick={() => closeStripTab(entry)}><X className="size-3" /></Button>
             </div>;
           })}
@@ -1550,6 +1604,18 @@ function EnvironmentPanelSurface({
                   chatId={panel.activeChat.chatId ?? undefined}
                   active={presented && panel.tab === "devices"}
                   compact={width < 540}
+                  selected={devices.selected}
+                  floating={devices.floating}
+                  onOpened={(session) => devices.opened(session)}
+                  onClosed={(session) => devices.dismiss(deviceTabKey(session))}
+                  onFloat={(session) => {
+                    devices.float(deviceTabKey(session));
+                    panel.closeTools();
+                  }}
+                  onDock={(session) => {
+                    if (chatId) deviceWorkspace.setFloating(chatId, null);
+                    devices.select(deviceTabKey(session));
+                  }}
                 />
               </React.Suspense>
             )}
@@ -1758,6 +1824,38 @@ function QuickViewCard({
   );
 }
 
+/** CSS lengths in px or rem, as the chat column tokens are written; `none` is unbounded. */
+function cssLength(value: string, rootFontSize: number, fallback: number): number {
+  if (value.trim() === "none") return Number.POSITIVE_INFINITY;
+  const amount = Number.parseFloat(value);
+  if (!Number.isFinite(amount)) return fallback;
+  return value.trim().endsWith("rem") ? amount * rootFontSize : amount;
+}
+
+/** The chat column's maximum width and inner gutter, read from its CSS tokens as Appearance sets them. */
+function useChatColumnMetrics(): { maxWidth: number; gutter: number } {
+  const [metrics, setMetrics] = React.useState({ maxWidth: 832, gutter: 72 });
+  React.useLayoutEffect(() => {
+    const root = document.documentElement;
+    const read = () => {
+      const style = getComputedStyle(root);
+      const rootFontSize = Number.parseFloat(style.fontSize) || 16;
+      const next = {
+        maxWidth: cssLength(style.getPropertyValue("--chat-content-max-width"), rootFontSize, 832),
+        gutter: cssLength(style.getPropertyValue("--aiden-dock-gutter"), rootFontSize, 72),
+      };
+      setMetrics((current) =>
+        current.maxWidth === next.maxWidth && current.gutter === next.gutter ? current : next,
+      );
+    };
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(root, { attributes: true, attributeFilter: ["style", "data-chat-width"] });
+    return () => observer.disconnect();
+  }, []);
+  return metrics;
+}
+
 export function EnvironmentWorkbench({
   children,
   suppressed = false,
@@ -1792,6 +1890,28 @@ export function EnvironmentWorkbench({
     toolsOpen && (!stacked || panel.frontSurface === "tools");
   const quickViewPresented =
     quickViewOpen && (!stacked || panel.frontSurface === "quick-view");
+  const inlineToolsWidth = fullOpen && inline ? renderedWidth : 0;
+  const chatColumn = useChatColumnMetrics();
+  // Quick View docks beside the chat when it is the visible card and no floating
+  // tools surface already covers the chat.
+  const chatCardInset =
+    quickViewPresented && (inline || !toolsPresented)
+      ? resolveChatCardInset({
+          chatWidth: containerWidth - inlineToolsWidth,
+          maxColumnWidth: chatColumn.maxWidth,
+          cardInset: quickViewLayout.right + quickViewLayout.width - inlineToolsWidth,
+          contentGutter: chatColumn.gutter,
+        })
+      : 0;
+  const floatingDevice = useFloatingDevice(panel.activeChat.chatId);
+  const dockDevice = React.useCallback(
+    (chatId: string, key: string) => {
+      deviceWorkspace.setFloating(chatId, null);
+      deviceWorkspace.updateTabs(chatId, (tabs) => selectDeviceTab(tabs, key));
+      panel.showTools("devices");
+    },
+    [panel.showTools],
+  );
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
@@ -1848,7 +1968,27 @@ export function EnvironmentWorkbench({
       data-environment-stacked={stacked ? "true" : "false"}
       className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden"
     >
-      <div data-browser-floating-container className="h-full min-h-0 min-w-0 flex-1">{children}</div>
+      <div
+        data-browser-floating-container
+        data-chat-card-inset={quickViewOpen ? chatCardInset : undefined}
+        style={
+          quickViewOpen
+            ? ({
+                "--chat-card-inset-end": `${chatCardInset}px`,
+                // Full-width chat has no max; the docked column then fills what the card leaves.
+                "--chat-card-max-width": Number.isFinite(chatColumn.maxWidth) ? `${chatColumn.maxWidth}px` : "100000px",
+              } as React.CSSProperties)
+            : undefined
+        }
+        className="h-full min-h-0 min-w-0 flex-1"
+      >
+        {children}
+      </div>
+      {panel.devicesEnabled && floatingDevice && !suppressed ? (
+        <React.Suspense fallback={null}>
+          <DeviceMiniPlayerHost chatId={panel.activeChat.chatId} enabled onDock={dockDevice} />
+        </React.Suspense>
+      ) : null}
       <QuickViewCard
         width={quickViewLayout.width}
         right={quickViewLayout.right}

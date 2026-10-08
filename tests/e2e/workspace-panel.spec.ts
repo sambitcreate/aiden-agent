@@ -5,6 +5,7 @@ import {
   expect,
   finishLmStudioOnboarding,
   test,
+  waitForToastsToClear,
 } from "./fixtures";
 
 test.use({ workspaceSeed: true });
@@ -63,6 +64,41 @@ test("workspace launcher opens tools on demand and returns after closing the las
   await panel.getByRole("button", { name: "Close Context tab" }).click();
   await expect(panel.getByRole("tab")).toHaveCount(1);
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+});
+
+test("Quick View docks beside the chat on a narrower window and floats over it when there is no room", async ({
+  aiden,
+}) => {
+  const { page, app } = aiden;
+  await finishLmStudioOnboarding(page);
+  const card = page.locator("#quick-view-card");
+  const composer = page.locator("textarea").first();
+  const resize = (width: number) =>
+    app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 900), width);
+  // Room between the composer's content and the card's left edge; negative means covered.
+  const clearance = async () => {
+    const field = await composer.boundingBox();
+    const quickView = await card.boundingBox();
+    return field && quickView ? Math.round(quickView.x - (field.x + field.width)) : Number.NaN;
+  };
+
+  await resize(1400);
+  const centered = await composer.boundingBox();
+  await page.locator("[data-quick-view-toggle]").click();
+  await expect(card).toHaveAttribute("data-state", "open");
+  // The chat moves left just enough for the card to sit beside it.
+  await expect.poll(clearance).toBeGreaterThanOrEqual(0);
+  const docked = await composer.boundingBox();
+  expect(docked!.x).toBeLessThan(centered!.x);
+
+  // Too narrow to dock without crushing the chat: the card floats over it as before.
+  await resize(1000);
+  await expect.poll(clearance).toBeLessThan(0);
+
+  // Closing Quick View centers the chat again.
+  await resize(1400);
+  await page.locator("[data-quick-view-toggle]").click();
+  await expect.poll(async () => Math.round((await composer.boundingBox())!.x)).toBe(Math.round(centered!.x));
 });
 
 test("terminal docking retains the same live surface, screen state and shell", async ({
@@ -259,6 +295,8 @@ test("browser pages share the tool tab strip and the launcher hides the native p
 test("browser creation and background selection preserve address focus while strip navigation moves it", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  // The onboarding toast sits over the floating panel's New browser tab button.
+  await waitForToastsToClear(page);
   await page.locator("[data-environment-toggle]").click();
   const panel = page.getByRole("complementary", { name: "Environment work surface" });
   await panel.getByRole("button", { name: "Browser", exact: true }).click();
@@ -293,6 +331,8 @@ test("browser creation and background selection preserve address focus while str
 test("the shared browser strip ignores a delayed command snapshot after a newer close event", async ({ aiden }) => {
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
+  // The onboarding toast sits over the floating panel's New browser tab button.
+  await waitForToastsToClear(page);
   await page.locator("[data-environment-toggle]").click();
   const panel = page.getByRole("complementary", { name: "Environment work surface" });
   await panel.getByRole("button", { name: "Browser", exact: true }).click();

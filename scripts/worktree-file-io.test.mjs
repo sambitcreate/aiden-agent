@@ -344,3 +344,52 @@ test("lazy operations reject hard links and link-count changes during reads and 
   }
   assert.equal(await readFile(path.join(outside, "secret"), "utf8"), "secret");
 });
+
+test("save replaces through its held parent when the pathname becomes an outside symlink", async (t) => {
+  if (process.platform !== "darwin") return;
+  const root = await directory(t);
+  const outside = await directory(t);
+  await writeFile(path.join(outside, "shot.png"), "outside");
+  const input = Buffer.from("after");
+  // Swap after the parent is opened, then (second round) after the temporary
+  // is written, just before it is renamed over the leaf.
+  for (const [moved, marker] of [["moved-p", "P"], ["moved-w", "W"]]) {
+    await mkdir(path.join(root, "shots"));
+    await writeFile(path.join(root, "shots", "shot.png"), "before");
+    const result = await runEditor(["save", ...await identity(root), "shots/shot.png", String(input.length)], input,
+      async (checkpoint) => {
+        if (checkpoint !== marker) return;
+        await rename(path.join(root, "shots"), path.join(root, moved));
+        await symlink(outside, path.join(root, "shots"));
+      });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout.toString(), /^c \d+ \d+\n$/u);
+    assert.equal(await readFile(path.join(root, moved, "shot.png"), "utf8"), "after");
+    assert.deepEqual(await readdir(path.join(root, moved)), ["shot.png"]);
+    assert.equal(await readFile(path.join(outside, "shot.png"), "utf8"), "outside");
+    assert.deepEqual(await readdir(outside), ["shot.png"]);
+    await rm(path.join(root, "shots"));
+  }
+});
+
+test("save refuses a symlinked ancestor or leaf and never writes through a hard link", async (t) => {
+  if (process.platform !== "darwin") return;
+  const root = await directory(t);
+  const outside = await directory(t);
+  await writeFile(path.join(outside, "shot.png"), "outside");
+  await symlink(outside, path.join(root, "linked"));
+  await symlink(path.join(outside, "shot.png"), path.join(root, "leaf.png"));
+  const rootId = await identity(root);
+  const input = Buffer.from("new");
+  for (const relative of ["linked/shot.png", "leaf.png"]) {
+    const result = await runEditor(["save", ...rootId, relative, String(input.length)], input);
+    assert.notEqual(result.code, 0, relative);
+    assert.equal(result.stderr.trim(), "unsafe_destination", relative);
+  }
+  await link(path.join(outside, "shot.png"), path.join(root, "hard.png"));
+  const replaced = await runEditor(["save", ...rootId, "hard.png", String(input.length)], input);
+  assert.equal(replaced.code, 0, replaced.stderr);
+  assert.equal(await readFile(path.join(root, "hard.png"), "utf8"), "new");
+  assert.equal(await readFile(path.join(outside, "shot.png"), "utf8"), "outside");
+  assert.deepEqual(await readdir(outside), ["shot.png"]);
+});

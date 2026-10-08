@@ -91,6 +91,10 @@ class AidenRemoteClient(
     )
 
     companion object {
+        /** Booting a simulator can take tens of seconds. */
+        const val SIMULATOR_OPEN_TIMEOUT_SECONDS = 120L
+        const val SIMULATOR_HELPER_PATH = "/simulators/hub/vendor/serve-sim/helper"
+
         // Null optional pairing fields must be omitted. Older Macs reject the
         // additive keys (and even explicit nulls) as an unknown payload shape.
         private val jsonParser = Json {
@@ -2227,6 +2231,100 @@ class AidenRemoteClient(
         }
         return executeRequest("/usage?range=$range") { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
+    }
+
+    // --- Simulators (contract revision 26, `simulators:mobile`) ---
+
+    /**
+     * The Mac's shared simulators. With [chatId] the listing also names the
+     * devices attached to that chat and never starts the hub; without it the
+     * Mac may start an installed hub, so call that form only on a user action.
+     */
+    suspend fun simulators(chatId: String? = null): AidenSimulatorListing {
+        val query = chatId?.let { "?chatId=" + URLEncoder.encode(it, Charsets.UTF_8.name()) } ?: ""
+        return executeRequest(
+            "/simulators$query",
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            json.decodeFromString<AidenSimulatorListing>(String(bytes, Charsets.UTF_8))
+        }
+    }
+
+    /** Boots the device when needed, which can take tens of seconds. */
+    suspend fun openSimulator(deviceId: String): AidenSimulatorDevice {
+        requireSimulatorDeviceId(deviceId)
+        return executeRequest(
+            "/simulators/open",
+            method = "POST",
+            bodyJson = json.encodeToString(AidenSimulatorDeviceRequest(deviceId)),
+            requestTimeoutSeconds = SIMULATOR_OPEN_TIMEOUT_SECONDS,
+            retryConnectionFailure = false,
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            val device = json.decodeFromString<AidenSimulatorOpenResponse>(String(bytes, Charsets.UTF_8)).device
+            if (device.id != deviceId) throw AidenRemoteClientException.InvalidResponse()
+            device
+        }
+    }
+
+    /** Shuts the device down. Callers confirm with the user first. */
+    suspend fun shutdownSimulator(deviceId: String) {
+        requireSimulatorDeviceId(deviceId)
+        executeRequest(
+            "/simulators/shutdown",
+            method = "POST",
+            bodyJson = json.encodeToString(AidenSimulatorDeviceRequest(deviceId)),
+            retryConnectionFailure = false,
+            maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
+        ) { bytes ->
+            if (!json.decodeFromString<AidenSimulatorShutdownResponse>(String(bytes, Charsets.UTF_8)).ok) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+
+    /**
+     * The pinned client for long-lived simulator streams: the MJPEG body and
+     * the input socket stay open as long as the viewer shows the device, so
+     * neither may hit a read or call timeout while the screen is still.
+     */
+    internal val simulatorStreamingClient: OkHttpClient by lazy {
+        httpClient.newBuilder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .callTimeout(0, TimeUnit.MILLISECONDS)
+            .build()
+    }
+
+    /** `GET …/helper/{deviceId}/stream.mjpeg` through the Mac's authenticated relay. */
+    internal fun simulatorMjpegRequest(deviceId: String): Request {
+        requireSimulatorDeviceId(deviceId)
+        return simulatorRequest("$SIMULATOR_HELPER_PATH/$deviceId/stream.mjpeg")
+            .addHeader("Accept", "multipart/x-mixed-replace")
+            .get()
+            .build()
+    }
+
+    /**
+     * The helper input socket. Native clients send no `Origin`: the relay
+     * refuses browser-origin upgrades.
+     */
+    internal fun simulatorInputRequest(deviceId: String): Request {
+        requireSimulatorDeviceId(deviceId)
+        return simulatorRequest("$SIMULATOR_HELPER_PATH/ws?device=$deviceId").get().build()
+    }
+
+    private fun simulatorRequest(path: String): Request.Builder {
+        if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
+        return Request.Builder()
+            .url("$endpoint$path")
+            .addHeader("Aiden-Protocol-Version", AidenRemoteProtocol.VERSION.toString())
+            .addHeader("Authorization", "Bearer $credential")
+    }
+
+    private fun requireSimulatorDeviceId(deviceId: String) {
+        if (!AidenSimulators.isValidDeviceId(deviceId)) {
+            throw AidenRemoteClientException.InvalidResponse("Invalid simulator device id.")
         }
     }
 
