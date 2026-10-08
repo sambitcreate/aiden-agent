@@ -1,8 +1,10 @@
-// One pi-ai `Models` view for every Bot harness, backed by the exact runtime
-// each Bot resolved for its own provider binding. Aiden resolves a runtime
-// (credentials pinned after Bot authority admission) per provider/model;
+// pi-ai `Models` views for Bot harnesses, one per Bot, each backed by the
+// exact runtime that Bot resolved for its own provider binding. Aiden resolves
+// a runtime (credentials pinned after Bot authority admission, and headers
+// such as OpenCode's `x-opencode-session` attributed to that Bot) per Bot;
 // generation looks the model up by the reference stored in the Bot's
-// conversation and streams through that runtime.
+// conversation and streams through that Bot's runtime. Two Bots on the same
+// provider/model never see each other's runtime.
 
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 
@@ -13,15 +15,17 @@ export interface BotModelRuntime {
 }
 
 export interface BotRuntimeModels {
-  models: Models;
-  /** Make `runtime` the one used for its provider/model. */
-  register(runtime: BotModelRuntime): void;
+  /** The `Models` view of one Bot's harness. */
+  modelsFor(botId: string): Models;
+  /** Make `runtime` the one this Bot uses for its provider/model. */
+  register(botId: string, runtime: BotModelRuntime): void;
+  /** Drop everything a deleted Bot resolved. */
+  forget(botId: string): void;
 }
 
 const key = (provider: string, modelId: string) => `${provider}\u0000${modelId}`;
 
-export function createBotRuntimeModels(): BotRuntimeModels {
-  const runtimes = new Map<string, BotModelRuntime>();
+function botModels(runtimes: Map<string, BotModelRuntime>): Models {
   const runtimeFor = (model: Pick<Model<Api>, "provider" | "id">): BotModelRuntime => {
     const runtime = runtimes.get(key(model.provider, model.id));
     if (runtime === undefined) throw new Error("This Bot's AI model is not ready yet.");
@@ -37,7 +41,7 @@ export function createBotRuntimeModels(): BotRuntimeModels {
     cancelDeferred: ((model, handle, options) => runtimeFor(model).models.cancelDeferred(model, handle, options)) as Models["cancelDeferred"],
   };
 
-  const models = new Proxy({} as Models, {
+  return new Proxy({} as Models, {
     get(_target, property) {
       if (property in overrides) return overrides[property as keyof Models];
       return () => {
@@ -45,11 +49,28 @@ export function createBotRuntimeModels(): BotRuntimeModels {
       };
     },
   });
+}
+
+export function createBotRuntimeModels(): BotRuntimeModels {
+  const perBot = new Map<string, { runtimes: Map<string, BotModelRuntime>; models: Models }>();
+  const entry = (botId: string) => {
+    let found = perBot.get(botId);
+    if (found === undefined) {
+      const runtimes = new Map<string, BotModelRuntime>();
+      found = { runtimes, models: botModels(runtimes) };
+      perBot.set(botId, found);
+    }
+    return found;
+  };
 
   return {
-    models,
-    register(runtime) {
-      runtimes.set(key(runtime.model.provider, runtime.model.id), runtime);
+    modelsFor: (botId) => entry(botId).models,
+    register(botId, runtime) {
+      entry(botId).runtimes.set(key(runtime.model.provider, runtime.model.id), runtime);
+    },
+    forget(botId) {
+      perBot.get(botId)?.runtimes.clear();
+      perBot.delete(botId);
     },
   };
 }

@@ -41,8 +41,8 @@ export interface BotHarnessHostOptions {
    * A registry with `attachHarness` is bound to the harness it serves.
    */
   buildRegistry(botId: string): Registry & { attachHarness?(harness: Harness): void };
-  /** pi-ai model access for generation. */
-  models: Models;
+  /** pi-ai model access for generation: one view for every Bot, or each Bot's own. */
+  models: Models | ((botId: string) => Models);
   settings?: HarnessSettings;
   idleCloseMs?: number;
   now?: () => number;
@@ -213,7 +213,7 @@ export async function createBotHarnessHost(
       harness = await Harness.open(
         storage,
         {
-          models: opts.models,
+          models: typeof opts.models === "function" ? opts.models(botId) : opts.models,
           registry,
           ...(opts.settings === undefined ? {} : { settings: opts.settings }),
           now,

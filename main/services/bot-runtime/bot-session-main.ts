@@ -189,7 +189,7 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
     const resolved = await withAdmission(botId, async (admission) => {
       const { sourceProviderId, sourceModelId } = admission.authority.provider;
       const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
-      runtimeModels.register(runtime as unknown as BotModelRuntime);
+      runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
       return runtime;
     });
     const ref = { provider: resolved.model.provider, modelId: resolved.model.id };
@@ -270,7 +270,7 @@ export async function dismissBotConnection(botId: string, pluginId: string): Pro
 export function botSessionRuntime(): Promise<BotSessionRuntime> {
   runtime ??= createBotSessionService({
     profileDir: profileDir(),
-    models: runtimeModels.models,
+    models: runtimeModels.modelsFor,
     extension,
     resolveModel,
     knownBotIds: async () => new Set((await botStore.list()).map(({ id }) => id)),
@@ -278,6 +278,10 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),
       (botId) => toolSources.forgetBot(botId),
+      async (botId) => {
+        runtimeModels.forget(botId);
+        resolvedModels.delete(botId);
+      },
       deleteRoutines,
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,

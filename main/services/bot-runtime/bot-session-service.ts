@@ -165,8 +165,11 @@ export interface BotSessionRuntime extends BotSessionService {
 
 export interface BotSessionServiceDeps {
   profileDir: string;
-  /** pi-ai model access, per Bot so a Bot's provider binding stays exact. */
-  models: Models;
+  /**
+   * pi-ai model access. Production passes each Bot its own view, so a Bot's
+   * provider binding and per-conversation headers stay its own.
+   */
+  models: Models | ((botId: string) => Models);
   extension: BotExtensionDeps;
   /**
    * The Bot's current model, or `null` when it has no model configured. Any

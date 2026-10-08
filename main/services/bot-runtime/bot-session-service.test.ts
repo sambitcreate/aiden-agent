@@ -16,6 +16,7 @@ import {
   type BotSessionRuntime,
   type BotSessionServiceDeps,
 } from "./bot-session-service.js";
+import { createBotRuntimeModels } from "./bot-models.js";
 import { botDirectoryName } from "./harness-host.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority } from "./test-support/assembly-fixtures.js";
@@ -365,6 +366,46 @@ test("a second Aiden process holding the profile makes Bots unavailable", async 
     await service.shutdown();
   } finally {
     await child.kill();
+  }
+});
+
+test("two Bots on the same OpenCode model keep their own session header", async () => {
+  const sessions: string[] = [];
+  const reply = (_context: unknown, _options: unknown, _state: unknown, model: { headers?: Record<string, string> }) => {
+    sessions.push(model.headers?.["x-opencode-session"] ?? "none");
+    return fauxAssistantMessage("ok");
+  };
+  const fauxModels = createFauxModels([reply, reply, reply]);
+  const runtimeModels = createBotRuntimeModels();
+  const base = fauxModels.models.getModel(FAUX_MODEL_REF.provider, FAUX_MODEL_REF.modelId)!;
+  // As production resolves a Bot's model: one runtime per Bot, attributed to that Bot.
+  const resolveModel = async (botId: string) => {
+    runtimeModels.register(botId, {
+      model: { ...base, headers: { "x-opencode-session": botId } },
+      models: fauxModels.models,
+      streams: fauxModels.models,
+    });
+    return FAUX_MODEL_REF;
+  };
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    models: runtimeModels.modelsFor,
+    resolveModel,
+    knownBotIds: async () => new Set(["bot:a", "bot:b"]),
+  });
+  try {
+    const signal = new AbortController().signal;
+    const a = await service.send("bot:a", { text: "hi", requestId: "a-1" });
+    // Bot B resolves its model before A's turn runs.
+    await resolveModel("bot:b");
+    await service.awaitReply("bot:a", a.submissionId, signal);
+    const b = await service.send("bot:b", { text: "hi", requestId: "b-1" });
+    await service.awaitReply("bot:b", b.submissionId, signal);
+    await resolveModel("bot:b");
+    const again = await service.send("bot:a", { text: "again", requestId: "a-2" });
+    await service.awaitReply("bot:a", again.submissionId, signal);
+    assert.deepEqual(sessions, ["bot:a", "bot:b", "bot:a"]);
+  } finally {
+    await service.shutdown();
   }
 });
 
