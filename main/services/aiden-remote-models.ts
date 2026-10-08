@@ -18,6 +18,7 @@ import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-t
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
 import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 
 const MAX_REMOTE_MODEL_ID_LENGTH = 256;
 const MAX_REMOTE_MODEL_CATALOG_BYTES = 900 * 1024;
@@ -102,7 +103,10 @@ export class AidenRemoteModelService {
           continue;
         }
         const metadata = provider.modelMetadata?.[id];
-        const thinkingLevels = metadata?.thinkingLevels
+        const configuredLevels = provider.kind === "openai" && metadata?.overrides?.effortControl
+          ? customModelThinkingLevels(metadata.overrides) ?? []
+          : undefined;
+        const thinkingLevels = (configuredLevels ?? metadata?.thinkingLevels)
           ?.slice(0, 8)
           .map((level) => bounded(level, 32));
         const safeThinkingLevels = thinkingLevels?.filter(isGenerationThinkingLevel) ?? [];
@@ -135,7 +139,8 @@ export class AidenRemoteModelService {
           ...(safeThinkingLevels.length ? {
             thinkingLevels: safeThinkingLevels,
             defaultThinkingLevel,
-            thinkingCanDisable: metadata?.thinkingCanDisable !== false,
+            thinkingCanDisable: configuredLevels
+              ? safeThinkingLevels.includes("off") : metadata?.thinkingCanDisable !== false,
           } : {}),
         };
         const modelBytes = Buffer.byteLength(JSON.stringify(model), "utf8") + 1;

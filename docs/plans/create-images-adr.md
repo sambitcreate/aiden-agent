@@ -81,6 +81,7 @@ interface ImageRunConsentPlan { consentId: string; workflowId: string; workflowR
 - **Cancel.** Queued attempts become `cancelled` with no request sent. A running attempt is aborted through its signal, recorded `cancelled`, and keeps `submitted_at`, so the UI says "may have been billed".
   - If a provider result settles successfully before the abort is observed, its images are **kept** and the attempt is `succeeded` with `cancel_requested=1`. Paid output is never silently discarded.
   - If a model returns more than 4 images, the first 4 valid ones are kept and the attempt is flagged `truncated`. The paid attempt is not failed. This reflects the old branch's Gemini interim-image lesson.
+  - `cancel-run` checks that the caller is an Aiden renderer document but is not bound to the document that started the run. Stopping can only reduce spend, and a reloaded or second Images window has a new document id yet must still be able to stop a run it shows.
 - **Quit.** `shutdownAndQuit` calls `imageRuns.shutdown()`: abort all, then mark `cancelled` with reason `app-quit`. This is a one-line orchestrator registration in the `main/index.ts` hotspot.
   - *Adjustment:* CI-1 also adds a main-side in-flight check to `confirmProtectedAction` with honest copy: "N image requests in progress. Quitting cancels them; requests already sent may still be billed." CI-4 keeps only the copy polish.
 
