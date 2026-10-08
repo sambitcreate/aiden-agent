@@ -165,7 +165,7 @@ test("floating Environment remains non-modal across every app-level interaction 
   assert.match(environment, /const toggleTools = React\.useCallback/u);
   assert.match(
     environment,
-    /<div data-browser-floating-container className="h-full min-h-0 min-w-0 flex-1">\{children\}<\/div>/u,
+    /<div\s+data-browser-floating-container[^>]*className="h-full min-h-0 min-w-0 flex-1"\s*>\s*\{children\}\s*<\/div>/u,
   );
   assert.doesNotMatch(environment, /bg-black|backdrop-blur|aria-modal|role=\{.*dialog/u);
   assert.doesNotMatch(environment, /environmentCompactModal|setCompactModalOpen/u);
