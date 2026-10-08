@@ -8,6 +8,7 @@ final class AidenRemoteClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.epoch = UUID().uuidString
     }
 
     override func tearDown() {
@@ -4853,6 +4854,7 @@ final class AidenRemoteClientTests: XCTestCase {
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AidenRemoteMockURLProtocol.self]
+        configuration.httpAdditionalHeaders = [AidenRemoteMockURLProtocol.epochHeader: AidenRemoteMockURLProtocol.epoch]
         return URLSession(configuration: configuration)
     }
 
@@ -5153,11 +5155,20 @@ private actor AidenInstallationDataRaceProbe {
 
 private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// Sessions carry the epoch of the test that made them. A request an
+    /// earlier test left behind (a cancelled `async let` can still reach
+    /// `startLoading`) fails instead of answering from a later test's handler.
+    static let epochHeader = "X-Aiden-Test-Epoch"
+    static var epoch = UUID().uuidString
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        guard request.value(forHTTPHeaderField: Self.epochHeader) == Self.epoch else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
         guard let handler = Self.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
