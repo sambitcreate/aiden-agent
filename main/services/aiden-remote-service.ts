@@ -58,10 +58,6 @@ import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-set
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
-import type {
-  BotNoticeAcknowledgement,
-  BotNoticeStatus,
-} from "../../renderer/shared/bot-capabilities.js";
 import {
   AIDEN_REMOTE_PRODUCTION_LAN_PORT,
   aidenRemotePortCandidatesForRange,
@@ -180,31 +176,19 @@ export interface AidenRemoteServiceOptions {
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
-        botNotice?: {
-          status(deviceId: string): Promise<BotNoticeStatus>;
-          acknowledge(
-            deviceId: string,
-            acknowledgement: BotNoticeAcknowledgement,
-          ): Promise<BotNoticeStatus>;
-        };
+        botSessions?: AidenRemoteRouterDependencies["botSessions"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
           | "get"
           | "create"
           | "updateIdentity"
-          | "archive"
-          | "restore"
           | "capabilityCatalog"
           | "updateAccess"
           | "createChat"
-          | "getChatAccess"
-          | "updateChatAccess"
-          | "favorites"
-          | "updateFavorites"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
         >>;
         settle?: () => Promise<void>;
       }
@@ -229,31 +213,19 @@ export interface AidenRemoteServiceOptions {
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
-        botNotice?: {
-          status(deviceId: string): Promise<BotNoticeStatus>;
-          acknowledge(
-            deviceId: string,
-            acknowledgement: BotNoticeAcknowledgement,
-          ): Promise<BotNoticeStatus>;
-        };
+        botSessions?: AidenRemoteRouterDependencies["botSessions"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
           | "get"
           | "create"
           | "updateIdentity"
-          | "archive"
-          | "restore"
           | "capabilityCatalog"
           | "updateAccess"
           | "createChat"
-          | "getChatAccess"
-          | "updateChatAccess"
-          | "favorites"
-          | "updateFavorites"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
         >>;
         settle?: () => Promise<void>;
       }>;

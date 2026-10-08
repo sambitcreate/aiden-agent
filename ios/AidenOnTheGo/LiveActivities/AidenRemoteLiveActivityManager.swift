@@ -5,7 +5,14 @@ import Foundation
 /// bounded state written here and never receives network credentials.
 @MainActor
 final class AidenRemoteLiveActivityManager {
-    static let shared = AidenRemoteLiveActivityManager()
+    /// The unit-test host never drives the device's ActivityKit through the
+    /// shared manager (chat models, coordinator purges): ActivityKit is
+    /// system-wide and slow on loaded simulators, and those flows await it
+    /// before transcript reads and purges. ActivityKit tests build their own
+    /// managers.
+    static let shared = AidenRemoteLiveActivityManager(
+        drivesActivityKit: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+    )
 
     static let responseExcerptPreferenceKey = "aiden.live-activities.response-excerpts"
 
@@ -22,12 +29,20 @@ final class AidenRemoteLiveActivityManager {
     private typealias ContentState = AgentRunActivityAttributes.ContentState
 
     private let defaults: UserDefaults
+    /// False keeps this manager off the device's ActivityKit entirely: it
+    /// requests, updates and ends nothing and sees no existing activities.
+    private let drivesActivityKit: Bool
     private var currentActivity: Activity<AgentRunActivityAttributes>?
     private var stateByActivityID: [String: ContentState] = [:]
     private var throttleByActivityID: [String: AidenLatestValueThrottle<ContentState>] = [:]
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, drivesActivityKit: Bool = true) {
         self.defaults = defaults
+        self.drivesActivityKit = drivesActivityKit
+    }
+
+    private var systemActivities: [Activity<AgentRunActivityAttributes>] {
+        drivesActivityKit ? Activity<AgentRunActivityAttributes>.activities : []
     }
 
     var includesResponseExcerpts: Bool {
@@ -43,7 +58,7 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func start(instanceID: String, chatID: String, title: String, streamID: String) async {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard drivesActivityKit, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let startedAt = Date()
         let attributes = AgentRunActivityAttributes(
             instanceID: instanceID,
@@ -164,7 +179,7 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func markAllStale() async {
-        for activity in Activity<AgentRunActivityAttributes>.activities where isLive(activity) {
+        for activity in systemActivities where isLive(activity) {
             let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
             stateByActivityID[activity.id] = state
             await throttle(for: activity).submitUrgent(state)
@@ -172,7 +187,7 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func endAll(forInstanceID instanceID: String) async {
-        for activity in Activity<AgentRunActivityAttributes>.activities
+        for activity in systemActivities
         where activity.attributes.instanceID == instanceID && isLive(activity) {
             let state = AgentRunActivityStateReducer.final(
                 status: .failed,
@@ -218,7 +233,7 @@ final class AidenRemoteLiveActivityManager {
         client: AidenRemoteClient,
         isCurrent: @MainActor () -> Bool
     ) async {
-        for activity in Activity<AgentRunActivityAttributes>.activities
+        for activity in systemActivities
         where activity.attributes.instanceID == instanceID && isLive(activity) {
             guard isCurrent() else { return }
             guard let streamID = activity.attributes.streamID else {
@@ -304,7 +319,7 @@ final class AidenRemoteLiveActivityManager {
            isLive(currentActivity) {
             return currentActivity
         }
-        return Activity<AgentRunActivityAttributes>.activities.first {
+        return systemActivities.first {
             Self.matches($0.attributes, instanceID: instanceID, streamID: streamID) && isLive($0)
         }
     }

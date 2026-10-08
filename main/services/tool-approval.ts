@@ -58,8 +58,13 @@ export class ToolApprovalCoordinator {
     private readonly withdraw?: (approvalId: string, outcome: ToolApprovalOutcome) => void,
   ) {}
 
+  /**
+   * `approvalId` may be supplied by a caller whose approvals outlive this
+   * process (Bots persist it as their `waitId`). A still-pending prompt with
+   * the same id is withdrawn first, so the id always names the newest ask.
+   */
   request(
-    descriptor: Omit<ToolApprovalPrompt, "approvalId">,
+    descriptor: Omit<ToolApprovalPrompt, "approvalId"> & { approvalId?: string },
     signal?: AbortSignal,
     ownerDocumentId?: string,
   ): Promise<ToolApprovalOutcome> {
@@ -70,7 +75,8 @@ export class ToolApprovalCoordinator {
     if (closedOutcome) {
       return Promise.resolve(closedOutcome);
     }
-    const approvalId = `a-${randomUUID()}`;
+    const approvalId = descriptor.approvalId ?? `a-${randomUUID()}`;
+    this.pending.get(approvalId)?.settle("cancelled");
     return new Promise<ToolApprovalOutcome>((resolve) => {
       let settled = false;
       let published = false;

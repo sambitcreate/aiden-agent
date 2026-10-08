@@ -101,15 +101,13 @@ import type {
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
 } from "../shared/diagnostics";
+import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service";
 import type {
-  BotAvatarSuggestion,
-  BotAvatarSuggestionInput,
   BotCreateInput,
   BotDefinition,
   BotRendererCanonicalPhoto,
   BotUpdateInput,
 } from "../shared/bots";
-import { botAvatarSuggestionErrorMessage } from "../shared/bots";
 import type {
   BotAccessUpdate,
   BotAccessView,
@@ -298,7 +296,7 @@ export const appApi = {
     invoke<OnboardingSnapshot>("app:getOnboardingState", legacyComplete),
   setOnboardingOutcome: (outcome: OnboardingOutcome, selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
-  setOnboardingProgress: (step: "profile" | "provider", selectedProviderId?: string) =>
+  setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
@@ -1158,7 +1156,8 @@ export const chatsApi = {
   createWithFirstMessage: (input: {
     draftId: string;
     title?: string;
-    workspaceId: string;
+    /** Ignored by main: a Bot chat always lives in its managed home. */
+    workspaceId?: string;
     providerId?: string;
     model?: string;
     computerUseEnabled?: boolean;
@@ -1268,32 +1267,81 @@ export const botsApi = {
     invoke<BotRendererCanonicalPhoto | null>("bots:getCanonicalPhoto", id),
   create: (input: { bot: BotCreateInput; access: BotAccessUpdate }) =>
     invoke<BotDefinition>("bots:create", input),
-  suggestAvatar: async (input: BotAvatarSuggestionInput) => {
-    try {
-      return await invoke<BotAvatarSuggestion>("bots:suggestAvatar", input);
-    } catch (error) {
-      throw new Error(botAvatarSuggestionErrorMessage(error));
-    }
-  },
-  cancelAvatarSuggestion: (requestId: string) =>
-    invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
   getCapabilityCatalog: (botId?: string) =>
     invoke<BotCapabilityCatalog>("bots:getCapabilityCatalog", botId),
   getBotAccess: (id: string) => invoke<BotAccessState | null>("bots:getBotAccess", id),
   updateBotAccess: (input: { botId: string; expectedRevision: string; access: BotAccessUpdate }) =>
     invoke<BotAccessView>("bots:updateBotAccess", input),
-  archive: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:archive", input),
-  restore: (input: { id: string; expectedRevision: string }) =>
-    invoke<BotDefinition>("bots:restore", input),
-  listChats: (id: string) => invoke<ChatMeta[]>("bots:listChats", id),
-  createChat: (input: {
+  /** Permanently erases the Bot: chat, memory, routines, files, photo, Telegram link. */
+  delete: (botId: string) => invoke<void>("bots:delete", botId),
+  sessionState: (botId: string) => invoke<BotSessionState>("bots:sessionState", botId),
+  /** Send to the Bot's one conversation. `requestId` is a fresh UUID per send, so a retry never doubles it. */
+  send: (input: {
     botId: string;
-    workspaceId: string;
-    providerId?: string;
-    model?: string;
-  }) => invokeChatMutation<Chat>("bots:createChat", input),
+    text: string;
+    requestId: string;
+    whenBusy?: "steer" | "followUp";
+    attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
+  }) => invoke<{ submissionId: string; deduped: boolean }>("bots:send", input),
+  resume: (botId: string, requestId: string) =>
+    invoke<BotSessionState>("bots:resume", { botId, requestId }),
+  dismiss: (botId: string, requestId: string) =>
+    invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
+  /** Stop the reply that is running now. */
+  stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Answer a Bot tool approval by its wait id; the first answer wins. */
+  approve: (waitId: string, decision: "allow" | "deny") =>
+    invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  /**
+   * Answer the Bot's A–E question by its wait id; `answered` is false once the
+   * question is no longer waiting (answered elsewhere or withdrawn).
+   */
+  answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
+    invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  pendingApprovals: (botId: string) =>
+    invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
+      "bots:pendingApprovals",
+      botId,
+    ),
+  onApproval: (handler: (prompt: import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt) => void) =>
+    onNotification("bots:approval", handler),
+  onApprovalSettled: (handler: (settled: { botId: string; waitId: string; outcome: string }) => void) =>
+    onNotification("bots:approval-settled", handler),
+  liveSubscribe: (botId: string) =>
+    invoke<import("../shared/bot-live").BotLiveSnapshot>("bots:live:subscribe", botId),
+  liveUnsubscribe: (botId: string) => invoke<void>("bots:live:unsubscribe", botId),
+  liveSummary: (botId: string) =>
+    invoke<import("../shared/bot-live").BotLiveSummary>("bots:live:summary", botId),
+  onLiveEvent: (handler: (event: import("../shared/bot-live").BotLiveEvent) => void) =>
+    onNotification<import("../shared/bot-live").BotLiveEvent>("bots:live:event", handler),
+  /** Start Chat on a starter Bot: the same Bot every time; only the first call reports `created`. */
+  createFromPreset: (input: { presetId: string; access?: BotAccessUpdate }) =>
+    invoke<{ bot: BotDefinition; created: boolean }>("bots:createFromPreset", input),
+  /** The one-time self-intro of a Bot made with the create flow. */
+  introduce: (botId: string) => invoke<boolean>("bots:introduce", botId),
+  /** Read-only Files: the Bot's own folder. */
+  files: {
+    list: (botId: string) => invoke<import("./types").WorkspaceFileIndex>("bots:files:list", botId),
+    read: (botId: string, path: string) =>
+      invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
+  },
+  /** Not now on a connect card: this Bot won't suggest that connection again. */
+  dismissConnection: (botId: string, pluginId: string) =>
+    invoke<void>("bots:connections:dismiss", botId, pluginId),
+  setPhoto: (botId: string, photo: { mimeType: "image/png" | "image/jpeg"; data: string }) =>
+    invoke<void>("bots:photo:set", botId, photo),
+  removePhoto: (botId: string) => invoke<void>("bots:photo:remove", botId),
+  routines: {
+    list: (botId: string) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine[]>("bots:routines:list", botId),
+    create: (input: import("../../main/services/scheduled-bot-routines").BotRoutineCreateInput) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:create", input),
+    update: (input: import("../../main/services/scheduled-bot-routines").BotRoutineUpdateInput) =>
+      invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
+    delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
+      invoke<void>("bots:routines:delete", input),
+  },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>

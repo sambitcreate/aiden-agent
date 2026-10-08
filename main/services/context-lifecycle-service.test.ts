@@ -52,7 +52,6 @@ function deps(overrides: Partial<ContextLifecycleServiceDeps> = {}) {
   const value: ContextLifecycleServiceDeps = {
     getChat: async () => baseChat,
     listChatsByBot: async () => [],
-    isBotArchived: async () => false,
     beginChatTurn: () => lease(events),
     openSession: async () => {
       throw new Error("stop after authority checks");
@@ -207,22 +206,6 @@ test("manual compaction rejects a provider alias that changes the saved binding"
       "operator",
     ),
     { compacted: false, reason: "context_metadata_invalid" },
-  );
-});
-
-test("archived Bots return a closed reason without leaking provider failures", async () => {
-  const archived = { ...baseChat, botId: "bot-1" };
-  const { value } = deps({
-    getChat: async () => archived,
-    isBotArchived: async () => true,
-  });
-  assert.deepEqual(
-    await new ContextLifecycleService(value).compactChat(
-      archived.id,
-      { kind: "desktop", ownerId: "renderer:1" },
-      "operator",
-    ),
-    { compacted: false, reason: "archived" },
   );
 });
 

@@ -2168,3 +2168,37 @@ test("image prompts cannot be authorized through a truncated Remote summary", as
   assert.equal(app.approvals.length, 1);
   assert.match(app.approvals[0]!, /:deny:/u);
 });
+
+test("an older client's stream cancel stops a running Bot chat turn without the Bot stop route", async () => {
+  // Bot chats run turns through the chat stream route, so a client that has not
+  // adopted POST /bots/{id}/stop still stops the run with POST /streams/{id}/cancel.
+  let run: ReturnType<AidenRemoteStreamService["create"]> | undefined;
+  const runStops: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: (streamId) => {
+      runStops.push(streamId);
+      // The host run aborts and reports its own terminal back to the stream.
+      run?.owner.send("chat:done", { streamId, chat: { messages: [] } });
+      return true;
+    },
+    approve: () => false,
+  });
+  run = service.create("device-1", "stream-bot-1", "bot-chat-1", "turn-1");
+  run.owner.send("chat:delta", { streamId: "stream-bot-1", delta: "Working" });
+
+  const cancelled = await service.cancel("device-1", "stream-bot-1", "older-client-stop-0001");
+
+  assert.deepEqual(runStops, ["stream-bot-1"]);
+  assert.equal(cancelled.state, "cancelled");
+  assert.equal(service.status("device-1", "stream-bot-1").state, "cancelled");
+  const events = service.snapshot().streams[0]?.events ?? [];
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "cancelled");
+  assert.deepEqual(terminal?.payload, { source: "device" });
+  // The stopped run's owner is closed, so output it produces afterwards is refused.
+  assert.throws(() => run!.owner.send("chat:delta", { streamId: "stream-bot-1", delta: " late" }));
+  assert.equal(service.status("device-1", "stream-bot-1").state, "cancelled");
+  const after = service.snapshot().streams[0]?.events ?? [];
+  assert.equal(after.length, events.length);
+});

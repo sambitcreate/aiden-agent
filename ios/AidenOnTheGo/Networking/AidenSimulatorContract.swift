@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Contract revision 25: mobile simulator viewer (`mobile-simulators-v1`)
+// MARK: - Contract revision 26: mobile simulator viewer (`mobile-simulators-v1`)
 //
 // Phones that negotiated `simulators:mobile` may list the Mac's shared
 // simulators, open or shut one down, watch its MJPEG stream and send touches,

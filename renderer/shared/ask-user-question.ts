@@ -2,7 +2,7 @@ export const ASK_USER_QUESTION_VERSION = 1 as const;
 export const ASK_USER_QUESTION_TOOL_NAME = "ask_user_question" as const;
 export const ASK_USER_MAX_QUESTIONS = 4;
 export const ASK_USER_MIN_OPTIONS = 2;
-export const ASK_USER_MAX_OPTIONS = 4;
+export const ASK_USER_MAX_OPTIONS = 5;
 export const ASK_USER_MAX_HEADER_LENGTH = 16;
 export const ASK_USER_MAX_LABEL_LENGTH = 60;
 export const ASK_USER_MAX_QUESTION_LENGTH = 1_000;
@@ -128,6 +128,27 @@ export function formatAskUserQuestionAnswers(
       return `${index + 1}. ${question.question}\nAnswer: ${answer.answer}`;
     })
     .join("\n\n");
+}
+
+/**
+ * What the person chose, as they would say it: the bare answer for one
+ * question, one `Header: answer` line per question otherwise, and "Skipped"
+ * for a closed card or an unanswered question. Shown as the person's reply in
+ * Bot chats; the model reads `formatAskUserQuestionAnswers` instead.
+ */
+export function summarizeAskUserQuestionResponse(
+  questions: readonly AskUserQuestionV1[],
+  response: Pick<AskUserQuestionResponseV1, "cancelled" | "answers">,
+): string {
+  if (response.cancelled) return "Skipped";
+  const byIndex = new Map(response.answers.map((answer) => [answer.questionIndex, answer]));
+  const answerText = (index: number) => {
+    const answer = byIndex.get(index);
+    if (!answer) return "Skipped";
+    return answer.kind === "multi" ? answer.selected.join(", ") : answer.answer;
+  };
+  if (questions.length === 1) return answerText(0);
+  return questions.map((question, index) => `${question.header}: ${answerText(index)}`).join("\n");
 }
 
 /**

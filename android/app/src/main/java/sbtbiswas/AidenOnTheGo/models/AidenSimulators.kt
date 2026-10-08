@@ -13,7 +13,7 @@ import kotlinx.serialization.encoding.Encoder
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 
 /**
- * Simulator sharing (Aiden Remote contract revision 25, `mobile-simulators-v1`).
+ * Simulator sharing (Aiden Remote contract revision 26, `mobile-simulators-v1`).
  *
  * Platform, kind and host status are open vocabularies: a value this version
  * does not know is kept as-is and treated conservatively, so a newer Mac never

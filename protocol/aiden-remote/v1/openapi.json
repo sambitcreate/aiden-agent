@@ -12,7 +12,13 @@
     "atomic": true
   },
   "x-aiden-context-private-response-fields": {
-    "appliesTo": ["Chat", "ChatSummary", "Bot", "ChatTaskProgress", "ChatAgentRoster"],
+    "appliesTo": [
+      "Chat",
+      "ChatSummary",
+      "Bot",
+      "ChatTaskProgress",
+      "ChatAgentRoster"
+    ],
     "recursive": true,
     "normalization": "Remove hyphens, underscores, periods, and whitespace, then lowercase before comparison.",
     "forbiddenNormalizedNames": [
@@ -1114,7 +1120,10 @@
         "description": "Authoritative bounded task-progress snapshot for one chat. Requires the negotiated tasks:read grant in addition to chat:read.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
-        "x-aiden-capabilities": ["chat:read", "tasks:read"],
+        "x-aiden-capabilities": [
+          "chat:read",
+          "tasks:read"
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/ChatId"
@@ -1148,7 +1157,10 @@
         "description": "Authoritative bounded delegated-agent roster for one chat's active or most recent turn. Requires the negotiated agents:read grant in addition to chat:read.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
-        "x-aiden-capabilities": ["chat:read", "agents:read"],
+        "x-aiden-capabilities": [
+          "chat:read",
+          "agents:read"
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/ChatId"
@@ -1185,7 +1197,10 @@
         "description": "Stop one running delegated agent in the chat's active turn through the Mac's own subagent stop path, then return the refreshed current-turn roster. Available only when /server.features advertises chat-agent-interrupt-v1. Requires chat:write plus the negotiated agents:read grant; retained Bot chats additionally require bot:write. The agent is addressed only by its public agentId. An already-finished or abandoned agent is an idempotent no-op that returns the roster; an unknown agentId returns not_found; a running agent whose Mac-side control is no longer available (for example a legacy run) returns operation_stale. The request has no body.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "chat:write",
-        "x-aiden-capabilities": ["chat:write", "agents:read"],
+        "x-aiden-capabilities": [
+          "chat:write",
+          "agents:read"
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/ChatId"
@@ -1256,30 +1271,30 @@
       ],
       "get": {
         "operationId": "chatProgressEvents",
-    "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after remain accepted for client compatibility, but this channel has no durable replay journal: a reconnect/full snapshot resync supersedes any requested offset. A device needs chat:read and at least one of tasks:read or agents:read. These progress events are not emitted on ordinary parent turn streams.",
+        "description": "Dedicated chat-scoped live snapshot channel for observing work started by any device. The streamId is the chat ID. Each subscription hydrates complete nonterminal task_update and agents_update snapshots filtered to the device's negotiated progress grants; transport heartbeats are SSE comment frames and are not protocol events. Last-Event-ID and after remain accepted for client compatibility, but this channel has no durable replay journal: a reconnect/full snapshot resync supersedes any requested offset. A device needs chat:read and at least one of tasks:read or agents:read. These progress events are not emitted on ordinary parent turn streams.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "parameters": [
           {
             "$ref": "#/components/parameters/ChatId"
           },
-      {
-        "name": "Last-Event-ID",
-        "in": "header",
-        "required": false,
-        "description": "Accepted for client compatibility; progress subscriptions still hydrate current snapshots rather than replaying a durable journal.",
-        "schema": {
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "description": "Accepted for client compatibility; progress subscriptions still hydrate current snapshots rather than replaying a durable journal.",
+            "schema": {
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
             }
           },
-      {
-        "name": "after",
-        "in": "query",
-        "required": false,
-        "description": "Accepted for client compatibility; the progress channel does not provide durable replay or missing-change detection.",
-        "schema": {
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "Accepted for client compatibility; the progress channel does not provide durable replay or missing-change detection.",
+            "schema": {
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
@@ -1288,7 +1303,7 @@
         ],
         "responses": {
           "200": {
-        "description": "Live chat progress snapshot event stream; each subscription starts with current snapshots. Last-Event-ID and after are accepted for compatibility but do not replay a durable progress journal.",
+            "description": "Live chat progress snapshot event stream; each subscription starts with current snapshots. Last-Event-ID and after are accepted for compatibility but do not replay a durable progress journal.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -1476,164 +1491,804 @@
     },
     "/bots": {
       "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "get": {
         "operationId": "listBots",
         "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read"],
+        "x-aiden-capabilities": [
+          "bot:read"
+        ],
         "parameters": [
           {
             "name": "includeArchived",
             "in": "query",
             "required": false,
-            "schema": { "type": "boolean", "default": false }
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Bounded Bot summaries and authoritative favorite order; instructions are omitted",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotList" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotList"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "post": {
         "operationId": "createBot",
         "x-aiden-provider-model-must-be-currently-available": true,
         "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/BotCreateRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotCreateRequest"
+              }
+            }
           }
         },
         "responses": {
           "201": {
             "description": "Main-owned Bot created",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotDetail" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotDetail"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/bots/{botId}": {
       "parameters": [
-        { "$ref": "#/components/parameters/BotId" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "get": {
         "operationId": "getBot",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read"],
+        "x-aiden-capabilities": [
+          "bot:read"
+        ],
         "responses": {
           "200": {
             "description": "Bot identity, editable guidance, avatar, and safe access view",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotDetail" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotDetail"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "patch": {
         "operationId": "updateBotIdentity",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" }
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/BotIdentityPatch" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotIdentityPatch"
+              }
+            }
           }
         },
         "responses": {
           "200": {
             "description": "Updated authoritative Bot detail",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotDetail" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotDetail"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "delete": {
-        "operationId": "archiveBot",
-        "x-aiden-archived-access": "mutation_blocked",
+        "operationId": "deleteBot",
         "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" }
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
         ],
         "responses": {
-          "200": {
-            "description": "Soft-archived authoritative Bot detail",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotDetail" } }
-            }
+          "204": {
+            "description": "Bot permanently erased: chat, memory, instructions, routines, files and photo"
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
-    "/bots/{botId}/restore": {
-      "parameters": [
-        { "$ref": "#/components/parameters/BotId" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
-      ],
-      "post": {
-        "operationId": "restoreBot",
-        "x-aiden-archived-access": "restore",
-        "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
-        "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+    "/bot-presets": {
+      "get": {
+        "operationId": "listBotPresets",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read"
         ],
         "responses": {
           "200": {
-            "description": "Restored authoritative Bot detail",
+            "description": "Starter Bot presets",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotDetail" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPresetList"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/from-preset": {
+      "post": {
+        "operationId": "createBotFromPreset",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Existing preset Bot returned, or one created from the preset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPresetCreateResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPresetCreateRequest"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/session": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotSession",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The Bot's one durable conversation: newest entries, in-flight partial and state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSession"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/session/events": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "streamBotSessionEvents",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Server-sent events: snapshot first, then partial, entry, state and closed frames",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionEvent"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-aiden-event-stream": true,
+        "x-aiden-event-epoch-seq": true
+      }
+    },
+    "/bots/{botId}/messages": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "sendBotMessage",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "chat:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message accepted (or deduped by Idempotency-Key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotMessageReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotMessageRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/resume": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "resumeBotSession",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bot session state after resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/dismiss": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "dismissBotSession",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bot session state after dismiss",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/stop": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "stopBotSession",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bot session state after stop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/questions/{waitId}/answer": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "waitId",
+          "in": "path",
+          "required": true,
+          "description": "The waitId of the question the Bot is waiting on (BotSession.question.waitId).",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "answerBotQuestion",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "description": "Answers the Bot's quick-reply question. The Idempotency-Key is the request UUID: a repeat with the same key returns the same receipt. Another key for a question that is no longer waiting returns 409 question_expired.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer was recorded for this question. A repeat with the same Idempotency-Key returns the same receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotQuestionAnswerReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/routines": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotRoutines",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Routines of this Bot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createBotRoutine",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Routine created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutine"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotRoutineCreateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/routines/{routineId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "$ref": "#/components/parameters/RoutineId"
+        }
+      ],
+      "patch": {
+        "operationId": "updateBotRoutine",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutine"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotRoutineUpdateRequest"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteBotRoutine",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Routine deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/connection-requests": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "requestBotConnection",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mac notified to finish connecting the app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectionRequestReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectionRequest"
+              }
+            }
+          }
         }
       }
     },
     "/bot-conversations": {
       "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "get": {
         "operationId": "listBotConversations",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read", "chat:read"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read"
+        ],
         "parameters": [
           {
             "name": "cursor",
             "in": "query",
             "required": false,
-            "schema": { "type": "string", "minLength": 1, "maxLength": 128 }
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
           },
           {
             "name": "query",
             "in": "query",
             "required": false,
-            "schema": { "type": "string", "maxLength": 200 }
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
           },
           {
             "name": "botId",
@@ -1650,24 +2305,39 @@
             "name": "limit",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 30 }
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 30
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Newest-first bounded Bot conversation page",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotConversationPage" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConversationPage"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/bots/{botId}/chats": {
       "parameters": [
-        { "$ref": "#/components/parameters/BotId" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "post": {
         "operationId": "createBotChat",
@@ -1676,186 +2346,231 @@
         "x-aiden-provider-model-required-only-when-creating": true,
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write", "chat:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "chat:write"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/BotChatCreateRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotChatCreateRequest"
+              }
+            }
           }
         },
         "responses": {
           "201": {
             "description": "Existing canonical Bot chat returned, or one authoritative chat created when absent; 201 is retained for v1 client compatibility",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotChatCreateResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotChatCreateResponse"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/bot-capabilities": {
       "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "get": {
         "operationId": "getBotCapabilityCatalog",
         "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read"],
+        "x-aiden-capabilities": [
+          "bot:read"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/BotIdQuery" }
+          {
+            "$ref": "#/components/parameters/BotIdQuery"
+          }
         ],
         "responses": {
           "200": {
             "description": "Safe opaque Bot capability catalog; no paths, credentials, headers, or fingerprints",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotCapabilityCatalog" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotCapabilityCatalog"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/bots/{botId}/capabilities": {
       "parameters": [
-        { "$ref": "#/components/parameters/BotId" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "patch": {
         "operationId": "updateBotAccess",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" }
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/BotAccessUpdateRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotAccessUpdateRequest"
+              }
+            }
           }
         },
         "responses": {
           "200": {
             "description": "Authoritative Bot access policy after a revision-checked update",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotAccessView" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAccessView"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/chats/{chatId}/capabilities": {
-      "parameters": [
-        { "$ref": "#/components/parameters/ChatId" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
-      ],
-      "get": {
-        "operationId": "getBotChatAccess",
-        "x-aiden-archived-access": "readable",
-        "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read", "chat:read"],
-        "responses": {
-          "200": {
-            "description": "Authoritative inherited or Custom reduction for this Bot chat",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ChatBotAccessView" } }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Error" }
-        }
-      },
-      "patch": {
-        "operationId": "updateBotChatAccess",
-        "x-aiden-archived-access": "mutation_blocked",
-        "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write", "chat:write"],
-        "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ChatBotAccessUpdateRequest" } }
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
-        },
-        "responses": {
-          "200": {
-            "description": "Authoritative chat reduction; it can never exceed its Bot",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ChatBotAccessView" } }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Error" }
         }
       }
     },
     "/bot-conversations/{chatId}/files": {
       "parameters": [
-        { "$ref": "#/components/parameters/ChatId" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "get": {
         "operationId": "listBotConversationFiles",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "files:read",
-        "x-aiden-capabilities": ["bot:read", "files:read"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "files:read"
+        ],
         "responses": {
           "200": {
             "description": "Bounded file index authorized against the Bot chat and current policy epoch",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/FileIndex" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileIndex"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/bot-conversations/{chatId}/files/{fileId}": {
       "parameters": [
-        { "$ref": "#/components/parameters/ChatId" },
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
         {
           "name": "fileId",
           "in": "path",
           "required": true,
-          "schema": { "type": "string", "pattern": "^file_[A-Za-z0-9_-]{43}$" }
+          "schema": {
+            "type": "string",
+            "pattern": "^file_[A-Za-z0-9_-]{43}$"
+          }
         },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "get": {
         "operationId": "readBotConversationFile",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "files:read",
-        "x-aiden-capabilities": ["bot:read", "files:read"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "files:read"
+        ],
         "responses": {
           "200": {
             "description": "Readable text document authorized against the Bot chat and current policy epoch",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/FileDocument" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileDocument"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "put": {
         "operationId": "writeBotConversationFile",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "files:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write", "files:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "files:write"
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["content", "expectedVersion"],
+                "required": [
+                  "content",
+                  "expectedVersion"
+                ],
                 "properties": {
-                  "content": { "type": "string", "maxLength": 5242880 },
-                  "expectedVersion": { "type": "string", "minLength": 1, "maxLength": 128 }
+                  "content": {
+                    "type": "string",
+                    "maxLength": 5242880
+                  },
+                  "expectedVersion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
                 },
                 "additionalProperties": false
               }
@@ -1866,185 +2581,149 @@
           "200": {
             "description": "Authoritative saved Bot-chat document",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/FileDocument" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileDocument"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/bots/{botId}/avatar": {
       "parameters": [
-        { "$ref": "#/components/parameters/BotId" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "put": {
         "operationId": "putBotAvatar",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/BotAvatarUploadRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotAvatarUploadRequest"
+              }
+            }
           }
         },
         "responses": {
           "200": {
             "description": "Canonical normalized Bot avatar metadata",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotAvatarAsset" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAvatarAsset"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "delete": {
         "operationId": "deleteBotAvatar",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" }
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
         ],
         "responses": {
           "200": {
             "description": "Bot detail after returning to the semantic avatar fallback",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotDetail" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotDetail"
+                }
+              }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/bots/{botId}/avatar/{assetRevision}": {
       "parameters": [
-        { "$ref": "#/components/parameters/BotId" },
-        { "$ref": "#/components/parameters/AssetRevision" },
-        { "$ref": "#/components/parameters/ProtocolVersion" }
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/AssetRevision"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
       ],
       "get": {
         "operationId": "getBotAvatarContent",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read"],
+        "x-aiden-capabilities": [
+          "bot:read"
+        ],
         "responses": {
           "200": {
             "description": "Authenticated canonical Bot avatar content",
             "headers": {
               "Cache-Control": {
                 "required": true,
-                "schema": { "const": "no-store" }
+                "schema": {
+                  "const": "no-store"
+                }
               },
               "X-Content-Type-Options": {
                 "required": true,
-                "schema": { "const": "nosniff" }
+                "schema": {
+                  "const": "nosniff"
+                }
               }
             },
             "content": {
               "image/png": {
-                "schema": { "type": "string", "contentEncoding": "binary", "maxLength": 4194304 }
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 4194304
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/bot-favorites": {
-      "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" }
-      ],
-      "get": {
-        "operationId": "getBotFavorites",
-        "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read"],
-        "responses": {
-          "200": {
-            "description": "Authoritative favorite membership and order",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotFavoritesView" } }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Error" }
-        }
-      },
-      "patch": {
-        "operationId": "updateBotFavorites",
-        "x-aiden-archived-access": "reject_archived_additions",
-        "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
-        "parameters": [
-          { "$ref": "#/components/parameters/IfMatch" }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/BotFavoritesUpdateRequest" } }
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
-        },
-        "responses": {
-          "200": {
-            "description": "Updated authoritative favorite membership and order",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotFavoritesView" } }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/bot-access-notice": {
-      "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" }
-      ],
-      "get": {
-        "operationId": "getBotAccessNoticeStatus",
-        "x-aiden-capability": "bot:read",
-        "x-aiden-capabilities": ["bot:read"],
-        "responses": {
-          "200": {
-            "description": "Mac-owned Full Access notice acknowledgement status for this paired device",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotAccessNoticeStatus" } }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/bot-access-notice/acknowledgement": {
-      "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" }
-      ],
-      "post": {
-        "operationId": "acknowledgeBotAccessNotice",
-        "x-aiden-capability": "bot:write",
-        "x-aiden-capabilities": ["bot:read", "bot:write"],
-        "parameters": [
-          { "$ref": "#/components/parameters/IdempotencyKey" }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/BotAccessNoticeAcknowledgementRequest" }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Persisted authoritative notice acknowledgement",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/BotAccessNoticeStatus" } }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -2285,7 +2964,7 @@
       ],
       "post": {
         "operationId": "respondApproval",
-        "description": "Resolve an approval owned by this device. Allowing schedule_task or edit_automation additionally requires schedule:write; clients without that grant may deny only.",
+        "description": "Resolve an approval owned by this device. Allowing schedule_task or edit_automation additionally requires schedule:write; clients without that grant may deny only. Contract revision 25: an approvalId that is a durable Bot approval waitId (BotSession.approval) is answered on that Bot by any device holding bot:read and bot:write as well; only scope once is accepted, and allowing one whose canAllow is false is capability_denied (deny still works).",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "approval:respond",
         "parameters": [
@@ -2478,71 +3157,193 @@
       }
     },
     "/speech": {
-      "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
       "get": {
         "operationId": "getSpeechStatus",
         "x-aiden-capability": "server:read",
         "responses": {
-          "200": { "description": "Paired-Mac local speech engine and model status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
-          "default": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "description": "Paired-Mac local speech engine and model status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "patch": {
         "operationId": "selectSpeechModel",
         "x-aiden-capability": "chat:write",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["modelId"], "properties": { "modelId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" } }, "additionalProperties": false } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "modelId"
+                ],
+                "properties": {
+                  "modelId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
         "responses": {
-          "200": { "description": "Updated local speech selection", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
-          "default": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "description": "Updated local speech selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/speech/models/{modelId}/download": {
       "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" },
-        { "name": "modelId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" } }
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "modelId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
       ],
       "post": {
         "operationId": "downloadSpeechModel",
         "x-aiden-capability": "chat:write",
         "responses": {
-          "202": { "description": "Model download accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
-          "default": { "$ref": "#/components/responses/Error" }
+          "202": {
+            "description": "Model download accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "delete": {
         "operationId": "cancelSpeechModelDownload",
         "x-aiden-capability": "chat:write",
         "responses": {
-          "200": { "description": "Current model download status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
-          "default": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "description": "Current model download status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/speech/models/{modelId}": {
       "parameters": [
-        { "$ref": "#/components/parameters/ProtocolVersion" },
-        { "name": "modelId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" } }
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "modelId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
       ],
       "delete": {
         "operationId": "deleteSpeechModel",
         "x-aiden-capability": "chat:write",
         "responses": {
-          "200": { "description": "Speech status after deleting the local model", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechStatus" } } } },
-          "default": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "description": "Speech status after deleting the local model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/speech/transcriptions": {
-      "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
       "post": {
         "operationId": "transcribeSpeech",
         "x-aiden-capability": "chat:write",
         "description": "Transcribes one explicit, bounded recording locally on the paired Mac. Audio is not retained and the current Parakeet model returns a final result only.",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechTranscriptionRequest" } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeechTranscriptionRequest"
+              }
+            }
+          }
+        },
         "responses": {
-          "200": { "description": "Final local transcript", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeechTranscription" } } } },
-          "default": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "description": "Final local transcript",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechTranscription"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
@@ -2601,9 +3402,35 @@
           {
             "$ref": "#/components/parameters/WorkspaceId"
           },
-          { "name": "tree", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "Opt into nonrecursive directory pages. Required when directory or cursor is supplied." },
-          { "name": "directory", "in": "query", "schema": { "type": "string", "pattern": "^file_[A-Za-z0-9_-]{43}$" }, "description": "Opaque directory handle from a file page; omitted for workspace root." },
-          { "name": "cursor", "in": "query", "schema": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" }, "description": "Expiring device/workspace/directory-bound continuation. An evicted snapshot returns handle_expired." }
+          {
+            "name": "tree",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "Opt into nonrecursive directory pages. Required when directory or cursor is supplied."
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^file_[A-Za-z0-9_-]{43}$"
+            },
+            "description": "Opaque directory handle from a file page; omitted for workspace root."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+            },
+            "description": "Expiring device/workspace/directory-bound continuation. An evicted snapshot returns handle_expired."
+          }
         ],
         "responses": {
           "200": {
@@ -3889,7 +4716,7 @@
             "name": "chatId",
             "in": "query",
             "required": false,
-            "description": "Contract revision 25. A chat the device can read; adds chatDeviceIds to the listing.",
+            "description": "Contract revision 26. A chat the device can read; adds chatDeviceIds to the listing.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -3898,7 +4725,7 @@
             }
           }
         ],
-        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Lists the serving Mac's iOS Simulators and Android Emulators. While the owner has not turned on Share with paired Macs, sharing is false and devices is empty. Phones also need the owner's Share with Aiden On The Go consent. Phones may open iOS Simulators only; Android Emulators are listed for them as Open on your Mac to view. The optional chatId query (the only query accepted) also requires chat:read and a visible chat; the response then carries chatDeviceIds and the Mac never starts its hub for it. Phones also receive toolVersions.",
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Lists the serving Mac's iOS Simulators and Android Emulators. While the owner has not turned on Share with paired Macs, sharing is false and devices is empty. Phones also need the owner's Share with Aiden On The Go consent. Phones may open iOS Simulators only; Android Emulators are listed for them as Open on your Mac to view. The optional chatId query (the only query accepted) also requires chat:read and a visible chat; the response then carries chatDeviceIds and the Mac never starts its hub for it. Phones also receive toolVersions.",
         "responses": {
           "200": {
             "description": "Simulator listing",
@@ -3926,7 +4753,7 @@
         "operationId": "openSimulator",
         "x-aiden-capability": "simulators:control",
         "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
-        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Boots a listed simulator and starts its stream on the serving Mac. Sharing must be on. Phones also need the owner's Share with Aiden On The Go consent. Phones may open only iOS Simulators; any other platform is capability_denied.",
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Boots a listed simulator and starts its stream on the serving Mac. Sharing must be on. Phones also need the owner's Share with Aiden On The Go consent. Phones may open only iOS Simulators; any other platform is capability_denied.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3964,7 +4791,7 @@
         "operationId": "shutdownSimulator",
         "x-aiden-capability": "simulators:control",
         "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
-        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Shuts down a listed simulator on the serving Mac. Phones also need the owner's Share with Aiden On The Go consent.",
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Shuts down a listed simulator on the serving Mac. Phones also need the owner's Share with Aiden On The Go consent.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4001,7 +4828,7 @@
       "post": {
         "operationId": "getSimulatorSettings",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Reads a listed simulator's settings. Contract revision 25: phones holding simulators:mobile are refused with capability_denied.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Reads a listed simulator's settings. Contract revision 26: phones holding simulators:mobile are refused with capability_denied.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4038,7 +4865,7 @@
       "post": {
         "operationId": "runSimulatorAction",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Runs one control action on a listed simulator. Contract revision 25: phones holding simulators:mobile are refused with capability_denied.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Runs one control action on a listed simulator. Contract revision 26: phones holding simulators:mobile are refused with capability_denied.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4087,7 +4914,7 @@
         "operationId": "relaySimulatorHub",
         "x-aiden-capability": "simulators:control",
         "x-aiden-any-capability": ["simulators:control", "simulators:mobile"],
-        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 25 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper, serve-emu video and gesture, and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device. Phones also need the owner's Share with Aiden On The Go consent. Phones reach only vendor/serve-sim/helper/{udid}/stream.mjpeg, .../config, .../health and the helper WebSocket vendor/serve-sim/helper/ws?device={udid}; every other hub path, including every serve-emu route, is capability_denied for them.",
+        "description": "Requires the negotiated simulators:control grant on a paired mac or linux device, or since contract revision 26 the simulators:mobile grant on an iphone or ipad; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper, serve-emu video and gesture, and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device. Phones also need the owner's Share with Aiden On The Go consent. Phones reach only vendor/serve-sim/helper/{udid}/stream.mjpeg, .../config, .../health and the helper WebSocket vendor/serve-sim/helper/ws?device={udid}; every other hub path, including every serve-emu route, is capability_denied for them.",
         "responses": {
           "200": {
             "description": "Relayed hub content"
@@ -4103,7 +4930,7 @@
       "post": {
         "operationId": "captureSimulatorScreenshot",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Only hubPath vendor/serve-sim/api/screenshot, vendor/serve-emu/api/screenshot, and vendor/serve-emu/api/fold accept POST. The iOS screenshot body names one listed simulator; the Android screenshot names its emulator in ?device= and takes no body; the fold body names a posture. The relay rebuilds each body from those fields alone and bounds the request to 1 KiB. serve-emu stream tuning (PUT and PATCH) is never relayed. Contract revision 25: phones holding simulators:mobile are refused with capability_denied.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Only hubPath vendor/serve-sim/api/screenshot, vendor/serve-emu/api/screenshot, and vendor/serve-emu/api/fold accept POST. The iOS screenshot body names one listed simulator; the Android screenshot names its emulator in ?device= and takes no body; the fold body names a posture. The relay rebuilds each body from those fields alone and bounds the request to 1 KiB. serve-emu stream tuning (PUT and PATCH) is never relayed. Contract revision 26: phones holding simulators:mobile are refused with capability_denied.",
         "requestBody": {
           "required": false,
           "content": {
@@ -5139,6 +5966,17 @@
           "minLength": 1,
           "maxLength": 128
         }
+      },
+      "RoutineId": {
+        "name": "routineId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        }
       }
     },
     "schemas": {
@@ -5579,12 +6417,20 @@
           {
             "if": {
               "properties": {
-                "capabilities": { "contains": { "const": "bot:write" } }
+                "capabilities": {
+                  "contains": {
+                    "const": "bot:write"
+                  }
+                }
               }
             },
             "then": {
               "properties": {
-                "capabilities": { "contains": { "const": "bot:read" } }
+                "capabilities": {
+                  "contains": {
+                    "const": "bot:read"
+                  }
+                }
               }
             }
           }
@@ -5690,7 +6536,7 @@
           },
           "features": {
             "type": "array",
-            "description": "Bounded additive API feature advertisements independent of device grants or vocabulary opt-in. Clients recognize supported values and ignore other bounded values; feature tokens never grant authority. Contract revision 25: phones alone may see mobile-simulators-v1, which gates negotiating simulators:mobile.",
+            "description": "Bounded additive API feature advertisements independent of device grants or vocabulary opt-in. Clients recognize supported values and ignore other bounded values; feature tokens never grant authority. Contract revision 26: phones alone may see mobile-simulators-v1, which gates negotiating simulators:mobile.",
             "maxItems": 32,
             "items": {
               "type": "string",
@@ -5727,25 +6573,43 @@
           {
             "if": {
               "properties": {
-                "capabilities": { "contains": { "const": "bot:write" } }
+                "capabilities": {
+                  "contains": {
+                    "const": "bot:write"
+                  }
+                }
               }
             },
             "then": {
               "properties": {
-                "capabilities": { "contains": { "const": "bot:read" } }
+                "capabilities": {
+                  "contains": {
+                    "const": "bot:read"
+                  }
+                }
               }
             }
           },
           {
             "if": {
-              "required": ["serverCapabilities"],
+              "required": [
+                "serverCapabilities"
+              ],
               "properties": {
-                "serverCapabilities": { "contains": { "const": "bot:write" } }
+                "serverCapabilities": {
+                  "contains": {
+                    "const": "bot:write"
+                  }
+                }
               }
             },
             "then": {
               "properties": {
-                "serverCapabilities": { "contains": { "const": "bot:read" } }
+                "serverCapabilities": {
+                  "contains": {
+                    "const": "bot:read"
+                  }
+                }
               }
             }
           }
@@ -5788,7 +6652,7 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only. Contract revision 25 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found.",
             "minItems": 1,
             "maxItems": 9,
             "items": {
@@ -5907,7 +6771,7 @@
         "properties": {
           "sharing": {
             "type": "boolean",
-            "description": "Whether the serving Mac's owner shares simulators with this device's audience: Share with paired Macs for desktops, Share with Aiden On The Go for phones (contract revision 25). devices is empty while false."
+            "description": "Whether the serving Mac's owner shares simulators with this device's audience: Share with paired Macs for desktops, Share with Aiden On The Go for phones (contract revision 26). devices is empty while false."
           },
           "status": {
             "enum": [
@@ -5935,7 +6799,7 @@
           "chatDeviceIds": {
             "type": "array",
             "maxItems": 256,
-            "description": "Contract revision 25. Present only when the request named a chatId: the listed simulators the desktop attached to that chat.",
+            "description": "Contract revision 26. Present only when the request named a chatId: the listed simulators the desktop attached to that chat.",
             "items": {
               "type": "string",
               "minLength": 1,
@@ -5945,7 +6809,7 @@
           },
           "toolVersions": {
             "type": "object",
-            "description": "Contract revision 25, phones only: the pinned helper versions on the serving Mac.",
+            "description": "Contract revision 26, phones only: the pinned helper versions on the serving Mac.",
             "required": ["hub", "agent"],
             "properties": {
               "hub": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -6024,41 +6888,129 @@
       },
       "SpeechStatus": {
         "type": "object",
-        "required": ["engine", "selectedModelId", "models", "input"],
+        "required": [
+          "engine",
+          "selectedModelId",
+          "models",
+          "input"
+        ],
         "properties": {
           "engine": {
             "type": "object",
-            "required": ["ready", "error"],
-            "properties": { "ready": { "type": "boolean" }, "error": { "type": ["string", "null"] } },
+            "required": [
+              "ready",
+              "error"
+            ],
+            "properties": {
+              "ready": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
             "additionalProperties": false
           },
-          "selectedModelId": { "type": ["string", "null"] },
+          "selectedModelId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "models": {
             "type": "array",
             "maxItems": 16,
             "items": {
               "type": "object",
-              "required": ["id", "name", "description", "sizeLabel", "quant", "languagesLabel", "accuracy", "speed", "recommended", "installed"],
+              "required": [
+                "id",
+                "name",
+                "description",
+                "sizeLabel",
+                "quant",
+                "languagesLabel",
+                "accuracy",
+                "speed",
+                "recommended",
+                "installed"
+              ],
               "properties": {
-                "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
-                "name": { "type": "string", "maxLength": 200 },
-                "description": { "type": "string", "maxLength": 1000 },
-                "sizeLabel": { "type": "string", "maxLength": 100 },
-                "quant": { "type": "string", "maxLength": 50 },
-                "languagesLabel": { "type": "string", "maxLength": 200 },
-                "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
-                "speed": { "type": "number", "minimum": 0, "maximum": 1 },
-                "recommended": { "type": "boolean" },
-                "installed": { "type": "boolean" },
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "description": {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                "sizeLabel": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "quant": {
+                  "type": "string",
+                  "maxLength": 50
+                },
+                "languagesLabel": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "accuracy": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "speed": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "recommended": {
+                  "type": "boolean"
+                },
+                "installed": {
+                  "type": "boolean"
+                },
                 "download": {
                   "type": "object",
-                  "required": ["id", "percentage", "phase", "status"],
+                  "required": [
+                    "id",
+                    "percentage",
+                    "phase",
+                    "status"
+                  ],
                   "properties": {
-                    "id": { "type": "string" },
-                    "percentage": { "type": "integer", "minimum": 0, "maximum": 100 },
-                    "phase": { "enum": ["download", "extract"] },
-                    "status": { "enum": ["downloading", "failed"] },
-                    "error": { "type": "string", "maxLength": 1000 }
+                    "id": {
+                      "type": "string"
+                    },
+                    "percentage": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "phase": {
+                      "enum": [
+                        "download",
+                        "extract"
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "downloading",
+                        "failed"
+                      ]
+                    },
+                    "error": {
+                      "type": "string",
+                      "maxLength": 1000
+                    }
                   },
                   "additionalProperties": false
                 }
@@ -6068,13 +7020,29 @@
           },
           "input": {
             "type": "object",
-            "required": ["encoding", "sampleRate", "channels", "maximumSeconds", "partialResults"],
+            "required": [
+              "encoding",
+              "sampleRate",
+              "channels",
+              "maximumSeconds",
+              "partialResults"
+            ],
             "properties": {
-              "encoding": { "const": "pcm_s16le" },
-              "sampleRate": { "const": 16000 },
-              "channels": { "const": 1 },
-              "maximumSeconds": { "const": 60 },
-              "partialResults": { "const": false }
+              "encoding": {
+                "const": "pcm_s16le"
+              },
+              "sampleRate": {
+                "const": 16000
+              },
+              "channels": {
+                "const": 1
+              },
+              "maximumSeconds": {
+                "const": 60
+              },
+              "partialResults": {
+                "const": false
+              }
             },
             "additionalProperties": false
           }
@@ -6083,22 +7051,50 @@
       },
       "SpeechTranscriptionRequest": {
         "type": "object",
-        "required": ["encoding", "sampleRate", "channels", "pcmBase64", "modelId"],
+        "required": [
+          "encoding",
+          "sampleRate",
+          "channels",
+          "pcmBase64",
+          "modelId"
+        ],
         "properties": {
-          "encoding": { "const": "pcm_s16le" },
-          "sampleRate": { "const": 16000 },
-          "channels": { "const": 1 },
-          "pcmBase64": { "type": "string", "contentEncoding": "base64", "maxLength": 2560000 },
-          "modelId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" }
+          "encoding": {
+            "const": "pcm_s16le"
+          },
+          "sampleRate": {
+            "const": 16000
+          },
+          "channels": {
+            "const": 1
+          },
+          "pcmBase64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "maxLength": 2560000
+          },
+          "modelId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
         },
         "additionalProperties": false
       },
       "SpeechTranscription": {
         "type": "object",
-        "required": ["text", "modelId"],
+        "required": [
+          "text",
+          "modelId"
+        ],
         "properties": {
-          "text": { "type": "string", "maxLength": 200000 },
-          "modelId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" }
+          "text": {
+            "type": "string",
+            "maxLength": 200000
+          },
+          "modelId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
         },
         "additionalProperties": false
       },
@@ -7127,7 +8123,10 @@
             "maxItems": 40,
             "items": {
               "type": "object",
-              "required": ["id", "title"],
+              "required": [
+                "id",
+                "title"
+              ],
               "properties": {
                 "id": {
                   "type": "string",
@@ -7151,31 +8150,78 @@
         "additionalProperties": false
       },
       "BotSemanticAvatar": {
-        "oneOf": [
-          {
-            "enum": ["spark", "orbit", "leaf", "prism", "wave", "ember"]
+        "type": "object",
+        "required": [
+          "version",
+          "shape",
+          "color"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
           },
-          {
-            "type": "object",
-            "required": ["version", "shape", "color", "eyes", "detail"],
-            "properties": {
-              "version": { "const": 1 },
-              "shape": {
-                "enum": ["wisp", "orb", "drop", "hex", "cloud", "peak", "squircle", "capsule"]
-              },
-              "color": {
-                "enum": ["lilac", "sky", "mint", "sun", "periwinkle", "coral", "peach", "aqua"]
-              },
-              "eyes": { "enum": ["dots", "wide", "happy", "sleepy", "focus", "wink"] },
-              "detail": { "enum": ["none", "halo", "orbit", "sparkles", "antenna", "bolts"] }
-            },
-            "additionalProperties": false
+          "shape": {
+            "enum": [
+              "wisp",
+              "orb",
+              "drop",
+              "hex",
+              "cloud",
+              "peak",
+              "squircle",
+              "capsule"
+            ]
+          },
+          "color": {
+            "enum": [
+              "lilac",
+              "sky",
+              "mint",
+              "sun",
+              "periwinkle",
+              "coral",
+              "peach",
+              "aqua",
+              "rose",
+              "lime",
+              "plum",
+              "graphite"
+            ]
+          },
+          "eyes": {
+            "enum": [
+              "dots",
+              "wide",
+              "happy",
+              "sleepy",
+              "focus",
+              "wink"
+            ],
+            "description": "Retired in revision 25: accepted and ignored on input, never emitted."
+          },
+          "detail": {
+            "enum": [
+              "none",
+              "halo",
+              "orbit",
+              "sparkles",
+              "antenna",
+              "bolts"
+            ],
+            "description": "Retired in revision 25: accepted and ignored on input, never emitted."
           }
-        ]
+        },
+        "additionalProperties": false
       },
       "BotAvatarAsset": {
         "type": "object",
-        "required": ["assetRevision", "mimeType", "width", "height", "byteSize"],
+        "required": [
+          "assetRevision",
+          "mimeType",
+          "width",
+          "height",
+          "byteSize"
+        ],
         "properties": {
           "assetRevision": {
             "type": "string",
@@ -7183,29 +8229,58 @@
             "maxLength": 128,
             "pattern": "^[A-Za-z0-9._:-]+$"
           },
-          "mimeType": { "const": "image/png" },
-          "width": { "const": 512 },
-          "height": { "const": 512 },
-          "byteSize": { "type": "integer", "minimum": 1, "maximum": 4194304 }
+          "mimeType": {
+            "const": "image/png"
+          },
+          "width": {
+            "const": 512
+          },
+          "height": {
+            "const": 512
+          },
+          "byteSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4194304
+          }
         },
         "additionalProperties": false
       },
       "BotAvatarView": {
         "type": "object",
-        "required": ["semantic"],
+        "required": [
+          "semantic"
+        ],
         "properties": {
-          "semantic": { "$ref": "#/components/schemas/BotSemanticAvatar" },
-          "asset": { "$ref": "#/components/schemas/BotAvatarAsset" }
+          "semantic": {
+            "$ref": "#/components/schemas/BotSemanticAvatar"
+          },
+          "asset": {
+            "$ref": "#/components/schemas/BotAvatarAsset"
+          }
         },
         "additionalProperties": false
       },
       "BotHealth": {
-        "enum": ["ready", "degraded", "unavailable", "archived"]
+        "enum": [
+          "ready",
+          "degraded",
+          "unavailable"
+        ]
       },
       "BotSummary": {
         "type": "object",
         "x-aiden-updated-at-not-before-created-at": true,
-        "required": ["id", "name", "purpose", "avatar", "health", "createdAt", "updatedAt", "revision"],
+        "required": [
+          "id",
+          "name",
+          "purpose",
+          "avatar",
+          "health",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -7213,156 +8288,233 @@
             "maxLength": 160,
             "pattern": "^[A-Za-z0-9._:-]+$"
           },
-          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-          "purpose": { "type": "string", "maxLength": 280 },
-          "avatar": { "$ref": "#/components/schemas/BotAvatarView" },
-          "health": { "$ref": "#/components/schemas/BotHealth" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" },
-          "archivedAt": { "type": "string", "format": "date-time" },
-          "revision": { "type": "string", "minLength": 1, "maxLength": 128 }
-        },
-        "allOf": [
-          {
-            "if": {
-              "required": ["health"],
-              "properties": { "health": { "const": "archived" } }
-            },
-            "then": { "required": ["archivedAt"] },
-            "else": { "not": { "required": ["archivedAt"] } }
-          }
-        ],
-        "additionalProperties": false
-      },
-      "BotFavoritesView": {
-        "type": "object",
-        "x-aiden-excludes-archived-bots": true,
-        "required": ["botIds", "revision"],
-        "properties": {
-          "botIds": {
-            "type": "array",
-            "maxItems": 20,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160,
-              "pattern": "^[A-Za-z0-9._:-]+$"
-            }
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
           },
-          "revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+          "purpose": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "avatar": {
+            "$ref": "#/components/schemas/BotAvatarView"
+          },
+          "health": {
+            "$ref": "#/components/schemas/BotHealth"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sessionState": {
+            "enum": [
+              "idle",
+              "running",
+              "interrupted",
+              "needs_model",
+              "unavailable"
+            ]
+          }
         },
         "additionalProperties": false
       },
       "BotList": {
         "type": "object",
-        "x-aiden-favorites-exclude-archived-bots": true,
-        "required": ["bots", "maxBots", "favorites"],
+        "required": [
+          "bots",
+          "maxBots"
+        ],
         "properties": {
           "bots": {
             "type": "array",
             "maxItems": 256,
-            "items": { "$ref": "#/components/schemas/BotSummary" }
+            "items": {
+              "$ref": "#/components/schemas/BotSummary"
+            }
           },
-          "maxBots": { "const": 256 },
-          "favorites": { "$ref": "#/components/schemas/BotFavoritesView" }
+          "maxBots": {
+            "const": 256
+          }
         },
         "additionalProperties": false
       },
       "BotCapabilityOption": {
         "type": "object",
-        "required": ["id", "label", "available"],
+        "required": [
+          "id",
+          "label",
+          "available"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" },
-          "label": { "type": "string", "minLength": 1, "maxLength": 120 },
-          "available": { "type": "boolean" },
-          "description": { "type": "string", "maxLength": 280 }
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 280
+          }
         },
         "additionalProperties": false
       },
       "BotFileScopeOption": {
         "type": "object",
-        "required": ["id", "label", "available", "kind"],
+        "required": [
+          "id",
+          "label",
+          "available",
+          "kind"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" },
-          "label": { "type": "string", "minLength": 1, "maxLength": 120 },
-          "available": { "type": "boolean" },
-          "kind": { "enum": ["full_mac", "bot_home", "approved_location"] },
-          "description": { "type": "string", "maxLength": 280 }
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "full_mac",
+              "bot_home",
+              "approved_location"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 280
+          }
         },
         "additionalProperties": false
       },
       "BotProviderModelOption": {
         "type": "object",
-        "required": ["id", "label", "available", "supportsImages"],
+        "required": [
+          "id",
+          "label",
+          "available",
+          "supportsImages"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "maxLength": 512 },
-          "label": { "type": "string", "minLength": 1, "maxLength": 160 },
-          "available": { "type": "boolean" },
-          "supportsImages": { "type": "boolean" }
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "supportsImages": {
+            "type": "boolean"
+          }
         },
         "additionalProperties": false
       },
       "BotProviderOption": {
         "type": "object",
-        "required": ["id", "label", "available", "models"],
+        "required": [
+          "id",
+          "label",
+          "available",
+          "models"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "label": { "type": "string", "minLength": 1, "maxLength": 120 },
-          "available": { "type": "boolean" },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "available": {
+            "type": "boolean"
+          },
           "models": {
             "type": "array",
             "maxItems": 256,
-            "items": { "$ref": "#/components/schemas/BotProviderModelOption" }
+            "items": {
+              "$ref": "#/components/schemas/BotProviderModelOption"
+            }
           }
         },
         "additionalProperties": false
       },
-      "BotAccessNoticeStatus": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": ["version", "requiresAcknowledgement"],
-            "properties": {
-              "version": { "const": "bot-full-access-v1" },
-              "requiresAcknowledgement": { "const": true }
-            },
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "required": ["version", "requiresAcknowledgement", "acceptedAt", "acceptedDecision"],
-            "properties": {
-              "version": { "const": "bot-full-access-v1" },
-              "requiresAcknowledgement": { "const": false },
-              "acceptedAt": { "type": "string", "format": "date-time" },
-              "acceptedDecision": { "enum": ["continue_full", "customize_first"] }
-            },
-            "additionalProperties": false
-          }
-        ]
-      },
       "BotCapabilityCatalog": {
         "type": "object",
-        "required": ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skills", "otherCapabilities", "notice"],
+        "required": [
+          "revision",
+          "providers",
+          "fileScopes",
+          "shellAvailable",
+          "connections",
+          "skills",
+          "otherCapabilities"
+        ],
         "properties": {
-          "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
           "providers": {
             "type": "array",
             "maxItems": 64,
             "x-aiden-max-total-models": 512,
-            "items": { "$ref": "#/components/schemas/BotProviderOption" }
+            "items": {
+              "$ref": "#/components/schemas/BotProviderOption"
+            }
           },
           "fileScopes": {
             "type": "array",
             "maxItems": 64,
-            "items": { "$ref": "#/components/schemas/BotFileScopeOption" }
+            "items": {
+              "$ref": "#/components/schemas/BotFileScopeOption"
+            }
           },
-          "shellAvailable": { "type": "boolean" },
+          "shellAvailable": {
+            "type": "boolean"
+          },
           "connections": {
             "type": "array",
             "maxItems": 128,
-            "items": { "$ref": "#/components/schemas/BotCapabilityOption" }
+            "items": {
+              "$ref": "#/components/schemas/BotCapabilityOption"
+            }
           },
           "skillsEnabled": {
             "type": "boolean",
@@ -7372,47 +8524,88 @@
           "skills": {
             "type": "array",
             "maxItems": 256,
-            "items": { "$ref": "#/components/schemas/BotCapabilityOption" }
+            "items": {
+              "$ref": "#/components/schemas/BotCapabilityOption"
+            }
           },
           "otherCapabilities": {
             "type": "array",
             "maxItems": 128,
-            "items": { "$ref": "#/components/schemas/BotCapabilityOption" }
-          },
-          "notice": { "$ref": "#/components/schemas/BotAccessNoticeStatus" }
+            "items": {
+              "$ref": "#/components/schemas/BotCapabilityOption"
+            }
+          }
         },
         "additionalProperties": false
       },
       "BotCustomSelection": {
         "type": "object",
-        "required": ["providerId", "modelId", "fileScopeIds", "shellEnabled", "connectionIds", "skillIds", "otherCapabilityIds"],
+        "required": [
+          "providerId",
+          "modelId",
+          "fileScopeIds",
+          "shellEnabled",
+          "connectionIds",
+          "skillIds",
+          "otherCapabilityIds"
+        ],
         "properties": {
-          "providerId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "modelId": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
           "fileScopeIds": {
             "type": "array",
             "maxItems": 64,
             "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" }
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
           },
-          "shellEnabled": { "type": "boolean" },
+          "shellEnabled": {
+            "type": "boolean"
+          },
           "connectionIds": {
             "type": "array",
             "maxItems": 128,
             "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" }
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
           },
           "skillIds": {
             "type": "array",
             "maxItems": 256,
             "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" }
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
           },
           "otherCapabilityIds": {
             "type": "array",
             "maxItems": 128,
             "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" }
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
           }
         },
         "additionalProperties": false
@@ -7421,7 +8614,13 @@
         "oneOf": [
           {
             "type": "object",
-            "required": ["botId", "accessMode", "revision", "policyEpoch", "summary"],
+            "required": [
+              "botId",
+              "accessMode",
+              "revision",
+              "policyEpoch",
+              "summary"
+            ],
             "properties": {
               "botId": {
                 "type": "string",
@@ -7429,16 +8628,37 @@
                 "maxLength": 160,
                 "pattern": "^[A-Za-z0-9._:-]+$"
               },
-              "accessMode": { "const": "full" },
-              "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "policyEpoch": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "summary": { "type": "string", "minLength": 1, "maxLength": 280 }
+              "accessMode": {
+                "const": "full"
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "policyEpoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 280
+              }
             },
             "additionalProperties": false
           },
           {
             "type": "object",
-            "required": ["botId", "accessMode", "revision", "policyEpoch", "summary", "custom"],
+            "required": [
+              "botId",
+              "accessMode",
+              "revision",
+              "policyEpoch",
+              "summary",
+              "custom"
+            ],
             "properties": {
               "botId": {
                 "type": "string",
@@ -7446,11 +8666,27 @@
                 "maxLength": 160,
                 "pattern": "^[A-Za-z0-9._:-]+$"
               },
-              "accessMode": { "const": "custom" },
-              "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "policyEpoch": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "summary": { "type": "string", "minLength": 1, "maxLength": 280 },
-              "custom": { "$ref": "#/components/schemas/BotCustomSelection" }
+              "accessMode": {
+                "const": "custom"
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "policyEpoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 280
+              },
+              "custom": {
+                "$ref": "#/components/schemas/BotCustomSelection"
+              }
             },
             "additionalProperties": false
           }
@@ -7460,105 +8696,83 @@
         "oneOf": [
           {
             "type": "object",
-            "required": ["accessMode", "catalogRevision", "confirmedForeground"],
+            "required": [
+              "accessMode",
+              "catalogRevision",
+              "confirmedForeground"
+            ],
             "properties": {
-              "accessMode": { "const": "full" },
-              "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "confirmedForeground": { "const": true },
-              "providerId": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "modelId": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "accessMode": {
+                "const": "full"
+              },
+              "catalogRevision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "confirmedForeground": {
+                "const": true
+              },
+              "providerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "modelId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
               "visionModel": {
                 "oneOf": [
-                  { "$ref": "#/components/schemas/BotModelSelection" },
-                  { "type": "null" }
+                  {
+                    "$ref": "#/components/schemas/BotModelSelection"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             },
             "dependentRequired": {
-              "providerId": ["modelId"],
-              "modelId": ["providerId"]
+              "providerId": [
+                "modelId"
+              ],
+              "modelId": [
+                "providerId"
+              ]
             },
             "additionalProperties": false
           },
           {
             "type": "object",
-            "required": ["accessMode", "catalogRevision", "custom"],
+            "required": [
+              "accessMode",
+              "catalogRevision",
+              "custom"
+            ],
             "properties": {
-              "accessMode": { "const": "custom" },
-              "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "custom": { "$ref": "#/components/schemas/BotCustomSelection" },
+              "accessMode": {
+                "const": "custom"
+              },
+              "catalogRevision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "custom": {
+                "$ref": "#/components/schemas/BotCustomSelection"
+              },
               "visionModel": {
                 "oneOf": [
-                  { "$ref": "#/components/schemas/BotModelSelection" },
-                  { "type": "null" }
+                  {
+                    "$ref": "#/components/schemas/BotModelSelection"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
-            },
-            "additionalProperties": false
-          }
-        ]
-      },
-      "ChatBotAccessView": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": ["chatId", "botId", "mode", "revision", "botPolicyRevision", "summary"],
-            "properties": {
-              "chatId": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "botId": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 160,
-                "pattern": "^[A-Za-z0-9._:-]+$"
-              },
-              "mode": { "const": "inherit" },
-              "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "botPolicyRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "summary": { "type": "string", "minLength": 1, "maxLength": 280 }
-            },
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "required": ["chatId", "botId", "mode", "revision", "botPolicyRevision", "summary", "custom"],
-            "properties": {
-              "chatId": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "botId": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 160,
-                "pattern": "^[A-Za-z0-9._:-]+$"
-              },
-              "mode": { "const": "custom" },
-              "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "botPolicyRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "summary": { "type": "string", "minLength": 1, "maxLength": 280 },
-              "custom": { "$ref": "#/components/schemas/BotCustomSelection" }
-            },
-            "additionalProperties": false
-          }
-        ]
-      },
-      "ChatBotAccessUpdateRequest": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": ["mode", "catalogRevision", "expectedBotPolicyRevision"],
-            "properties": {
-              "mode": { "const": "inherit" },
-              "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "expectedBotPolicyRevision": { "type": "string", "minLength": 1, "maxLength": 128 }
-            },
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "required": ["mode", "catalogRevision", "expectedBotPolicyRevision", "custom"],
-            "properties": {
-              "mode": { "const": "custom" },
-              "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "expectedBotPolicyRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-              "custom": { "$ref": "#/components/schemas/BotCustomSelection" }
             },
             "additionalProperties": false
           }
@@ -7567,7 +8781,18 @@
       "BotDetail": {
         "type": "object",
         "x-aiden-updated-at-not-before-created-at": true,
-        "required": ["id", "name", "purpose", "instructions", "avatar", "health", "access", "createdAt", "updatedAt", "revision"],
+        "required": [
+          "id",
+          "name",
+          "purpose",
+          "instructions",
+          "avatar",
+          "health",
+          "access",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -7575,60 +8800,127 @@
             "maxLength": 160,
             "pattern": "^[A-Za-z0-9._:-]+$"
           },
-          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-          "purpose": { "type": "string", "maxLength": 280 },
-          "openingGreeting": { "type": "string", "maxLength": 2000 },
-          "instructions": { "type": "string", "minLength": 1, "maxLength": 32000 },
-          "avatar": { "$ref": "#/components/schemas/BotAvatarView" },
-          "health": { "$ref": "#/components/schemas/BotHealth" },
-          "access": { "$ref": "#/components/schemas/BotAccessView" },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "openingGreeting": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "instructions": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "avatar": {
+            "$ref": "#/components/schemas/BotAvatarView"
+          },
+          "health": {
+            "$ref": "#/components/schemas/BotHealth"
+          },
+          "access": {
+            "$ref": "#/components/schemas/BotAccessView"
+          },
           "modelSelection": {
             "type": "object",
-            "required": ["providerId", "modelId"],
+            "required": [
+              "providerId",
+              "modelId"
+            ],
             "properties": {
-              "providerId": { "type": "string", "minLength": 1, "maxLength": 256 },
-              "modelId": { "type": "string", "minLength": 1, "maxLength": 512 }
+              "providerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "modelId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
             },
             "additionalProperties": false
           },
-          "visionModelSelection": { "$ref": "#/components/schemas/BotModelSelection" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" },
-          "archivedAt": { "type": "string", "format": "date-time" },
-          "revision": { "type": "string", "minLength": 1, "maxLength": 128 }
-        },
-        "allOf": [
-          {
-            "if": {
-              "required": ["health"],
-              "properties": { "health": { "const": "archived" } }
-            },
-            "then": { "required": ["archivedAt"] },
-            "else": { "not": { "required": ["archivedAt"] } }
+          "visionModelSelection": {
+            "$ref": "#/components/schemas/BotModelSelection"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           }
-        ],
+        },
         "additionalProperties": false
       },
       "BotModelSelection": {
         "type": "object",
-        "required": ["providerId", "modelId"],
+        "required": [
+          "providerId",
+          "modelId"
+        ],
         "properties": {
-          "providerId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "modelId": { "type": "string", "minLength": 1, "maxLength": 512 }
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
         },
         "additionalProperties": false
       },
       "BotCreateRequest": {
         "type": "object",
         "x-aiden-provider-model-must-be-currently-available": true,
-        "required": ["name", "purpose", "instructions", "avatar", "access"],
+        "required": [
+          "name",
+          "purpose",
+          "instructions",
+          "avatar",
+          "access"
+        ],
         "properties": {
-          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-          "purpose": { "type": "string", "maxLength": 280 },
-          "openingGreeting": { "type": "string", "maxLength": 2000 },
-          "instructions": { "type": "string", "minLength": 1, "maxLength": 32000 },
-          "avatar": { "$ref": "#/components/schemas/BotSemanticAvatar" },
-          "access": { "$ref": "#/components/schemas/BotAccessUpdateRequest" }
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "openingGreeting": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "instructions": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "avatar": {
+            "$ref": "#/components/schemas/BotSemanticAvatar"
+          },
+          "access": {
+            "$ref": "#/components/schemas/BotAccessUpdateRequest"
+          }
         },
         "additionalProperties": false
       },
@@ -7636,44 +8928,107 @@
         "type": "object",
         "minProperties": 1,
         "properties": {
-          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-          "purpose": { "type": "string", "maxLength": 280 },
-          "openingGreeting": { "type": "string", "maxLength": 2000 },
-          "instructions": { "type": "string", "minLength": 1, "maxLength": 32000 },
-          "avatar": { "$ref": "#/components/schemas/BotSemanticAvatar" }
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "openingGreeting": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "instructions": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "avatar": {
+            "$ref": "#/components/schemas/BotSemanticAvatar"
+          }
         },
         "additionalProperties": false
       },
       "BotConversationItem": {
         "type": "object",
         "x-aiden-updated-at-not-before-created-at": true,
-        "required": ["chatId", "botId", "title", "activityState", "canRespondToApproval", "createdAt", "updatedAt", "revision"],
+        "required": [
+          "chatId",
+          "botId",
+          "title",
+          "activityState",
+          "canRespondToApproval",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
         "properties": {
-          "chatId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
           "botId": {
             "type": "string",
             "minLength": 1,
             "maxLength": 160,
             "pattern": "^[A-Za-z0-9._:-]+$"
           },
-          "title": { "type": "string", "maxLength": 1024 },
-          "preview": { "type": "string", "maxLength": 500 },
-          "activityState": {
-            "enum": ["idle", "queued", "running", "waiting_for_approval", "reconciling"]
+          "title": {
+            "type": "string",
+            "maxLength": 1024
           },
-          "canRespondToApproval": { "type": "boolean" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" },
-          "revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+          "preview": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "activityState": {
+            "enum": [
+              "idle",
+              "queued",
+              "running",
+              "waiting_for_approval",
+              "reconciling"
+            ]
+          },
+          "canRespondToApproval": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
         },
         "allOf": [
           {
             "if": {
-              "required": ["canRespondToApproval"],
-              "properties": { "canRespondToApproval": { "const": true } }
+              "required": [
+                "canRespondToApproval"
+              ],
+              "properties": {
+                "canRespondToApproval": {
+                  "const": true
+                }
+              }
             },
             "then": {
-              "properties": { "activityState": { "const": "waiting_for_approval" } }
+              "properties": {
+                "activityState": {
+                  "const": "waiting_for_approval"
+                }
+              }
             }
           }
         ],
@@ -7681,14 +9036,22 @@
       },
       "BotConversationPage": {
         "type": "object",
-        "required": ["conversations"],
+        "required": [
+          "conversations"
+        ],
         "properties": {
           "conversations": {
             "type": "array",
             "maxItems": 50,
-            "items": { "$ref": "#/components/schemas/BotConversationItem" }
+            "items": {
+              "$ref": "#/components/schemas/BotConversationItem"
+            }
           },
-          "nextCursor": { "type": "string", "minLength": 1, "maxLength": 128 }
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
         },
         "additionalProperties": false
       },
@@ -7702,10 +9065,21 @@
           },
           {
             "type": "object",
-            "required": ["providerId", "modelId"],
+            "required": [
+              "providerId",
+              "modelId"
+            ],
             "properties": {
-              "providerId": { "type": "string", "minLength": 1, "maxLength": 256 },
-              "modelId": { "type": "string", "minLength": 1, "maxLength": 512 }
+              "providerId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "modelId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
             },
             "additionalProperties": false
           }
@@ -7713,46 +9087,30 @@
       },
       "BotChatCreateResponse": {
         "allOf": [
-          { "$ref": "#/components/schemas/Chat" },
+          {
+            "$ref": "#/components/schemas/Chat"
+          },
           {
             "type": "object",
-            "required": ["botId"]
+            "required": [
+              "botId"
+            ]
           }
         ]
       },
-      "BotFavoritesUpdateRequest": {
-        "type": "object",
-        "required": ["botIds"],
-        "properties": {
-          "botIds": {
-            "type": "array",
-            "maxItems": 20,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160,
-              "pattern": "^[A-Za-z0-9._:-]+$"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
-      "BotAccessNoticeAcknowledgementRequest": {
-        "type": "object",
-        "required": ["version", "decision", "confirmedForeground"],
-        "properties": {
-          "version": { "const": "bot-full-access-v1" },
-          "decision": { "enum": ["continue_full", "customize_first"] },
-          "confirmedForeground": { "const": true }
-        },
-        "additionalProperties": false
-      },
       "BotAvatarUploadRequest": {
         "type": "object",
-        "required": ["mimeType", "data"],
+        "required": [
+          "mimeType",
+          "data"
+        ],
         "properties": {
-          "mimeType": { "enum": ["image/png", "image/jpeg"] },
+          "mimeType": {
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ]
+          },
           "data": {
             "type": "string",
             "contentEncoding": "base64",
@@ -7768,8 +9126,12 @@
         "x-aiden-max-json-response-bytes": 1048576,
         "x-aiden-updated-at-not-before-created-at": true,
         "dependentRequired": {
-          "providerId": ["modelId"],
-          "modelId": ["providerId"]
+          "providerId": [
+            "modelId"
+          ],
+          "modelId": [
+            "providerId"
+          ]
         },
         "required": [
           "id",
@@ -8253,25 +9615,41 @@
           {
             "if": {
               "properties": {
-                "availability": { "const": "ready" }
+                "availability": {
+                  "const": "ready"
+                }
               },
-              "required": ["availability"]
+              "required": [
+                "availability"
+              ]
             },
             "then": {
-              "not": { "required": ["unavailableReason"] }
+              "not": {
+                "required": [
+                  "unavailableReason"
+                ]
+              }
             }
           },
           {
             "if": {
               "properties": {
-                "availability": { "const": "unavailable" }
+                "availability": {
+                  "const": "unavailable"
+                }
               },
-              "required": ["availability"]
+              "required": [
+                "availability"
+              ]
             },
             "then": {
-              "required": ["unavailableReason"],
+              "required": [
+                "unavailableReason"
+              ],
               "properties": {
-                "tasks": { "maxItems": 0 }
+                "tasks": {
+                  "maxItems": 0
+                }
               }
             }
           }
@@ -8445,10 +9823,14 @@
                   ]
                 }
               },
-              "required": ["state"]
+              "required": [
+                "state"
+              ]
             },
             "then": {
-              "required": ["finishedAt"]
+              "required": [
+                "finishedAt"
+              ]
             }
           },
           {
@@ -8463,13 +9845,23 @@
                   ]
                 }
               },
-              "required": ["state"]
+              "required": [
+                "state"
+              ]
             },
             "then": {
               "not": {
                 "anyOf": [
-                  { "required": ["finishedAt"] },
-                  { "required": ["error"] }
+                  {
+                    "required": [
+                      "finishedAt"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "error"
+                    ]
+                  }
                 ]
               },
               "properties": {
@@ -8479,7 +9871,11 @@
                 },
                 "notices": {
                   "type": "array",
-                  "not": { "contains": { "const": "report_truncated" } }
+                  "not": {
+                    "contains": {
+                      "const": "report_truncated"
+                    }
+                  }
                 }
               }
             }
@@ -8487,23 +9883,37 @@
           {
             "if": {
               "properties": {
-                "depth": { "const": 1 }
+                "depth": {
+                  "const": 1
+                }
               },
-              "required": ["depth"]
+              "required": [
+                "depth"
+              ]
             },
             "then": {
-              "not": { "required": ["parentAgentId"] }
+              "not": {
+                "required": [
+                  "parentAgentId"
+                ]
+              }
             }
           },
           {
             "if": {
               "properties": {
-                "depth": { "minimum": 2 }
+                "depth": {
+                  "minimum": 2
+                }
               },
-              "required": ["depth"]
+              "required": [
+                "depth"
+              ]
             },
             "then": {
-              "required": ["parentAgentId"]
+              "required": [
+                "parentAgentId"
+              ]
             }
           }
         ],
@@ -8585,37 +9995,59 @@
           {
             "if": {
               "properties": {
-                "availability": { "const": "ready" }
+                "availability": {
+                  "const": "ready"
+                }
               },
-              "required": ["availability"]
+              "required": [
+                "availability"
+              ]
             },
             "then": {
-              "not": { "required": ["unavailableReason"] }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "availability": { "const": "unavailable" }
-              },
-              "required": ["availability"]
-            },
-            "then": {
-              "required": ["unavailableReason"],
-              "properties": {
-                "agents": { "maxItems": 0 }
+              "not": {
+                "required": [
+                  "unavailableReason"
+                ]
               }
             }
           },
           {
             "if": {
               "properties": {
-                "agents": { "minItems": 1 }
+                "availability": {
+                  "const": "unavailable"
+                }
               },
-              "required": ["agents"]
+              "required": [
+                "availability"
+              ]
             },
             "then": {
-              "required": ["turnId"]
+              "required": [
+                "unavailableReason"
+              ],
+              "properties": {
+                "agents": {
+                  "maxItems": 0
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "agents": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "agents"
+              ]
+            },
+            "then": {
+              "required": [
+                "turnId"
+              ]
             }
           }
         ],
@@ -9716,8 +11148,15 @@
           "maxDepth"
         ],
         "properties": {
-          "directoryPath": { "type": "string", "maxLength": 4096, "description": "Workspace-relative directory, empty for root. Present only for tree pages." },
-          "nextCursor": { "type": "string", "pattern": "^cur_[A-Za-z0-9_-]{43}$" },
+          "directoryPath": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Workspace-relative directory, empty for root. Present only for tree pages."
+          },
+          "nextCursor": {
+            "type": "string",
+            "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+          },
           "snapshotId": {
             "type": "string"
           },
@@ -11229,7 +12668,7 @@
         ],
         "additionalProperties": false
       },
-"PairingRequestCreate": {
+      "PairingRequestCreate": {
         "type": "object",
         "description": "Contract revision 20 (pairing-requests-v1). deviceName is the requester's unauthenticated claim and is shown to the host user as such.",
         "required": [
@@ -12263,8 +13702,12 @@
         "description": "Contract revision 23 (chat-messages-window-metadata-v1) adds the chat metadata a whole-chat read returns: workspaceId, botId, title, titlePending, providerId/modelId, createdAt and updatedAt. A host advertising chat-messages-window-metadata-v1 always includes workspaceId, title, createdAt and updatedAt; a client that refreshes from a window falls back to GET /chats/{chatId} when they are absent.",
         "x-aiden-max-json-response-bytes": 1048576,
         "dependentRequired": {
-          "providerId": ["modelId"],
-          "modelId": ["providerId"]
+          "providerId": [
+            "modelId"
+          ],
+          "modelId": [
+            "providerId"
+          ]
         },
         "required": [
           "chatId",
@@ -12340,6 +13783,886 @@
                 "$ref": "#/components/schemas/ChatForkLineage"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotSessionState": {
+        "type": "object",
+        "required": [
+          "state",
+          "interrupted"
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "interrupted",
+              "needs_model",
+              "unavailable"
+            ]
+          },
+          "interrupted": {
+            "type": "boolean"
+          },
+          "blocked": {
+            "enum": [
+              "access_changed",
+              "bot_missing"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotSessionEntry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "role",
+              "text"
+            ],
+            "properties": {
+              "type": {
+                "const": "message"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "role": {
+                "enum": [
+                  "user",
+                  "assistant"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 100000
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "interrupted": {
+                "const": true
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "pluginId",
+              "name",
+              "iconId",
+              "reason",
+              "status"
+            ],
+            "properties": {
+              "type": {
+                "const": "connect_card"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "pluginId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "iconId": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 280
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "connected",
+                  "dismissed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "notice"
+            ],
+            "properties": {
+              "type": {
+                "const": "notice"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "notice": {
+                "const": "session_reset"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A reply that failed. Clients show \"I couldn't finish that reply.\"; on the newest entry, Retry posts retryText to POST /bots/{botId}/messages with a new Idempotency-Key. retryText is omitted when there is nothing to resend.",
+            "required": [
+              "type",
+              "id"
+            ],
+            "properties": {
+              "type": {
+                "const": "failed_turn"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "retryText": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100000
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BotSession": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BotSessionState"
+          }
+        ],
+        "type": "object",
+        "required": [
+          "botId",
+          "epoch",
+          "seq",
+          "state",
+          "interrupted",
+          "entries",
+          "hasOlder",
+          "question",
+          "approval"
+        ],
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "partial": {
+            "type": "string",
+            "maxLength": 100000
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/BotSessionEntry"
+            }
+          },
+          "hasOlder": {
+            "type": "boolean"
+          },
+          "question": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "approval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotSessionEvent": {
+        "type": "object",
+        "required": [
+          "protocolVersion",
+          "botId",
+          "epoch",
+          "seq",
+          "type",
+          "payload"
+        ],
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "type": {
+            "enum": [
+              "snapshot",
+              "partial",
+              "entry",
+              "state",
+              "question",
+              "approval",
+              "closed"
+            ]
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessageRequest": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessageReceipt": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BotSessionState"
+          }
+        ],
+        "type": "object",
+        "required": [
+          "submissionId",
+          "deduped",
+          "state",
+          "interrupted"
+        ],
+        "properties": {
+          "submissionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deduped": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineSchedule": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "date",
+              "time"
+            ],
+            "properties": {
+              "kind": {
+                "const": "once"
+              },
+              "date": {
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "time"
+            ],
+            "properties": {
+              "kind": {
+                "const": "daily"
+              },
+              "time": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "time"
+            ],
+            "properties": {
+              "kind": {
+                "const": "weekdays"
+              },
+              "time": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "days",
+              "time"
+            ],
+            "properties": {
+              "kind": {
+                "const": "weekly"
+              },
+              "days": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 7,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 6
+                }
+              },
+              "time": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "day",
+              "time"
+            ],
+            "properties": {
+              "kind": {
+                "const": "monthly"
+              },
+              "day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 28
+              },
+              "time": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BotRoutine": {
+        "type": "object",
+        "required": [
+          "id",
+          "botId",
+          "name",
+          "message",
+          "schedule",
+          "timezone",
+          "label",
+          "enabled",
+          "updatedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotRoutineSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "nextRunAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastRunAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastResult": {
+            "enum": [
+              "success",
+              "error",
+              "silent",
+              "blocked",
+              "skipped"
+            ]
+          },
+          "lastError": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineList": {
+        "type": "object",
+        "required": [
+          "routines"
+        ],
+        "properties": {
+          "routines": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/BotRoutine"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineCreateRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "schedule",
+          "message"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/BotRoutineSchedule"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 80
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineUpdateRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/BotRoutineSchedule"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotConnectionRequest": {
+        "type": "object",
+        "required": [
+          "pluginId"
+        ],
+        "properties": {
+          "pluginId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotConnectionRequestReceipt": {
+        "type": "object",
+        "required": [
+          "pluginId",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "pluginId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "status": {
+            "const": "sent"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotConnectionChip": {
+        "type": "object",
+        "required": [
+          "pluginId",
+          "name",
+          "iconId"
+        ],
+        "properties": {
+          "pluginId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "iconId": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPreset": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "subtitle",
+          "avatar",
+          "suggestedConnections"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "subtitle": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "avatar": {
+            "type": "object",
+            "required": [
+              "version",
+              "shape",
+              "color"
+            ],
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "shape": {
+                "enum": [
+                  "wisp",
+                  "orb",
+                  "drop",
+                  "hex",
+                  "cloud",
+                  "peak",
+                  "squircle",
+                  "capsule"
+                ]
+              },
+              "color": {
+                "enum": [
+                  "lilac",
+                  "sky",
+                  "mint",
+                  "sun",
+                  "periwinkle",
+                  "coral",
+                  "peach",
+                  "aqua",
+                  "rose",
+                  "lime",
+                  "plum",
+                  "graphite"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "suggestedConnections": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/BotConnectionChip"
+            }
+          },
+          "suggestedRoutine": {
+            "type": "object",
+            "required": [
+              "name",
+              "label"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPresetList": {
+        "type": "object",
+        "required": [
+          "presets"
+        ],
+        "properties": {
+          "presets": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/BotPreset"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPresetCreateRequest": {
+        "type": "object",
+        "required": [
+          "presetId"
+        ],
+        "properties": {
+          "presetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPresetCreateResult": {
+        "type": "object",
+        "required": [
+          "created",
+          "bot"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "bot": {
+            "$ref": "#/components/schemas/BotSummary"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQuestion": {
+        "description": "A question the Bot is waiting on. Answered by waitId, once.",
+        "type": "object",
+        "required": [
+          "waitId",
+          "toolCallId",
+          "questions"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "toolCallId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/PendingQuestionItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotApproval": {
+        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it.",
+        "type": "object",
+        "required": [
+          "waitId",
+          "toolCallId",
+          "toolName",
+          "summary",
+          "canAllow"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "toolCallId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "toolName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "canAllow": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQuestionAnswerReceipt": {
+        "type": "object",
+        "required": [
+          "waitId"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
           }
         },
         "additionalProperties": false

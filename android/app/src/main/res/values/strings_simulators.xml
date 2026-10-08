@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Shared simulators (Aiden Remote contract revision 25) -->
+    <!-- Shared simulators (Aiden Remote contract revision 26) -->
     <string name="simulator_view_device">View device</string>
     <plurals name="simulator_view_devices">
         <item quantity="one">View %1$d device</item>

@@ -444,12 +444,12 @@ function searchableIdentity(bot: BotDefinition): BotSearchIdentity {
  */
 export function projectBotFavoriteOrder(
   storedBotIds: readonly unknown[],
-  bots: readonly Pick<BotDefinition, "id" | "archivedAt">[],
+  bots: readonly Pick<BotDefinition, "id">[],
 ): string[] {
   const active = new Set(
     bots
       .slice(0, BOT_INBOX_PROJECTION_LIMITS.botCount)
-      .filter((bot) => bot.archivedAt === undefined && SAFE_BOT_ID.test(bot.id))
+      .filter((bot) => SAFE_BOT_ID.test(bot.id))
       .map((bot) => bot.id),
   );
   const seen = new Set<string>();

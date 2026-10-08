@@ -5,7 +5,7 @@
  * this Mac's iOS Simulators and Android Emulators, and reach its device hub
  * through a relay that applies the Simulator tab proxy's allowlist.
  *
- * Phones and tablets holding `simulators:mobile` (contract revision 25) are
+ * Phones and tablets holding `simulators:mobile` (contract revision 26) are
  * the `mobile` audience: they may list, open and shut down simulators, watch
  * the MJPEG stream and drive the input socket, and nothing else.
  *

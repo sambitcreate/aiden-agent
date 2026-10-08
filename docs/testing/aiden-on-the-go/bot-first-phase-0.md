@@ -3,6 +3,8 @@
 Date: 2026-08-22
 Status: Complete — product/security contracts, the fixture-only prototype, physical-iPhone evidence, and review/remediation loops passed.
 
+> **Removed (2026-10):** the `--bot-first-prototype` fixture harness and `BotFirstPrototype` described below were deleted in the Bots rework ([spec](../../superpowers/specs/2026-10-07-bots-rework-design.md), PR #377). This file is kept as historical evidence only; do not run or reproduce the harness.
+
 ## Scope and authority
 
 Phase 0 changes documentation and a debug-only native fixture harness. It adds no Bot endpoint, renderer control, remote mutation, persistence migration, or production capability grant.

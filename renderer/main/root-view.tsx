@@ -19,6 +19,7 @@ import {
 import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
 import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
+import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
@@ -302,7 +303,7 @@ function RootContent() {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
         queryClient.invalidateQueries({ queryKey: ["bot"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-live-summary"] }),
         queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
       ]);
@@ -419,10 +420,13 @@ function RootContent() {
   return (
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
-      <OnboardingFlow />
+      <OnboardingFlow
+        onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
+      />
       <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
       <PairingRequestSheet />
+      {capabilities.bots ? <BotConnectionSetupHost /> : null}
     </div>
   );
 }

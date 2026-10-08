@@ -148,6 +148,8 @@ import {
   stopAidenRemoteServiceAndSettle,
 } from "./services/aiden-remote-service-main.js";
 import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
+import { trackConnectionSetupFocus } from "./services/bot-connection-setup.js";
+import { startBotApplication } from "./services/bot-startup-core.js";
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
@@ -327,6 +329,23 @@ function cleanupApplication(): void {
   void mcpManager.closeAll();
 }
 
+/** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */
+async function shutdownBotRuntimeWithin(budgetMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const closed = (async () => {
+    const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
+    await shutdownBotSessionRuntime();
+    return true;
+  })();
+  const settled = await Promise.race([
+    closed,
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), budgetMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  if (!settled) logger.warn("bots", "The Bot runtime did not close within the shutdown budget.");
+}
+
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
@@ -425,8 +444,13 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     await Promise.all([
       shutdownProviderAuthFlow(),
       computerUseStatus.shutdown(),
-      scheduleService.stopAndSettle(),
-      telegramService.stopAndSettle(),
+      (async () => {
+        // Stop Bot ingress first so nothing reopens the runtime, then close
+        // every Bot harness: a running turn is left interrupted (Resume on
+        // next start) and the profile lock is released.
+        await Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]);
+        await shutdownBotRuntimeWithin(5_000);
+      })(),
       (async () => {
         await subagentRunStore.flush();
         await subagentRunStore.close();
@@ -962,7 +986,7 @@ ipcMain.handle(
     ) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
-    if (step !== "profile" && step !== "provider") {
+    if (step !== "profile" && step !== "provider" && step !== "bots") {
       throw new Error("Invalid onboarding step.");
     }
     if (
@@ -2007,17 +2031,12 @@ if (!ownsSingleInstanceLock) {
           );
         }
       }
-      if (hostPlatformCapabilities().bots) {
-        try {
-          await initializeBotApplicationService();
-        } catch (error) {
-          logger.error(
-            "bots",
-            "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
-            error,
-          );
-        }
-      }
+      await startBotApplication({
+        supported: hostPlatformCapabilities().bots,
+        initialize: initializeBotApplicationService,
+        trackConnectionSetupFocus,
+        logError: (message, error) => logger.error("bots", message, error),
+      });
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
       try {

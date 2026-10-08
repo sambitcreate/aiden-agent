@@ -17,8 +17,7 @@ export async function resolveBotForGeneration(
   if (authoritativeMode !== undefined)
     throw new Error("Bot conversations cannot use an Assistant generation mode.");
   const bot = await getBot(chat.botId);
-  if (!bot || bot.archivedAt !== undefined)
-    throw new Error("This bot is archived or no longer available.");
+  if (!bot) throw new Error("This bot is no longer available.");
   return bot;
 }
 

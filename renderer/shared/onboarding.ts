@@ -3,7 +3,7 @@ export const ONBOARDING_COMPLETE_STORAGE_KEY = "aiden:onboarding:v1:complete";
 export const ONBOARDING_STATE_VERSION = 2 as const;
 
 export type OnboardingOutcome = "incomplete" | "deferred" | "completed";
-export type OnboardingSatisfiedStep = "none" | "profile" | "provider" | "tour";
+export type OnboardingSatisfiedStep = "none" | "profile" | "provider" | "bots" | "tour";
 
 export interface OnboardingState {
   version: typeof ONBOARDING_STATE_VERSION;
@@ -22,7 +22,7 @@ export function shouldOpenOnboarding(outcome: OnboardingOutcome): boolean {
 }
 
 const outcomes = new Set<OnboardingOutcome>(["incomplete", "deferred", "completed"]);
-const steps = new Set<OnboardingSatisfiedStep>(["none", "profile", "provider", "tour"]);
+const steps = new Set<OnboardingSatisfiedStep>(["none", "profile", "provider", "bots", "tour"]);
 
 export function parseOnboardingState(value: unknown): OnboardingState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;

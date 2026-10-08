@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import AidenOnTheGo
 
-/// Contract revision 25 (`mobile-simulators-v1`): the phone simulator viewer's
+/// Contract revision 26 (`mobile-simulators-v1`): the phone simulator viewer's
 /// wire shapes, MJPEG parsing, helper messages and viewer state.
 final class AidenSimulatorViewerTests: XCTestCase {
     override func tearDown() {

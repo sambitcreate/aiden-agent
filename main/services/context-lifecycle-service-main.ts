@@ -1,7 +1,6 @@
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
-import { botStore } from "./bot-store.js";
 import { chatStore } from "./chat-store.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { configStore } from "./config-store.js";
@@ -28,7 +27,6 @@ export const contextLifecycleService = new ContextLifecycleService({
   skillsEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
   getChat: (chatId) => chatStore.get(chatId),
   listChatsByBot: (botId) => chatStore.listByBot(botId),
-  isBotArchived: async (botId) => (await botStore.get(botId))?.archivedAt !== undefined,
   beginChatTurn: (chatId, turnId, ownerId) => llmClient.beginChatTurn(chatId, turnId, ownerId),
   openSession: async (chatId) => {
     const chat = await chatStore.get(chatId);

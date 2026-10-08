@@ -63,14 +63,6 @@ final class AidenBotContractTests: XCTestCase {
             AidenBotContractError.invalidCombination("unavailable custom access")
                 .localizedDescription.contains("Review this Bot’s access choices"),
         )
-        XCTAssertTrue(
-            AidenBotContractError.invalidCombination("chat access exceeds bot")
-                .localizedDescription.contains("Reduce the chat’s access"),
-        )
-        XCTAssertTrue(
-            AidenBotContractError.invalidCombination("full access notice")
-                .localizedDescription.contains("Full Access notice"),
-        )
 
         let invalidField = AidenBotContractError.invalidField("providerId").localizedDescription
         let invalidCombination = AidenBotContractError.invalidCombination(
@@ -131,13 +123,9 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertEqual(fixture.botAvatarMetadata.mimeType, .png)
         XCTAssertEqual(fixture.botAvatarMetadata.width, 512)
         XCTAssertEqual(fixture.botCreate.response.avatar.semantic, fixture.botCreate.request.avatar)
-        XCTAssertEqual(
-            fixture.botCreate.request.access.catalogRevision,
-            fixture.botCapabilityCatalog.revision
-        )
+        // Omitted create access is Full on revision 25.
+        XCTAssertNil(fixture.botCreate.request.access)
         XCTAssertNil(fixture.botIdentity.response.openingGreeting)
-        XCTAssertEqual(fixture.botArchive.bot.health, .archived)
-        XCTAssertEqual(fixture.botRestore.bot.health, .ready)
         XCTAssertEqual(fixture.botConversation.activityState, .waitingForApproval)
         XCTAssertEqual(fixture.botConversations.conversations, [fixture.botConversation])
         XCTAssertEqual(fixture.botConversationQuery.limit, 30)
@@ -149,18 +137,14 @@ final class AidenBotContractTests: XCTestCase {
             fixture.botPolicyUpdate.request.catalogRevision,
             fixture.botCapabilityCatalog.revision
         )
-        XCTAssertEqual(fixture.botChatSubset.mode, .inherit)
-        XCTAssertEqual(fixture.botChatSubsetUpdate.response.mode, .custom)
-        XCTAssertEqual(
-            fixture.botChatSubsetUpdate.request.expectedBotPolicyRevision,
-            fixture.botPolicyUpdate.response.revision
-        )
-        XCTAssertEqual(fixture.botFavorites, fixture.botFavoritesUpdate.response)
-        XCTAssertTrue(fixture.botNotice.requiresAcknowledgement)
-        XCTAssertEqual(
-            fixture.botNoticeAcknowledgement.response.acceptedDecision,
-            .continueFull
-        )
+        // Revision 25 durable sessions, routines and presets.
+        XCTAssertEqual(fixture.botSession.state, .interrupted)
+        XCTAssertTrue(fixture.botSession.stateView.interrupted)
+        XCTAssertEqual(fixture.botSessionNeedsModel.state, .needsModel)
+        XCTAssertFalse(fixture.botSessionNeedsModel.stateView.interrupted)
+        XCTAssertEqual(fixture.botPresetCreate.response.bot.sessionState, .needsModel)
+        XCTAssertEqual(fixture.botRoutines.routines.first?.botId, fixture.botSummary.id)
+        XCTAssertEqual(fixture.botConnectionRequest.response.status, "sent")
         XCTAssertEqual(fixture.botAvatarUpload.response, fixture.botAvatarMetadata)
         XCTAssertFalse(fixture.legacyNonNegotiating.server.capabilities.contains(.botRead))
     }
@@ -190,15 +174,6 @@ final class AidenBotContractTests: XCTestCase {
         )
         XCTAssertEqual(decoded.id, "bot_fixture_01")
         XCTAssertEqual(decoded.avatar.asset?.assetRevision, "avatar_revision_3")
-
-        var notice = try XCTUnwrap(fixture["botNotice"] as? [String: Any])
-        notice["futureNotice"] = ["displayHint": "safe"]
-        XCTAssertNoThrow(
-            try AidenRemoteJSONDecoder.decode(
-                AidenBotNoticeStatus.self,
-                from: data(for: notice)
-            )
-        )
 
         detail["managedHomePath"] = "/Users/example/.aiden/bots/private"
         XCTAssertThrowsError(
@@ -331,44 +306,6 @@ final class AidenBotContractTests: XCTestCase {
         }
     }
 
-    func testBotListNeverFavoritesAnArchivedBot() throws {
-        let fixture = try sharedFixtureObject()
-        var list = try XCTUnwrap(fixture["botList"] as? [String: Any])
-        var bots = try XCTUnwrap(list["bots"] as? [[String: Any]])
-        bots[0]["health"] = "archived"
-        bots[0]["archivedAt"] = "2026-08-18T19:10:00.000Z"
-        list["bots"] = bots
-
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(AidenBotList.self, from: data(for: list))
-        )
-
-        var favorites = try XCTUnwrap(list["favorites"] as? [String: Any])
-        favorites["botIds"] = []
-        list["favorites"] = favorites
-        XCTAssertNoThrow(
-            try AidenRemoteJSONDecoder.decode(AidenBotList.self, from: data(for: list))
-        )
-    }
-
-    func testReplacingFavoritesPreservesTheCurrentBotProjectionAndRevalidatesMembership() throws {
-        let fixture = try sharedFixtureObject()
-        let listObject = try XCTUnwrap(fixture["botList"] as? [String: Any])
-        let list = try AidenRemoteJSONDecoder.decode(AidenBotList.self, from: data(for: listObject))
-        let emptyFavorites = try AidenBotFavorites(botIds: [], revision: "favorites-next")
-        let updated = try list.replacingFavorites(emptyFavorites)
-
-        XCTAssertEqual(updated.bots, list.bots)
-        XCTAssertEqual(updated.maxBots, list.maxBots)
-        XCTAssertEqual(updated.favorites, emptyFavorites)
-
-        let unknownFavorites = try AidenBotFavorites(
-            botIds: ["bot-not-in-current-list"],
-            revision: "favorites-invalid"
-        )
-        XCTAssertThrowsError(try list.replacingFavorites(unknownFavorites))
-    }
-
     func testRequiredIdentityRevisionEpochAndPathSafeGrantFieldsFailClosed() throws {
         let fixture = try sharedFixtureObject()
         var summary = try XCTUnwrap(fixture["botSummary"] as? [String: Any])
@@ -424,32 +361,14 @@ final class AidenBotContractTests: XCTestCase {
             fixture["botDetail"] = detail
         }
         try assertSharedFixtureRejected { fixture in
-            var favorites = try XCTUnwrap(fixture["botFavorites"] as? [String: Any])
-            favorites["botIds"] = ["bot_unlisted"]
-            fixture["botFavorites"] = favorites
-        }
-        try assertSharedFixtureRejected { fixture in
-            var chatAccess = try XCTUnwrap(fixture["botChatSubset"] as? [String: Any])
-            chatAccess["chatId"] = "chat_other"
-            fixture["botChatSubset"] = chatAccess
-        }
-        try assertSharedFixtureRejected { fixture in
             var create = try XCTUnwrap(fixture["botChatCreate"] as? [String: Any])
             var response = try XCTUnwrap(create["response"] as? [String: Any])
             response["botId"] = "bot_other"
             create["response"] = response
             fixture["botChatCreate"] = create
         }
-        try assertSharedFixtureRejected { fixture in
-            var page = try XCTUnwrap(fixture["botConversations"] as? [String: Any])
-            var conversations = try XCTUnwrap(page["conversations"] as? [[String: Any]])
-            var unlisted = try XCTUnwrap(conversations.first)
-            unlisted["chatId"] = "chat_unlisted_bot"
-            unlisted["botId"] = "bot_unlisted"
-            conversations.append(unlisted)
-            page["conversations"] = conversations
-            fixture["botConversations"] = page
-        }
+        // A page's Bot scope is a query property (see the client route tests), so an
+        // unfiltered page may legitimately list another Bot's conversation.
     }
 
     func testSharedFixtureBindsRevisionPairingAndInstallationIdentity() throws {
@@ -517,19 +436,6 @@ final class AidenBotContractTests: XCTestCase {
         policyUpdate["response"] = policyResponse
         fixture["botPolicyUpdate"] = policyUpdate
 
-        var chatUpdate = try XCTUnwrap(fixture["botChatSubsetUpdate"] as? [String: Any])
-        var chatRequest = try XCTUnwrap(chatUpdate["request"] as? [String: Any])
-        var chatRequestCustom = try XCTUnwrap(chatRequest["custom"] as? [String: Any])
-        chatRequestCustom["fileScopeIds"] = ["scope.bot_home", "scope.documents"]
-        chatRequest["custom"] = chatRequestCustom
-        chatUpdate["request"] = chatRequest
-        var chatResponse = try XCTUnwrap(chatUpdate["response"] as? [String: Any])
-        var chatResponseCustom = try XCTUnwrap(chatResponse["custom"] as? [String: Any])
-        chatResponseCustom["fileScopeIds"] = ["scope.documents", "scope.bot_home"]
-        chatResponse["custom"] = chatResponseCustom
-        chatUpdate["response"] = chatResponse
-        fixture["botChatSubsetUpdate"] = chatUpdate
-
         XCTAssertNoThrow(
             try AidenRemoteJSONDecoder.decode(
                 AidenRemoteContractFixture.self,
@@ -582,10 +488,6 @@ final class AidenBotContractTests: XCTestCase {
         policy["summary"] = "A valid older policy projection."
         fixture["botPolicy"] = policy
 
-        var chatSubset = try XCTUnwrap(fixture["botChatSubset"] as? [String: Any])
-        chatSubset["botPolicyRevision"] = "bot_policy_revision_stale"
-        fixture["botChatSubset"] = chatSubset
-
         XCTAssertNoThrow(
             try AidenRemoteJSONDecoder.decode(
                 AidenRemoteContractFixture.self,
@@ -629,25 +531,6 @@ final class AidenBotContractTests: XCTestCase {
             bots[0]["archivedAt"] = "2026-08-18T18:45:00.000Z"
             list["bots"] = bots
             fixture["botList"] = list
-        }
-        try assertSharedFixtureRejected { fixture in
-            var archive = try XCTUnwrap(fixture["botArchive"] as? [String: Any])
-            archive["openingGreeting"] = "A changed greeting"
-            fixture["botArchive"] = archive
-        }
-        try assertSharedFixtureRejected { fixture in
-            var restore = try XCTUnwrap(fixture["botRestore"] as? [String: Any])
-            var avatar = try XCTUnwrap(restore["avatar"] as? [String: Any])
-            var semantic = try XCTUnwrap(avatar["semantic"] as? [String: Any])
-            semantic["color"] = "mint"
-            avatar["semantic"] = semantic
-            restore["avatar"] = avatar
-            fixture["botRestore"] = restore
-        }
-        try assertSharedFixtureRejected { fixture in
-            var archive = try XCTUnwrap(fixture["botArchive"] as? [String: Any])
-            archive["createdAt"] = "2026-08-18T16:59:00.000Z"
-            fixture["botArchive"] = archive
         }
     }
 
@@ -741,37 +624,6 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertThrowsError(
             try AidenRemoteJSONDecoder.decode(AidenBotAccessView.self, from: invalidFullView)
         )
-
-        let invalidInheritedView = Data(#"""
-        {
-          "chatId":"chat_1","botId":"bot_1","mode":"inherit","revision":"revision_1",
-          "botPolicyRevision":"policy_1","summary":"Inherited",
-          "custom":{"providerId":"provider","modelId":"model","fileScopeIds":[],
-            "shellEnabled":false,"connectionIds":[],"skillIds":[],"otherCapabilityIds":[]}
-        }
-        """#.utf8)
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(AidenBotChatAccessView.self, from: invalidInheritedView)
-        )
-
-        XCTAssertEqual(
-            try AidenRemoteJSONDecoder.decode(
-                AidenBotChatAccessUpdate.self,
-                from: Data(
-                    #"{"mode":"inherit","catalogRevision":"catalog_revision","expectedBotPolicyRevision":"policy_revision"}"#.utf8
-                )
-            ),
-            .inherit(
-                catalogRevision: "catalog_revision",
-                expectedBotPolicyRevision: "policy_revision"
-            )
-        )
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(
-                AidenBotChatAccessUpdate.self,
-                from: Data(#"{"mode":"inherit","catalogRevision":"catalog_revision"}"#.utf8)
-            )
-        )
     }
 
     func testMutationAvatarsAreNestedExactWhileResponseRecipesRemainAdditive() throws {
@@ -804,9 +656,9 @@ final class AidenBotContractTests: XCTestCase {
           "avatar":{"version":1,"shape":"orb","color":"sky","eyes":"wide","detail":"orbit"}
         }
         """#.utf8)
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(AidenBotCreateRequest.self, from: createWithoutAccess)
-        )
+        // Omitted access is Full on revision 25, so the create request is valid.
+        let omitted = try AidenRemoteJSONDecoder.decode(AidenBotCreateRequest.self, from: createWithoutAccess)
+        XCTAssertNil(omitted.access)
     }
 
     func testBotChatCreateOverridePairAndProjectionBoundsFailClosed() throws {
@@ -1287,38 +1139,7 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
-    func testNoticeAndAvatarContractsFailClosedAtAuthorityBoundaries() throws {
-        let incoherentNotice = Data(#"""
-        {
-          "version":"bot-full-access-v1","requiresAcknowledgement":true,
-          "acceptedAt":"2026-08-18T19:03:00.000Z","acceptedDecision":"continue_full"
-        }
-        """#.utf8)
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(AidenBotNoticeStatus.self, from: incoherentNotice)
-        )
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(
-                AidenBotNoticeStatus.self,
-                from: Data(
-                    #"{"version":"bot-full-access-v2","requiresAcknowledgement":true}"#.utf8
-                )
-            )
-        )
-
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(
-                AidenBotNoticeAcknowledgement.self,
-                from: Data(#"{"version":"bot-full-access-v1","decision":"continue_full","confirmedForeground":false}"#.utf8)
-            )
-        )
-        XCTAssertThrowsError(
-            try AidenRemoteJSONDecoder.decode(
-                AidenBotNoticeAcknowledgement.self,
-                from: Data(#"{"version":"bot-full-access-v2","decision":"continue_full","confirmedForeground":true}"#.utf8)
-            )
-        )
-
+    func testAvatarUploadContractsFailClosedAtAuthorityBoundaries() throws {
         XCTAssertNoThrow(
             try AidenRemoteJSONDecoder.decode(
                 AidenBotAvatarUpload.self,
@@ -1414,21 +1235,6 @@ final class AidenBotContractTests: XCTestCase {
             fixture["botDetail"] = detail
         }
 
-        try assertSharedFixtureRejected { fixture in
-            var identity = try XCTUnwrap(fixture["botIdentity"] as? [String: Any])
-            var response = try XCTUnwrap(identity["response"] as? [String: Any])
-            response["createdAt"] = "2026-08-18T17:00:00.1239Z"
-            identity["response"] = response
-            fixture["botIdentity"] = identity
-
-            var archive = try XCTUnwrap(fixture["botArchive"] as? [String: Any])
-            archive["createdAt"] = "2026-08-18T17:00:00.1230Z"
-            fixture["botArchive"] = archive
-
-            var restore = try XCTUnwrap(fixture["botRestore"] as? [String: Any])
-            restore["createdAt"] = "2026-08-18T17:00:00.1230Z"
-            fixture["botRestore"] = restore
-        }
 
         try assertSharedFixtureRejected { fixture in
             var conversation = try XCTUnwrap(fixture["botConversation"] as? [String: Any])
@@ -1666,27 +1472,6 @@ final class AidenBotContractTests: XCTestCase {
             fixture["botPolicyUpdate"] = update
         }
         try assertSharedFixtureRejected { fixture in
-            var update = try XCTUnwrap(fixture["botChatSubsetUpdate"] as? [String: Any])
-            var request = try XCTUnwrap(update["request"] as? [String: Any])
-            request["expectedBotPolicyRevision"] = "stale_policy_revision"
-            update["request"] = request
-            fixture["botChatSubsetUpdate"] = update
-        }
-        try assertSharedFixtureRejected { fixture in
-            var update = try XCTUnwrap(fixture["botChatSubsetUpdate"] as? [String: Any])
-            var request = try XCTUnwrap(update["request"] as? [String: Any])
-            var requestCustom = try XCTUnwrap(request["custom"] as? [String: Any])
-            requestCustom["shellEnabled"] = true
-            request["custom"] = requestCustom
-            update["request"] = request
-            var response = try XCTUnwrap(update["response"] as? [String: Any])
-            var responseCustom = try XCTUnwrap(response["custom"] as? [String: Any])
-            responseCustom["shellEnabled"] = true
-            response["custom"] = responseCustom
-            update["response"] = response
-            fixture["botChatSubsetUpdate"] = update
-        }
-        try assertSharedFixtureRejected { fixture in
             var create = try XCTUnwrap(fixture["botCreate"] as? [String: Any])
             var request = try XCTUnwrap(create["request"] as? [String: Any])
             request["access"] = [
@@ -1872,15 +1657,7 @@ final class AidenBotContractTests: XCTestCase {
         provider["models"] = models
         providers[0] = provider
         catalog["providers"] = providers
-        let acceptedNotice: [String: Any] = [
-            "version": "bot-full-access-v1",
-            "requiresAcknowledgement": false,
-            "acceptedAt": "2026-08-23T19:55:00.000Z",
-            "acceptedDecision": "continue_full",
-        ]
-        catalog["notice"] = acceptedNotice
         object["botCapabilityCatalog"] = catalog
-        object["botNotice"] = acceptedNotice
         let fixture = try AidenRemoteJSONDecoder.decode(
             AidenRemoteContractFixture.self,
             from: data(for: object)
@@ -2012,10 +1789,6 @@ final class AidenBotContractTests: XCTestCase {
             isCreating: false,
             hasAvatarCandidate: true
         ), "An accepted photo preview must require an explicit use or discard decision.")
-        XCTAssertFalse(
-            aidenBotEditorCanSubmitSettings(hasAvatarCandidate: true),
-            "Settings Save must not dismiss and destroy an accepted photo preview."
-        )
         editDraft.purpose += " updated"
         XCTAssertTrue(aidenBotEditorIsDirty(
             draft: editDraft,
@@ -2046,25 +1819,6 @@ final class AidenBotContractTests: XCTestCase {
             aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(422)),
             "A validation response must unlock the draft for correction."
         )
-    }
-
-    func testCustomAccessDirtyStateUsesLoadedOrReconciledBaseline() throws {
-        let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
-        let fixture = try AidenRemoteJSONDecoder.decode(
-            AidenRemoteContractFixture.self,
-            from: Data(contentsOf: fixtureURL)
-        )
-        let clean = try XCTUnwrap(
-            AidenBotCustomAccessDraft(
-                access: fixture.botPolicyUpdate.response,
-                catalog: fixture.botCapabilityCatalog
-            )
-        )
-        XCTAssertFalse(aidenBotCustomAccessIsDirty(draft: clean, cleanDraft: clean))
-        var changed = clean
-        changed.shellEnabled.toggle()
-        XCTAssertTrue(aidenBotCustomAccessIsDirty(draft: changed, cleanDraft: clean))
-        XCTAssertFalse(aidenBotCustomAccessIsDirty(draft: changed, cleanDraft: changed))
     }
 
     func testCustomAccessOnlyShowsAvailableOptionsAndSelectedTombstones() throws {
@@ -2104,109 +1858,11 @@ final class AidenBotContractTests: XCTestCase {
         )
     }
 
-    func testCustomAccessOnlyRebasesExpectedRevisionConflicts() throws {
-        let conflictEnvelope = try AidenRemoteJSONDecoder.decode(
-            AidenRemoteErrorEnvelope.self,
-            from: data(for: [
-                "error": [
-                    "code": "operation_stale",
-                    "message": "The capability catalog changed.",
-                    "requestId": "request_test",
-                    "retryable": false,
-                ],
-            ])
-        )
-        XCTAssertEqual(
-            aidenBotAccessSaveFailureKind(
-                AidenRemoteClientError.server(statusCode: 409, body: conflictEnvelope.error)
-            ),
-            .conflict
-        )
-        XCTAssertEqual(
-            aidenBotAccessSaveFailureKind(
-                AidenRemoteClientError.server(statusCode: 500, body: conflictEnvelope.error)
-            ),
-            .retryable
-        )
-        XCTAssertEqual(
-            aidenBotAccessSaveFailureKind(AidenRemoteClientError.invalidResponse),
-            .retryable
-        )
-    }
-
-    func testFavoriteOrderSupportsMembershipAndStableReordering() {
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b"], moving: "c", .add), ["a", "b", "c"])
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .earlier), ["b", "a", "c"])
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .later), ["a", "c", "b"])
-        XCTAssertEqual(aidenBotFavoriteOrder(["a", "b", "c"], moving: "b", .remove), ["a", "c"])
-    }
-
-    func testConversationDeletionRequiresIdleActiveWritableBot() throws {
-        var fixture = try sharedFixtureObject()
-        var conversation = try XCTUnwrap(fixture["botConversation"] as? [String: Any])
-        conversation["activityState"] = "idle"
-        conversation["canRespondToApproval"] = false
-        fixture["botConversation"] = conversation
-        let item = try AidenRemoteJSONDecoder.decode(
-            AidenBotConversationItem.self,
-            from: data(for: conversation)
-        )
-
-        XCTAssertTrue(aidenBotConversationCanDelete(item, botHealth: .ready, canWrite: true))
-        XCTAssertFalse(aidenBotConversationCanDelete(item, botHealth: .archived, canWrite: true))
-        XCTAssertFalse(aidenBotConversationCanDelete(item, botHealth: .ready, canWrite: false))
-    }
-
-    func testConversationSelectionAccessibilityExposesSelectedAndArchivedReadOnlyState() {
-        let selected = aidenBotConversationSelectionAccessibility(
-            isSelecting: true,
-            isSelected: true,
-            canDelete: true,
-            botHealth: .ready,
-            canWrite: true,
-            activityState: .idle
-        )
-        XCTAssertEqual(selected.value, "Selected")
-        XCTAssertTrue(selected.isSelected)
-        XCTAssertEqual(selected.hint, "Selects this chat for deletion.")
-
-        let archived = aidenBotConversationSelectionAccessibility(
-            isSelecting: true,
-            isSelected: false,
-            canDelete: false,
-            botHealth: .archived,
-            canWrite: true,
-            activityState: .idle
-        )
-        XCTAssertEqual(archived.value, "Not selected")
-        XCTAssertFalse(archived.isSelected)
-        XCTAssertEqual(archived.hint, "Archived Bot chats are read-only.")
-    }
-
-    func testSemanticAvatarPresentationPreservesRecipeAndMapsLegacyIdentity() {
-        let recipe = AidenBotAvatarRecipe(
-            shape: .hex,
-            color: .coral,
-            eyes: .wink,
-            detail: .antenna
-        )
+    func testSemanticAvatarPresentationUsesColourAndShape() {
+        let recipe = AidenBotAvatarRecipe(shape: .hex, color: .coral)
         XCTAssertEqual(
             aidenBotAvatarPresentation(.recipe(recipe)),
-            AidenBotAvatarPresentation(
-                shape: .hex,
-                color: .coral,
-                eyes: .wink,
-                detail: .antenna
-            )
-        )
-        XCTAssertEqual(
-            aidenBotAvatarPresentation(.legacy(.orbit)),
-            AidenBotAvatarPresentation(
-                shape: .orb,
-                color: .lilac,
-                eyes: .focus,
-                detail: .orbit
-            )
+            AidenBotAvatarPresentation(shape: .hex, color: .coral)
         )
     }
 }

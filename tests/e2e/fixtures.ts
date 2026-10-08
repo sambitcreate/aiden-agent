@@ -1,4 +1,4 @@
-import { type ElectronApplication, type Page } from "@playwright/test";
+import { type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
@@ -576,6 +576,20 @@ async function assertRuntimeIsolation(
   }
 }
 
+/**
+ * Hosts with Bots offer "Meet Your First Bot" after provider setup. Flows that
+ * only need the feature tour skip it; the Bots starter test drives it directly.
+ */
+export async function skipBotsOnboardingStep(onboarding: Locator): Promise<void> {
+  const botsHeading = onboarding.getByRole("heading", { name: "Meet Your First Bot" });
+  const tourHeading = onboarding.getByRole("heading", { name: "Everything Aiden brings together" });
+  await expect(botsHeading.or(tourHeading)).toBeVisible();
+  if (await botsHeading.isVisible()) {
+    await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
+  }
+  await expect(tourHeading).toBeVisible();
+}
+
 /** Complete first-run setup with the disposable keyless LM Studio connection. */
 export async function finishLmStudioOnboarding(page: Page): Promise<void> {
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
@@ -594,9 +608,7 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
 
   // Discovery must return and persist at least one model before onboarding can advance.
   await next.click();
-  await expect(
-    onboarding.getByRole("heading", { name: "Everything Aiden brings together" }),
-  ).toBeVisible();
+  await skipBotsOnboardingStep(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
   await expect(

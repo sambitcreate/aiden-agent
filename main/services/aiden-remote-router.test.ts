@@ -30,7 +30,6 @@ import {
   ASSISTANT_AUTOMATION_TOOL_NAME,
 } from "../../renderer/shared/assistant.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
-import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
   providers?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["providers"];
@@ -38,11 +37,12 @@ async function fixture(options: {
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
   acceptsBotCapabilities?: boolean;
+  /** A recording durable-session service for the Bot session, routine and preset routes. */
+  botSessions?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"];
   acceptsProgressCapabilities?: boolean;
   progressAvailable?: boolean;
   authorizationBlocked?: () => boolean;
   botChat?: boolean;
-  botArchived?: boolean;
   botChatAuthorization?: (
     request: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
   ) => boolean | Promise<boolean>;
@@ -70,10 +70,6 @@ async function fixture(options: {
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
-  let notice: import("../../renderer/shared/bot-capabilities.js").BotNoticeStatus = {
-    version: BOT_FULL_ACCESS_NOTICE_VERSION,
-    requiresAcknowledgement: true,
-  };
   const workspace = {
     id: "workspace-1",
     name: "Project",
@@ -123,14 +119,13 @@ async function fixture(options: {
     name: "Planner",
     purpose: "Keeps projects moving",
     instructions: "Help plan projects.",
-    avatar: { semantic: "spark" as const },
+    avatar: { semantic: { version: 1 as const, shape: "orb" as const, color: "sky" as const } },
     health: "ready" as const,
     access: botAccess,
     createdAt: new Date(1_000).toISOString(),
     updatedAt: new Date(2_000).toISOString(),
     revision: "bot_revision_1",
   };
-  const favorites = { botIds: ["bot-1"], revision: "bot_favorites_revision_1" };
   const speechStatus = {
     engine: { ready: true, error: null },
     selectedModelId: "parakeet-v3",
@@ -282,7 +277,6 @@ async function fixture(options: {
         return options.botChat
           ? {
               botId: "bot-1",
-              ...(options.botArchived ? { botArchived: true as const } : {}),
             }
           : {};
       },
@@ -307,13 +301,6 @@ async function fixture(options: {
             "not_found",
             "This Aiden chat no longer exists.",
             404,
-          );
-        }
-        if (options.botArchived) {
-          throw new AidenRemoteServiceError(
-            "bot_archived",
-            "Restore this bot before making changes.",
-            409,
           );
         }
         return action();
@@ -511,28 +498,10 @@ async function fixture(options: {
         models: [],
       }),
     },
-    botNotice: {
-      status: async (deviceId) => {
-        calls.push(`bot-notice:status:${deviceId}`);
-        return notice;
-      },
-      acknowledge: async (deviceId, acknowledgement) => {
-        calls.push(
-          `bot-notice:ack:${deviceId}:${acknowledgement.decision}`,
-        );
-        notice = {
-          version: BOT_FULL_ACCESS_NOTICE_VERSION,
-          requiresAcknowledgement: false,
-          acceptedAt: new Date(1_000).toISOString(),
-          acceptedDecision: acknowledgement.decision,
-        };
-        return notice;
-      },
-    },
     bots: {
-      list: async (includeArchived) => {
-        calls.push(`bots:list:${includeArchived}`);
-        return { bots: [botDetail], maxBots: 256, favorites };
+      list: async () => {
+        calls.push("bots:list");
+        return { bots: [botDetail], maxBots: 256 };
       },
       get: async (botId) => {
         calls.push(`bots:get:${botId}`);
@@ -546,19 +515,8 @@ async function fixture(options: {
         calls.push(`bots:update:${botId}:${revision}`);
         return { ...botDetail, id: botId, revision: "bot_revision_2" };
       },
-      archive: async (botId, revision) => {
-        calls.push(`bots:archive:${botId}:${revision}`);
-        return {
-          ...botDetail,
-          id: botId,
-          health: "archived" as const,
-          archivedAt: new Date(3_000).toISOString(),
-          revision: "bot_revision_2",
-        };
-      },
-      restore: async (deviceId, botId, revision, key) => {
-        calls.push(`bots:restore:${deviceId}:${botId}:${revision}:${key}`);
-        return { ...botDetail, id: botId, revision: "bot_revision_3" };
+      delete: async (botId, revision) => {
+        calls.push(`bots:delete:${botId}:${revision}`);
       },
       capabilityCatalog: async (deviceId, botId) => {
         calls.push(`bots:catalog:${deviceId}:${botId ?? "generic"}`);
@@ -576,7 +534,6 @@ async function fixture(options: {
             : [{ id: `skill_saved_${botId}`, label: "Saved skill", available: false }],
           skillsEnabled: false,
           otherCapabilities: [],
-          notice,
         };
       },
       updateAccess: async (deviceId, botId, revision) => {
@@ -586,36 +543,6 @@ async function fixture(options: {
       createChat: async (deviceId, botId, key) => {
         calls.push(`bots:chat:${deviceId}:${botId}:${key}`);
         return { ...chat, botId };
-      },
-      getChatAccess: async (chatId) => {
-        calls.push(`bots:chat-access-get:${chatId}`);
-        return {
-          chatId,
-          botId: "bot-1",
-          mode: "inherit" as const,
-          revision: "bot_chat_policy_revision_1",
-          botPolicyRevision: botAccess.revision,
-          summary: "Full",
-        };
-      },
-      updateChatAccess: async (deviceId, chatId, revision) => {
-        calls.push(`bots:chat-access:${deviceId}:${chatId}:${revision}`);
-        return {
-          chatId,
-          botId: "bot-1",
-          mode: "inherit" as const,
-          revision: "bot_chat_policy_revision_2",
-          botPolicyRevision: botAccess.revision,
-          summary: "Full",
-        };
-      },
-      favorites: async () => {
-        calls.push("bots:favorites:get");
-        return favorites;
-      },
-      updateFavorites: async (revision) => {
-        calls.push(`bots:favorites:update:${revision}`);
-        return { ...favorites, revision: "bot_favorites_revision_2" };
       },
       listConversations: async (deviceId, input) => {
         calls.push(`bots:conversations:${deviceId}:${input.query ?? ""}`);
@@ -660,6 +587,7 @@ async function fixture(options: {
         };
       },
     },
+    ...(options.botSessions ? { botSessions: options.botSessions } : {}),
     streams: {
       streamChatId: () => "chat-1",
       status: (_deviceId, streamId) => ({
@@ -1696,106 +1624,6 @@ test("capability upgrade requires server:read and a live device", async () => {
   }
 });
 
-test("paired devices explicitly acknowledge the one-time Bot notice under their stable device id", async () => {
-  const app = await fixture({
-    capabilities: ["bot:read", "bot:write"],
-    acceptsBotCapabilities: true,
-  });
-  const headers = {
-    authorization: `Bearer ${"a".repeat(43)}`,
-    "aiden-protocol-version": "1",
-  };
-  try {
-    const pending = await fetch(`${app.base}/bot-access-notice`, { headers });
-    assert.equal(pending.status, 200);
-    assert.deepEqual(await pending.json(), {
-      version: BOT_FULL_ACCESS_NOTICE_VERSION,
-      requiresAcknowledgement: true,
-    });
-
-    const accepted = await fetch(
-      `${app.base}/bot-access-notice/acknowledgement`,
-      {
-        method: "POST",
-        headers: { ...headers, "content-type": "application/json" },
-        body: JSON.stringify({
-          version: BOT_FULL_ACCESS_NOTICE_VERSION,
-          decision: "customize_first",
-          confirmedForeground: true,
-        }),
-      },
-    );
-    assert.equal(accepted.status, 200);
-    assert.deepEqual(await accepted.json(), {
-      version: BOT_FULL_ACCESS_NOTICE_VERSION,
-      requiresAcknowledgement: false,
-      acceptedAt: new Date(1_000).toISOString(),
-      acceptedDecision: "customize_first",
-    });
-
-    const reread = await fetch(`${app.base}/bot-access-notice`, { headers });
-    assert.equal(reread.status, 200);
-    assert.equal((await reread.json()).acceptedDecision, "customize_first");
-    assert.deepEqual(app.calls.filter((call) => call.startsWith("bot-notice:")), [
-      "bot-notice:status:device-authorized-12345678",
-      "bot-notice:ack:device-authorized-12345678:customize_first",
-      "bot-notice:status:device-authorized-12345678",
-    ]);
-  } finally {
-    await app.close();
-  }
-});
-
-test("Bot notice acknowledgement requires both Bot grants and exact foreground disclosure", async () => {
-  const app = await fixture({
-    capabilities: ["bot:write"],
-    acceptsBotCapabilities: true,
-  });
-  try {
-    const response = await fetch(
-      `${app.base}/bot-access-notice/acknowledgement`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${"a".repeat(43)}`,
-          "aiden-protocol-version": "1",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          version: BOT_FULL_ACCESS_NOTICE_VERSION,
-          decision: "continue_full",
-          confirmedForeground: false,
-        }),
-      },
-    );
-    assert.equal(response.status, 400);
-    assert.equal((await response.json()).error.code, "invalid_request");
-    assert.equal(app.calls.some((call) => call.startsWith("bot-notice:ack:")), false);
-
-    const disclosed = await fetch(
-      `${app.base}/bot-access-notice/acknowledgement`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${"a".repeat(43)}`,
-          "aiden-protocol-version": "1",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          version: BOT_FULL_ACCESS_NOTICE_VERSION,
-          decision: "continue_full",
-          confirmedForeground: true,
-        }),
-      },
-    );
-    assert.equal(disclosed.status, 403);
-    assert.equal((await disclosed.json()).error.code, "capability_denied");
-    assert.equal(app.calls.some((call) => call.startsWith("bot-notice:ack:")), false);
-  } finally {
-    await app.close();
-  }
-});
-
 test("Bot grants do not imply support-vocabulary negotiation for a legacy device", async () => {
   const app = await fixture({ capabilities: ["server:read", "bot:read"] });
   try {
@@ -1814,7 +1642,7 @@ test("Bot grants do not imply support-vocabulary negotiation for a legacy device
   }
 });
 
-test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favorites contract", async () => {
+test("authenticated Bot routes enforce the frozen CRUD, access, chat, and delete contract", async () => {
   const app = await fixture({
     capabilities: ["bot:read", "bot:write", "chat:read", "chat:write"],
     acceptsBotCapabilities: true,
@@ -1825,9 +1653,16 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
   };
   const jsonHeaders = { ...headers, "content-type": "application/json" };
   try {
-    assert.equal((await fetch(`${app.base}/bots?includeArchived=true`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots`, { headers })).status, 200);
+    // Retired surfaces are gone: archive/restore, favorites, chat capabilities and the archived list query.
+    assert.equal((await fetch(`${app.base}/bots?includeArchived=true`, { headers })).status, 400);
     assert.equal((await fetch(`${app.base}/bot-capabilities`, { headers })).status, 200);
-    assert.equal((await fetch(`${app.base}/bot-favorites`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bot-favorites`, { headers })).status, 404);
+    assert.equal((await fetch(`${app.base}/chats/chat-1/capabilities`, { headers })).status, 404);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/restore`, {
+      method: "POST",
+      headers: { ...headers, "if-match": "bot_revision_2", "idempotency-key": "bot-restore-key-001" },
+    })).status, 404);
 
     const created = await fetch(`${app.base}/bots`, {
       method: "POST",
@@ -1836,7 +1671,7 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
         name: "Planner",
         purpose: "Plans",
         instructions: "Plan carefully.",
-        avatar: "spark",
+        avatar: { version: 1, shape: "orb", color: "sky" },
         access: {
           accessMode: "full",
           catalogRevision: "bot_catalog_revision_1",
@@ -1866,51 +1701,251 @@ test("authenticated Bot routes enforce the frozen CRUD, access, chat, and favori
       headers: { ...jsonHeaders, "idempotency-key": "bot-chat-key-00001" },
       body: JSON.stringify({}),
     })).status, 201);
-    assert.equal((await fetch(`${app.base}/chats/chat-1/capabilities`, { headers })).status, 200);
-    assert.equal((await fetch(`${app.base}/chats/chat-1/capabilities`, {
-      method: "PATCH",
-      headers: { ...jsonHeaders, "if-match": "bot_chat_policy_revision_1" },
-      body: JSON.stringify({
-        mode: "inherit",
-        catalogRevision: "bot_catalog_revision_1",
-        expectedBotPolicyRevision: "bot_policy_revision_1",
-      }),
-    })).status, 200);
-    assert.equal((await fetch(`${app.base}/bot-favorites`, {
-      method: "PATCH",
-      headers: { ...jsonHeaders, "if-match": "bot_favorites_revision_1" },
-      body: JSON.stringify({ botIds: ["bot-1"] }),
-    })).status, 200);
-    assert.equal((await fetch(`${app.base}/bots/bot-1`, {
+    const deleted = await fetch(`${app.base}/bots/bot-1`, {
       method: "DELETE",
       headers: { ...headers, "if-match": "bot_revision_2" },
-    })).status, 200);
-    assert.equal((await fetch(`${app.base}/bots/bot-1/restore`, {
-      method: "POST",
-      headers: {
-        ...headers,
-        "if-match": "bot_revision_2",
-        "idempotency-key": "bot-restore-key-001",
-      },
-    })).status, 200);
+    });
+    assert.equal(deleted.status, 204);
 
     assert.deepEqual(app.calls.filter((call) => call.startsWith("bots:")), [
-      "bots:list:true",
+      "bots:list",
       "bots:catalog:device-authorized-12345678:generic",
-      "bots:favorites:get",
       "bots:create:device-authorized-12345678:bot-create-key-0001",
       "bots:get:bot-1",
       "bots:update:bot-1:bot_revision_1",
       "bots:access:device-authorized-12345678:bot-1:bot_policy_revision_1",
       "bots:chat:device-authorized-12345678:bot-1:bot-chat-key-00001",
-      "bots:chat-access-get:chat-1",
-      "bots:chat-access:device-authorized-12345678:chat-1:bot_chat_policy_revision_1",
-      "bots:favorites:update:bot_favorites_revision_1",
-      "bots:archive:bot-1:bot_revision_2",
-      "bots:restore:device-authorized-12345678:bot-1:bot_revision_2:bot-restore-key-001",
+      "bots:delete:bot-1:bot_revision_2",
     ]);
   } finally {
     await app.close();
+  }
+});
+
+test("Bot session routes pass their request keys through to the durable session service", async () => {
+  const seen: string[] = [];
+  const state = { state: "running" as const, interrupted: false };
+  const session = {
+    supportsRoutines: true,
+    supportsPresets: true,
+    supportsConnectionRequests: true,
+    session: async (botId: string) => { seen.push(`session:${botId}`); return { botId, epoch: "epoch_1", seq: 0, ...state, entries: [], hasOlder: false }; },
+    openEvents: async () => {},
+    send: async (deviceId: string, botId: string, key: string) => {
+      seen.push(`send:${deviceId}:${botId}:${key}`);
+      return { submissionId: "sub_1", deduped: false, ...state };
+    },
+    resume: async (_deviceId: string, botId: string, key: string) => {
+      seen.push(`resume:${botId}:${key}`);
+      return { state: "running" as const, interrupted: false };
+    },
+    dismiss: async (_deviceId: string, botId: string, key: string) => {
+      seen.push(`dismiss:${botId}:${key}`);
+      return { state: "idle" as const, interrupted: false };
+    },
+    stop: async (_deviceId: string, botId: string, key: string) => {
+      seen.push(`stop:${botId}:${key}`);
+      return { state: "idle" as const, interrupted: false };
+    },
+    listRoutines: async (botId: string) => { seen.push(`routines:${botId}`); return { routines: [] }; },
+    createRoutine: async () => { throw new Error("not used"); },
+    updateRoutine: async () => { throw new Error("not used"); },
+    deleteRoutine: async (botId: string, routineId: string, revision: string) => {
+      seen.push(`routine-delete:${botId}:${routineId}:${revision}`);
+    },
+    requestConnection: async (_deviceId: string, botId: string, key: string, input: unknown) => {
+      seen.push(`connection:${botId}:${key}:${JSON.stringify(input)}`);
+      return { pluginId: "gmail", name: "Gmail", status: "sent" as const };
+    },
+    presets: () => ({ presets: [] }),
+    createFromPreset: async () => {
+      seen.push("preset");
+      return { created: false, bot: { id: "bot-1" } as never };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write", "chat:read", "chat:write"],
+    acceptsBotCapabilities: true,
+    botSessions: session,
+  });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const jsonHeaders = { ...headers, "content-type": "application/json" };
+  const key = "resume-request-0001";
+  try {
+    assert.equal((await fetch(`${app.base}/bots/bot-1/session`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bot-presets`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/resume`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "idempotency-key": key },
+      body: "{}",
+    })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/dismiss`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "idempotency-key": key },
+      body: "{}",
+    })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/routines/routine-1`, {
+      method: "DELETE",
+      headers: { ...headers, "if-match": "routine_revision_1" },
+    })).status, 204);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/connection-requests`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "idempotency-key": "connect-request-0001" },
+      body: JSON.stringify({ pluginId: "gmail" }),
+    })).status, 200);
+    // A resume without a request key is refused before the session service runs.
+    assert.equal((await fetch(`${app.base}/bots/bot-1/resume`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: "{}",
+    })).status, 400);
+    assert.deepEqual(seen, [
+      "session:bot-1",
+      "resume:bot-1:resume-request-0001",
+      "dismiss:bot-1:resume-request-0001",
+      "routine-delete:bot-1:routine-1:routine_revision_1",
+      `connection:bot-1:connect-request-0001:{"pluginId":"gmail"}`,
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+/** A durable-session service whose every route records that it ran. */
+function recordingBotSessions(seen: string[], supports: { routines: boolean; presets: boolean; connections: boolean }) {
+  const state = { state: "idle" as const, interrupted: false };
+  const record = (name: string) => async () => {
+    seen.push(name);
+    return name === "session"
+      ? { botId: "bot-1", epoch: "epoch_1", seq: 0, ...state, entries: [], hasOlder: false }
+      : name === "send"
+        ? { submissionId: "sub_1", deduped: false, ...state }
+        : state;
+  };
+  return {
+    supportsRoutines: supports.routines,
+    supportsPresets: supports.presets,
+    supportsConnectionRequests: supports.connections,
+    session: record("session"),
+    openEvents: async () => { seen.push("events"); },
+    send: record("send"),
+    resume: record("resume"),
+    dismiss: record("dismiss"),
+    stop: record("stop"),
+    listRoutines: async () => { seen.push("routines"); return { routines: [] }; },
+    createRoutine: record("routine-create"),
+    updateRoutine: record("routine-update"),
+    deleteRoutine: async () => { seen.push("routine-delete"); },
+    requestConnection: record("connection"),
+    presets: () => { seen.push("presets"); return { presets: [] }; },
+    createFromPreset: record("preset"),
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+}
+
+test("revision 25 Bot feature tokens are announced exactly when their routes are wired", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const botTokens = (features: string[]) => features.filter((feature) => feature.startsWith("bot-")).sort();
+
+  const wired = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:read", "chat:write"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions([], { routines: true, presets: true, connections: true }),
+  });
+  try {
+    const server = await (await fetch(`${wired.base}/server`, { headers })).json();
+    assert.deepEqual(botTokens(server.features), [
+      "bot-connection-requests-v1",
+      "bot-delete-v1",
+      "bot-durable-session-v1",
+      "bot-presets-v1",
+      "bot-routines-v1",
+    ]);
+  } finally {
+    await wired.close();
+  }
+
+  // A host whose routine/preset/connection services are absent only offers the session.
+  const partial = await fixture({
+    capabilities: ["server:read", "bot:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions([], { routines: false, presets: false, connections: false }),
+  });
+  try {
+    const server = await (await fetch(`${partial.base}/server`, { headers })).json();
+    assert.deepEqual(botTokens(server.features), ["bot-delete-v1", "bot-durable-session-v1"]);
+  } finally {
+    await partial.close();
+  }
+
+  // No durable sessions: none of the session tokens, and the routes are not found.
+  const unwired = await fixture({ capabilities: ["server:read", "bot:read", "chat:read"], acceptsBotCapabilities: true });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.deepEqual(botTokens(server.features), ["bot-delete-v1"]);
+    const session = await fetch(`${unwired.base}/bots/bot-1/session`, { headers });
+    assert.equal(session.status, 404);
+    assert.equal((await session.json()).error.code, "not_found");
+  } finally {
+    await unwired.close();
+  }
+});
+
+test("Bot session routes refuse devices without the grants for transcripts and changes", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const post = (key: string, body = "{}") => ({
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", "idempotency-key": key },
+    body,
+  });
+
+  // Bot metadata only: the transcript and its stream are chat reads.
+  const metadataOnly: string[] = [];
+  const reader = await fixture({
+    capabilities: ["bot:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions(metadataOnly, { routines: true, presets: true, connections: true }),
+  });
+  try {
+    for (const path of ["/bots/bot-1/session", "/bots/bot-1/session/events"]) {
+      const response = await fetch(`${reader.base}${path}`, { headers });
+      assert.equal(response.status, 403, path);
+      assert.equal((await response.json()).error.code, "capability_denied", path);
+    }
+    for (const [path, body] of [
+      ["/bots/bot-1/resume", "{}"],
+      ["/bots/bot-1/dismiss", "{}"],
+      ["/bots/bot-1/stop", "{}"],
+      ["/bots/bot-1/messages", JSON.stringify({ text: "hi" })],
+      ["/bots/bot-1/routines", JSON.stringify({ name: "x", message: "y", schedule: { kind: "daily", time: "08:00" } })],
+      ["/bots/bot-1/connection-requests", JSON.stringify({ pluginId: "gmail" })],
+      ["/bots/from-preset", JSON.stringify({ presetId: "meal-planner" })],
+    ] as const) {
+      const response = await fetch(`${reader.base}${path}`, post("grant-request-00001", body));
+      assert.equal(response.status, 403, path);
+    }
+    // Reading routines and presets is Bot metadata.
+    assert.equal((await fetch(`${reader.base}/bots/bot-1/routines`, { headers })).status, 200);
+    assert.equal((await fetch(`${reader.base}/bot-presets`, { headers })).status, 200);
+    assert.deepEqual(metadataOnly, ["routines", "presets"]);
+  } finally {
+    await reader.close();
+  }
+
+  // Bot changes without chat writes may control the session but not speak in it.
+  const controls: string[] = [];
+  const writer = await fixture({
+    capabilities: ["bot:read", "bot:write", "chat:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions(controls, { routines: true, presets: true, connections: true }),
+  });
+  try {
+    assert.equal((await fetch(`${writer.base}/bots/bot-1/session`, { headers })).status, 200);
+    assert.equal((await fetch(`${writer.base}/bots/bot-1/resume`, post("grant-request-00002"))).status, 200);
+    const message = await fetch(`${writer.base}/bots/bot-1/messages`, post("grant-request-00003", JSON.stringify({ text: "hi" })));
+    assert.equal(message.status, 403);
+    assert.deepEqual(controls, ["session", "resume"]);
+  } finally {
+    await writer.close();
   }
 });
 
@@ -2636,122 +2671,6 @@ test("ordinary move-to-workspace rejects authorized Bot chats", async () => {
     assert.equal(response.status, 404);
     assert.equal((await response.json()).error.code, "not_found");
     assert.equal(app.calls.some((call) => call.startsWith("chat-move:")), false);
-  } finally {
-    await app.close();
-  }
-});
-
-test("authorized archived Bot chats preserve reads and reject every retained mutation", async () => {
-  const revision = `rev_${"c".repeat(43)}`;
-  const attachmentId = `att_${"a".repeat(43)}`;
-  const app = await fixture({
-    botChat: true,
-    botArchived: true,
-    capabilities: [
-      "chat:read",
-      "chat:write",
-      "approval:respond",
-      "bot:read",
-      "bot:write",
-    ],
-    acceptsBotCapabilities: true,
-    botChatAuthorization: () => true,
-  });
-  const headers = {
-    authorization: `Bearer ${"a".repeat(43)}`,
-    "aiden-protocol-version": "1",
-  };
-
-  try {
-    for (const path of [
-      "/chats/chat-1",
-      `/chats/chat-1/attachments/${attachmentId}/content`,
-      "/streams/stream-1",
-      "/streams/stream-1/approval",
-      "/streams/stream-1/events",
-    ]) {
-      const response = await fetch(`${app.base}${path}`, { headers });
-      assert.equal(response.status, 200, `${path} remains readable while archived`);
-      await response.arrayBuffer();
-    }
-
-    const mutations: Array<{
-      path: string;
-      method: "PATCH" | "POST" | "DELETE";
-      headers?: Record<string, string>;
-      body?: string;
-    }> = [
-      {
-        path: "/chats/chat-1",
-        method: "PATCH",
-        headers: { "content-type": "application/json", "if-match": revision },
-        body: JSON.stringify({ title: "Archived" }),
-      },
-      {
-        path: "/chats/chat-1",
-        method: "DELETE",
-        headers: { "if-match": revision },
-      },
-      {
-        path: "/chats/chat-1/move",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "if-match": revision,
-          "idempotency-key": "archived-move-0001",
-        },
-        body: JSON.stringify({ workspaceId: "workspace-2", confirmedForeground: true }),
-      },
-      {
-        path: "/chats/chat-1/turns",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "archived-turn-0001",
-        },
-        body: JSON.stringify({ text: "Do not run" }),
-      },
-      {
-        path: "/chats/chat-1/attachments",
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      },
-      {
-        path: `/chats/chat-1/attachments/${attachmentId}`,
-        method: "DELETE",
-      },
-      {
-        path: "/streams/stream-1/cancel",
-        method: "POST",
-        headers: { "idempotency-key": "archived-cancel-01" },
-      },
-      {
-        path: "/approvals/approval-1/respond",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "archived-approval-1",
-        },
-        body: JSON.stringify({ decision: "deny" }),
-      },
-    ];
-
-    for (const mutation of mutations) {
-      const response = await fetch(`${app.base}${mutation.path}`, {
-        method: mutation.method,
-        headers: { ...headers, ...mutation.headers },
-        ...(mutation.body !== undefined ? { body: mutation.body } : {}),
-      });
-      assert.equal(response.status, 409, mutation.path);
-      assert.equal((await response.json()).error.code, "bot_archived", mutation.path);
-    }
-
-    assert.deepEqual(
-      app.calls.filter((call) =>
-        /^(?:chat-rename|chat-remove|chat-move|turn|attachment-upload|attachment-remove|cancel|approval):/u.test(call)),
-      [],
-    );
   } finally {
     await app.close();
   }
@@ -4036,7 +3955,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 25,
+      contractRevision: 26,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4776,5 +4695,132 @@ test("a phone's hub WebSocket upgrade authenticates with the viewer grant and ke
     assert.equal(await statusLine(ungranted.base, "/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1"), "HTTP/1.1 403 Refused");
   } finally {
     await ungranted.close();
+  }
+});
+
+test("the Bot question answer route passes its waitId, request key and answer through", async () => {
+  const seen: string[] = [];
+  const session = {
+    supportsRoutines: true,
+    supportsPresets: true,
+    supportsConnectionRequests: true,
+    answerQuestion: async (deviceId: string, botId: string, waitId: string, key: string, input: unknown) => {
+      seen.push(`answer:${deviceId.length > 0}:${botId}:${waitId}:${key}:${JSON.stringify(input)}`);
+      return { waitId };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+    botSessions: session,
+  });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const jsonHeaders = { ...headers, "content-type": "application/json" };
+  const waitId = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c";
+  const answer = { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "Blue" }] };
+  try {
+    const response = await fetch(`${app.base}/bots/bot-1/questions/${waitId}/answer`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "idempotency-key": "answer-request-0001" },
+      body: JSON.stringify(answer),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { waitId });
+    assert.deepEqual(seen, [`answer:true:bot-1:${waitId}:answer-request-0001:${JSON.stringify(answer)}`]);
+
+    // Without an Idempotency-Key the answer is refused before the session service runs.
+    assert.equal((await fetch(`${app.base}/bots/bot-1/questions/${waitId}/answer`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify(answer),
+    })).status, 400);
+    assert.equal(seen.length, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("the approval route answers a durable Bot's approval by waitId, and only for a device that may use Bots", async () => {
+  const waitId = "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6";
+  const seen: string[] = [];
+  const session = {
+    supportsRoutines: true,
+    supportsPresets: true,
+    supportsConnectionRequests: true,
+    ownsApproval: (id: string) => id === waitId,
+    respondApproval: async (deviceId: string, id: string, decision: string, key: string, scope?: string) => {
+      seen.push(`approve:${deviceId.length > 0}:${id}:${decision}:${key}:${scope ?? "-"}`);
+      return { approvalId: id, decision, resolvedAt: "2026-10-08T00:00:00.000Z" };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const respond = (base: string, id: string, key: string) =>
+    fetch(`${base}/approvals/${id}/respond`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        "idempotency-key": key,
+      },
+      body: JSON.stringify({ decision: "allow" }),
+    });
+
+  const app = await fixture({
+    capabilities: ["approval:respond", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+    botSessions: session,
+  });
+  try {
+    const response = await respond(app.base, waitId, "approve-request-0001");
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      approvalId: waitId,
+      decision: "allow",
+      resolvedAt: "2026-10-08T00:00:00.000Z",
+    });
+    assert.deepEqual(seen, [`approve:true:${waitId}:allow:approve-request-0001:-`]);
+    // Any other id is still a workspace chat approval, never a Bot's.
+    await respond(app.base, "approval-other", "approve-request-0002");
+    assert.equal(seen.length, 1);
+  } finally {
+    await app.close();
+  }
+
+  const noBots = await fixture({ capabilities: ["approval:respond", "bot:read"], acceptsBotCapabilities: true, botSessions: session });
+  try {
+    assert.equal((await respond(noBots.base, waitId, "approve-request-0003")).status, 403);
+    assert.equal(seen.length, 1, "a device without Bot write access never reaches the Bot");
+  } finally {
+    await noBots.close();
+  }
+});
+
+test("the Bot question answer route needs Bot write access", async () => {
+  let reached = 0;
+  const session = {
+    supportsRoutines: true,
+    supportsPresets: true,
+    supportsConnectionRequests: true,
+    answerQuestion: async () => {
+      reached += 1;
+      return { waitId: "x" };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const app = await fixture({ capabilities: ["bot:read"], acceptsBotCapabilities: true, botSessions: session });
+  try {
+    const response = await fetch(`${app.base}/bots/bot-1/questions/5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c/answer`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        "idempotency-key": "answer-request-0009",
+      },
+      body: JSON.stringify({ cancelled: true, answers: [] }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(reached, 0, "a read-only device never reaches the Bot");
+  } finally {
+    await app.close();
   }
 });

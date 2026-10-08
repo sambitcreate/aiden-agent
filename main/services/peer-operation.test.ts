@@ -43,12 +43,10 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "tasks", resourceId: "chat_1" }, "getChatTasks"],
     [{ operation: "agents", resourceId: "chat_1", turnId: "turn_2" }, "getChatAgents"],
     [{ operation: "streamQuestion", resourceId: "stream_1" }, "getStreamQuestion"],
-    [{ operation: "bots", includeArchived: true }, "listBots"],
+    [{ operation: "bots" }, "listBots"],
     [{ operation: "bot", resourceId: "bot_1" }, "getBot"],
     [{ operation: "botConversations", query: "release notes & more", botId: "bot_1", limit: 20 }, "listBotConversations"],
     [{ operation: "botCapabilities", botId: "bot_1" }, "getBotCapabilityCatalog"],
-    [{ operation: "botChatAccess", resourceId: "chat_1" }, "getBotChatAccess"],
-    [{ operation: "botFavorites" }, "getBotFavorites"],
     [{ operation: "markRead", resourceId: "chat_1", idempotencyKey: KEY, body: { throughMessageId: "m1" } }, "markChatRead"],
     [{ operation: "interruptAgent", resourceId: "chat_1", itemId: "agent_1", idempotencyKey: KEY }, "interruptChatAgent"],
     [{ operation: "respondQuestion", resourceId: "prompt_1", idempotencyKey: KEY }, "respondQuestion"],
@@ -58,8 +56,6 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "runRespondQuestion", resourceId: "run_1", itemId: "prompt_1", idempotencyKey: KEY }, "respondRunQuestion"],
     [{ operation: "runInputs", resourceId: "run_1", idempotencyKey: KEY }, "submitRunInput"],
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
-    [{ operation: "updateBotFavorites", idempotencyKey: KEY, revision: "\"r1\"" }, "updateBotFavorites"],
-    [{ operation: "updateBotChatAccess", resourceId: "chat_1", idempotencyKey: KEY, revision: "\"r2\"" }, "updateBotChatAccess"],
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
   ];
@@ -105,12 +101,6 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
       Error,
       operation,
     );
-  assert.throws(() =>
-    peerOperationRequest({
-      operation: "updateBotFavorites",
-      idempotencyKey: KEY,
-    }),
-  );
   for (const invalid of [
     { operation: "messagesWindow", resourceId: "chat_1", limit: 0 },
     { operation: "messagesWindow", resourceId: "chat_1", limit: 201 },
@@ -151,8 +141,6 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     "bot",
     "botConversations",
     "botCapabilities",
-    "botChatAccess",
-    "botFavorites",
     "markRead",
     "interruptAgent",
     "respondQuestion",
@@ -162,8 +150,6 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     "runRespondQuestion",
     "runInputs",
     "createBotChat",
-    "updateBotFavorites",
-    "updateBotChatAccess",
     "uploadAttachment",
     "removeAttachment",
   ])

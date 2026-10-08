@@ -259,7 +259,7 @@ function isMobileSimulatorCapability(
 }
 
 /**
- * The phone simulator viewer grant (contract revision 25) belongs to phones
+ * The phone simulator viewer grant (contract revision 26) belongs to phones
  * and tablets only; desktops use `simulators:control`.
  */
 export function mayHoldMobileSimulatorCapabilities(type: unknown): boolean {

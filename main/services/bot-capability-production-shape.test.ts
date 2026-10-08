@@ -346,7 +346,7 @@ test("global Skills pause preserves real incarnations and exact saved Bot grants
   assert.ok(paused.catalog.skills.every(({ available }) => !available));
   assert.equal(discoveries, discoveryCount, "off must not read skill instructions");
   assert.deepEqual((await catalog.snapshot({ audienceId })).catalog.skills, []);
-  // Audience preflight, archived reads, and admission all consume the same
+  // Audience preflight and admission both consume the same
   // main-owned suppression bit instead of requiring each caller to guess it.
   await store.assertAuthorityBindingsCurrent({ botId, chatId: chat.chatId, snapshot: paused });
   const admitted = await store.admit({ audienceId, botId, chatId: chat.chatId, snapshot: paused });
@@ -358,10 +358,6 @@ test("global Skills pause preserves real incarnations and exact saved Bot grants
   await store.updateChatPolicy({ chatId: chat.chatId, expectedRevision: chat.revision, catalog: paused.catalog, access: { mode: "custom", custom, expectedBotPolicyRevision: updated.revision, catalogRevision: paused.catalog.revision } });
   await assert.rejects(catalog.bindCustom({ audienceId, botId, selection: edited, catalogRevision: paused.catalog.revision, snapshot: paused }), /disabled/u);
   await assert.rejects(catalog.bindCustom({ audienceId, botId, selection: { ...edited, skillIds: [...edited.skillIds, "skill:unknown"] }, catalogRevision: paused.catalog.revision, snapshot: paused, retainedBindings: [saved] }), /disabled/u);
-  await store.archiveBotAuthority(botId);
-  await store.assertAuthorityBindingsCurrent({ botId, chatId: chat.chatId, snapshot: paused });
-  assert.equal((await store.inspectArchivedReadAuthority(botId, chat.chatId)).policy.authorityStatus, "archived");
-  await store.restoreBotAuthority(botId);
   ({ store, catalog } = await createServices());
   skillsEnabled = true;
   const resumed = await catalog.snapshot({ audienceId, botId, retainedBindings: [retained] });

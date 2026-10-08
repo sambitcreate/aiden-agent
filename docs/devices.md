@@ -274,7 +274,7 @@ Android emulators are listed with "Open on your Mac to view". They stream H.264 
 
 ### How it works
 
-- **Contract.** Aiden Remote revision 25 adds the phone-only `simulators:mobile` grant behind the `mobile-simulators-v1` feature. Phones negotiate it after pairing. `aiden-remote-simulators.ts` serves phones as a separate audience with a narrower route set: list, open (iOS only), shut down, the MJPEG stream, the screen config and health reads, and the input socket. Details are in `docs/aiden-remote-api-v1.md` under "Phone simulator viewer".
+- **Contract.** Aiden Remote revision 26 adds the phone-only `simulators:mobile` grant behind the `mobile-simulators-v1` feature. Phones negotiate it after pairing. `aiden-remote-simulators.ts` serves phones as a separate audience with a narrower route set: list, open (iOS only), shut down, the MJPEG stream, the screen config and health reads, and the input socket. Details are in `docs/aiden-remote-api-v1.md` under "Phone simulator viewer".
 - **Consent per audience.** `device-service.ts` builds one share host per audience, each with its own consent and listeners. The relay closes only the affected audience's streams when consent changes. The 8-stream cap per paired device still applies.
 - **Chat devices.** `GET /simulators?chatId=` returns `chatDeviceIds` from the desktop's per-chat sessions after checking that the phone can read the chat. It never starts the hub. Phones call it when a chat opens, when the app returns to the foreground, and when the viewer closes. Nothing polls.
 - **Native viewers, no WebView.** WKWebView cannot easily honour Aiden's pinned self-signed TLS, so both apps stream natively:

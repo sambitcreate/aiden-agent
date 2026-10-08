@@ -87,6 +87,15 @@ export interface BotManagedWorkspaceStorage {
   ): Promise<BotManagedHomeInspection>;
   /** Removes only a matching receipt and an otherwise-empty owned directory. */
   removeOwnedEmptyHome(directoryName: string, receipt: BotManagedHomeReceipt): Promise<boolean>;
+  /**
+   * Bot delete: move the owned home (whatever it contains) out of the homes
+   * directory, then drop its receipt. Refuses a replaced directory or a
+   * mismatched receipt. Tolerates either half already being gone, so an
+   * interrupted delete can be retried.
+   */
+  removeOwnedHome(directoryName: string, receipt: BotManagedHomeReceipt): Promise<void>;
+  /** Erase homes a delete has moved aside. Never touches a bound home. */
+  purgeRemovedHomes(): Promise<void>;
 }
 
 export interface BotManagedWorkspaceCoreOptions {
@@ -649,6 +658,29 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
 
     audit(): Promise<void> {
       return serialized(async () => auditDocument(await loadDocument()));
+    },
+
+    /**
+     * Bot delete: erase the Bot's managed home and its binding. Idempotent and
+     * crash-safe: the home leaves the homes directory before its receipt and
+     * binding go, and each step tolerates the earlier ones having finished.
+     */
+    deleteHome(botId: string): Promise<boolean> {
+      return serialized(async () => {
+        if (!isPathSafeBotManagedIdentifier(botId)) {
+          throw new BotManagedWorkspaceStateError("Bot identifier is invalid.");
+        }
+        const document = await loadDocument();
+        const binding = document.bindings.find((candidate) => candidate.botId === botId);
+        if (binding) {
+          await options.storage.removeOwnedHome(binding.directoryName, receiptFor(binding));
+          const next = cloneDocument(document);
+          next.bindings = next.bindings.filter((candidate) => candidate.botId !== botId);
+          await options.storage.writeManifest(next);
+        }
+        await options.storage.purgeRemovedHomes();
+        return binding !== undefined;
+      });
     },
 
     rollbackProvision(input: {

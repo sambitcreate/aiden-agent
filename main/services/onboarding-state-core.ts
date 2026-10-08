@@ -21,7 +21,9 @@ export function onboardingEvidenceProvider(
   state: OnboardingState | null,
 ): Provider | undefined {
   const providerStepSatisfied =
-    state?.lastSatisfiedStep === "provider" || state?.lastSatisfiedStep === "tour";
+    state?.lastSatisfiedStep === "provider" ||
+    state?.lastSatisfiedStep === "bots" ||
+    state?.lastSatisfiedStep === "tour";
   if (!providerStepSatisfied || !state.selectedProviderId) return undefined;
   return providers.find(
     (provider) => provider.id === state.selectedProviderId && onboardingProviderReady(provider),
