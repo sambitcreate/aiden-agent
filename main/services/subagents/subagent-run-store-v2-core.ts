@@ -484,6 +484,9 @@ function stableIdentity(left: SubagentRunSnapshotV2, right: SubagentRunSnapshotV
     left.taskPreview === right.taskPreview &&
     left.startedAt === right.startedAt &&
     left.modelId === right.modelId &&
+    left.providerId === right.providerId &&
+    left.thinkingLevel === right.thinkingLevel &&
+    left.modelSelection === right.modelSelection &&
     left.parentRunId === right.parentRunId &&
     left.retryOfRunId === right.retryOfRunId &&
     left.depth === right.depth &&

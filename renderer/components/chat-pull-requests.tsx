@@ -9,6 +9,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Clock3,
   ExternalLink,
   GitMerge,
   GitPullRequest,
@@ -57,6 +58,7 @@ import {
   useGitBranches,
 } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
+import { formatGitHubPausedUntil } from "../lib/github-pause";
 import { chatPullRequestChipLabels, chatPullRequestListStatus } from "../lib/chat-pull-request-chip";
 
 export function openPullRequestExternal(url: string): void {
@@ -545,8 +547,11 @@ export function PullRequestLinkDialog({
             </p>
           ) : candidates.data?.availability !== "ready" ? (
             <p className="py-1 text-small text-tertiary">
-              {candidates.data?.message ??
-                "Pull requests are not available for this workspace."}
+              {candidates.data?.availability === "rate-limited" &&
+              candidates.data.retryAt !== undefined
+                ? `${formatGitHubPausedUntil(candidates.data.retryAt, Date.now())}.`
+                : (candidates.data?.message ??
+                  "Pull requests are not available for this workspace.")}
             </p>
           ) : candidates.data.pullRequests.length === 0 ? (
             <p className="py-1 text-small text-tertiary">
@@ -891,6 +896,7 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
   const [refresh, setRefresh] = React.useState<{
     state: "idle" | "refreshing" | "failed";
     message?: string;
+    rateLimitedUntil?: number;
   }>({ state: "idle" });
   const refreshAttempt = React.useRef(0);
   const runRefresh = React.useCallback(() => {
@@ -898,9 +904,13 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
     setRefresh({ state: "refreshing" });
     void pullRequestsApi
       .refresh(chatId)
-      .then(() => {
+      .then((result) => {
         if (attempt !== refreshAttempt.current) return;
-        setRefresh({ state: "idle" });
+        setRefresh(
+          result.rateLimitedUntil !== undefined
+            ? { state: "idle", rateLimitedUntil: result.rateLimitedUntil }
+            : { state: "idle" },
+        );
         invalidate();
       })
       .catch((error: unknown) => {
@@ -932,6 +942,15 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
     }
     return merged;
   }, [views, currentView]);
+
+  const pausedUntil = Math.max(
+    refresh.rateLimitedUntil ?? 0,
+    current.data?.rateLimitedUntil ?? 0,
+  );
+  const pausedLabel =
+    pausedUntil > Date.now()
+      ? formatGitHubPausedUntil(pausedUntil, Date.now())
+      : undefined;
 
   const pendingCount = pending.data?.length ?? 0;
   const chip = chatPullRequestChipLabels({
@@ -993,6 +1012,12 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
                 onChanged={invalidate}
               />
             ))}
+            {pausedLabel && listStatus !== "error" ? (
+              <p className="flex items-center gap-2 px-2 py-2 text-small text-secondary" role="status">
+                <Clock3 className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1">{pausedLabel}. Showing saved details.</span>
+              </p>
+            ) : null}
             {refresh.state === "failed" && listStatus !== "error" ? (
               <div className="flex items-center gap-2 px-2 py-2" role="alert">
                 <Text variant="small" color="secondary" className="min-w-0 flex-1">

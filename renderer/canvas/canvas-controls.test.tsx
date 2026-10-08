@@ -50,10 +50,12 @@ test("zoom controls read out the zoom and disable at the limits", () => {
   const label = (zoom: number, name: string) =>
     at(zoom).find((button) => button.getAttribute("aria-label")?.startsWith(name));
   assert.equal(label(1.2, "Zoom 120%")?.textContent, "120%");
-  assert.equal(label(CANVAS_MIN_ZOOM, "Zoom out")?.hasAttribute("disabled"), true);
-  assert.equal(label(CANVAS_MAX_ZOOM, "Zoom in")?.hasAttribute("disabled"), true);
-  assert.equal(label(1, "Zoom out")?.hasAttribute("disabled"), false);
-  assert.equal(label(1, "Zoom in")?.hasAttribute("disabled"), false);
+  // Limits are aria-disabled, so the button keeps keyboard focus and still reads as unavailable.
+  assert.equal(label(CANVAS_MIN_ZOOM, "Zoom out")?.getAttribute("aria-disabled"), "true");
+  assert.equal(label(CANVAS_MAX_ZOOM, "Zoom in")?.getAttribute("aria-disabled"), "true");
+  assert.equal(label(1, "Zoom out")?.getAttribute("aria-disabled"), "false");
+  assert.equal(label(1, "Zoom in")?.getAttribute("aria-disabled"), "false");
+  assert.equal(label(CANVAS_MIN_ZOOM, "Zoom out")?.hasAttribute("disabled"), false);
   assert.equal(label(1, "Fit to screen")?.getAttribute("aria-keyshortcuts"), "Shift+1");
 });
 

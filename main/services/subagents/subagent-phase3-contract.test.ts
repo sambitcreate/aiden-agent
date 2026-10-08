@@ -660,7 +660,10 @@ test("every workspace path capability is renderer-document owned and mutation ad
 
   assert.match(ipcHandlerSource(workspaces, "workspaces:gitInfo"), /gitInfo\(.+signal\)/u);
   assert.match(ipcHandlerSource(workspaces, "git:branches"), /gitBranches\(.+signal\)/u);
-  assert.match(ipcHandlerSource(workspaces, "git:pullRequestStatus"), /githubCurrentPullRequest\(.+signal\)/u);
+  assert.match(
+    ipcHandlerSource(workspaces, "git:pullRequestStatus"),
+    /githubCurrentPullRequest\([\s\S]+resolved\.folderPath[\s\S]+signal[\s\S]*\)/u,
+  );
   assert.match(ipcHandlerSource(workspaces, "git:worktrees"), /gitWorktrees\(.+signal\)/u);
   assert.match(git, /async info\(cwd: string, signal\?: AbortSignal\)/u);
   assert.match(git, /async branches\(cwd: string, signal\?: AbortSignal\)/u);
