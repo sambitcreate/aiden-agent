@@ -8,6 +8,8 @@
 // - MJPEG serves a small portrait JPEG every 200ms.
 // - The per-device input socket pushes a screen config, logs every packet, and
 //   closes the first connection after its first touch so the client must reconnect.
+// - The per-device `ax` route answers a small accessibility tree, and the event
+//   log feed seeds two entries over SSE, for the device power features spec.
 //
 // Every request is appended as a JSON line to AIDEN_E2E_FAKE_HUB_LOG.
 import { Buffer } from "node:buffer";
@@ -69,6 +71,32 @@ const server = createServer((request, response) => {
     request.resume();
     response.writeHead(200, { "content-type": "image/png" });
     return response.end(PNG);
+  }
+  // serve-sim's accessibility tree: the root application plus one button and one label.
+  if (request.method === "GET" && /^\/vendor\/serve-sim\/helper\/[A-Za-z0-9-]+\/ax$/u.test(entry.path)) {
+    return json(response, [
+      {
+        type: "Application",
+        AXLabel: "Settings",
+        frame: { x: 0, y: 0, width: 400, height: 800 },
+        children: [
+          { type: "Button", AXLabel: "General", AXUniqueId: "general", frame: { x: 40, y: 200, width: 320, height: 40 } },
+          { type: "StaticText", AXLabel: "Wi-Fi", frame: { x: 40, y: 320, width: 120, height: 30 } },
+        ],
+      },
+    ]);
+  }
+  // serve-sim's event log: a seeded history, then the stream stays open like the real feed.
+  if (request.method === "GET" && entry.path === "/vendor/serve-sim/api/event-log/events") {
+    response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    const events = [
+      { id: 1, timestamp: "2026-10-08T09:41:00.000Z", kind: "button", summary: "Button home" },
+      { id: 2, timestamp: "2026-10-08T09:41:02.000Z", kind: "touch", summary: "Touch begin 0.50,0.50" },
+    ];
+    response.write(`: connected\n\ndata: ${JSON.stringify({ events })}\n\n`);
+    const timer = setInterval(() => response.write(": keep-alive\n\n"), 1_000);
+    response.once("close", () => clearInterval(timer));
+    return;
   }
   if (entry.path.endsWith("/stream.avcc")) {
     // Tag 1 is the decoder description; profile 0xff is not a real H.264 profile.
