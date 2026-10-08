@@ -22,6 +22,7 @@ import {
 import type { PeerHostView } from "../../../renderer/shared/peer-host.js";
 import type { PeerRequest, PeerTrust } from "../peer-transport.js";
 import { peerTlsOptions, PeerTransportError } from "../peer-transport.js";
+import { isEmulatorSerial } from "./android-device-actions.js";
 import type { DeviceHubUpstream } from "./device-hub-proxy.js";
 
 /** Booting a simulator on the other Mac can take minutes. */
@@ -206,8 +207,9 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
     async open(hostId, deviceId) {
       const value = await post(hostId, "/simulators/open", { deviceId }, PEER_OPEN_TIMEOUT_MS);
       const device = isRecord(value) ? parseSimulator(value.device) : null;
-      // A booted Android AVD answers under its emulator serial instead of its AVD name.
-      if (!device || (device.id !== deviceId && device.platform !== "android")) {
+      // A booted Android AVD answers under its emulator serial instead of its AVD name. Any other
+      // changed id is refused; the device service also checks the AVD against its listing.
+      if (!device || (device.id !== deviceId && !(device.platform === "android" && isEmulatorSerial(device.id)))) {
         throw new PeerTransportError("invalid_response");
       }
       return device;

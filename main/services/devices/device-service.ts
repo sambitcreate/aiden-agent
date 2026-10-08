@@ -35,7 +35,7 @@ import {
   type DeviceHostReady,
 } from "./device-host.js";
 import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
-import { readAndroidDeviceSettings, runAndroidDeviceAction } from "./android-device-actions.js";
+import { isEmulatorSerial, readAndroidDeviceSettings, runAndroidDeviceAction } from "./android-device-actions.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
 import {
   MOBILE_SIMULATOR_REFUSAL,
@@ -1520,9 +1520,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
       if (hostId !== host.id) {
         const entry = requirePeer(hostId);
-        if (!entry.devices.some((device) => device.id === input.deviceId)) {
-          throw new Error("That simulator is no longer available.");
-        }
+        const requested = entry.devices.find((device) => device.id === input.deviceId);
+        if (!requested) throw new Error("That simulator is no longer available.");
         const epoch = peerEpoch;
         const closed = closeCount(input.chatId, hostId, input.deviceId);
         const opened = await peerPort().open(hostId, input.deviceId);
@@ -1532,10 +1531,18 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (closeCount(input.chatId, hostId, input.deviceId) !== closed) {
           throw new Error("The simulator was closed while it was opening.");
         }
-        // An Android AVD comes back under its emulator serial.
-        entry.devices = entry.devices.some((device) => device.id === opened.id)
-          ? entry.devices.map((device) => (device.id === opened.id ? { ...opened, hostId } : device))
-          : entry.devices.map((device) => (device.id === input.deviceId ? { ...opened, hostId } : device));
+        // Only an Android AVD that was not running may come back under a new id, its emulator
+        // serial, and only a serial no other listed device already has.
+        const renamedAvd =
+          requested.platform === "android" &&
+          !requested.booted &&
+          opened.platform === "android" &&
+          isEmulatorSerial(opened.id) &&
+          !entry.devices.some((device) => device.id === opened.id);
+        if (opened.id !== input.deviceId && !renamedAvd) {
+          throw new Error("The paired Mac answered with a different device. Refresh and try again.");
+        }
+        entry.devices = entry.devices.map((device) => (device.id === input.deviceId ? { ...opened, hostId } : device));
         const existing = sessions.find(
           (session) => session.chatId === input.chatId && session.hostId === hostId && session.deviceId === opened.id,
         );
