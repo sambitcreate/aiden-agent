@@ -137,6 +137,14 @@ its stream client, simulator controls, and procedural 3D device frame
 Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
 not included; the device-motion spring is Aiden's own.
 
+The Aiden On The Go simulator viewers (`ios/AidenOnTheGo/Features/Simulators/`,
+`ios/AidenOnTheGo/Networking/AidenSimulatorStream.swift` and
+`AidenMJPEGMultipartParser.swift`, and the Android
+`features/simulators/` and `networking/AidenSimulatorStream.kt`) adapt the
+on-demand controls, shake detector and device picker of T3 Code's
+`apps/mobile/src/features/devices`, under the same MIT license. Both apps ship
+the license as `ThirdPartyNotices/T3Code-LICENSE.txt`.
+
 ## three.js
 
 Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is
