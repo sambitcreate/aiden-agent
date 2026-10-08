@@ -957,7 +957,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (error instanceof DeviceToolsMissingError) {
         setSsh(entry, {
           status: "needs-consent",
-          detail: `Install the simulator helpers on ${entry.config.label} to use its simulators.`,
+          detail: `Install the simulator helpers on ${entry.config.label} in Settings → Simulator to use its simulators.`,
         });
       } else {
         setSsh(entry, { status: "error", detail: errorMessage(error) });
