@@ -44,4 +44,31 @@ export function consumeRendererLifecycleUnloadApproval(): boolean {
   return true;
 }
 
+type LifecycleFlush = () => Promise<void>;
+const flushes = new Set<LifecycleFlush>();
+
+/**
+ * Registers work that saves pending edits. Main runs every registered flush (bounded) before it
+ * reads the close guard for quit, close or reload, so an edit waiting on a debounce is saved
+ * instead of stopping on the unsaved-changes prompt. Returns the unregister function.
+ */
+export function registerLifecycleFlush(flush: LifecycleFlush): () => void {
+  flushes.add(flush);
+  return () => {
+    flushes.delete(flush);
+  };
+}
+
+async function flushPendingSaves(): Promise<void> {
+  await Promise.allSettled([...flushes].map((flush) => flush()));
+}
+
+declare global {
+  interface Window {
+    /** Called by main through executeJavaScript before it reads the close guard. */
+    __aidenFlushPendingSaves?: () => Promise<void>;
+  }
+}
+
+window.__aidenFlushPendingSaves = flushPendingSaves;
 publish();

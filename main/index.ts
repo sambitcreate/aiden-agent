@@ -511,13 +511,24 @@ async function refreshCloseGuardFromRenderer(
   window: BrowserWindow,
 ): Promise<number | null> {
   try {
+    // Pending debounced saves (Create Images autosave) run first, bounded, so a quit right after an
+    // edit saves it rather than stopping on the unsaved-changes prompt. A failed save stays dirty.
     const latest = (await window.webContents.executeJavaScript(
-      `({
-        dirty: document.documentElement.dataset.aidenDirty === "1",
-        gitBusy: document.documentElement.dataset.aidenGitBusy === "1",
-        revision: Number(document.documentElement.dataset.aidenGuardRevision || "0"),
-        saving: document.documentElement.dataset.aidenSaving === "1"
-      })`,
+      `(async () => {
+        const flush = window.__aidenFlushPendingSaves;
+        if (typeof flush === "function") {
+          await Promise.race([
+            Promise.resolve().then(flush).catch(() => undefined),
+            new Promise((resolve) => setTimeout(resolve, 3000)),
+          ]);
+        }
+        return {
+          dirty: document.documentElement.dataset.aidenDirty === "1",
+          gitBusy: document.documentElement.dataset.aidenGitBusy === "1",
+          revision: Number(document.documentElement.dataset.aidenGuardRevision || "0"),
+          saving: document.documentElement.dataset.aidenSaving === "1"
+        };
+      })()`,
       true,
     )) as {
       dirty?: unknown;

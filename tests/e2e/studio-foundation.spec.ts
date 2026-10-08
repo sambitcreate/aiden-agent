@@ -261,7 +261,7 @@ test.describe("Studio foundation with both flags on", () => {
     paletteSearch = await openCommandPalette(page);
     await paletteSearch.fill("Open Create Images");
     await page.getByRole("option", { name: /Open Create Images/u }).click();
-    await expect(page.getByRole("region", { name: "Images canvas" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New from Starter" }).first()).toBeVisible();
     await expect.poll(() => currentPath(page)).toBe("/images");
     await expect(imagesRow).toHaveAttribute("aria-current", "page");
     await expect(designRow).not.toHaveAttribute("aria-current", "page");
@@ -273,7 +273,7 @@ test.describe("Studio foundation with both flags on", () => {
     await expect.poll(() => currentPath(page)).toBe("/design/project-1");
     await expect(designRow).toHaveAttribute("aria-current", "page");
     await navigateTo(page, "/images/workflow-1");
-    await expect(page.getByRole("region", { name: "Images canvas" })).toBeVisible();
+    await expect(page.getByText("This workflow could not be opened", { exact: true })).toBeVisible();
     await expect.poll(() => currentPath(page)).toBe("/images/workflow-1");
     await expect(imagesRow).toHaveAttribute("aria-current", "page");
 

@@ -25,6 +25,10 @@ export function CanvasZoomControls({
   onToggleMinimap,
 }: CanvasZoomControlsProps) {
   const percent = formatZoomPercent(zoom);
+  // aria-disabled, not disabled: a disabled button drops keyboard focus at the zoom limits.
+  const atMin = zoom <= CANVAS_MIN_ZOOM + EPSILON;
+  const atMax = zoom >= CANVAS_MAX_ZOOM - EPSILON;
+  const limitClass = "aria-disabled:pointer-events-none aria-disabled:opacity-45";
   return (
     <div
       role="toolbar"
@@ -36,8 +40,9 @@ export function CanvasZoomControls({
         iconOnly
         aria-label="Zoom out"
         aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomOut}
-        disabled={zoom <= CANVAS_MIN_ZOOM + EPSILON}
-        onClick={onZoomOut}
+        aria-disabled={atMin}
+        className={limitClass}
+        onClick={atMin ? undefined : onZoomOut}
       >
         <ZoomOut />
       </Button>
@@ -55,8 +60,9 @@ export function CanvasZoomControls({
         iconOnly
         aria-label="Zoom in"
         aria-keyshortcuts={CANVAS_COMMAND_SHORTCUTS.zoomIn}
-        disabled={zoom >= CANVAS_MAX_ZOOM - EPSILON}
-        onClick={onZoomIn}
+        aria-disabled={atMax}
+        className={limitClass}
+        onClick={atMax ? undefined : onZoomIn}
       >
         <ZoomIn />
       </Button>
