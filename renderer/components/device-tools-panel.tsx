@@ -10,6 +10,7 @@ import * as React from "react";
 import { X } from "lucide-react";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Text } from "./ui";
 import type { DeviceControls } from "../lib/device-controls";
+import { DeviceHostDiagnostics } from "./device-host-diagnostics";
 import type {
   DeviceColorFilter,
   DevicePermission,
@@ -218,6 +219,7 @@ export function DeviceToolsPanel({
           ) : null}
         </ToolsSection>
         {children}
+        <DeviceHostDiagnostics />
       </div>
     </section>
   );

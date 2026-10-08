@@ -182,6 +182,11 @@ import type {
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import {
+  parseDeviceHostCheck,
+  type DeviceHostCheck,
+  type SshDeviceHostConfig,
+} from "../shared/device-ssh-hosts";
+import {
   parseChatContextPressure,
   parseChatContextPressureNotification,
   type ChatContextPressureV1,
@@ -874,6 +879,20 @@ export const devicesApi = {
   pruneTools: () => invokeDeviceToolchain("devices:prune-tools"),
   /** Turns every simulator permission off and deletes the installed helpers. */
   removeTools: () => invokeDeviceState("devices:remove-tools"),
+  /** An explicit Start, Connect, or Retry for one host; approved outdated helpers update here. */
+  startHost: (hostId: string) => invokeDeviceState("devices:start-host", hostId),
+  /** Installs or updates one pinned helper on a host after the user confirmed it. */
+  updateTool: (input: { hostId: string; tool: "hub" | "agent" }) => invokeDeviceState("devices:update-tool", input),
+  /** Reads helper versions; contacts SSH hosts but never installs or starts anything. */
+  inspectTools: () => invokeDeviceState("devices:inspect-tools"),
+  saveSshHost: (config: SshDeviceHostConfig) => invokeDeviceState("devices:ssh-save", config),
+  removeSshHost: (hostId: string) => invokeDeviceState("devices:ssh-remove", hostId),
+  /** **Test connection**: contacts the host once; never installs or starts anything there. */
+  testSshHost: async (config: SshDeviceHostConfig): Promise<DeviceHostCheck> => {
+    const check = parseDeviceHostCheck(await invoke<unknown>("devices:ssh-test", config));
+    if (!check) throw new Error("The connection check response was invalid.");
+    return check;
+  },
   onState: (handler: (state: DeviceServiceState) => void) =>
     onNotification<unknown>("devices:state", (payload) => {
       const state = parseDeviceServiceState(payload);

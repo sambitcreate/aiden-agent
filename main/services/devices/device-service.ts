@@ -35,7 +35,29 @@ import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
 import type { AidenRemoteSimulatorHost } from "../aiden-remote-simulators.js";
 import type { DevicePeerPort } from "./peer-devices.js";
-import { AGENT_DEVICE, DEVICE_HUB, installedToolVersions, pruneOldToolVersions } from "./device-toolchain.js";
+import {
+  AGENT_DEVICE,
+  DEVICE_HUB,
+  deviceToolPaths,
+  installedToolVersions,
+  isToolInstalled,
+} from "./device-toolchain.js";
+import { runToolMaintenance, type ToolMaintenanceSpec } from "./device-tool-maintenance.js";
+import type { SshDeviceHost } from "./ssh-device-host.js";
+import {
+  readSshHosts,
+  writeSshHosts,
+  type SshHostToolConsent,
+  type StoredSshHosts,
+} from "./ssh-host-store.js";
+import {
+  deviceToolInstallMessage,
+  toolNeedsUpdate,
+  updateSshDeviceHosts,
+  type DeviceHostCheck,
+  type DeviceToolVersions,
+  type SshDeviceHostConfig,
+} from "../../../renderer/shared/device-ssh-hosts.js";
 import {
   agentDeviceConfigPath,
   agentDeviceSession,
@@ -69,6 +91,24 @@ export interface DeviceServiceDeps {
     url: string,
     init: { method: "POST"; headers: Record<string, string>; body: string; signal: AbortSignal },
   ): Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; arrayBuffer(): Promise<ArrayBuffer> }>;
+  /** SSH device hosts. Absent in tests that only cover this Mac and paired Macs. */
+  ssh?: DeviceSshPort;
+  /** Electron-as-Node, which runs the local agent-device shim and tool maintenance. */
+  nodePath?: string;
+  /** Reclaims old helper versions under the maintenance lock; injectable for tests. */
+  runMaintenance?(input: {
+    nodePath: string;
+    toolsRoot: string;
+    specs: readonly ToolMaintenanceSpec[];
+    policy: "prune" | "reclaim";
+  }): Promise<string[]>;
+}
+
+/** What the service needs to manage SSH hosts. Nothing here contacts a host until a method runs. */
+export interface DeviceSshPort {
+  create(config: SshDeviceHostConfig): SshDeviceHost;
+  /** Resolves the target with `ssh -G` and a name lookup; true when it is this Mac. */
+  isLocalTarget(config: SshDeviceHostConfig): Promise<boolean>;
 }
 
 export interface DeviceOpenInput {
@@ -140,7 +180,31 @@ export interface DeviceService {
   onReveal(listener: (chatId: string, target?: DeviceRevealTarget) => void): () => void;
   /** What paired desktops may reach while the owner shares this Mac's simulators. */
   shareHost(): AidenRemoteSimulatorHost;
+  /**
+   * An explicit Start or Retry for one host. When the user already approved a
+   * helper's install, an outdated version is updated here, with progress.
+   */
+  startHost(hostId: string): Promise<DeviceServiceState>;
+  /** Installs (or updates) a pinned helper on one host after the user confirmed it. */
+  updateTool(input: { hostId: string; tool: "hub" | "agent" }): Promise<DeviceServiceState>;
+  /** Reads helper versions: from disk for this Mac, over SSH for SSH hosts. Changes nothing. */
+  inspectTools(): Promise<DeviceServiceState>;
+  /** Adds or edits an SSH host. An edited destination disconnects the old one first. */
+  saveSshHost(config: SshDeviceHostConfig): Promise<DeviceServiceState>;
+  /** Disconnects an SSH host, stops its helpers there, and forgets it. */
+  removeSshHost(hostId: string): Promise<DeviceServiceState>;
+  /** **Test connection**: checks Node, npm, Xcode, and versions without installing or starting anything. */
+  testSshHost(config: SshDeviceHostConfig): Promise<DeviceHostCheck>;
   stop(): Promise<void>;
+}
+
+interface SshEntry {
+  config: SshDeviceHostConfig;
+  host: SshDeviceHost;
+  state: DeviceHostState;
+  devices: DeviceSummary[];
+  toolInspectionError?: string;
+  unsubscribe(): void;
 }
 
 interface PeerEntry {
@@ -228,6 +292,27 @@ function parseConsent(text: string): DeviceConsent {
 }
 
 const STREAMING_OFF = "Set up simulator streaming first.";
+const SSH_IDLE: DeviceHostState = { status: "stopped", detail: "Not connected. Aiden connects only when you ask." };
+const NO_SSH_CONSENT: SshHostToolConsent = { hub: false, agent: false };
+/** Tunnels close at once; the remote cleanup gets this long before a revoke or quit moves on. */
+const SSH_STOP_BUDGET_MS = 5_000;
+
+function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+    work.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
 const AGENT_ACCESS_OFF = "Agent access to simulators is off. Ask the user to allow it in the Simulator tab.";
 const chatKey = (chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
 
@@ -274,12 +359,46 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let removing: Promise<DeviceServiceState> | null = null;
   /** Agent starts from `agentTarget`, which removal waits out before deleting their files. */
   const agentStarts = new Set<Promise<unknown>>();
+  /** SSH device hosts, in the order Settings lists them. Nothing connects until the user asks. */
+  const ssh = new Map<string, SshEntry>();
+  let sshStored: StoredSshHosts = { hosts: [], toolConsent: {} };
+  /** Bumped when SSH hosts are disconnected by a revoke, so an in-flight connect cannot bring one back. */
+  let sshEpoch = 0;
+  /** This Mac's helper versions, read from disk only. */
+  let localTools: DeviceToolVersions | undefined;
+  let localToolsError: string | undefined;
+  const nodePath = deps.nodePath ?? process.execPath;
+  const maintain = deps.runMaintenance ?? ((input) => runToolMaintenance(input));
 
+  const sshInfo = (entry: SshEntry): DeviceHostInfo => {
+    const tools = entry.host.tools();
+    return {
+      id: entry.config.id,
+      kind: "ssh",
+      name: entry.config.label,
+      ...entry.state,
+      ...(tools ? { tools } : {}),
+      ...(entry.toolInspectionError ? { toolInspectionError: entry.toolInspectionError } : {}),
+    };
+  };
+  // This Mac first, then paired Macs, then SSH hosts.
   const hostList = (): DeviceHostInfo[] => [
-    { id: host.id, kind: "local", name: "This Mac", ...hostState },
+    {
+      id: host.id,
+      kind: "local",
+      name: "This Mac",
+      ...hostState,
+      ...(localTools ? { tools: localTools } : {}),
+      ...(localToolsError ? { toolInspectionError: localToolsError } : {}),
+    },
     ...[...peers].map(([id, entry]): DeviceHostInfo => ({ id, kind: "peer", name: entry.name, ...entry.state })),
+    ...[...ssh.values()].map(sshInfo),
   ];
-  const allDevices = (): DeviceSummary[] => [...devices, ...[...peers.values()].flatMap((entry) => entry.devices)];
+  const allDevices = (): DeviceSummary[] => [
+    ...devices,
+    ...[...peers.values()].flatMap((entry) => entry.devices),
+    ...[...ssh.values()].flatMap((entry) => entry.devices),
+  ];
 
   const snapshot = (): DeviceServiceState => ({
     hostStatus: hostState.status,
@@ -290,6 +409,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     sessions: sessions.map((session) => ({ ...session })),
     toolVersions: { hub: DEVICE_HUB.version, agent: AGENT_DEVICE.version },
     ...(unavailableReason === undefined ? {} : { unavailableReason }),
+    sshHosts: sshStored.hosts.map((config) => ({ ...config })),
   });
 
   const sharing = () => consent.streaming && consent.peerSharing;
@@ -320,9 +440,40 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   async function idleStatus(): Promise<DeviceHostState> {
     if (!consent.streaming) return { status: "needs-consent" };
     if (host.current()) return { status: "ready" };
-    return (await host.hubInstalled())
-      ? { status: "stopped" }
+    if (await host.hubInstalled()) return { status: "stopped" };
+    // Streaming consent already covers the hub, so an outdated install updates on the next Start.
+    const installed = await installedToolVersions(deps.baseDir, DEVICE_HUB);
+    const previous = installed[installed.length - 1];
+    return previous
+      ? {
+          status: "stopped",
+          detail: `${DEVICE_HUB.name} ${DEVICE_HUB.version} replaces ${previous} when you choose Start.`,
+        }
       : { status: "needs-consent", detail: "The simulator helpers need to be installed again." };
+  }
+
+  async function readLocalTools(): Promise<DeviceToolVersions> {
+    const [hub, agent] = await Promise.all([
+      installedToolVersions(deps.baseDir, DEVICE_HUB),
+      installedToolVersions(deps.baseDir, AGENT_DEVICE),
+    ]);
+    const running = host.runningToolVersions?.() ?? {
+      hub: host.current() ? DEVICE_HUB.version : null,
+      agent: null,
+    };
+    return {
+      hub: { requiredVersion: DEVICE_HUB.version, installedVersions: hub, runningVersion: running.hub },
+      agent: { requiredVersion: AGENT_DEVICE.version, installedVersions: agent, runningVersion: running.agent },
+    };
+  }
+
+  async function refreshLocalTools(): Promise<void> {
+    try {
+      localTools = await readLocalTools();
+      localToolsError = undefined;
+    } catch (error) {
+      localToolsError = `Could not read helper versions: ${errorMessage(error)} Installed tools were not changed.`;
+    }
   }
 
   function load(): Promise<void> {
@@ -330,6 +481,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       consent = parseConsent(await readFile(consentPath, "utf8").catch(() => ""));
       sharingWas = sharing();
       hostState = await idleStatus();
+      await refreshLocalTools();
+      if (deps.ssh) {
+        // Reading the saved hosts touches only the disk; no host is contacted.
+        sshStored = await readSshHosts(deps.baseDir);
+        for (const config of sshStored.hosts) addSshEntry(config);
+      }
       // After a relaunch the shim from the earlier grant still pins agent-device for run_command.
       const shim = path.join(deps.baseDir, "bin");
       if (consent.agentAccess && (await access(path.join(shim, "agent-device")).then(() => true, () => false))) {
@@ -350,7 +507,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   }
 
   /** Starts the host. Without `allowInstall`, a missing install stops short of npm. */
-  function start(allowInstall: boolean): Promise<DeviceHostReady | null> {
+  function start(allowInstall: boolean, installDetail?: string): Promise<DeviceHostReady | null> {
     const running = host.current();
     if (running) return Promise.resolve(running);
     starting ??= (async () => {
@@ -364,7 +521,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         // A revoke during the install check wins before npm is contacted.
         if (epoch !== consentEpoch || !consent.streaming) return null;
         const ready = await host.ensureReady(
-          (phase, detail) => setHost({ status: phase, ...(detail ? { detail } : {}) }),
+          (phase, detail) => {
+            const shown = phase === "installing" && installDetail ? installDetail : detail;
+            setHost({ status: phase, ...(shown ? { detail: shown } : {}) });
+          },
           { allowInstall },
         );
         if (epoch !== consentEpoch || !consent.streaming) {
@@ -601,6 +761,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   };
 
   function requireReady(hostId: string): DeviceHostReady {
+    if (ssh.has(hostId)) return requireSsh(hostId).ready;
     if (hostId !== host.id) throw new Error(`Unknown device host ${hostId}.`);
     const ready = host.current();
     if (!consent.streaming || !ready) throw new Error("Set up simulator streaming first.");
@@ -616,7 +777,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
 
   /** Actions only reach simulators the last listing reported, and only booted ones. */
   function requireKnownDevice(hostId: string, deviceId: string): DeviceSummary {
-    const device = devices.find((candidate) => candidate.hostId === hostId && candidate.id === deviceId);
+    const device = allDevices().find((candidate) => candidate.hostId === hostId && candidate.id === deviceId);
     if (!device) throw new Error("That simulator is no longer available.");
     if (!device.booted) throw new Error("Open the simulator before changing its settings.");
     return device;
@@ -668,6 +829,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     }
     consent = kind === "streaming" ? { ...NO_CONSENT } : { ...consent, agentAccess: false };
     if (kind === "streaming") forgetPeers();
+    if (kind === "streaming") await disconnectSsh({ forgetToolConsent: true });
+    else await Promise.all([...ssh.values()].map((entry) => entry.host.stopAgent().catch(() => undefined)));
     shimDir = null;
     await saveConsent();
     // Sharing ends before the hub stops, so relays close first.
@@ -678,6 +841,264 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     await rm(path.join(deps.baseDir, "hosts"), { recursive: true, force: true }).catch(() => undefined);
     setHost(await idleStatus());
     return snapshot();
+  }
+
+  // ---------------------------------------------------------------------------
+  // SSH device hosts. Every function here runs from an explicit user action.
+  // ---------------------------------------------------------------------------
+
+  function sshPort(): DeviceSshPort {
+    if (!deps.ssh) throw new Error("SSH device hosts are unavailable.");
+    return deps.ssh;
+  }
+
+  function sshConsent(hostId: string): SshHostToolConsent {
+    return sshStored.toolConsent[hostId] ?? NO_SSH_CONSENT;
+  }
+
+  async function saveSshStore(next: StoredSshHosts): Promise<void> {
+    await writeSshHosts(deps.baseDir, next);
+    sshStored = next;
+  }
+
+  function setSsh(entry: SshEntry, next: DeviceHostState): void {
+    if (ssh.get(entry.config.id) !== entry) return;
+    entry.state = next;
+    emit();
+  }
+
+  function dropSshDevices(entry: SshEntry): void {
+    entry.devices = [];
+    sessions = sessions.filter((session) => session.hostId !== entry.config.id);
+    closePeerStreams(entry.config.id);
+  }
+
+  function addSshEntry(config: SshDeviceHostConfig): SshEntry {
+    const entry: SshEntry = {
+      config,
+      host: sshPort().create(config),
+      state: { ...SSH_IDLE },
+      devices: [],
+      unsubscribe: () => undefined,
+    };
+    entry.unsubscribe = entry.host.onHealth((health, detail) => {
+      if (!consent.streaming || ssh.get(config.id) !== entry) return;
+      if (health === "restarting") setSsh(entry, { status: "starting", detail: detail ?? `Reconnecting to ${config.label}…` });
+      else if (health === "ready") setSsh(entry, { status: "ready" });
+      else {
+        dropSshDevices(entry);
+        setSsh(entry, { status: "error", detail: detail ?? `Lost the connection to ${config.label}.` });
+      }
+    });
+    ssh.set(config.id, entry);
+    return entry;
+  }
+
+  async function forgetSshEntry(entry: SshEntry): Promise<void> {
+    entry.unsubscribe();
+    if (ssh.get(entry.config.id) === entry) ssh.delete(entry.config.id);
+    dropSshDevices(entry);
+    await withinBudget(entry.host.stop(), SSH_STOP_BUDGET_MS);
+    await rm(agentDeviceConfigPath(deps.baseDir, entry.config.id), { force: true }).catch(() => undefined);
+  }
+
+  /** Tears every tunnel down and stops the helpers Aiden started on each host. */
+  async function disconnectSsh(options: { forgetToolConsent: boolean }): Promise<void> {
+    sshEpoch += 1;
+    const entries = [...ssh.values()];
+    for (const entry of entries) {
+      dropSshDevices(entry);
+      entry.state = { ...SSH_IDLE };
+      entry.toolInspectionError = undefined;
+    }
+    await withinBudget(Promise.all(entries.map((entry) => entry.host.stop())), SSH_STOP_BUDGET_MS);
+    if (options.forgetToolConsent && Object.keys(sshStored.toolConsent).length > 0) {
+      await saveSshStore({ ...sshStored, toolConsent: {} }).catch(() => undefined);
+    }
+  }
+
+  function requireSsh(hostId: string): { entry: SshEntry; ready: DeviceHostReady } {
+    if (!consent.streaming) throw new Error(STREAMING_OFF);
+    const entry = ssh.get(hostId);
+    if (!entry) throw new Error(`Unknown device host ${hostId}.`);
+    const ready = entry.host.current();
+    if (entry.state.status !== "ready" || !ready) {
+      throw new Error(entry.state.detail && entry.state.status !== "stopped"
+        ? entry.state.detail
+        : `Connect ${entry.config.label} first.`);
+    }
+    return { entry, ready };
+  }
+
+  async function listSsh(entry: SshEntry, ready: DeviceHostReady): Promise<void> {
+    const result = await ready.run("xcrun", ["simctl", "list", "devices", "--json"], {
+      timeoutMs: SIMCTL_LIST_TIMEOUT_MS,
+    });
+    if (result.code !== 0) {
+      throw new Error(`Could not list simulators on ${entry.config.label}. Open Xcode there once, then try again.`);
+    }
+    entry.devices = parseSimctlDevices(result.stdout, entry.config.id);
+    const known = new Set(entry.devices.map((device) => device.id));
+    sessions = sessions.filter((session) => session.hostId !== entry.config.id || known.has(session.deviceId));
+  }
+
+  /**
+   * Connects one host and lists its simulators. With the user's earlier
+   * approval for this host, a missing or outdated pinned helper is installed
+   * here, with progress; without it, the host asks for Install.
+   */
+  async function connectSsh(entry: SshEntry, options: { allowInstall?: boolean } = {}): Promise<void> {
+    if (!consent.streaming) throw new Error(STREAMING_OFF);
+    const id = entry.config.id;
+    const epoch = sshEpoch;
+    const live = () => epoch === sshEpoch && consent.streaming && ssh.get(id) === entry;
+    setSsh(entry, { status: "starting", detail: `Connecting to ${entry.config.label}…` });
+    if (await sshPort().isLocalTarget(entry.config).catch(() => false)) {
+      dropSshDevices(entry);
+      setSsh(entry, {
+        status: "unavailable",
+        detail: `${entry.config.label} is this Mac. Its simulators already appear under This Mac.`,
+      });
+      return;
+    }
+    if (!live()) return;
+    const approved = sshConsent(id);
+    try {
+      const ready = await entry.host.ensureReady(
+        (phase, detail) => {
+          if (live()) setSsh(entry, { status: phase, ...(detail ? { detail } : {}) });
+        },
+        { allowInstall: options.allowInstall === true || approved.hub },
+      );
+      if (!live()) return;
+      // Approved agent tools that are out of date update with the same action.
+      if (consent.agentAccess && approved.agent && toolNeedsUpdate(entry.host.tools()?.agent)) {
+        await entry.host.ensureAgentReady(
+          (phase, detail) => {
+            if (live()) setSsh(entry, { status: phase, ...(detail ? { detail } : {}) });
+          },
+          { allowInstall: true },
+        );
+        if (!live()) return;
+      }
+      await listSsh(entry, ready);
+      if (!live()) return;
+      entry.toolInspectionError = undefined;
+      setSsh(entry, { status: "ready" });
+    } catch (error) {
+      if (!live()) return;
+      dropSshDevices(entry);
+      if (error instanceof DeviceToolsMissingError) {
+        setSsh(entry, {
+          status: "needs-consent",
+          detail: `Install the simulator helpers on ${entry.config.label} in Settings → Simulator to use its simulators.`,
+        });
+      } else {
+        setSsh(entry, { status: "error", detail: errorMessage(error) });
+      }
+    }
+  }
+
+  async function connectAllSsh(): Promise<void> {
+    if (!consent.streaming || !deps.ssh) return;
+    await Promise.all([...ssh.values()].map((entry) => connectSsh(entry).catch(() => undefined)));
+  }
+
+  async function reclaimLocal(specs: ToolMaintenanceSpec[]): Promise<void> {
+    // Keeps the newest previous install as a fallback; never touches a version a running helper uses.
+    await maintain({ nodePath, toolsRoot: path.join(deps.baseDir, "tools"), specs, policy: "reclaim" }).catch(
+      () => undefined,
+    );
+  }
+
+  /** Installs one pinned helper on this Mac. Callers have checked the matching consent. */
+  async function installLocalTool(tool: "hub" | "agent"): Promise<void> {
+    if (!host.installTool) throw new Error("This Mac cannot update simulator helpers.");
+    const spec = tool === "hub" ? DEVICE_HUB : AGENT_DEVICE;
+    const before = localTools ?? (await readLocalTools());
+    setHost({
+      status: "installing",
+      detail: deviceToolInstallMessage(tool === "hub" ? "the device hub" : "agent tools", before[tool]),
+    });
+    try {
+      await host.installTool(tool);
+    } catch (error) {
+      await refreshLocalTools();
+      if (error instanceof DeviceHostUnavailableError) setHost({ status: "error", detail: error.reason });
+      else setHost({ status: "error", detail: `Updating ${spec.name} failed: ${errorMessage(error)}` });
+      throw error instanceof DeviceHostUnavailableError ? new Error(error.reason) : error;
+    }
+    // A daemon an older agent-device started must not keep serving; the next agent call starts the new one.
+    if (tool === "agent") await host.stopAgent().catch(() => undefined);
+    await reclaimLocal([spec]);
+    await refreshLocalTools();
+    setHost(host.current() ? { status: "ready" } : await idleStatus());
+  }
+
+  /** The explicit Start, Try again, or Retry for this Mac. */
+  async function startLocal(): Promise<void> {
+    if (!consent.streaming) throw new Error(STREAMING_OFF);
+    await removing?.catch(() => undefined);
+    await refreshLocalTools();
+    const hubUpdate = toolNeedsUpdate(localTools?.hub);
+    const ready = await start(
+      hubUpdate,
+      hubUpdate ? deviceToolInstallMessage("the device hub", localTools?.hub) : undefined,
+    );
+    if (!ready) {
+      await refreshLocalTools();
+      emit();
+      return;
+    }
+    if (hubUpdate) await reclaimLocal([DEVICE_HUB]);
+    if (consent.agentAccess && toolNeedsUpdate(localTools?.agent)) {
+      await installLocalTool("agent").catch(() => undefined);
+    }
+    await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
+    await refreshLocalTools();
+    emit();
+  }
+
+  async function sshAgentTarget(input: { chatId: string; hostId: string; deviceId: string }) {
+    const { entry } = requireSsh(input.hostId);
+    if (!(await isToolInstalled(deps.baseDir, AGENT_DEVICE))) {
+      throw new Error(
+        `${AGENT_DEVICE.name} is not installed on this Mac. Ask the user to turn agent access off and on in the Simulator tab.`,
+      );
+    }
+    const epoch = consentEpoch;
+    const preparing = entry.host.ensureAgentReady(undefined, { allowInstall: false });
+    agentStarts.add(preparing);
+    let ready: Awaited<typeof preparing>;
+    try {
+      ready = await preparing;
+    } catch (error) {
+      if (error instanceof DeviceToolsMissingError) {
+        throw new Error(
+          `Agent tools are not installed on ${entry.config.label}. Ask the user to install them in Settings → Simulator.`,
+        );
+      }
+      throw error;
+    } finally {
+      agentStarts.delete(preparing);
+    }
+    if (epoch !== consentEpoch || !consent.streaming || !consent.agentAccess || ssh.get(input.hostId) !== entry) {
+      await entry.host.stopAgent().catch(() => undefined);
+      throw new Error(AGENT_ACCESS_OFF);
+    }
+    // The local agent-device CLI drives the host's daemon through the forwarded port.
+    const shim = await ensureAgentDeviceShim({
+      baseDir: deps.baseDir,
+      nodePath,
+      entryPath: deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath,
+    });
+    shimDir = shim.shimDir;
+    const config = agentDeviceConfigPath(deps.baseDir, input.hostId);
+    await writeAgentDeviceConfig(config, ready.agentDevice);
+    return {
+      command: shim.command,
+      args: ["--config", config, "--session", agentDeviceSession(input.chatId, input.hostId, input.deviceId)],
+    };
   }
 
   async function readToolchain(): Promise<DeviceToolchainState> {
@@ -770,10 +1191,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     revokeConsent: revoke,
     toolchain: readToolchain,
     async pruneTools() {
-      await Promise.all([
-        pruneOldToolVersions(deps.baseDir, DEVICE_HUB),
-        pruneOldToolVersions(deps.baseDir, AGENT_DEVICE),
-      ]);
+      // Under the maintenance lock; a version a running helper was started from stays.
+      await maintain({
+        nodePath,
+        toolsRoot: path.join(deps.baseDir, "tools"),
+        specs: [DEVICE_HUB, AGENT_DEVICE],
+        policy: "prune",
+      });
+      await refreshLocalTools();
+      emit();
       return readToolchain();
     },
     removeTools() {
@@ -791,6 +1217,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
             ),
           );
           shimDir = null;
+          await refreshLocalTools();
           setHost(await idleStatus());
           const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
           if (failed) throw new Error(`Some simulator tool files could not be deleted: ${errorMessage(failed.reason)}`);
@@ -804,8 +1231,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     async refresh() {
       await load();
       const peersDone = refreshPeerHosts();
+      const sshDone = connectAllSsh();
       await refreshLocalHost();
       await peersDone;
+      await sshDone;
       return snapshot();
     },
     async refreshLocal() {
@@ -821,6 +1250,36 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     async open(input) {
       await load();
       const hostId = input.hostId ?? host.id;
+      if (ssh.has(hostId)) {
+        const { entry, ready } = requireSsh(hostId);
+        const epoch = sshEpoch;
+        const closed = closeCount(input.chatId, hostId, input.deviceId);
+        let device = entry.devices.find((candidate) => candidate.id === input.deviceId);
+        if (!device) {
+          await listSsh(entry, ready);
+          device = entry.devices.find((candidate) => candidate.id === input.deviceId);
+        }
+        if (!device) throw new Error("That simulator is no longer available.");
+        const attached = await attach(ready, device);
+        if (epoch !== sshEpoch || !consent.streaming || ssh.get(hostId) !== entry) {
+          throw new Error("Simulator streaming was turned off while opening.");
+        }
+        if (closeCount(input.chatId, hostId, input.deviceId) !== closed) {
+          throw new Error("The simulator was closed while it was opening.");
+        }
+        entry.devices = entry.devices.map((candidate) => (candidate.id === attached.id ? attached : candidate));
+        const existing = sessions.find(
+          (session) => session.chatId === input.chatId && session.hostId === hostId && session.deviceId === device.id,
+        );
+        if (existing) {
+          emit();
+          return { ...existing };
+        }
+        const session: DeviceSession = { chatId: input.chatId, hostId, deviceId: device.id, openedBy: input.openedBy };
+        sessions = [...sessions, session];
+        emit();
+        return { ...session };
+      }
       if (hostId !== host.id) {
         const entry = requirePeer(hostId);
         if (!entry.devices.some((device) => device.id === input.deviceId)) {
@@ -888,7 +1347,16 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         (session) =>
           !(session.chatId === input.chatId && session.hostId === input.hostId && session.deviceId === input.deviceId),
       );
-      if (input.shutdown && input.hostId !== host.id) {
+      if (input.shutdown && ssh.has(input.hostId)) {
+        const { entry, ready } = requireSsh(input.hostId);
+        const result = await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], {
+          timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS,
+        });
+        if (result.code !== 0) throw new Error("The simulator did not shut down.");
+        entry.devices = entry.devices.map((device) =>
+          device.id === input.deviceId ? { ...device, booted: false } : device,
+        );
+      } else if (input.shutdown && input.hostId !== host.id) {
         const entry = requirePeer(input.hostId);
         await peerPort().shutdown(input.hostId, input.deviceId);
         entry.devices = entry.devices.map((device) =>
@@ -915,7 +1383,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async action(input) {
       await load();
-      if (input.hostId !== host.id) {
+      if (input.hostId !== host.id && !ssh.has(input.hostId)) {
         requirePeerDevice(input.hostId, input.deviceId);
         return peerPort().action(input.hostId, input);
       }
@@ -926,7 +1394,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async settings(input) {
       await load();
-      if (input.hostId !== host.id) {
+      if (input.hostId !== host.id && !ssh.has(input.hostId)) {
         requirePeerDevice(input.hostId, input.deviceId);
         return peerPort().settings(input.hostId, input.deviceId);
       }
@@ -938,7 +1406,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       sessions.filter((session) => session.chatId === chatId).map((session) => ({ ...session })),
     async screenshot(input) {
       await load();
-      if (input.hostId !== host.id) {
+      if (input.hostId !== host.id && !ssh.has(input.hostId)) {
         requirePeer(input.hostId);
         return peerPort().screenshot(input.hostId, input.deviceId);
       }
@@ -967,9 +1435,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       await load();
       const localReady = consent.streaming && host.current() !== null;
       const peerReady = consent.streaming && [...peers.values()].some((entry) => entry.state.status === "ready");
-      if (!localReady && !peerReady) requireReady(host.id);
+      const sshReady = consent.streaming && [...ssh.values()].some((entry) => entry.state.status === "ready");
+      if (!localReady && !peerReady && !sshReady) requireReady(host.id);
       proxy ??= deps.startProxy((hostId) => {
         if (hostId === host.id) return consent.streaming ? (host.current()?.hub.origin ?? null) : null;
+        // An SSH host's hub is reached through its forwarded loopback port, never directly.
+        const sshEntry = ssh.get(hostId);
+        if (sshEntry) {
+          return consent.streaming && sshEntry.state.status === "ready" ? (sshEntry.host.current()?.hub.origin ?? null) : null;
+        }
         // A paired Mac is reachable only after a refresh reported it ready.
         if (!consent.streaming || peers.get(hostId)?.state.status !== "ready" || !deps.peers) return null;
         return deps.peers.upstream(hostId);
@@ -984,8 +1458,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     async agentTarget(input) {
       await load();
       if (!consent.streaming || !consent.agentAccess) throw new Error(AGENT_ACCESS_OFF);
-      if (input.hostId !== host.id) throw new Error(`Unknown device host ${input.hostId}.`);
       if (removing) throw new Error(AGENT_ACCESS_OFF);
+      if (ssh.has(input.hostId)) return sshAgentTarget(input);
+      if (input.hostId !== host.id) throw new Error(`Unknown device host ${input.hostId}.`);
       const epoch = consentEpoch;
       let prepared: Awaited<ReturnType<typeof prepareAgent>>;
       // Never installs: a missing tool sends the user back to the Simulator tab.
@@ -1031,7 +1506,151 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       return () => revealListeners.delete(listener);
     },
     shareHost: () => share,
+    async startHost(hostId) {
+      await load();
+      if (hostId === host.id) {
+        await startLocal();
+        return snapshot();
+      }
+      const entry = ssh.get(hostId);
+      if (!entry) throw new Error(`Unknown device host ${hostId}.`);
+      await connectSsh(entry);
+      return snapshot();
+    },
+    async updateTool({ hostId, tool }) {
+      await load();
+      await removing?.catch(() => undefined);
+      if (!consent.streaming) throw new Error(STREAMING_OFF);
+      if (tool === "agent" && !consent.agentAccess) {
+        throw new Error("Turn on agent access before installing agent tools.");
+      }
+      if (hostId === host.id) {
+        // Local consent toggles are the install approval for this Mac.
+        const run = granting.then(async () => {
+          await installLocalTool(tool);
+          if (tool === "hub" && !host.current()) {
+            const ready = await start(false);
+            if (ready) await listDevices(ready).catch(() => undefined);
+          }
+          return snapshot();
+        });
+        granting = run.catch(() => undefined);
+        return run;
+      }
+      const entry = ssh.get(hostId);
+      if (!entry) throw new Error(`Unknown device host ${hostId}.`);
+      // Pressing Install or Update on an SSH host is the approval to install there.
+      const approved = sshConsent(hostId);
+      const nextConsent: SshHostToolConsent = tool === "hub" ? { ...approved, hub: true } : { hub: true, agent: true };
+      await saveSshStore({ ...sshStored, toolConsent: { ...sshStored.toolConsent, [hostId]: nextConsent } });
+      if (tool === "hub" || entry.state.status !== "ready") await connectSsh(entry, { allowInstall: true });
+      if (tool === "agent" && ssh.get(hostId) === entry && entry.state.status === "ready") {
+        try {
+          await entry.host.ensureAgentReady(
+            (phase, detail) => setSsh(entry, { status: phase, ...(detail ? { detail } : {}) }),
+            { allowInstall: true },
+          );
+          setSsh(entry, { status: "ready" });
+        } catch (error) {
+          setSsh(entry, { status: "error", detail: errorMessage(error) });
+        }
+      }
+      if (entry.state.status === "error" && entry.state.detail) throw new Error(entry.state.detail);
+      return snapshot();
+    },
+    async inspectTools() {
+      await load();
+      await refreshLocalTools();
+      emit();
+      // Each SSH host is checked independently, so one failure never hides another host's versions.
+      await Promise.all(
+        [...ssh.values()].map(async (entry) => {
+          try {
+            await entry.host.inspect();
+            entry.toolInspectionError = undefined;
+          } catch (error) {
+            entry.toolInspectionError = `Could not check versions: ${errorMessage(error)} Installed tools were not changed.`;
+          }
+          if (ssh.get(entry.config.id) === entry) emit();
+        }),
+      );
+      return snapshot();
+    },
+    async saveSshHost(config) {
+      await load();
+      sshPort();
+      const hosts = updateSshDeviceHosts(sshStored.hosts, config);
+      const existing = ssh.get(config.id);
+      await saveSshStore({ ...sshStored, hosts });
+      if (existing) {
+        const moved =
+          existing.config.target !== config.target ||
+          existing.config.port !== config.port ||
+          existing.config.identityFile !== config.identityFile;
+        if (moved || existing.state.status !== "ready") {
+          // A new destination is a different machine: its approval and its helpers start over.
+          await forgetSshEntry(existing);
+          if (moved) {
+            const { [config.id]: _dropped, ...toolConsent } = sshStored.toolConsent;
+            await saveSshStore({ ...sshStored, toolConsent });
+          }
+          addSshEntry(config);
+        } else {
+          existing.config = config;
+        }
+      } else {
+        addSshEntry(config);
+      }
+      // Map order follows the saved order, so a re-added entry keeps its place.
+      const ordered = sshStored.hosts.map((saved) => [saved.id, ssh.get(saved.id)!] as const);
+      ssh.clear();
+      for (const [id, entry] of ordered) ssh.set(id, entry);
+      emit();
+      return snapshot();
+    },
+    async removeSshHost(hostId) {
+      await load();
+      const entry = ssh.get(hostId);
+      if (!entry) throw new Error(`Unknown device host ${hostId}.`);
+      const { [hostId]: _dropped, ...toolConsent } = sshStored.toolConsent;
+      await saveSshStore({ hosts: sshStored.hosts.filter((saved) => saved.id !== hostId), toolConsent });
+      await forgetSshEntry(entry);
+      emit();
+      return snapshot();
+    },
+    async testSshHost(config) {
+      await load();
+      const port = sshPort();
+      if (await port.isLocalTarget(config).catch(() => false)) return { status: "local" };
+      const entry = ssh.get(config.id);
+      const sameDestination =
+        entry &&
+        entry.config.target === config.target &&
+        entry.config.port === config.port &&
+        entry.config.identityFile === config.identityFile;
+      const probeHost = sameDestination ? entry.host : port.create(config);
+      try {
+        const probe = await probeHost.inspect();
+        if (sameDestination && ssh.get(config.id) === entry) {
+          entry.toolInspectionError = undefined;
+          emit();
+        }
+        return {
+          status: "connected",
+          nodeVersion: probe.nodeVersion,
+          platforms: probe.platforms,
+          ...(probe.tools ? { tools: probe.tools } : {}),
+        };
+      } catch (error) {
+        return { status: "failed", error: errorMessage(error) };
+      }
+    },
     async stop() {
+      const entries = [...ssh.values()];
+      for (const entry of entries) entry.unsubscribe();
+      ssh.clear();
+      // Every tunnel closes immediately; each host's own helpers get a bounded chance to stop.
+      await withinBudget(Promise.all(entries.map((entry) => entry.host.stop())), SSH_STOP_BUDGET_MS);
       for (const listener of sharingListeners) listener(false);
       sharingListeners.clear();
       await stopHost();

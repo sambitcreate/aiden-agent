@@ -1,4 +1,10 @@
 /** Simulator devices cross the renderer ↔ main boundary only through these fail-closed shapes. */
+import {
+  parseDeviceToolVersions,
+  parseSshDeviceHostConfigs,
+  type DeviceToolVersions,
+  type SshDeviceHostConfig,
+} from "./device-ssh-hosts.js";
 export type DevicePlatform = "ios";
 /** `peer` is a paired Aiden desktop sharing its simulators (Phase 5). */
 export type DeviceHostKind = "local" | "peer" | "ssh";
@@ -49,6 +55,10 @@ export interface DeviceHostInfo extends DeviceHostState {
   id: string;
   kind: DeviceHostKind;
   name: string;
+  /** Installed, running, and pinned helper versions, when known. SSH hosts report them after a check or connect. */
+  tools?: DeviceToolVersions;
+  /** Why the last version check failed. Installed tools were not changed. */
+  toolInspectionError?: string;
 }
 export interface DeviceServiceState {
   hostStatus: DeviceHostStatus;
@@ -60,6 +70,8 @@ export interface DeviceServiceState {
   toolVersions: { hub: string; agent: string };
   /** A user-readable reason the host cannot run, e.g. missing Xcode or npm. */
   unavailableReason?: string;
+  /** Configured SSH device hosts, in the order Settings shows them. */
+  sshHosts?: SshDeviceHostConfig[];
 }
 /** Shown before anything is downloaded from npm, in the panel and in Settings. */
 export const DEVICE_SETUP_NOTICE =
@@ -122,7 +134,21 @@ function parseHostInfo(value: unknown): DeviceHostInfo | null {
   const { id, kind, name } = value;
   if (!state || !isHostId(id) || !nonEmptyString(name)) return null;
   if (kind !== "local" && kind !== "peer" && kind !== "ssh") return null;
-  return { id, kind, name, ...state };
+  let tools: DeviceToolVersions | undefined;
+  if (value.tools !== undefined) {
+    const parsed = parseDeviceToolVersions(value.tools);
+    if (!parsed) return null;
+    tools = parsed;
+  }
+  if (value.toolInspectionError !== undefined && typeof value.toolInspectionError !== "string") return null;
+  return {
+    id,
+    kind,
+    name,
+    ...state,
+    ...(tools ? { tools } : {}),
+    ...(typeof value.toolInspectionError === "string" ? { toolInspectionError: value.toolInspectionError } : {}),
+  };
 }
 
 function parseDevice(value: unknown): DeviceSummary | null {
@@ -187,6 +213,12 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
   if (value.unavailableReason !== undefined && typeof value.unavailableReason !== "string") {
     return null;
   }
+  let sshHosts: SshDeviceHostConfig[] | undefined;
+  if (value.sshHosts !== undefined) {
+    const parsed = parseSshDeviceHostConfigs(value.sshHosts);
+    if (!parsed) return null;
+    sshHosts = parsed;
+  }
   return {
     hostStatus,
     hostStatuses,
@@ -202,6 +234,7 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
     ...(value.unavailableReason === undefined
       ? {}
       : { unavailableReason: value.unavailableReason }),
+    ...(sshHosts ? { sshHosts } : {}),
   };
 }
 

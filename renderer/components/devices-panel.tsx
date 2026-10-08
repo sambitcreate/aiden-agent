@@ -4,6 +4,7 @@ import { Button, Switch, Text, toast } from "./ui";
 import { DeviceViewer } from "./device-viewer";
 import { DeviceFloatingPlaceholder } from "./device-floating-placeholder";
 import { deviceTabKey } from "../lib/device-tabs";
+import { DeviceHostDiagnostics } from "./device-host-diagnostics";
 import { devicesApi } from "../lib/ipc";
 import {
   DEVICE_SETUP_NOTICE,
@@ -56,6 +57,8 @@ export interface DevicesPanelViewProps {
   onPeerSharing(granted: boolean): void;
   /** Re-reads the service state after the first read failed. */
   onRetryLoad?(): void;
+  /** Connects or retries one SSH host. Contacts only that host. */
+  onStartHost?(hostId: string): void;
   /** Renders the live viewer for the open session. */
   viewer?: (session: DeviceSession, device: DeviceSummary) => React.ReactNode;
   /** The device tab to show; null shows the picker. Omitted, the chat's first session shows. */
@@ -186,6 +189,7 @@ function HostGroup({
   pending,
   onOpen,
   onRefreshPeers,
+  onStartHost,
 }: {
   host: DeviceHostInfo;
   devices: DeviceSummary[];
@@ -193,7 +197,12 @@ function HostGroup({
   pending: string | null;
   onOpen(device: DeviceSummary): void;
   onRefreshPeers(): void;
+  onStartHost?(hostId: string): void;
 }) {
+  const connectable =
+    onStartHost &&
+    host.kind !== "peer" &&
+    (host.status === "stopped" || host.status === "error" || host.status === "unavailable");
   const titleId = `devices-host-${host.id.replace(/[^A-Za-z0-9_-]/gu, "-")}`;
   const note = hostNote(host);
   return (
@@ -207,6 +216,18 @@ function HostGroup({
           <Button variant="transparent" size="small" disabled={pending !== null} onClick={onRefreshPeers}>
             {pending === "peers" ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
             Try again
+          </Button>
+        ) : null}
+        {connectable ? (
+          <Button
+            variant="transparent"
+            size="small"
+            disabled={pending !== null}
+            aria-label={`${host.status === "stopped" ? (host.kind === "ssh" ? "Connect" : "Start") : "Try again"} ${host.name}`}
+            onClick={() => onStartHost(host.id)}
+          >
+            {pending === `host:${host.id}` ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+            {host.status === "stopped" ? (host.kind === "ssh" ? "Connect" : "Start") : "Try again"}
           </Button>
         ) : null}
       </header>
@@ -233,6 +254,7 @@ function DeviceList({
   onOpen,
   onRefresh,
   onRefreshPeers,
+  onStartHost,
 }: {
   hosts: DeviceHostInfo[];
   devices: DeviceSummary[];
@@ -241,9 +263,10 @@ function DeviceList({
   onOpen(device: DeviceSummary): void;
   onRefresh(): void;
   onRefreshPeers(): void;
+  onStartHost?(hostId: string): void;
 }) {
-  // A lone Mac keeps the flat list; paired Macs add one group per host, this Mac first.
-  const grouped = hosts.some((host) => host.kind === "peer");
+  // A lone Mac keeps the flat list; paired Macs and SSH hosts add one group per host, this Mac first.
+  const grouped = hosts.some((host) => host.kind === "peer" || host.kind === "ssh");
   return (
     <section aria-labelledby="devices-list-title" className="devices-list">
       <header className="devices-list-header">
@@ -276,6 +299,7 @@ function DeviceList({
             pending={pending}
             onOpen={onOpen}
             onRefreshPeers={onRefreshPeers}
+            onStartHost={onStartHost}
           />
         ))
       ) : devices.length === 0 ? (
@@ -304,6 +328,7 @@ export function DevicesPanelView({
   onAgentAccess,
   onPeerSharing,
   onRetryLoad,
+  onStartHost,
   viewer,
   selected,
 }: DevicesPanelViewProps) {
@@ -333,8 +358,10 @@ export function DevicesPanelView({
   }
   const detail = state.hostStatuses[LOCAL_DEVICE_HOST_ID]?.detail;
   // Paired Macs stay usable while this Mac's own helpers are unavailable, e.g. without Xcode.
+  // SSH hosts are listed (with Connect) even then, since the user reaches them from here.
   const peerReady =
-    state.consent.streaming && state.hosts.some((host) => host.kind === "peer" && host.status === "ready");
+    state.consent.streaming &&
+    state.hosts.some((host) => (host.kind === "peer" && host.status === "ready") || host.kind === "ssh");
   const status = peerReady ? "ready" : state.hostStatus;
   const errorLine = error ? (
     <Text variant="small" className="text-red" role="alert">
@@ -371,6 +398,7 @@ export function DevicesPanelView({
           title={state.hostStatus === "installing" ? "Installing simulator helpers…" : "Starting simulator helpers…"}
         >
           <p role="status">{detail ?? "This usually takes a few seconds."}</p>
+          <DeviceHostDiagnostics variant="panel" />
         </Empty>
       );
     case "stopped":
@@ -399,6 +427,7 @@ export function DevicesPanelView({
             {pending === "start" ? spinner : null}
             Try again
           </Button>
+          <DeviceHostDiagnostics variant="panel" />
         </Empty>
       );
     case "ready": {
@@ -450,6 +479,7 @@ export function DevicesPanelView({
             onOpen={onOpen}
             onRefresh={onRefresh}
             onRefreshPeers={onRefreshPeers}
+            onStartHost={onStartHost}
           />
         </div>
       );
@@ -547,7 +577,9 @@ export function DevicesPanel({
         setLoadAttempt((attempt) => attempt + 1);
       }}
       onSetup={() => void run("setup", () => devicesApi.setConsent("streaming", true))}
-      onStart={() => void run("start", () => devicesApi.refresh("local"))}
+      // An explicit Start may update helpers the user already approved; opening the tab never does.
+      onStart={() => void run("start", () => devicesApi.startHost(LOCAL_DEVICE_HOST_ID))}
+      onStartHost={(hostId) => void run(`host:${hostId}`, () => devicesApi.startHost(hostId))}
       onRefresh={() => void run("refresh", () => devicesApi.refresh())}
       onRefreshPeers={() => void run("peers", () => devicesApi.refreshPeers())}
       onAgentAccess={(granted) => void run("agent", () => devicesApi.setConsent("agentAccess", granted))}

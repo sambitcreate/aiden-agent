@@ -11,7 +11,6 @@ import {
   ensureTool,
   installedToolVersions,
   isToolInstalled,
-  pruneOldToolVersions,
   resolveNpm,
   type NpmRunner,
   type ToolSpec,
@@ -181,18 +180,6 @@ test("a rename failure without a published install is an error", async () => {
     });
     await assert.rejects(ensureTool(baseDir, DEVICE_HUB, npm), /publishing the install\./u);
     assert.deepEqual(await stagingDirs(baseDir, DEVICE_HUB), []);
-  });
-});
-
-test("pruning keeps only the pinned version and ignores foreign names", async () => {
-  await withBaseDir(async (baseDir) => {
-    const toolDir = path.join(baseDir, "tools", DEVICE_HUB.name);
-    for (const name of ["0.11.0", "0.12.0", "0.13.0-beta.1", "notes"]) {
-      await mkdir(path.join(toolDir, name), { recursive: true });
-    }
-    await pruneOldToolVersions(baseDir, DEVICE_HUB);
-    assert.deepEqual((await readdir(toolDir)).sort(), ["0.12.0", "notes"]);
-    await pruneOldToolVersions(path.join(baseDir, "missing"), DEVICE_HUB);
   });
 });
 

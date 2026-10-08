@@ -99,6 +99,13 @@ export interface DeviceHost {
   current(): DeviceHostReady | null;
   /** Reports supervised hub restarts so the service can update the tab. */
   onHealth(listener: (health: DeviceHostHealth, detail?: string) => void): () => void;
+  /**
+   * Installs one pinned helper without starting it. Only an explicit Update,
+   * or a Start the user approved for an outdated install, calls this.
+   */
+  installTool?(tool: "hub" | "agent"): Promise<void>;
+  /** The helper versions running right now, without touching the disk or the network. */
+  runningToolVersions?(): { hub: string | null; agent: string | null };
   /** Stops only agent-device. Manual viewing through the hub stays available. */
   stopAgent(): Promise<void>;
   /** Stops helpers. Simulators keep running; the user owns those. */
