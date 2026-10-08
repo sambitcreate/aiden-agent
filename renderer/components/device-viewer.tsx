@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   ALargeSmall,
   Box,
-  Camera,
   House,
   Lock,
   Moon,
@@ -46,7 +45,16 @@ import { resolveDeviceShape } from "../lib/device-3d/shape-profile";
 import { DeviceDuoControls } from "./device-duo-controls";
 import { DevicePhoneViewport } from "./device-phone-viewport";
 import { DEVICE_TEXT_SIZE_OPTIONS, DeviceToolsPanel } from "./device-tools-panel";
-import type { DeviceSession, DeviceStreamGrant, DeviceSummary } from "../shared/devices";
+import { DeviceAxOverlay, type DeviceAxStatus } from "./device-ax-overlay";
+import { pasteToDeviceWithFeedback } from "./device-clipboard-controls";
+import { DeviceFeatureSections } from "./device-feature-sections";
+import { DeviceMultiTouchLayer } from "./device-multitouch-layer";
+import { DeviceRecordControl } from "./device-record-control";
+import { DeviceScreenshotControl, saveScreenshotWithFeedback } from "./device-screenshot-control";
+import { createDeviceGrantSource } from "../lib/device-grant";
+import type { MultiTouchSink } from "../lib/device-multitouch";
+import type { DeviceFeatureTarget } from "../shared/device-features";
+import { LOCAL_DEVICE_HOST_ID, type DeviceSession, type DeviceStreamGrant, type DeviceSummary } from "../shared/devices";
 
 /** A burst of rejected grants means the proxy is refusing us, not that one grant expired. */
 const MAX_GRANT_RENEWALS_PER_MINUTE = 3;
@@ -111,6 +119,25 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const pressedKeysRef = React.useRef(new Set<string>());
   const stageFocusedRef = React.useRef(false);
   const [resetPose, setResetPose] = React.useState<(() => void) | null>(null);
+  const screenRef = React.useRef<HTMLDivElement | null>(null);
+  // Device power features: accessibility overlay, multi-touch, clipboard, recording, erase.
+  const [axOverlay, setAxOverlay] = React.useState(false);
+  const [axStatus, setAxStatus] = React.useState<DeviceAxStatus | null>(null);
+  const [axRefresh, setAxRefresh] = React.useState(0);
+  const featureGrants = React.useMemo(() => createDeviceGrantSource(() => devicesApi.streamGrant()), []);
+  const featureTarget = React.useMemo<DeviceFeatureTarget>(
+    () => ({ platform: device.platform, hostId: session.hostId, deviceId: session.deviceId }),
+    [device.platform, session.hostId, session.deviceId],
+  );
+  const localDevice = session.hostId === LOCAL_DEVICE_HOST_ID;
+  const multiTouchSink = React.useMemo<MultiTouchSink>(
+    () => ({ sendMultiTouch: (phase, first, second) => clientRef.current?.sendMultiTouch(phase, first, second) }),
+    [],
+  );
+  const sendDeviceKey = React.useCallback(
+    (code: string, phase: "down" | "up") => clientRef.current?.sendKey(code, phase),
+    [],
+  );
   const [duoState, setDuoState] = React.useState<DuoControlState>({
     pending: false,
     requested: null,
@@ -272,7 +299,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     hinged: Boolean(screen?.supportsHingeAngle),
     webglUnavailable,
   });
-  const frame3d = active && framePreference === "3d" && blocker === null && screen !== null && framed;
+  // Element frames draw over the flat screen, so the 3D frame steps aside while they show.
+  const frame3d = active && framePreference === "3d" && blocker === null && screen !== null && framed && !axOverlay;
   // Switching surfaces unmounts or hides the focused one: release its keys and keep focus on the device.
   React.useLayoutEffect(() => {
     releaseKeys();
@@ -340,6 +368,14 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     writeFramePreference(next);
   };
   const label = deviceStatusLabel(status, inputConnected);
+  const reconnect = () => {
+    renewalsRef.current = [];
+    setAttempt((value) => value + 1);
+  };
+  const pasteShortcut = React.useCallback(
+    () => void pasteToDeviceWithFeedback(featureTarget, sendDeviceKey),
+    [featureTarget, sendDeviceKey],
+  );
   const railButton = (
     name: string,
     icon: React.ReactNode,
@@ -414,6 +450,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           </div>
         ) : null}
         <div
+          ref={screenRef}
           className="device-viewer-screen"
           hidden={frame3d}
           style={{ aspectRatio: String(aspect) }}
@@ -431,6 +468,24 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         >
           <canvas ref={canvasRef} hidden={Boolean(mjpegUrl)} aria-hidden />
           {mjpegUrl ? <img ref={attachImage} alt="" draggable={false} /> : null}
+          {axOverlay && active && !frame3d ? (
+            <DeviceAxOverlay
+              hostId={session.hostId}
+              deviceId={session.deviceId}
+              grants={featureGrants}
+              screen={screen}
+              screenRef={screenRef}
+              poll={localDevice}
+              refreshKey={axRefresh}
+              onStatus={setAxStatus}
+            />
+          ) : null}
+          <DeviceMultiTouchLayer
+            screenRef={screenRef}
+            sink={multiTouchSink}
+            enabled={active && !frame3d && streaming && inputConnected}
+            onPaste={localDevice ? pasteShortcut : undefined}
+          />
           {frame3d ? null : errorOverlay}
         </div>
         {screen?.supportsHingeAngle ? (
@@ -482,7 +537,16 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-        {railButton("Screenshot to chat", <Camera aria-hidden />, screenshotToChat, busy !== null)}
+        <DeviceScreenshotControl
+          disabled={busy !== null}
+          onScreenshotToChat={screenshotToChat}
+          onSaveScreenshot={() =>
+            void run("save a screenshot", () =>
+              saveScreenshotWithFeedback({ hostId: session.hostId, deviceId: session.deviceId }),
+            )
+          }
+        />
+        {localDevice ? <DeviceRecordControl chatId={chatId} target={featureTarget} disabled={!streaming} /> : null}
         <Button
           variant={framePreference === "3d" && blocker === null ? "muted" : "transparent"}
           size="small"
@@ -536,7 +600,25 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             closeTools();
           }}
         >
-          <DeviceToolsPanel controls={controls} onClose={closeTools} />
+          <DeviceToolsPanel controls={controls} onClose={closeTools}>
+            <DeviceFeatureSections
+              chatId={chatId}
+              target={featureTarget}
+              deviceName={device.name}
+              grants={featureGrants}
+              axOverlay={axOverlay}
+              axStatus={axStatus}
+              onAxOverlayChange={(enabled) => {
+                setAxOverlay(enabled);
+                if (!enabled) setAxStatus(null);
+              }}
+              onAxRefresh={() => setAxRefresh((value) => value + 1)}
+              sendKey={streaming && inputConnected ? sendDeviceKey : null}
+              disabled={!streaming}
+              onReconnect={reconnect}
+              onCloseSession={() => onClose(false)}
+            />
+          </DeviceToolsPanel>
         </div>
       ) : null}
       <AlertDialog
