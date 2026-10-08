@@ -158,13 +158,25 @@ export function redactDesignMessageForStorage<T extends AgentMessage>(message: T
   return replaceRenderHtml(message, (toolCallId) => `[design html omitted: ${toolCallId}]`) as T;
 }
 
+/** Messages that take part in the conversation; system and custom entries do not answer a brief. */
+const CONVERSATION_ROLES: ReadonlySet<string> = new Set(["user", "assistant", "toolResult"]);
+
 /**
- * A user turn with no reply sits directly before the next user turn: a crash
- * rolled its run back, or the run was refused after the append (ADR-DS §2). A
- * Resume repeats that brief, so the orphan is dropped rather than sent twice.
+ * A user turn with no reply comes before the next user turn: a crash rolled its
+ * run back, or the run was refused after the append (ADR-DS §2). A Resume repeats
+ * that brief, so the orphan is dropped rather than sent twice. System and custom
+ * entries in between are skipped: they do not answer it.
  */
 function dropOrphanedUserTurns(messages: readonly AgentMessage[]): AgentMessage[] {
-  return messages.filter((message, index) => message.role !== "user" || messages[index + 1]?.role !== "user");
+  const kept: AgentMessage[] = [];
+  let nextConversationRole: string | undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    const orphaned = message.role === "user" && nextConversationRole === "user";
+    if (CONVERSATION_ROLES.has(message.role)) nextConversationRole = message.role;
+    if (!orphaned) kept.push(message);
+  }
+  return kept.reverse();
 }
 
 /**

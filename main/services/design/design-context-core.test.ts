@@ -155,6 +155,27 @@ test("a Resume lists existing directions as untrusted data and drops an interrup
   );
 });
 
+test("an orphaned brief is dropped even when a system message sits before the next brief", () => {
+  const brief = "A calm pricing page";
+  const contextText = '<design_context trust="untrusted">ctx</design_context>';
+  const briefs = (messages: AgentMessage[]) =>
+    projectDesignContext(messages, { contextText, revisionForToolCall: () => undefined }).filter(
+      (message) => message.role === "user" && (message as { content: string }).content === brief,
+    ).length;
+  const system = { role: "system", content: "The available tools changed.", timestamp: 2 } as unknown as AgentMessage;
+  assert.equal(
+    briefs([{ role: "user", content: brief, timestamp: 1 }, system, { role: "user", content: brief, timestamp: 3 }]),
+    1,
+    "the unanswered brief is not sent twice",
+  );
+  const reply = fauxAssistantMessage("Two directions are ready.");
+  assert.equal(
+    briefs([{ role: "user", content: brief, timestamp: 1 }, reply, system, { role: "user", content: brief, timestamp: 3 }]),
+    2,
+    "a brief that got a reply stays",
+  );
+});
+
 test("storage redaction keeps call ids and titles, and 200 revisions shrink from megabytes to kilobytes", () => {
   const html = `<main>${"<p>Lorem ipsum dolor sit amet.</p>".repeat(900)}</main>`;
   const transcript = Array.from({ length: 200 }, (_, index) =>
