@@ -143,6 +143,8 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
   });
 
   handle("imageWorkflows:cancel-run", async (event, input) => {
+    // Any Aiden document may stop any run (ADR-CI, Cancel): stopping only reduces spend, and a
+    // reloaded or second Images window has a new document id yet must still be able to stop it.
     deps.owner(event);
     return { ok: deps.services().coordinator.cancel(parseRunRequest(input).runId) };
   });

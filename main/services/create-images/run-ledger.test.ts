@@ -153,6 +153,20 @@ test("latest outputs come from each node's newest succeeded attempt across runs"
   assert.deepEqual(ledger.listRuns("wf", 1).map((summary) => summary.runId), ["run-2"]);
 });
 
+test("a node named like an Object.prototype member still gets its own latest output and sequence", async (t) => {
+  const ledger = open(await directory(t), t);
+  const names = ["constructor", "toString", "valueOf", "hasOwnProperty"];
+  ledger.createRun(run({ attempts: names.map((nodeId) => ({ nodeId, variant: 0, provider: "openrouter", model: "m" })) }));
+  ledger.finishAttempts(names.map((nodeId, index) => ({ runId: "run-1", nodeId, variant: 0, state: "succeeded" as const, output: [out(String(index))] })));
+  ledger.finishRun("run-1", "succeeded");
+  const outputs = ledger.latestOutputs("wf");
+  const sequence = ledger.latestOutputSequence("wf");
+  names.forEach((name, index) => {
+    assert.deepEqual(Object.getOwnPropertyDescriptor(outputs, name)?.value, [out(String(index))], name);
+    assert.equal(typeof Object.getOwnPropertyDescriptor(sequence, name)?.value, "number", name);
+  });
+});
+
 test("output sequence orders nodes by their newest output, and image counts de-duplicate shared images", async (t) => {
   const ledger = open(await directory(t), t);
   ledger.createRun(run({ runId: "r1" }));

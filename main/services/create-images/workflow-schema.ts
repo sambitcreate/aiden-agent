@@ -17,7 +17,7 @@ import {
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; issues: string[] };
 
 /** Titles and labels are single-line display text; prompts are not checked here. */
-function hasControlCharacter(value: string): boolean {
+export function hasControlCharacter(value: string): boolean {
   for (const character of value) {
     const code = character.charCodeAt(0);
     if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) return true;
