@@ -606,6 +606,18 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
   ).toBeVisible();
 }
 
+/**
+ * Lets the onboarding "provider added" toast leave, as a user who moves on
+ * would. Sonner pins a toast for as long as the pointer rests on it, and the
+ * top-center toast overlaps the floating Environment panel's browser and tab
+ * controls, so a click aimed there can hover it forever. Park the pointer
+ * away from it and wait for it to expire before working the panel.
+ */
+export async function waitForToastsToClear(page: Page): Promise<void> {
+  await page.mouse.move(1, 1);
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+}
+
 function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(
