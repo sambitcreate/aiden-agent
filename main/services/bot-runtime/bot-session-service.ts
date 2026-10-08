@@ -9,9 +9,14 @@
 //   state and makes no provider request.
 // - Nothing here resumes a harness on its own. The startup scan only records
 //   which Bots are interrupted.
-// - `deleteBot` aborts the live run and erases the Bot's session before the
-//   caller-supplied cleanup steps run.
+// - `deleteBot` records the delete durably (`bots/pending-deletes.json`)
+//   before its first destructive step, then aborts the live run, erases the
+//   Bot's session and runs the caller-supplied cleanup steps. A pending delete
+//   refuses to reopen the Bot's session, and startup rolls it forward through
+//   every step before anything else.
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -30,6 +35,7 @@ import {
   type BotReadmission,
   type BotRegistry,
 } from "./bot-extension.js";
+import { writeFileAtomic } from "../durable-fs.js";
 import {
   createBotHarnessHost,
   isBotHarnessHostUnavailable,
@@ -204,6 +210,24 @@ function unfinishedInput(inspection: HarnessInspection): SubmissionRecord | unde
   return inspection.submissions.find((submission) => submission.type === "input");
 }
 
+const PENDING_DELETES_FILE = "pending-deletes.json";
+
+/** Bots whose delete started and has not finished every step. */
+async function readPendingDeletes(file: string): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const parsed = JSON.parse(raw) as { version?: unknown; botIds?: unknown };
+  if (parsed.version !== 1 || !Array.isArray(parsed.botIds) || !parsed.botIds.every((id) => typeof id === "string")) {
+    throw new Error("The pending Bot delete record is unreadable.");
+  }
+  return parsed.botIds as string[];
+}
+
 /** A keyed promise chain: one operation per Bot at a time. */
 function createKeyedQueue() {
   const tails = new Map<string, Promise<unknown>>();
@@ -241,6 +265,23 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   /** Interrupted turns whose Resume was refused because the Bot's access changed. */
   const blocked = new Map<string, "access_changed" | "bot_missing">();
   const deleted = new Set<string>();
+  const pendingDeletesFile = path.join(deps.profileDir, "bots", PENDING_DELETES_FILE);
+  // A delete cut short by a crash still owns the Bot: never reopen its session.
+  for (const botId of await readPendingDeletes(pendingDeletesFile)) deleted.add(botId);
+
+  /** Add or remove a Bot in the durable pending-delete record (one writer at a time). */
+  function recordPendingDelete(botId: string, pending: boolean): Promise<void> {
+    return serialize(PENDING_DELETES_FILE, async () => {
+      const current = new Set(await readPendingDeletes(pendingDeletesFile));
+      if (pending === current.has(botId)) return;
+      if (pending) current.add(botId);
+      else current.delete(botId);
+      await writeFileAtomic(pendingDeletesFile, JSON.stringify({ version: 1, botIds: [...current] }), {
+        mode: 0o600,
+        mkdirMode: 0o700,
+      });
+    });
+  }
 
   function requireHost(): BotHarnessHost {
     if (host === null) throw new BotSessionError("unavailable");
@@ -338,6 +379,10 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   const service: BotSessionRuntime = {
     async initialize() {
       if (host === null) return { removedOrphans: [], interrupted: [] };
+      // Finish deletes a crash cut short before anything else sees the Bot.
+      for (const botId of await readPendingDeletes(pendingDeletesFile)) {
+        await service.deleteBot(botId).catch((error: unknown) => deps.onReport?.(botId, error));
+      }
       const removedOrphans = await host.sweepOrphans(await deps.knownBotIds());
       const interrupted = await host.interruptedBots();
       for (const { botId } of interrupted) {
@@ -444,9 +489,13 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const owner = requireHost();
         deleted.add(botId);
         blocked.delete(botId);
+        // Durable before the first destructive step, so a crash anywhere below
+        // is finished at the next start instead of leaving a Bot half deleted.
+        await recordPendingDelete(botId, true);
         await owner.destroy(botId);
         registries.delete(botId);
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
+        await recordPendingDelete(botId, false);
       });
     },
 

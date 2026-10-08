@@ -25,7 +25,7 @@ import { createBotManagedWorkspaceService } from "../bot-managed-workspace.js";
 import { BotMutationGate } from "../bot-mutation-gate.js";
 import { createBotStore } from "../bot-store-core.js";
 import { createChatStore } from "../chat-store-core.js";
-import { createBotSessionService, type BotSessionRuntime } from "./bot-session-service.js";
+import { BotSessionError, createBotSessionService, type BotSessionRuntime } from "./bot-session-service.js";
 import { botDirectoryName } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
@@ -137,6 +137,7 @@ async function sessionFor(
   opened: Profile,
   fauxModels: FauxModels,
   routines: Map<string, string[]>,
+  options: { quitAfterSessionDestroyed?: boolean } = {},
 ): Promise<BotSessionRuntime> {
   return createBotSessionService({
     profileDir: profile,
@@ -146,7 +147,10 @@ async function sessionFor(
     knownBotIds: async () => new Set((await opened.botStore.list()).map(({ id }) => id)),
     // Production order: routines and bindings, then the Bot's stored data.
     deleteEffects: [
-      async (botId) => void routines.delete(botId),
+      async (botId) => {
+        if (options.quitAfterSessionDestroyed) throw new Error("Aiden quit right after erasing the session.");
+        routines.delete(botId);
+      },
       (botId) => opened.app.deleteBot({ botId }),
     ],
   });
@@ -260,6 +264,57 @@ test("a delete interrupted between steps leaves the Bot listed and finishes on r
   await restarted.app.initialize();
   assert.deepEqual(await restarted.app.list(), []);
   await assertErased(profile, second.bot.id, second.homePath, second.chat.id);
+});
+
+test("a delete cut short right after the session is erased finishes at the next start, and the session never comes back", async () => {
+  const profile = await tempProfile();
+  const opened = openProfile(profile);
+  await opened.app.initialize();
+  const doomed = await createBotWithData(opened, "Doomed");
+  const survivor = await createBotWithData(opened, "Survivor");
+  const routines = new Map([[doomed.bot.id, ["routine-1"]], [survivor.bot.id, ["routine-2"]]]);
+  const fauxModels = createFauxModels([fauxAssistantMessage("hi")]);
+  const crashed = await sessionFor(profile, opened, fauxModels, routines, { quitAfterSessionDestroyed: true });
+  await crashed.conversation(doomed.bot.id);
+  await assert.rejects(crashed.deleteBot(doomed.bot.id), /quit right after erasing the session/u);
+  await crashed.shutdown();
+  assert.equal(existsSync(path.join(profile, "bots", botDirectoryName(doomed.bot.id))), false, "the session is gone");
+
+  // Next start: the Bot is still listed, because only its session was erased.
+  const restarted = openProfile(profile);
+  await restarted.app.initialize();
+  assert.equal((await restarted.app.list()).some(({ id }) => id === doomed.bot.id), true);
+  const session = await sessionFor(profile, restarted, fauxModels, routines);
+  try {
+    await assert.rejects(
+      session.conversation(doomed.bot.id),
+      (error: unknown) => error instanceof BotSessionError && error.reason === "bot_deleted",
+      "a pending delete refuses to recreate the session before startup finishes it",
+    );
+    await session.initialize();
+    assert.deepEqual((await restarted.app.list()).map(({ id }) => id), [survivor.bot.id]);
+    assert.equal(routines.has(doomed.bot.id), false, "the remaining effects ran");
+    assert.equal(routines.has(survivor.bot.id), true);
+    await assert.rejects(
+      session.conversation(doomed.bot.id),
+      (error: unknown) => error instanceof BotSessionError && error.reason === "bot_deleted",
+    );
+    await assertErased(profile, doomed.bot.id, doomed.homePath, doomed.chat.id);
+    assert.equal((await session.state(survivor.bot.id)).kind, "idle");
+  } finally {
+    await session.shutdown();
+  }
+
+  // Finished deletes are not replayed at the start after that.
+  const again = openProfile(profile);
+  await again.app.initialize();
+  const later = await sessionFor(profile, again, fauxModels, routines);
+  try {
+    await later.initialize();
+    assert.equal((await later.send(survivor.bot.id, { text: "still here?", requestId: "after" })).deduped, false);
+  } finally {
+    await later.shutdown();
+  }
 });
 
 test("Bots archived by an older release are erased at startup with all their data", async () => {
