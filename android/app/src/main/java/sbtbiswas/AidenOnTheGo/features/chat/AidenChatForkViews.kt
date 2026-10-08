@@ -251,11 +251,11 @@ private fun ReadySummary(
         visible = expanded,
         enter = if (reduceMotion) EnterTransition.None else {
             expandVertically(AidenMotion.spatialExpressiveSpring(), expandFrom = Alignment.Top) +
-                fadeIn(AidenMotion.nonSpatialExpressiveSpring())
+                fadeIn(AidenMotion.short())
         },
         exit = if (reduceMotion) ExitTransition.None else {
             shrinkVertically(AidenMotion.spatialExpressiveSpring(), shrinkTowards = Alignment.Top) +
-                fadeOut(AidenMotion.nonSpatialExpressiveSpring())
+                fadeOut(AidenMotion.short())
         }
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {

@@ -136,7 +136,7 @@ export function SkillsSettings() {
           instructions.
         </Text>
       ) : (
-        <div className="settings-card rounded-card border border-separator">
+        <div className="settings-card rounded-card">
           {list.map((s, i) => (
             <React.Fragment key={s.id}>
               {i > 0 ? <Separator /> : null}
@@ -183,7 +183,7 @@ export function SkillsSettings() {
               Availability follows the same collision and safety rules as the composer and model.
             </Text>
           </div>
-          <div className="settings-card rounded-card border border-separator">
+          <div className="settings-card rounded-card">
             {discoveredList.map((s, i) => (
               <React.Fragment key={s.invocationId}>
                 {i > 0 ? <Separator /> : null}

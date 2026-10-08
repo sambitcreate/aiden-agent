@@ -141,6 +141,7 @@ import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
 import androidx.annotation.StringRes
 import androidx.compose.ui.res.pluralStringResource
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
 private const val AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT = 20
@@ -371,7 +372,7 @@ private fun AidenWorkspaceHome(
                         if (connectionState == AidenConnectionState.CONNECTED) showNewChatChoices = true
                     },
                     containerColor = palette.accent,
-                    contentColor = Color.White,
+                    contentColor = palette.onAccent,
                     shape = CircleShape,
                     modifier = Modifier.semantics { contentDescription = newChatDescription }
                 ) {
@@ -406,7 +407,7 @@ private fun AidenWorkspaceHome(
                                     color = palette.secondary,
                                     modifier = Modifier.weight(1f)
                                 )
-                                TextButton(onClick = coordinator::refreshClient) { Text(stringResource(R.string.action_retry)) }
+                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = coordinator::refreshClient) { Text(stringResource(R.string.action_retry)) }
                             }
                         }
                     }
@@ -623,7 +624,7 @@ private fun AidenWorkspaceHome(
                                     // The next page arrives as rows, so it is previewed as rows.
                                     AidenSkeletonList(count = 2, leading = false, loadingDescription = stringResource(R.string.workspace_home_loading_more))
                                 } else {
-                                    TextButton(onClick = viewModel::loadMoreChats) {
+                                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = viewModel::loadMoreChats) {
                                         Text(if (chatPaginationErrorMessage == null) stringResource(R.string.workspace_home_load_more) else stringResource(R.string.action_retry))
                                     }
                                 }
@@ -870,7 +871,7 @@ internal fun AidenWorkspaceInlineRefreshError(
             modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
         ) {
             Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-            TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry), color = palette.accent) }
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onRetry) { Text(stringResource(R.string.action_retry), color = palette.accent) }
         }
     }
 }

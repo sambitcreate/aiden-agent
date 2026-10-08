@@ -54,7 +54,7 @@
 .devices-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow-y: auto; padding: 8px 10px 14px; }
 .devices-list-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 6px; }
 .devices-list-note { padding: 4px 5px 8px; }
-.devices-agent-access { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; margin: 10px 10px 0; padding: 10px 12px; border: 1px solid var(--border-separator); border-radius: var(--radius-control); background: var(--surface-control); }
+.devices-agent-access { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; margin: 10px 10px 0; padding: 10px 12px; border: 0; border-radius: var(--radius-control); background: var(--surface-control); }
 .devices-agent-access > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-tertiary); }
 .devices-list-rows { margin: 0; padding: 0; list-style: none; }
 .devices-host-group + .devices-host-group { margin-top: 10px; }
@@ -80,7 +80,7 @@
 .devices-platform-title { display: block; padding: 6px 5px 2px; }
 .device-viewer-rail { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--border-separator); }
 .device-duo-controls { position: absolute; top: 50%; right: 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateY(-50%); }
-.device-duo-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-popover); box-shadow: var(--elevation-popover); }
+.device-duo-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; border: 0; border-radius: var(--radius-pill); background: var(--surface-popover); box-shadow: var(--elevation-control); }
 .device-duo-group svg { width: 18px; height: 18px; }
 /* A horizontal phone turns the fold glyphs a quarter, as the device does. */
 .device-duo-glyph { transition: transform 180ms ease-out; }
@@ -268,22 +268,33 @@
   --shadow-composer: var(--elevation-composer);
   --font-sans: var(--font-ui-family);
   --font-mono: var(--font-code-family);
+  /*
+   * Text steps follow the Untitled theme's ratios (GUI.md, gui/themes/untitled.md)
+   * anchored to the UI font-size preference so that setting still scales the
+   * whole ladder: at 14px, mini = xxs 10/14, small = xs 12/16, regular = s 14/20,
+   * large-strong = m 16/24, heading1 = l 24/32. heading2 keeps Aiden's 18/24 step
+   * so it stays distinct from large-strong.
+   */
   --text-heading1: calc(var(--ui-font-size) + 10px);
-  --text-heading1--line-height: calc(var(--ui-font-size) + 16px);
+  --text-heading1--line-height: calc(var(--ui-font-size) + 18px);
   --text-heading2: calc(var(--ui-font-size) + 4px);
   --text-heading2--line-height: calc(var(--ui-font-size) + 10px);
   --text-large-strong: calc(var(--ui-font-size) + 2px);
-  --text-large-strong--line-height: calc(var(--ui-font-size) + 8px);
+  --text-large-strong--line-height: calc(var(--ui-font-size) + 10px);
   --text-regular: var(--ui-font-size);
-  --text-regular--line-height: calc(var(--ui-font-size) + 5px);
+  --text-regular--line-height: calc(var(--ui-font-size) + 6px);
   --text-strong: var(--ui-font-size);
-  --text-strong--line-height: calc(var(--ui-font-size) + 5px);
-  --text-small: calc(var(--ui-font-size) - 1px);
-  --text-small--line-height: calc(var(--ui-font-size) + 3px);
-  --text-small-strong: calc(var(--ui-font-size) - 1px);
-  --text-small-strong--line-height: calc(var(--ui-font-size) + 3px);
-  --text-mini: calc(var(--ui-font-size) - 3px);
-  --text-mini--line-height: calc(var(--ui-font-size) - 1px);
+  --text-strong--line-height: calc(var(--ui-font-size) + 6px);
+  --text-small: calc(var(--ui-font-size) - 2px);
+  --text-small--line-height: calc(var(--ui-font-size) + 2px);
+  --text-small-strong: calc(var(--ui-font-size) - 2px);
+  --text-small-strong--line-height: calc(var(--ui-font-size) + 2px);
+  --text-mini: calc(var(--ui-font-size) - 4px);
+  --text-mini--line-height: var(--ui-font-size);
+  --ease-standard: var(--motion-easing);
+  --ease-emphasized: var(--motion-large-easing);
+  --default-transition-duration: var(--motion-duration);
+  --default-transition-timing-function: var(--motion-easing);
 }
 :root {
   color-scheme: light;
@@ -295,6 +306,13 @@
     ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   --ui-font-size: 14px;
   --code-font-size: 12px;
+  /* Untitled motion: small for controls/menus/popovers, large for panels. */
+  --motion-duration: 200ms;
+  --motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-large-duration: 360ms;
+  --motion-large-easing: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-popup-scale: 0.96;
+  --motion-press-distance: 1px;
   --text-primary: #3D3F41;
   --toolbar-icon: #77797a;
   --text-secondary: #545963;
@@ -497,7 +515,9 @@ body {
   cursor: pointer !important;
 }
 
-:root[data-reduce-motion="true"] *,
+/* Activity marks are excluded: they freeze on their own still pose (see .aiden-mark),
+   and collapsing their tracks to 0.001ms would end them on a last frame instead. */
+:root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *),
 :root[data-reduce-motion="true"] *::before,
 :root[data-reduce-motion="true"] *::after {
   animation-duration: 0.001ms !important;
@@ -613,7 +633,7 @@ body {
 .ask-user-question-pill {
   min-height: 2.25rem;
   flex-shrink: 0;
-  border: 1px solid var(--border-field);
+  border: 0;
   border-radius: 999px;
   padding-inline: 0.9rem;
   background: var(--surface-popover);
@@ -882,7 +902,7 @@ textarea {
 .model-pad-browser {
   position: sticky;
   top: 1rem;
-  border: 1px solid var(--border-separator);
+  border: 0;
   box-shadow: var(--elevation-control);
   view-transition-name: model-pad-browser;
 }
@@ -1021,12 +1041,12 @@ textarea {
   max-width: 12rem;
   padding: 0.375rem 0.5rem;
   overflow: hidden;
-  border: 1px solid var(--border-separator);
+  border: 0;
   border-radius: var(--radius-popover);
   background: color-mix(in srgb, var(--surface-popover) 96%, transparent);
   box-shadow: var(--elevation-popover);
   opacity: 0;
-  transform: translate(-50%, 3px) scale(0.98);
+  transform: translate(-50%, 3px) scale(var(--motion-popup-scale));
   transition:
     opacity 120ms ease-out,
     transform 150ms cubic-bezier(0, 0, 0.2, 1);
@@ -1047,7 +1067,7 @@ textarea {
 .model-pad-marker[data-label-side="bottom"] .model-pad-marker-label {
   top: calc(100% + 8px);
   bottom: auto;
-  transform: translate(-50%, -3px) scale(0.98);
+  transform: translate(-50%, -3px) scale(var(--motion-popup-scale));
 }
 
 .model-pad-marker[data-label-side="bottom"]:hover .model-pad-marker-label,
@@ -1058,7 +1078,7 @@ textarea {
 
 .model-pad-marker[data-label-align="start"] .model-pad-marker-label {
   left: -0.25rem;
-  transform: translate(0, 3px) scale(0.98);
+  transform: translate(0, 3px) scale(var(--motion-popup-scale));
   transform-origin: left bottom;
 }
 
@@ -1071,7 +1091,7 @@ textarea {
 .model-pad-marker[data-label-align="end"] .model-pad-marker-label {
   right: -0.25rem;
   left: auto;
-  transform: translate(0, 3px) scale(0.98);
+  transform: translate(0, 3px) scale(var(--motion-popup-scale));
   transform-origin: right bottom;
 }
 
@@ -1083,7 +1103,7 @@ textarea {
 
 .model-pad-marker[data-label-side="bottom"][data-label-align="start"] .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"] .model-pad-marker-label {
-  transform: translate(0, -3px) scale(0.98);
+  transform: translate(0, -3px) scale(var(--motion-popup-scale));
   transform-origin: top;
 }
 
@@ -1147,7 +1167,7 @@ textarea {
   bottom: 0.5rem;
   left: 50%;
   min-width: max-content;
-  border: 1px solid var(--border-separator);
+  border: 0;
   background: color-mix(in srgb, var(--surface-popover) 94%, transparent);
   box-shadow: var(--elevation-popover);
   transform: translateX(-50%);
@@ -1341,7 +1361,7 @@ textarea {
 
 .settings-page .settings-card,
 .settings-page .settings-group-card {
-  border: 1px solid var(--border-separator);
+  border: 0;
   border-radius: var(--settings-card-radius);
   background: var(--settings-card-fill);
   box-shadow: var(--elevation-control);
@@ -1697,7 +1717,7 @@ textarea {
 @keyframes aiden-popover-in {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.98);
+    transform: translateY(-4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1807,7 +1827,7 @@ textarea {
 @keyframes aiden-slash-palette-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1852,7 +1872,7 @@ textarea {
 @keyframes aiden-environment-summary-in {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.98);
+    transform: translateY(-4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1874,7 +1894,7 @@ textarea {
 @keyframes aiden-app-update-banner-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -1910,7 +1930,7 @@ textarea {
   animation: aiden-overlay-out 120ms ease-in;
 }
 :root[data-reduce-motion="false"] [data-slot="popover-content"][data-state="open"] {
-  animation: aiden-popover-in 150ms cubic-bezier(0, 0, 0.2, 1);
+  animation: aiden-popover-in var(--motion-duration) var(--motion-easing);
 }
 :root[data-reduce-motion="false"] [data-slot="popover-content"][data-state="closed"] {
   animation: aiden-popover-out 100ms ease-in;
@@ -2179,7 +2199,7 @@ textarea {
 
 .appearance-theme-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px 10px;
 }
 
@@ -2513,7 +2533,7 @@ textarea {
 @keyframes aiden-pill-enter {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
+    transform: translateY(4px) scale(var(--motion-popup-scale));
   }
   to {
     opacity: 1;
@@ -2582,6 +2602,8 @@ textarea {
 }
 
 /* Deliberate actions may opt into tactile feedback; routine controls stay still. */
+/* Untitled press distance: shared actions settle down by one pixel while held. */
+:root[data-reduce-motion="false"] [data-slot="button"]:active:not(:disabled):not([class*="translate-"]) { translate: 0 var(--motion-press-distance); }
 .button-press-feedback:active:not(:disabled) { scale: 0.96; }
 :root[data-reduce-motion="true"] .button-press-feedback { scale: none !important; }
 @media (prefers-reduced-motion: reduce) {
@@ -2637,7 +2659,7 @@ textarea {
   height: var(--aiden-live-trigger-size);
   place-items: center;
   overflow: visible;
-  border: 1px solid color-mix(in srgb, var(--color-separator) 72%, transparent);
+  border: 0;
   background: var(--color-background);
   box-shadow:
     0 10px 30px rgb(0 0 0 / 16%),
@@ -2661,7 +2683,7 @@ textarea {
   scale: 1.32;
   object-fit: cover;
 }
-.aiden-live-trigger[data-kind="orb"] {
+.aiden-live-trigger[data-kind="mark"] {
   appearance: none;
   border-color: transparent;
   border-radius: 9999px;
@@ -2680,7 +2702,7 @@ textarea {
     0 0 0 3px var(--color-focus-ring),
     0 10px 30px rgb(0 0 0 / 16%);
 }
-.aiden-live-trigger[data-kind="orb"]:focus-visible {
+.aiden-live-trigger[data-kind="mark"]:focus-visible {
   box-shadow: 0 0 0 3px var(--color-focus-ring);
 }
 .aiden-live-trigger-badge {
@@ -2693,47 +2715,129 @@ textarea {
   border-radius: 9999px;
   background: var(--color-support-warning);
 }
-.aiden-live-orb {
+.aiden-live-mark {
   position: relative;
-  display: block;
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100%;
   min-width: 2.5rem;
   min-height: 2.5rem;
+  color: var(--accent);
   transform: scale(calc(0.94 + var(--aiden-live-level, 0) * 0.06));
   transition: opacity 300ms ease, transform 420ms cubic-bezier(.22, 1, .36, 1);
 }
-.aiden-live-orb-layer,
-.aiden-live-duplex-listening,
-.aiden-live-duplex-weaving { position: absolute; inset: 0; }
-.aiden-live-orb-layer { opacity: 0; transition: opacity 360ms ease; }
-.aiden-live-orb[data-visual="rest"] [data-layer="rest"],
-.aiden-live-orb[data-visual="connecting"] [data-layer="connecting"],
-.aiden-live-orb[data-visual="duplex"] [data-layer="duplex"] { opacity: 1; }
-.aiden-live-duplex-listening { opacity: .65; }
-.aiden-live-duplex-weaving { opacity: .35; }
-.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-listening { animation: aiden-live-duplex 10s ease-in-out infinite alternate; }
-.aiden-live-orb[data-visual="duplex"] .aiden-live-duplex-weaving { animation: aiden-live-duplex 10s ease-in-out infinite alternate-reverse; }
-@keyframes aiden-live-duplex { from { opacity: .75; } to { opacity: .25; } }
+.aiden-live-mark > .aiden-mark { width: 100% !important; height: 100% !important; animation: aiden-live-mark-in 280ms ease both; }
+@keyframes aiden-live-mark-in { from { opacity: 0; } to { opacity: 1; } }
 .aiden-live-stop-symbol { position: absolute; width: 16px; height: 16px; border-radius: 4px; background: var(--color-text-primary, currentColor); opacity: 0; transform: scale(.85); transition: opacity 220ms ease, transform 300ms cubic-bezier(.22,1,.36,1); pointer-events: none; }
-.aiden-live-trigger[data-stop-revealed="true"] > .aiden-live-orb { opacity: 0; transform: scale(.94); }
+.aiden-live-trigger[data-stop-revealed="true"] > .aiden-live-mark { opacity: 0; transform: scale(.94); }
 .aiden-live-trigger[data-stop-revealed="true"] .aiden-live-stop-symbol { opacity: 1; transform: scale(1); }
-:root[data-reduce-motion="true"] .aiden-live-orb-layer,
+:root[data-reduce-motion="true"] .aiden-live-mark,
 :root[data-reduce-motion="true"] .aiden-live-stop-symbol { transition: none; }
-:root[data-reduce-motion="true"] .aiden-live-duplex-listening,
-:root[data-reduce-motion="true"] .aiden-live-duplex-weaving { animation: none !important; }
+:root[data-reduce-motion="true"] .aiden-live-mark > .aiden-mark { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  .aiden-live-orb, .aiden-live-orb-layer, .aiden-live-stop-symbol { transition: none !important; }
-  .aiden-live-duplex-listening, .aiden-live-duplex-weaving { animation: none !important; }
+  .aiden-live-mark, .aiden-live-stop-symbol { transition: none !important; }
+  .aiden-live-mark > .aiden-mark { animation: none; }
 }
-.aiden-live-orb-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100% !important;
-  height: 100% !important;
-  /* thinking-orbs 0.3.1 is monochrome; normalize its ink, then tint it blue. */
-  filter: brightness(0) saturate(100%) invert(48%) sepia(97%) saturate(3187%)
-    hue-rotate(209deg) brightness(102%) contrast(101%);
+
+/* ───────── Activity marks ─────────
+   Shared geometry and timing: docs/activity-marks.md (also drawn natively on iOS and Android).
+   Inline SVG, CSS keyframes on transform and opacity only: no canvas, no per-frame JS,
+   no filters. Paused, off-screen and Reduced Motion marks freeze on a still frame. */
+.aiden-mark { display: block; flex: none; overflow: visible; }
+.aiden-mark * { transform-box: view-box; }
+.aiden-mark[data-paused] *,
+.aiden-mark[data-offscreen] * { animation-play-state: paused !important; }
+:root[data-reduce-motion="true"] .aiden-mark * { animation-play-state: paused !important; }
+@media (prefers-reduced-motion: reduce) {
+  .aiden-mark * { animation-play-state: paused !important; }
+}
+
+/* Tri-step: a third of a turn with a small overshoot, then a rest. */
+.aiden-mark[data-aiden-mark="tri-step"] .aiden-mark-turn { transform-origin: 12px 12px; animation: aiden-mark-tri 2.7s infinite; }
+@keyframes aiden-mark-tri {
+  0% { transform: rotate(0); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+  22%, 33.33% { transform: rotate(120deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+  55.33%, 66.66% { transform: rotate(240deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+  88.66%, 100% { transform: rotate(360deg); }
+}
+
+/* Quad shuffle: fold to a diagonal, spread back, trade corners. */
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle { animation: 2.6s cubic-bezier(.65, 0, .35, 1) infinite; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(1) { animation-name: aiden-mark-shuffle-tl; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(2) { animation-name: aiden-mark-shuffle-tr; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(3) { animation-name: aiden-mark-shuffle-bl; }
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(4) { animation-name: aiden-mark-shuffle-br; }
+@keyframes aiden-mark-shuffle-tl { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(-2.2px, -2.2px); } 56%, 72% { transform: translate(10px, 0); } }
+@keyframes aiden-mark-shuffle-tr { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(-7.4px, 2.6px); } 56%, 72% { transform: translate(0, 10px); } }
+@keyframes aiden-mark-shuffle-bl { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(7.4px, -2.6px); } 56%, 72% { transform: translate(0, -10px); } }
+@keyframes aiden-mark-shuffle-br { 0%, 36%, 90%, 100% { transform: translate(0, 0); } 18% { transform: translate(2.2px, 2.2px); } 56%, 72% { transform: translate(-10px, 0); } }
+
+/* Compose: three text lines grow from the left in turn. */
+.aiden-mark[data-aiden-mark="compose"] rect {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: aiden-mark-compose 2.2s cubic-bezier(.4, 0, .2, 1) infinite both;
+}
+@keyframes aiden-mark-compose {
+  0% { transform: scaleX(.16); opacity: .35; }
+  35%, 70% { transform: scaleX(1); opacity: 1; }
+  100% { transform: scaleX(.16); opacity: .35; }
+}
+
+/* Scan grid: columns light up left to right. */
+.aiden-mark[data-aiden-mark="scan-grid"] circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: aiden-mark-scan 1.5s ease-in-out infinite;
+}
+@keyframes aiden-mark-scan { 0%, 70%, 100% { opacity: .2; transform: scale(1); } 30% { opacity: 1; transform: scale(1.18); } }
+
+/* Glance: look left, look right, blink. */
+.aiden-mark[data-aiden-mark="glance"] .aiden-mark-look { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
+.aiden-mark[data-aiden-mark="glance"] .aiden-mark-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
+@keyframes aiden-mark-look {
+  0%, 14% { transform: translateX(0); }
+  24%, 40% { transform: translateX(-2.6px); }
+  52%, 68% { transform: translateX(2.6px); }
+  80%, 100% { transform: translateX(0); }
+}
+@keyframes aiden-mark-blink { 0%, 86%, 94%, 100% { transform: scaleY(1); } 90% { transform: scaleY(.1); } }
+
+/* Bounce: the typing trio. */
+.aiden-mark[data-aiden-mark="bounce"] circle { animation: aiden-mark-bounce 1.2s cubic-bezier(.45, 0, .55, 1) infinite both; }
+@keyframes aiden-mark-bounce { 0%, 55%, 100% { transform: translateY(0); } 27% { transform: translateY(-5px); } }
+
+/* Helix family (Live). Position and depth run on the same period with depth a
+   quarter behind (per-circle delays are inline), so the strands read as
+   passing in front of each other. */
+.aiden-mark[data-aiden-mark^="helix-"] circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation-name: aiden-mark-helix-y, aiden-mark-helix-z;
+  animation-duration: var(--dur);
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+@keyframes aiden-mark-helix-y { 0%, 100% { translate: 0 calc(var(--amp) * -1); } 50% { translate: 0 var(--amp); } }
+@keyframes aiden-mark-helix-z { 0%, 100% { scale: var(--zf); opacity: 1; } 50% { scale: var(--zb); opacity: var(--ob); } }
+.aiden-mark[data-aiden-mark="helix-calm"]   { --amp: 3.4px; --dur: 3.6s; --zf: 1.12; --zb: .78; --ob: .5; }
+.aiden-mark[data-aiden-mark="helix-twist"]  { --amp: 5px;   --dur: 1.5s; --zf: 1.3;  --zb: .55; --ob: .3; }
+.aiden-mark[data-aiden-mark="helix-swell"]  { --amp: 3px;   --dur: 1.6s; --zf: 1.3;  --zb: .6;  --ob: .35; --aiden-mark-amp2: 3px; }
+.aiden-mark[data-aiden-mark="helix-duplex"] { --amp: 5px;   --dur: 2s;   --zf: 1.3;  --zb: .6;  --ob: .35; }
+.aiden-mark[data-aiden-mark="helix-duplex"] .aiden-mark-strand-b { fill-opacity: .55; }
+.aiden-mark[data-aiden-mark="helix-flat"] circle { animation: none; }
+.aiden-mark[data-aiden-mark="helix-flat"] .aiden-mark-strands { opacity: .45; }
+/* Swell: a slower second wave on top of the braid, sized in five steps by the voice level. */
+.aiden-mark[data-aiden-mark="helix-swell"] .aiden-mark-wave { animation: aiden-mark-swell 2.3s ease-in-out infinite; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="0"] { --aiden-mark-amp2: 1px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="1"] { --aiden-mark-amp2: 2px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="2"] { --aiden-mark-amp2: 3px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="3"] { --aiden-mark-amp2: 4px; }
+.aiden-mark[data-aiden-mark="helix-swell"][data-level="4"] { --aiden-mark-amp2: 5px; }
+@keyframes aiden-mark-swell {
+  0%, 100% { translate: 0 calc(var(--aiden-mark-amp2) * -1); }
+  50% { translate: 0 var(--aiden-mark-amp2); }
 }
 .gemini-live-setup-hero {
   display: grid;
@@ -2742,22 +2846,20 @@ textarea {
   gap: 0.75rem;
   padding: 0.25rem 0 0.75rem;
 }
-.aiden-live-orb[data-state="ready"] {
+.aiden-live-mark[data-state="ready"] {
   opacity: 0.82;
 }
-.aiden-live-orb[data-visual="duplex"] {
+.aiden-live-mark[data-mark="helix-swell"],
+.aiden-live-mark[data-mark="helix-duplex"] {
   transform: scale(calc(0.98 + var(--aiden-live-level, 0) * 0.08));
 }
-.aiden-live-orb[data-state="approval"] {
-  filter: drop-shadow(0 0 7px rgb(79 125 255 / 32%));
-}
-.aiden-live-orb[data-state="error"],
-.aiden-live-orb[data-state="unavailable"] {
+.aiden-live-mark[data-state="error"],
+.aiden-live-mark[data-state="unavailable"] {
   opacity: 0.5;
 }
 .gemini-live-readiness-list {
   overflow: hidden;
-  border: 1px solid var(--color-separator);
+  border: 0;
   border-radius: 0.875rem;
   background: var(--color-well);
 }
@@ -2818,7 +2920,7 @@ textarea {
   width: min(22rem, calc(100vw - 2rem));
   overflow: hidden;
   pointer-events: auto;
-  border: 1px solid var(--color-separator);
+  border: 0;
   border-radius: 1rem;
   background: color-mix(in srgb, var(--color-background) 94%, transparent);
   box-shadow:
@@ -2833,7 +2935,7 @@ textarea {
   padding: 0.75rem;
   border-bottom: 1px solid var(--color-separator);
 }
-.gemini-live-hud-header > .aiden-live-orb {
+.gemini-live-hud-header > .aiden-live-mark {
   width: 2.5rem;
   height: 2.5rem;
 }
@@ -2862,7 +2964,7 @@ textarea {
 :root[data-reduce-motion="true"] .aiden-live-trigger:active {
   transform: none;
 }
-:root[data-reduce-motion="true"] .aiden-live-orb {
+:root[data-reduce-motion="true"] .aiden-live-mark {
   transform: none;
   transition: none;
 }

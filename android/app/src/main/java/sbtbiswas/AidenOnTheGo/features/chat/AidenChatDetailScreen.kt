@@ -84,9 +84,9 @@ import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.features.shared.aidenModelDisplayLabel
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbSize
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbState
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.ThinkingOrb
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.aidenActivityMarkForTool
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
@@ -912,6 +912,7 @@ fun AidenChatDetailScreen(
                         val tools by viewModel.tools.collectAsStateWithLifecycle()
                         val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
                         val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
+                        val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
                         ActiveStreamingCard(
                             liveText = liveText,
                             reasoning = reasoning,
@@ -920,7 +921,8 @@ fun AidenChatDetailScreen(
                             isBotChat = isBotChat,
                             palette = palette,
                             liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
-                            isWaitingForNetwork = isWaitingForNetwork
+                            isWaitingForNetwork = isWaitingForNetwork,
+                            pendingApprovalToolName = livePendingApproval?.toolName
                         )
                     }
                 }
@@ -1441,7 +1443,8 @@ internal fun ActiveStreamingCard(
     isBotChat: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     liveStart: java.time.Instant? = null,
-    isWaitingForNetwork: Boolean = false
+    isWaitingForNetwork: Boolean = false,
+    pendingApprovalToolName: String? = null
 ) {
     val reasoningActive = reasoning.isNotEmpty() && (
         AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
@@ -1517,7 +1520,16 @@ internal fun ActiveStreamingCard(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (tool in tools) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX16)
+                            AidenActivityMark(
+                                mark = aidenActivityMarkForTool(
+                                    toolName = tool.name,
+                                    awaitingApproval = tool.status == null && tool.name == pendingApprovalToolName
+                                ),
+                                size = 16.dp,
+                                // Finished tools freeze, as terminal marks do on desktop.
+                                active = tool.status == null,
+                                color = palette.foreground
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = tool.name,
@@ -1568,7 +1580,11 @@ internal fun ActiveStreamingCard(
             }
             if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
+                    AidenActivityMark(
+                        mark = AidenActivityMarkKind.TRI_STEP,
+                        size = 20.dp,
+                        color = palette.foreground
+                    )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = stringResource(R.string.chat_working),

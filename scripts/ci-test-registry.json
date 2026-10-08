@@ -824,7 +824,8 @@
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
         "scripts/update-model-capabilities.test.mjs",
         "scripts/vendor-cua-driver.test.mjs",
-        "scripts/verify-macos-package.test.mjs"
+        "scripts/verify-macos-package.test.mjs",
+        "renderer/components/aiden-activity-mark.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

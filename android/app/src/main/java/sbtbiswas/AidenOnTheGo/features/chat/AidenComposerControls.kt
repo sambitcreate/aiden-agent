@@ -98,13 +98,13 @@ internal fun <T : Any> AidenComposerReveal(
             EnterTransition.None
         } else {
             expandVertically(AidenMotion.spatialExpressiveSpring(), expandFrom = Alignment.Bottom) +
-                fadeIn(AidenMotion.nonSpatialExpressiveSpring())
+                fadeIn(AidenMotion.short())
         },
         exit = if (reduceMotion) {
             ExitTransition.None
         } else {
             shrinkVertically(AidenMotion.spatialExpressiveSpring(), shrinkTowards = Alignment.Bottom) +
-                fadeOut(AidenMotion.nonSpatialExpressiveSpring())
+                fadeOut(AidenMotion.short())
         }
     ) {
         retained.value?.let { content(it) }

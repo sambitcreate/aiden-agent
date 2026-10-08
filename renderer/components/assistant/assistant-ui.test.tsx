@@ -18,8 +18,8 @@ test("Live audio player ownership survives asynchronous capability refresh", () 
 });
 import { renderToStaticMarkup } from "react-dom/server";
 import { AssistantDockPresentation, liveDockClickAction } from "./assistant-dock.js";
-import { aidenLiveOrbVisual, AidenLiveOrb } from "./aiden-live-orb.js";
-import { assistantLiveOrbState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
+import { aidenLiveMark, AidenLiveMark } from "./aiden-live-mark.js";
+import { assistantLiveMarkState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
 import {
   assistantLiveVoiceApprovalDecision,
   assistantLiveVoiceApprovalForReceipt,
@@ -74,17 +74,16 @@ const idleLive: AssistantLiveController = {
   cancelSetup: async () => undefined,
 };
 
-test("duplex visuals remain stable through voice and action changes", () => {
-  for (const state of ["listening", "thinking", "speaking", "acting"] as const) {
-    assert.equal(aidenLiveOrbVisual(state), "duplex");
-    const markup = renderToStaticMarkup(<AidenLiveOrb state={state} level={NaN} />);
-    assert.match(markup, /data-visual="duplex"/);
+test("Live voice and action states share the animated duplex helix", () => {
+  for (const state of ["thinking", "speaking", "acting"] as const) {
+    assert.deepEqual(aidenLiveMark(state), { mark: "helix-duplex", active: true });
+    const markup = renderToStaticMarkup(<AidenLiveMark state={state} level={NaN} />);
+    assert.match(markup, /data-aiden-mark="helix-duplex"/);
+    assert.doesNotMatch(markup, /data-paused/);
     assert.doesNotMatch(markup, /NaN/);
   }
-  assert.equal(aidenLiveOrbVisual("error"), "rest");
-  assert.equal(aidenLiveOrbVisual("connecting"), "connecting");
-  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: false }), "listening");
-  assert.equal(assistantLiveOrbState({ ...idleLive, active: true, busy: true, state: "closing" }), "ready");
+  assert.equal(assistantLiveMarkState({ ...idleLive, active: true, state: "open", microphoneActive: false }), "listening");
+  assert.equal(assistantLiveMarkState({ ...idleLive, active: true, busy: true, state: "closing" }), "ready");
 });
 
 test("dock requires reveal then stop, including mic-off and first-session startup", () => {
@@ -99,31 +98,31 @@ test("dock requires reveal then stop, including mic-off and first-session startu
   assert.equal(liveDockClickAction({ ...idleLive, setupComplete: false }, true, false), "settings");
 });
 
-test("Aiden Live orb state prioritizes errors, approvals, and connection work", () => {
-  assert.equal(assistantLiveOrbState(idleLive), "ready");
+test("Aiden Live mark state prioritizes errors, approvals, and connection work", () => {
+  assert.equal(assistantLiveMarkState(idleLive), "ready");
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, active: true, state: "open", microphoneActive: true }),
+    assistantLiveMarkState({ ...idleLive, active: true, state: "open", microphoneActive: true }),
     "listening",
   );
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, active: true, state: "connecting", busy: true }),
+    assistantLiveMarkState({ ...idleLive, active: true, state: "connecting", busy: true }),
     "connecting",
   );
-  assert.equal(assistantLiveOrbState({ ...idleLive, active: true }, true), "approval");
+  assert.equal(assistantLiveMarkState({ ...idleLive, active: true }, true), "approval");
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, active: true, computerUseActing: true }),
+    assistantLiveMarkState({ ...idleLive, active: true, computerUseActing: true }),
     "acting",
   );
-  assert.equal(assistantLiveOrbState({ ...idleLive, error: "Disconnected" }), "error");
+  assert.equal(assistantLiveMarkState({ ...idleLive, error: "Disconnected" }), "error");
   assert.equal(
-    assistantLiveOrbState({ ...idleLive, available: false, setupComplete: false }),
+    assistantLiveMarkState({ ...idleLive, available: false, setupComplete: false }),
     "unavailable",
   );
 });
 
-test("a final user caption moves the active orb to thinking", () => {
+test("a final user caption moves the active mark to thinking", () => {
   assert.equal(
-    assistantLiveOrbState({
+    assistantLiveMarkState({
       ...idleLive,
       active: true,
       state: "open",
@@ -134,9 +133,9 @@ test("a final user caption moves the active orb to thinking", () => {
   );
 });
 
-test("an active output caption moves the orb to speaking", () => {
+test("an active output caption moves the mark to speaking", () => {
   assert.equal(
-    assistantLiveOrbState({
+    assistantLiveMarkState({
       ...idleLive,
       active: true,
       state: "open",
@@ -201,16 +200,16 @@ test("batched voice receipts are examined FIFO and the earliest exact command wi
   );
 });
 
-test("dock replaces the retired Assistant panel with setup logo then Live orb", () => {
+test("dock replaces the retired Assistant panel with setup logo then Live mark", () => {
   const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
-  assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
+  assert.match(dock, /data-kind=\{setupCompleted \? "mark" : "logo"\}/u);
   assert.match(dock, /AIDEN_LIVE_SETUP_COMPLETE_KEY/u);
   assert.match(
     dock,
     /if \(!live\.active \|\| !live\.microphoneActive \|\| setupCompleted\) return/u,
   );
   assert.match(dock, /AssistantLiveSetupDialog/u);
-  assert.match(dock, /AidenLiveOrb/u);
+  assert.match(dock, /AidenLiveMark/u);
   assert.match(dock, /AssistantComputerUseApproval/u);
   assert.doesNotMatch(dock, /useAssistantLiveApprovals\(/u);
   assert.match(dock, /chat=\{SESSION_ACTIONS\}/u);
@@ -296,32 +295,32 @@ test("Aiden Live is visibly marked beta in setup and settings", () => {
   assert.match(settings, /Availability and\s+supported actions may change during beta\./u);
 });
 
-test("the Live orb maps all user-visible states onto the shared Libraries.dev orb", () => {
-  const orb = readFileSync(new URL("./aiden-live-orb.tsx", import.meta.url), "utf8");
-  const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
-  const packageJson = readFileSync(new URL("../../../package.json", import.meta.url), "utf8");
-  for (const state of [
-    "ready",
-    "connecting",
-    "listening",
-    "thinking",
-    "speaking",
-    "acting",
-    "approval",
-    "error",
-    "unavailable",
-  ]) {
-    assert.match(orb, new RegExp(`\\b${state}\\b`, "u"));
+test("every Live state renders a Helix-family mark, frozen when idle or unavailable", () => {
+  const expected = {
+    ready: ["helix-calm", false],
+    connecting: ["helix-twist", true],
+    listening: ["helix-swell", true],
+    thinking: ["helix-duplex", true],
+    speaking: ["helix-duplex", true],
+    acting: ["helix-duplex", true],
+    approval: ["glance", true],
+    error: ["helix-flat", false],
+    unavailable: ["helix-flat", false],
+  } as const;
+  for (const [state, [mark, active]] of Object.entries(expected)) {
+    const markup = renderToStaticMarkup(<AidenLiveMark state={state as keyof typeof expected} />);
+    assert.match(markup, new RegExp(`data-mark="${mark}"`), state);
+    assert.match(markup, new RegExp(`data-aiden-mark="${mark}"`), state);
+    assert.equal(markup.includes("data-paused"), !active, state);
+    assert.doesNotMatch(markup, /<canvas/u);
   }
-  assert.match(orb, /import \{ AidenOrb \} from "\.\.\/aiden-orb"/u);
-  assert.match(orb, /state="listening"/u);
-  assert.match(orb, /state="weaving"/u);
-  assert.doesNotMatch(orb, /Rive|\.riv/u);
-  assert.match(styles, /\.aiden-live-orb-canvas[\s\S]*filter:[\s\S]*hue-rotate\(209deg\)/u);
-  assert.match(
-    styles,
-    /\.aiden-live-trigger\[data-kind="orb"\][\s\S]*background: transparent;[\s\S]*box-shadow: none;/u,
-  );
-  assert.match(packageJson, /"thinking-orbs": "0\.3\.1"/u);
-  assert.doesNotMatch(packageJson, /@rive-app/u);
+});
+
+test("Live listening sizes the swell wave from the microphone level", () => {
+  const quiet = renderToStaticMarkup(<AidenLiveMark state="listening" level={0} />);
+  const loud = renderToStaticMarkup(<AidenLiveMark state="listening" level={1} />);
+  const clipped = renderToStaticMarkup(<AidenLiveMark state="listening" level={7} />);
+  assert.match(quiet, /data-level="0"/u);
+  assert.match(loud, /data-level="4"/u);
+  assert.match(clipped, /data-level="4"/u);
 });
