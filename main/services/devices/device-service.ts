@@ -49,6 +49,12 @@ const HUB_REQUEST_TIMEOUT_MS = 30_000;
 const SIMCTL_LIST_TIMEOUT_MS = 30_000;
 const SIMCTL_SHUTDOWN_TIMEOUT_MS = 60_000;
 
+/** The device an agent opened, so the renderer can float or select exactly that one. */
+export interface DeviceRevealTarget {
+  hostId: string;
+  deviceId: string;
+}
+
 export interface DeviceServiceDeps {
   /** `userData/devices`, where `consent.json` lives beside the tool installs. */
   baseDir: string;
@@ -120,9 +126,9 @@ export interface DeviceService {
   agentShimDir(): string | null;
   /** A per-chat directory for screenshots a text-only model cannot view. Removed with the chat. */
   screenshotDir(chatId: string): Promise<string>;
-  /** Asks the renderer to show the Simulator tab for a chat. */
-  reveal(chatId: string): void;
-  onReveal(listener: (chatId: string) => void): () => void;
+  /** Asks the renderer to show a chat's device: floating over the chat, or in its tab. */
+  reveal(chatId: string, target?: DeviceRevealTarget): void;
+  onReveal(listener: (chatId: string, target?: DeviceRevealTarget) => void): () => void;
   /** What paired desktops may reach while the owner shares this Mac's simulators. */
   shareHost(): AidenRemoteSimulatorHost;
   stop(): Promise<void>;
@@ -224,7 +230,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   const consentPath = path.join(deps.baseDir, "consent.json");
   const host = deps.host;
   const listeners = new Set<(state: DeviceServiceState) => void>();
-  const revealListeners = new Set<(chatId: string) => void>();
+  const revealListeners = new Set<(chatId: string, target?: DeviceRevealTarget) => void>();
   let shimDir: string | null = null;
   let consent: DeviceConsent = { ...NO_CONSENT };
   let hostState: DeviceHostState = { status: "needs-consent" };
@@ -999,8 +1005,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       await mkdir(directory, { recursive: true, mode: 0o700 });
       return directory;
     },
-    reveal(chatId) {
-      for (const listener of revealListeners) listener(chatId);
+    reveal(chatId, target) {
+      for (const listener of revealListeners) listener(chatId, target);
     },
     onReveal(listener) {
       revealListeners.add(listener);

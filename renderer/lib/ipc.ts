@@ -871,11 +871,16 @@ export const devicesApi = {
       const state = parseDeviceServiceState(payload);
       if (state) handler(state);
     }),
-  /** An agent opened a simulator for this chat; the Simulator tab should come forward. */
-  onReveal: (handler: (chatId: string) => void) =>
+  /** An agent opened a device for this chat; it floats over the chat or its tab comes forward. */
+  onReveal: (handler: (chatId: string, target?: { hostId: string; deviceId: string }) => void) =>
     onNotification<unknown>("devices:reveal", (payload) => {
-      const chatId = (payload as { chatId?: unknown } | null)?.chatId;
-      if (typeof chatId === "string" && chatId) handler(chatId);
+      const value = (payload ?? {}) as { chatId?: unknown; hostId?: unknown; deviceId?: unknown };
+      if (typeof value.chatId !== "string" || !value.chatId) return;
+      const target =
+        typeof value.hostId === "string" && value.hostId && typeof value.deviceId === "string" && value.deviceId
+          ? { hostId: value.hostId, deviceId: value.deviceId }
+          : undefined;
+      handler(value.chatId, target);
     }),
 };
 
