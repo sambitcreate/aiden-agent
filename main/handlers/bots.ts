@@ -2,13 +2,9 @@ import { ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { configStore } from "../services/config-store.js";
-import { llmClient } from "../services/llm-client.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../services/bot-runtime-authority-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
-import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
-import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
-import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import {
   BotCapabilityValidationError,
   parseBotNoticeAcknowledgement,
@@ -24,11 +20,25 @@ import {
   BotCapabilityUnavailableError,
 } from "../services/bot-capability-store-core.js";
 import { botMutationGate } from "../services/bot-mutation-gate.js";
-import { generateBotAvatarSuggestion } from "../services/bot-avatar-generator.js";
-import { botAvatarOperations } from "../services/bot-avatar-operation-registry.js";
 import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-store-main.js";
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
+import {
+  botLiveProjection,
+  botSessionRuntime,
+  dismissBotConnection,
+} from "../services/bot-runtime/bot-session-main.js";
+import { botStarter } from "../services/bot-runtime/bot-starter-main.js";
+import {
+  parseAidenRemoteBotAvatarUploadRequest,
+  type AidenRemoteBotAvatarUploadRequest,
+} from "../services/aiden-remote-protocol.js";
+import { registerBotLiveHandlers } from "./bot-live.js";
+import { registerBotQuestionHandlers } from "./bot-questions.js";
+import { registerBotFileHandlers } from "./bot-files.js";
+import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
+import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
+import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
 import {
   telegramBotBindingAuthority,
   telegramBotBindings,
@@ -41,14 +51,54 @@ import {
 import { telegramProfileMutationFence } from "../services/telegram/telegram-profile-mutation-fence.js";
 import {
   parseBotAccessUpdateInput,
-  parseBotAvatarSuggestionInput,
-  parseBotAvatarRequestId,
-  parseBotChatCreate,
+  parseBotCreateFromPreset,
   parseBotCreateWithAccess,
+  parseConnectionPluginId,
   parseBotId,
-  parseBotRevision,
+  parseBotSend,
+  parseBotSessionAction,
+  parseBotApprovalDecision,
   parseBotUpdate,
 } from "./bot-params.js";
+
+async function desktopAvatarAdapter() {
+  const instanceId = (await (await getAidenRemoteRuntime()).state.snapshot()).instanceId;
+  return createMainBotAvatarApplicationAdapter(instanceId);
+}
+
+/** Choose photo: replaces the Bot's one canonical photo (the same store the phones use). */
+async function setBotPhoto(botId: string, upload: AidenRemoteBotAvatarUploadRequest): Promise<void> {
+  const avatar = await desktopAvatarAdapter();
+  await botApplicationService.withBotMutation(botId, async () => {
+    const bot = await botApplicationService.get(botId);
+    if (!bot) throw new Error("This Bot no longer exists.");
+    const current = await avatar.view(botId, bot.avatar);
+    await avatar.put(
+      {
+        botId,
+        expectedAssetRevision: current.asset?.assetRevision ?? null,
+        operationId: `avatarop_desktop_${crypto.randomUUID().split("-").join("")}`,
+      },
+      upload,
+    );
+  });
+}
+
+/** Remove photo: back to the Bot's character. */
+async function removeBotPhoto(botId: string): Promise<void> {
+  const avatar = await desktopAvatarAdapter();
+  await botApplicationService.withBotMutation(botId, async () => {
+    const bot = await botApplicationService.get(botId);
+    if (!bot) throw new Error("This Bot no longer exists.");
+    const current = await avatar.view(botId, bot.avatar);
+    if (!current.asset) return;
+    await avatar.delete({
+      botId,
+      expectedAssetRevision: current.asset.assetRevision,
+      operationId: `avatarop_desktop_${crypto.randomUUID().split("-").join("")}`,
+    });
+  });
+}
 
 export function registerBotHandlers(): void {
   const desktopAudienceId = BOT_DESKTOP_AUDIENCE_ID;
@@ -121,11 +171,8 @@ export function registerBotHandlers(): void {
       );
     },
   );
-  ipcMain.handle("bots:list", async (_event, includeArchived: unknown) => {
-    if (includeArchived !== undefined && typeof includeArchived !== "boolean")
-      throw new Error("Invalid bot list fields.");
-    return botApplicationService.list(includeArchived === true);
-  });
+  // Bots are deleted, never archived; a legacy include-archived flag is ignored.
+  ipcMain.handle("bots:list", async () => botApplicationService.list());
   ipcMain.handle("bots:get", async (_event, id: unknown) =>
     botApplicationService.get(parseBotId(id)),
   );
@@ -149,43 +196,81 @@ export function registerBotHandlers(): void {
       throw botAccessUpdateRendererError(error);
     }
   });
-  ipcMain.handle("bots:suggestAvatar", async (event, input: unknown) => {
-    const owner = rendererDocumentOwner(
-      event,
-      () =>
-        new Error(
-          "Bot avatar design requires the active application document.",
-        ),
-    );
-    const parsed = parseBotAvatarSuggestionInput(input);
-    const operation = botAvatarOperations.admit(
-      owner.documentId,
-      parsed.requestId,
-    );
-    const unsubscribe = owner.onInvalidated(operation.cancel);
-    try {
-      return await generateBotAvatarSuggestion(parsed, operation.signal);
-    } finally {
-      unsubscribe();
-      operation.finish();
-    }
-  });
-  ipcMain.handle(
-    "bots:cancelAvatarSuggestion",
-    async (event, requestId: unknown) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () =>
-          new Error(
-            "Bot avatar design requires the active application document.",
-          ),
-      );
-      return botAvatarOperations.cancel(
-        owner.documentId,
-        parseBotAvatarRequestId(requestId),
-      );
-    },
+  ipcMain.handle("bots:sessionState", async (_event, id: unknown) =>
+    (await botSessionRuntime()).state(parseBotId(id)),
   );
+  ipcMain.handle("bots:send", async (_event, input: unknown) => {
+    const { botId, ...message } = parseBotSend(input);
+    return (await botSessionRuntime()).send(botId, message);
+  });
+  ipcMain.handle("bots:resume", async (_event, input: unknown) => {
+    const { botId, requestId } = parseBotSessionAction(input, "resume");
+    return (await botSessionRuntime()).resume(botId, requestId);
+  });
+  ipcMain.handle("bots:dismiss", async (_event, input: unknown) => {
+    const { botId, requestId } = parseBotSessionAction(input, "dismiss");
+    return (await botSessionRuntime()).dismiss(botId, requestId);
+  });
+  ipcMain.handle("bots:stop", async (_event, id: unknown) =>
+    (await botSessionRuntime()).stop(parseBotId(id)),
+  );
+  ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
+    const { presetId, access } = parseBotCreateFromPreset(input);
+    const { bot, created } = await botStarter().startFromPreset(presetId, access === undefined ? {} : { access });
+    return { bot, created };
+  });
+  ipcMain.handle("bots:introduce", async (_event, id: unknown) => {
+    // The create flow's one-time self-intro; deduped per Bot by the runtime.
+    return botStarter().introduce(parseBotId(id));
+  });
+  ipcMain.handle("bots:connections:dismiss", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
+    const botId = parseBotId(rawBotId);
+    const pluginId = parseConnectionPluginId(rawPluginId);
+    await dismissBotConnection(botId, pluginId);
+  });
+  ipcMain.handle("bots:photo:set", async (_event, rawBotId: unknown, rawUpload: unknown) => {
+    const botId = parseBotId(rawBotId);
+    const upload = parseAidenRemoteBotAvatarUploadRequest(rawUpload);
+    await setBotPhoto(botId, upload);
+    ipcMain.broadcast("bots:changed", { botId });
+  });
+  ipcMain.handle("bots:photo:remove", async (_event, rawBotId: unknown) => {
+    const botId = parseBotId(rawBotId);
+    await removeBotPhoto(botId);
+    ipcMain.broadcast("bots:changed", { botId });
+  });
+  registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => {
+      const owner = rendererDocumentOwner(event, () => new Error("Bot chats require the active application document."));
+      return {
+        key: `${owner.id}:${owner.documentId}`,
+        isDestroyed: owner.isDestroyed,
+        onInvalidated: owner.onInvalidated,
+        send: (channel, payload) => owner.send(channel, payload),
+      };
+    },
+    projection: botLiveProjection,
+    parseBotId,
+  });
+  // Bot tool approvals: any desktop window may answer; the first answer wins.
+  ipcMain.handle("bots:approve", async (_event, input: unknown) => {
+    const { waitId, decision } = parseBotApprovalDecision(input);
+    return { decided: botApprovals.decide(waitId, decision) };
+  });
+  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
+  // Bot quick-reply questions: any desktop window may answer; the first answer wins.
+  registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
+  // Read-only Files: the Bot's own folder.
+  registerBotFileHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    homePath: async (botId) => (await botApplicationService.resolveManagedWorkspace(botId)).homePath,
+    list: listWorkspaceFiles,
+    read: readWorkspaceFile,
+  });
+  ipcMain.handle("bots:delete", async (_event, id: unknown) => {
+    await (await botSessionRuntime()).deleteBot(parseBotId(id));
+  });
   ipcMain.handle("bots:update", async (_event, input: unknown) => {
     return botApplicationService.updateBot(parseBotUpdate(input));
   });
@@ -213,43 +298,6 @@ export function registerBotHandlers(): void {
     } catch (error) {
       throw botAccessUpdateRendererError(error);
     }
-  });
-  ipcMain.handle("bots:archive", async (_event, id: unknown) => {
-    if (!id || typeof id !== "object" || Array.isArray(id)) {
-      throw new Error("Invalid bot archive fields.");
-    }
-    const input = id as Record<string, unknown>;
-    if (
-      !Object.keys(input).every(
-        (key) => key === "id" || key === "expectedRevision",
-      )
-    ) {
-      throw new Error("Invalid bot archive fields.");
-    }
-    return botApplicationService.archiveBot({
-      botId: parseBotId(input.id),
-      expectedRevision: parseBotRevision(input.expectedRevision),
-    });
-  });
-  ipcMain.handle("bots:restore", async (_event, id: unknown) => {
-    if (!id || typeof id !== "object" || Array.isArray(id)) {
-      throw new Error("Invalid bot restore fields.");
-    }
-    const input = id as Record<string, unknown>;
-    if (
-      !Object.keys(input).every(
-        (key) => key === "id" || key === "expectedRevision",
-      )
-    ) {
-      throw new Error("Invalid bot restore fields.");
-    }
-    return botApplicationService.restoreBot({
-      botId: parseBotId(input.id),
-      expectedRevision: parseBotRevision(input.expectedRevision),
-    });
-  });
-  ipcMain.handle("bots:listChats", async (_event, id: unknown) => {
-    return botApplicationService.listChats(parseBotId(id));
   });
   ipcMain.handle("bots:getTelegramBinding", async (_event, id: unknown) =>
     telegramBotBindings.get(parseBotId(id)),
@@ -432,44 +480,6 @@ export function registerBotHandlers(): void {
       telegramBotBindingAuthority.disableBot(botId),
     );
   });
-  ipcMain.handle("bots:createChat", async (event, input: unknown) => {
-    const parsed = parseBotChatCreate(input);
-    const owner = rendererDocumentOwner(
-      event,
-      () =>
-        new Error("Bot conversations require the active application document."),
-    );
-    if (llmClient.requiresAppendReconciliation(owner.documentId))
-      throw new Error(appendReconciliationFailureMessage("blocked"));
-    const assertCurrent = () => {
-      if (owner.isDestroyed())
-        throw new Error(
-          "The application changed before the Bot conversation was created.",
-        );
-      if (llmClient.requiresAppendReconciliation(owner.documentId))
-        throw new Error(appendReconciliationFailureMessage("blocked"));
-    };
-    try {
-      return chatForRenderer(
-        await botApplicationService.createChat({
-          audienceId: desktopAudienceId,
-          botId: parsed.botId,
-          providerId: parsed.providerId,
-          model: parsed.model,
-          assertCurrent,
-        }),
-      );
-    } catch (error) {
-      if (isChatCreateReconciliationRequiredError(error)) {
-        llmClient.markAppendReconciliationRequired(owner.documentId);
-        owner.onInvalidated(() =>
-          llmClient.clearAppendReconciliationRequired(owner.documentId),
-        );
-        throw new Error(appendReconciliationFailureMessage("blocked"));
-      }
-      throw error;
-    }
-  });
 }
 
 /**
@@ -481,11 +491,7 @@ function botAccessUpdateRendererError(error: unknown): unknown {
     return new Error("Bot capabilities kept changing. Review the latest choices and try again.");
   }
   if (error instanceof BotApplicationUnavailableError) {
-    return new Error(
-      error.reason === "archived"
-        ? "Restore this Bot before making changes."
-        : "This Bot no longer exists.",
-    );
+    return new Error("This Bot no longer exists.");
   }
   if (
     error instanceof BotCapabilityRevisionConflictError ||

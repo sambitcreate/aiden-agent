@@ -28,7 +28,6 @@ const OPERATION_FIELDS = new Set([
   "query",
   "botId",
   "turnId",
-  "includeArchived",
   "body",
   "idempotencyKey",
   "revision",
@@ -55,7 +54,6 @@ export const PEER_CHAT_MUTATIONS: ReadonlySet<string> = new Set([
   "deleteChat",
   "markRead",
   "interruptAgent",
-  "updateBotChatAccess",
   // A fork never changes its source, but a summary action changes the fork.
   "forkSummaryRetry",
   "forkSummarySkip",
@@ -240,7 +238,7 @@ export function peerOperationRequest(
       path = `/streams/${id()}/question`;
       break;
     case "bots":
-      path = `/bots${input.includeArchived === true ? "?includeArchived=true" : ""}`;
+      path = "/bots";
       break;
     case "bot":
       path = `/bots/${id()}`;
@@ -261,12 +259,6 @@ export function peerOperationRequest(
       path = `/bot-capabilities${query([
         ["botId", optional(input.botId, () => hostIdentifier(input.botId))],
       ])}`;
-      break;
-    case "botChatAccess":
-      path = `/chats/${id()}/capabilities`;
-      break;
-    case "botFavorites":
-      path = "/bot-favorites";
       break;
     case "createChat":
       path = "/chats";
@@ -351,18 +343,6 @@ export function peerOperationRequest(
       path = `/bots/${id()}/chats`;
       method = "POST";
       needsKey = true;
-      break;
-    case "updateBotFavorites":
-      path = "/bot-favorites";
-      method = "PATCH";
-      needsKey = true;
-      needsRevision = true;
-      break;
-    case "updateBotChatAccess":
-      path = `/chats/${id()}/capabilities`;
-      method = "PATCH";
-      needsKey = true;
-      needsRevision = true;
       break;
     case "uploadAttachment":
       // Not keyed: an unused staged upload expires on the host, so a retry

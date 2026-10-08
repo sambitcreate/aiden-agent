@@ -1,359 +1,134 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
-import androidx.activity.compose.BackHandler
-import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
-import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
-import androidx.compose.ui.res.stringResource
-import sbtbiswas.AidenOnTheGo.R
-import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
-import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
-import sbtbiswas.AidenOnTheGo.features.shared.toModelPickerProvider
-import sbtbiswas.AidenOnTheGo.models.*
-import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
-import java.util.UUID
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalResources
-import androidx.annotation.StringRes
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
+import java.util.UUID
 
-enum class AidenBotEditorDefaultAccess {
-    RECOMMENDED,
-    FULL,
-    CUSTOM
+const val AIDEN_BOT_DEFAULT_INSTRUCTIONS = "Help clearly, use the selected tools when useful, and keep me in control."
+
+/** The one-line subtitle a Bot shows under its name, taken from "What should it help with?". */
+fun aidenBotSubtitle(help: String): String {
+    val firstLine = help.trim().lineSequence().firstOrNull()?.trim().orEmpty()
+    if (firstLine.codePointCount(0, firstLine.length) <= AidenBotWire.MAX_PURPOSE_LENGTH) return firstLine
+    return firstLine.substring(0, firstLine.offsetByCodePoints(0, AidenBotWire.MAX_PURPOSE_LENGTH)).trimEnd()
 }
 
-sealed class AidenBotEditorMode {
-    data class Create(val defaultAccess: AidenBotEditorDefaultAccess = AidenBotEditorDefaultAccess.RECOMMENDED) : AidenBotEditorMode()
-    data class Edit(val botID: String) : AidenBotEditorMode()
-}
-
-data class AidenBotCustomAccessDraft(
-    var providerID: String,
-    var modelID: String,
-    var fileScopeIDs: Set<String>,
-    var shellEnabled: Boolean,
-    var connectionIDs: Set<String>,
-    var skillIDs: Set<String>,
-    var otherCapabilityIDs: Set<String>
+/** The two answers the create flow asks for. */
+data class AidenBotCreateDraft(
+    val name: String = "",
+    val help: String = ""
 ) {
-    companion object {
-        fun fromCatalog(catalog: AidenBotCapabilityCatalog): AidenBotCustomAccessDraft? {
-            val provider = catalog.providers.firstOrNull { it.available && it.models.any { m -> m.available } } ?: return null
-            val model = provider.models.firstOrNull { it.available } ?: return null
-            return AidenBotCustomAccessDraft(
-                providerID = provider.id,
-                modelID = model.id,
-                fileScopeIDs = catalog.fileScopes.filter { it.available }.map { it.id }.toSet(),
-                shellEnabled = catalog.shellAvailable,
-                connectionIDs = catalog.connections.filter { it.available }.map { it.id }.toSet(),
-                skillIDs = catalog.skills.filter { it.available }.map { it.id }.toSet(),
-                otherCapabilityIDs = catalog.otherCapabilities.filter { it.available }.map { it.id }.toSet()
-            )
-        }
+    val canCreate: Boolean
+        get() = name.isNotBlank()
 
-        fun fromAccess(access: AidenBotAccessView, catalog: AidenBotCapabilityCatalog): AidenBotCustomAccessDraft? {
-            val custom = access.custom
-            if (custom != null) {
-                return AidenBotCustomAccessDraft(
-                    providerID = custom.providerId,
-                    modelID = custom.modelId,
-                    fileScopeIDs = custom.fileScopeIds.toSet(),
-                    shellEnabled = custom.shellEnabled,
-                    connectionIDs = custom.connectionIds.toSet(),
-                    skillIDs = custom.skillIds.toSet(),
-                    otherCapabilityIDs = custom.otherCapabilityIds.toSet()
-                )
-            }
-            return fromCatalog(catalog)
-        }
-    }
-
-    fun selection(): AidenBotCustomSelection {
-        return AidenBotCustomSelection(
-            fileScopeIds = fileScopeIDs.sorted(),
-            shellEnabled = shellEnabled,
-            connectionIds = connectionIDs.sorted(),
-            skillIds = skillIDs.sorted(),
-            otherCapabilityIds = otherCapabilityIDs.sorted(),
-            providerId = providerID,
-            modelId = modelID
-        )
-    }
-
-    fun isSaveable(catalog: AidenBotCapabilityCatalog): Boolean {
-        return try {
-            val sel = selection()
-            catalog.containsAvailable(sel)
-        } catch (_: Exception) {
-            false
-        }
-    }
-}
-
-data class AidenBotEditorDraft(
-    var name: String,
-    var purpose: String,
-    var openingGreeting: String,
-    var instructions: String,
-    var avatar: AidenBotAvatarRecipe,
-    var usesFullAccess: Boolean,
-    var customAccess: AidenBotCustomAccessDraft
-) {
-    companion object {
-        val DEFAULT_AVATAR = AidenBotAvatarRecipe(
-            shape = AidenBotAvatarShape.ORB,
-            color = AidenBotAvatarColor.SKY,
-            eyes = AidenBotAvatarEyes.HAPPY,
-            detail = AidenBotAvatarDetail.SPARKLES
-        )
-
-        const val DEFAULT_INSTRUCTIONS = "Help clearly, use the selected tools when useful, and keep me in control."
-
-        fun fullAccessAccepted(catalog: AidenBotCapabilityCatalog): Boolean {
-            return catalog.notice.acceptedDecision == AidenBotNoticeDecision.CONTINUE_FULL
-        }
-
-        fun createDefault(catalog: AidenBotCapabilityCatalog, defaultAccess: AidenBotEditorDefaultAccess): AidenBotEditorDraft? {
-            val customAccess = AidenBotCustomAccessDraft.fromCatalog(catalog) ?: return null
-            val usesFull = when (defaultAccess) {
-                AidenBotEditorDefaultAccess.CUSTOM -> false
-                AidenBotEditorDefaultAccess.FULL, AidenBotEditorDefaultAccess.RECOMMENDED -> fullAccessAccepted(catalog)
-            }
-            return AidenBotEditorDraft(
-                name = "",
-                purpose = "",
-                openingGreeting = "",
-                instructions = DEFAULT_INSTRUCTIONS,
-                avatar = DEFAULT_AVATAR,
-                usesFullAccess = usesFull,
-                customAccess = customAccess
-            )
-        }
-
-        fun fromDetail(detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog): AidenBotEditorDraft? {
-            val customAccess = AidenBotCustomAccessDraft.fromAccess(detail.access, catalog) ?: return null
-            if (detail.modelSelection != null) {
-                val prov = catalog.providers.firstOrNull { it.id == detail.modelSelection?.providerId }
-                if (prov?.models?.any { it.id == detail.modelSelection?.modelId } == true) {
-                    customAccess.providerID = detail.modelSelection!!.providerId
-                    customAccess.modelID = detail.modelSelection!!.modelId
-                }
-            }
-            val recipe = when (val s = detail.avatar.semantic) {
-                is AidenBotSemanticAvatar.Recipe -> s.recipe
-                is AidenBotSemanticAvatar.Legacy -> {
-                    val pres = aidenBotAvatarPresentation(s)
-                    AidenBotAvatarRecipe(shape = pres.shape, color = pres.color, eyes = pres.eyes, detail = pres.detail)
-                }
-            }
-            return AidenBotEditorDraft(
-                name = detail.name,
-                purpose = detail.purpose,
-                openingGreeting = detail.openingGreeting ?: "",
-                instructions = detail.instructions,
-                avatar = recipe,
-                usesFullAccess = detail.access.accessMode == AidenBotAccessMode.FULL,
-                customAccess = customAccess
-            )
-        }
-    }
-
-    fun accessUpdate(catalog: AidenBotCapabilityCatalog): AidenBotAccessUpdate {
-        val modelSelection = AidenBotModelSelection(
-            providerId = customAccess.providerID,
-            modelId = customAccess.modelID
-        )
-        if (!catalog.containsAvailable(modelSelection.providerId, modelSelection.modelId)) {
-            throw AidenBotContractException.InvalidCombination("unavailable Bot model")
-        }
-        return if (usesFullAccess) {
-            AidenBotAccessUpdate.full(catalog.revision, modelSelection)
-        } else {
-            val sel = customAccess.selection()
-            if (!catalog.containsAvailable(sel)) {
-                throw AidenBotContractException.InvalidCombination("unavailable custom access")
-            }
-            AidenBotAccessUpdate.custom(catalog.revision, sel)
-        }
-    }
-
-    fun createRequest(catalog: AidenBotCapabilityCatalog): AidenBotCreateRequest {
+    /**
+     * The create request for this draft. The answer becomes the subtitle and seeds the
+     * instructions; the character is picked from the name. Access is omitted, which the
+     * Mac treats as Full; a Bot made before any AI model is ready reports `needs_model`.
+     */
+    fun request(): AidenBotCreateRequest? {
+        if (!canCreate) return null
+        val trimmedName = name.trim().take(AidenBotWire.MAX_NAME_LENGTH)
         return AidenBotCreateRequest(
-            name = name.trim(),
-            purpose = purpose.trim(),
-            openingGreeting = openingGreeting.trim().ifEmpty { null },
-            instructions = instructions.trim(),
-            avatar = AidenBotSemanticAvatar.Recipe(avatar),
-            access = accessUpdate(catalog)
+            name = trimmedName,
+            purpose = aidenBotSubtitle(help),
+            instructions = help.trim().take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH).ifEmpty { AIDEN_BOT_DEFAULT_INSTRUCTIONS },
+            avatar = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(trimmedName))
         )
     }
-
-    fun identityPatch(comparedTo: AidenBotDetail): AidenBotIdentityPatch? {
-        val nextName = name.trim()
-        val nextPurpose = purpose.trim()
-        val nextGreeting = openingGreeting.trim().ifEmpty { null }
-        val nextInstructions = instructions.trim()
-        val nextAvatar = AidenBotSemanticAvatar.Recipe(avatar)
-        val greetingChanged = nextGreeting != comparedTo.openingGreeting
-        if (nextName == comparedTo.name && nextPurpose == comparedTo.purpose && !greetingChanged && nextInstructions == comparedTo.instructions && nextAvatar == comparedTo.avatar.semantic) {
-            return null
-        }
-        return AidenBotIdentityPatch(
-            name = if (nextName == comparedTo.name) null else nextName,
-            purpose = if (nextPurpose == comparedTo.purpose) null else nextPurpose,
-            openingGreeting = if (greetingChanged) nextGreeting else null,
-            instructions = if (nextInstructions == comparedTo.instructions) null else nextInstructions,
-            avatar = if (nextAvatar == comparedTo.avatar.semantic) null else nextAvatar
-        )
-    }
-
-    fun changesAccess(comparedTo: AidenBotDetail, catalog: AidenBotCapabilityCatalog): Boolean {
-        val next = accessUpdate(catalog)
-        return when (next.accessMode) {
-            AidenBotAccessMode.FULL -> comparedTo.access.accessMode != AidenBotAccessMode.FULL || (comparedTo.modelSelection?.providerId != next.providerId || comparedTo.modelSelection?.modelId != next.modelId)
-            AidenBotAccessMode.CUSTOM -> comparedTo.access.accessMode != AidenBotAccessMode.CUSTOM || comparedTo.access.custom != next.custom
-        }
-    }
-
-    fun isSaveable(catalog: AidenBotCapabilityCatalog): Boolean {
-        return (try { createRequest(catalog) } catch (_: Exception) { null }) != null
-    }
-
-    fun isSatisfied(detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog): Boolean {
-        return identityPatch(detail) == null && !changesAccess(detail, catalog)
-    }
 }
 
-fun aidenBotEditorIsDirty(
-    draft: AidenBotEditorDraft?,
-    cleanCreateDraft: AidenBotEditorDraft?,
-    baselineBot: AidenBotDetail?,
-    catalog: AidenBotCapabilityCatalog?,
-    isCreating: Boolean,
-    hasAvatarCandidate: Boolean = false
-): Boolean {
-    if (hasAvatarCandidate) return true
-    if (draft == null) return false
-    if (isCreating) return draft != cleanCreateDraft
-    if (baselineBot == null || catalog == null) return false
-    val identityChanged = draft.identityPatch(baselineBot) != null
-    val accessChanged = try { draft.changesAccess(baselineBot, catalog) } catch (_: Exception) { false }
-    return identityChanged || accessChanged
-}
-
-fun aidenBotEditorCreateFailureIsAmbiguous(error: Throwable): Boolean {
-    return aidenBotAvatarMutationFailureIsAmbiguous(error)
-}
-
-fun aidenBotEditorCanSubmitSettings(hasAvatarCandidate: Boolean): Boolean {
-    return !hasAvatarCandidate
-}
-
-fun aidenBotEditorResolvedDraft(
-    mode: AidenBotEditorMode,
-    catalog: AidenBotCapabilityCatalog,
-    bot: AidenBotDetail?
-): AidenBotEditorDraft {
-    return when (mode) {
-        is AidenBotEditorMode.Create -> {
-            AidenBotEditorDraft.createDefault(catalog, mode.defaultAccess)
-                ?: throw AidenBotContractException.InvalidCombination("no available provider and model")
-        }
-        is AidenBotEditorMode.Edit -> {
-            val b = bot ?: throw AidenBotContractException.InvalidCombination("missing bot detail")
-            AidenBotEditorDraft.fromDetail(b, catalog)
-                ?: throw AidenBotContractException.InvalidCombination("no available provider and model")
-        }
+/**
+ * The Bot editor route. With no [botId] it is the two-question create flow; with a
+ * [botId] it is the full-screen Instructions editor, where Save persists and Back discards.
+ */
+@Composable
+fun AidenBotEditorScreen(
+    botId: String? = null,
+    coordinator: AidenRemoteCoordinator,
+    onNavigateBack: () -> Unit,
+    onBotSaved: (String) -> Unit
+) {
+    if (botId == null) {
+        AidenBotCreateScreen(coordinator, onNavigateBack, onBotSaved)
+    } else {
+        AidenBotInstructionsEditorScreen(botId, coordinator, onNavigateBack, onBotSaved)
     }
-}
-
-fun aidenBotEditorRebasedDraft(
-    draft: AidenBotEditorDraft,
-    baseline: AidenBotDetail,
-    baselineCatalog: AidenBotCapabilityCatalog,
-    authoritative: AidenBotDetail,
-    authoritativeCatalog: AidenBotCapabilityCatalog
-): AidenBotEditorDraft {
-    val baselineDraft = AidenBotEditorDraft.fromDetail(baseline, baselineCatalog)
-        ?: throw AidenBotContractException.InvalidCombination("no available provider and model")
-    val rebased = AidenBotEditorDraft.fromDetail(authoritative, authoritativeCatalog)
-        ?: throw AidenBotContractException.InvalidCombination("no available provider and model")
-
-    val identityPatch = draft.identityPatch(baseline)
-    if (identityPatch != null) {
-        if (identityPatch.name != null) rebased.name = draft.name
-        if (identityPatch.purpose != null) rebased.purpose = draft.purpose
-        if (identityPatch.openingGreeting != null) rebased.openingGreeting = draft.openingGreeting
-        if (identityPatch.instructions != null) rebased.instructions = draft.instructions
-        if (identityPatch.avatar != null) rebased.avatar = draft.avatar
-    }
-
-    if (draft.usesFullAccess != baselineDraft.usesFullAccess) {
-        rebased.usesFullAccess = draft.usesFullAccess
-    }
-    val modelBindingChanged = draft.customAccess.providerID != baselineDraft.customAccess.providerID ||
-            draft.customAccess.modelID != baselineDraft.customAccess.modelID
-    if (modelBindingChanged) {
-        rebased.customAccess.providerID = draft.customAccess.providerID
-        rebased.customAccess.modelID = draft.customAccess.modelID
-    }
-    if (draft.customAccess.fileScopeIDs != baselineDraft.customAccess.fileScopeIDs) {
-        rebased.customAccess.fileScopeIDs = draft.customAccess.fileScopeIDs
-    }
-    if (draft.customAccess.shellEnabled != baselineDraft.customAccess.shellEnabled) {
-        rebased.customAccess.shellEnabled = draft.customAccess.shellEnabled
-    }
-    if (draft.customAccess.connectionIDs != baselineDraft.customAccess.connectionIDs) {
-        rebased.customAccess.connectionIDs = draft.customAccess.connectionIDs
-    }
-    if (draft.customAccess.skillIDs != baselineDraft.customAccess.skillIDs) {
-        rebased.customAccess.skillIDs = draft.customAccess.skillIDs
-    }
-    if (draft.customAccess.otherCapabilityIDs != baselineDraft.customAccess.otherCapabilityIDs) {
-        rebased.customAccess.otherCapabilityIDs = draft.customAccess.otherCapabilityIDs
-    }
-    return rebased
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AidenBotEditorScreen(
-    botId: String? = null,
+private fun AidenBotEditorScaffold(
+    title: String,
+    actionLabel: String,
+    actionEnabled: Boolean,
+    onAction: () -> Unit,
+    onNavigateBack: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val palette = AidenTheme.palette
+    Scaffold(
+        containerColor = palette.canvas,
+        topBar = {
+            TopAppBar(
+                title = { Text(title, fontWeight = FontWeight.SemiBold) },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
+                    }
+                },
+                actions = {
+                    AidenPrimaryButton(
+                        text = actionLabel,
+                        enabled = actionEnabled,
+                        onClick = onAction,
+                        modifier = Modifier.padding(end = 12.dp)
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.canvas, titleContentColor = palette.foreground)
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .aidenReadableWidth()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = AidenUi.ScreenGutter, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun AidenBotCreateScreen(
     coordinator: AidenRemoteCoordinator,
     onNavigateBack: () -> Unit,
     onBotSaved: (String) -> Unit
@@ -362,534 +137,168 @@ fun AidenBotEditorScreen(
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
-
-    var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
-    var baselineBot by remember { mutableStateOf<AidenBotDetail?>(null) }
-    var draft by remember { mutableStateOf<AidenBotEditorDraft?>(null) }
-    var cleanCreateDraft by remember { mutableStateOf<AidenBotEditorDraft?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
+    var draft by remember { mutableStateOf(AidenBotCreateDraft()) }
     var isSaving by remember { mutableStateOf(false) }
-    var isConfirmingDiscard by remember { mutableStateOf(false) }
-    var showImagePlaygroundSheet by remember { mutableStateOf(false) }
-    var avatarModel by remember { mutableStateOf<AidenBotGeneratedAvatarModel?>(null) }
-    var saveError by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // One key per attempt, so a retried Create never makes two Bots.
+    val botKey = remember { UUID.randomUUID() }
 
-    val isCreating = botId == null
-    val isDirty = aidenBotEditorIsDirty(
-        draft = draft,
-        cleanCreateDraft = cleanCreateDraft,
-        baselineBot = baselineBot,
-        catalog = catalog,
-        isCreating = isCreating,
-        hasAvatarCandidate = avatarModel?.hasCandidate == true
-    )
-    // System back must not silently discard edits the Close button would confirm.
-    BackHandler(enabled = isDirty && !isConfirmingDiscard) { isConfirmingDiscard = true }
+    AidenBotEditorScaffold(
+        title = stringResource(R.string.bot_editor_new_title),
+        actionLabel = if (isSaving) stringResource(R.string.bot_editor_creating) else stringResource(R.string.action_create),
+        actionEnabled = !isSaving && client != null && draft.request() != null,
+        onNavigateBack = onNavigateBack,
+        onAction = {
+            val cl = client ?: return@AidenBotEditorScaffold
+            val request = draft.request() ?: return@AidenBotEditorScaffold
+            scope.launch {
+                isSaving = true
+                error = null
+                try {
+                    val created = cl.createBot(request, botKey)
+                    coordinator.botCache.putBotDetail(created)
+                    onBotSaved(created.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    error = resources.getString(R.string.bot_editor_create_failed)
+                } finally {
+                    isSaving = false
+                }
+            }
+        }
+    ) {
+        AidenBotSemanticAvatarView(
+            avatar = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(draft.name)),
+            name = draft.name,
+            size = 96.dp,
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        )
+        AidenBotLabeledField(
+            label = stringResource(R.string.bot_field_name),
+            value = draft.name,
+            onValueChange = { draft = draft.copy(name = it.take(AidenBotWire.MAX_NAME_LENGTH)) },
+            placeholder = stringResource(R.string.bot_editor_name_placeholder),
+            singleLine = true
+        )
+        AidenBotLabeledField(
+            label = stringResource(R.string.bot_editor_help_label),
+            value = draft.help,
+            onValueChange = { draft = draft.copy(help = it.take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH)) },
+            placeholder = stringResource(R.string.bot_editor_help_placeholder),
+            singleLine = false
+        )
+        Text(
+            text = stringResource(R.string.bot_editor_later_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.secondary
+        )
+        error?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+@Composable
+private fun AidenBotInstructionsEditorScreen(
+    botId: String,
+    coordinator: AidenRemoteCoordinator,
+    onNavigateBack: () -> Unit,
+    onBotSaved: (String) -> Unit
+) {
+    val palette = AidenTheme.palette
+    val resources = LocalResources.current
+    val scope = rememberCoroutineScope()
+    val client by coordinator.client.collectAsStateWithLifecycle()
+    var bot by remember { mutableStateOf<AidenBotDetail?>(coordinator.botCache.getBotDetail(botId)) }
+    var text by remember { mutableStateOf(bot?.instructions.orEmpty()) }
+    var loaded by remember { mutableStateOf(bot != null) }
+    var isSaving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(botId, client) {
         val cl = client ?: return@LaunchedEffect
-        isLoading = true
+        // The pairing this read belongs to; a removed or switched pairing never gets it back.
+        val requestInstance = coordinator.activeInstanceId
         try {
-            val cat = cl.botCapabilityCatalog(botId)
-            catalog = cat
-            if (botId != null) {
-                val detail = cl.bot(botId)
-                baselineBot = detail
-                val d = AidenBotEditorDraft.fromDetail(detail, cat)
-                draft = d
-                avatarModel = AidenBotGeneratedAvatarModel(coordinator = coordinator, botId = botId)
-            } else {
-                val d = AidenBotEditorDraft.createDefault(cat, AidenBotEditorDefaultAccess.RECOMMENDED)
-                draft = d
-                cleanCreateDraft = d?.copy()
-            }
-        } catch (e: Exception) {
-            saveError = e.message
-        } finally {
-            isLoading = false
+            val fresh = cl.bot(botId)
+            if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@LaunchedEffect
+            // Keep what the person already typed; only fill an untouched editor.
+            if (!loaded || text == bot?.instructions) text = fresh.instructions
+            bot = fresh
+            loaded = true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            if (!loaded) error = resources.getString(R.string.bot_editor_instructions_load_failed)
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (isCreating) stringResource(R.string.bot_editor_new_title) else stringResource(R.string.bot_editor_edit_title), fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (isDirty) {
-                            isConfirmingDiscard = true
-                        } else {
-                            onNavigateBack()
-                        }
-                    }) {
-                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = palette.foreground)
-                    }
-                },
-                actions = {
-                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
-                        onClick = {
-                            val curDraft = draft ?: return@TextButton
-                            val curCat = catalog ?: return@TextButton
-                            val cl = client ?: return@TextButton
-                            if (!curDraft.isSaveable(curCat) || isSaving) return@TextButton
-
-                            scope.launch {
-                                isSaving = true
-                                saveError = null
-                                try {
-                                    if (isCreating) {
-                                        val req = curDraft.createRequest(curCat)
-                                        val botKey = UUID.randomUUID()
-                                        val chatKey = UUID.randomUUID()
-                                        val created = cl.createBot(req, botKey)
-                                        try {
-                                            cl.createBotChat(created.id, AidenBotChatCreateRequest(), chatKey)
-                                        } catch (_: Exception) {}
-                                        onBotSaved(created.id)
-                                    } else {
-                                        val bot = baselineBot ?: return@launch
-                                        val patch = curDraft.identityPatch(bot)
-                                        var currentBot = bot
-                                        if (patch != null) {
-                                            currentBot = cl.updateBotIdentity(bot.id, currentBot.revision, patch)
-                                        }
-                                        if (curDraft.changesAccess(bot, curCat)) {
-                                            val accessUpdate = curDraft.accessUpdate(curCat)
-                                            cl.updateBotAccess(bot.id, currentBot.access.revision, accessUpdate)
-                                        }
-                                        onBotSaved(currentBot.id)
-                                    }
-                                } catch (e: Exception) {
-                                    saveError = e.message ?: resources.getString(R.string.bot_editor_save_failed)
-                                } finally {
-                                    isSaving = false
-                                }
-                            }
-                        },
-                        enabled = draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true && !isSaving
-                    ) {
-                        Text(if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save), color = if (draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true) palette.accent else palette.secondary, fontWeight = FontWeight.Bold)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.canvas, titleContentColor = palette.foreground)
-            )
-        },
-        containerColor = palette.canvas
-    ) { padding ->
-        val currentDraft = draft
-        val currentCat = catalog
-
-        if (currentDraft == null || currentCat == null) {
-            if (!isLoading && saveError != null) {
-                AidenEmptyState(
-                    icon = Icons.Default.CloudOff,
-                    title = if (isCreating) stringResource(R.string.bot_editor_cannot_start) else stringResource(R.string.bot_editor_cannot_load),
-                    body = saveError ?: "",
-                    modifier = Modifier.fillMaxSize().padding(padding)
-                )
-            } else {
-                AidenBotFormSkeleton(
-                    loadingDescription = if (isCreating) stringResource(R.string.bot_editor_loading_options) else stringResource(R.string.bot_profile_loading),
-                    modifier = Modifier.padding(padding)
-                )
+    val current = bot
+    val trimmed = text.trim()
+    AidenBotEditorScaffold(
+        title = stringResource(R.string.bot_profile_instructions),
+        actionLabel = if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
+        actionEnabled = !isSaving && current != null && trimmed.isNotEmpty(),
+        onNavigateBack = onNavigateBack,
+        onAction = {
+            val cl = client ?: return@AidenBotEditorScaffold
+            val b = current ?: return@AidenBotEditorScaffold
+            if (trimmed == b.instructions) {
+                onBotSaved(b.id)
+                return@AidenBotEditorScaffold
             }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(20.dp)
-            ) {
-                // Identity Section
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(stringResource(R.string.bot_editor_identity), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
-
-                        TextField(
-
-                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                            value = currentDraft.name,
-                            onValueChange = { draft = currentDraft.copy(name = it.take(80)) },
-                            label = { Text(stringResource(R.string.bot_editor_name)) },
-                            placeholder = { Text(stringResource(R.string.bot_editor_name_placeholder)) },
-                            singleLine = true,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        TextField(
-
-                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                            value = currentDraft.purpose,
-                            onValueChange = { draft = currentDraft.copy(purpose = it.take(280)) },
-                            label = { Text(stringResource(R.string.bot_editor_purpose)) },
-                            placeholder = { Text(stringResource(R.string.bot_editor_purpose_placeholder)) },
-                            singleLine = true,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        TextField(
-
-                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                            value = currentDraft.openingGreeting,
-                            onValueChange = { draft = currentDraft.copy(openingGreeting = it.take(2000)) },
-                            label = { Text(stringResource(R.string.bot_editor_greeting)) },
-                            placeholder = { Text(stringResource(R.string.bot_editor_greeting_placeholder)) },
-                            minLines = 2,
-                            maxLines = 4,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        TextField(
-
-                            colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                            value = currentDraft.instructions,
-                            onValueChange = { draft = currentDraft.copy(instructions = it.take(32000)) },
-                            label = { Text(stringResource(R.string.bot_profile_instructions)) },
-                            placeholder = { Text(stringResource(R.string.bot_editor_instructions_placeholder)) },
-                            minLines = 4,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-
-                // Avatar Studio
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text(stringResource(R.string.bot_editor_avatar_studio), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary, modifier = Modifier.align(Alignment.Start))
-
-                        AidenBotSemanticAvatarView(
-                            avatar = AidenBotSemanticAvatar.Recipe(currentDraft.avatar),
-                            name = currentDraft.name.ifEmpty { stringResource(R.string.bot_profile_bot_fallback) },
-                            size = 84.dp
-                        )
-
-                        // Shape selector
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(stringResource(R.string.bot_editor_avatar_shape), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                                items(AidenBotAvatarShape.values()) { shape ->
-                                    FilterChip(
-                                        border = null,
-                                        selected = currentDraft.avatar.shape == shape,
-                                        onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(shape = shape)) },
-                                        label = { Text(shape.name.lowercase().replaceFirstChar { it.uppercase() }) }
-                                    )
-                                }
-                            }
-                        }
-
-                        // Color selector
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(stringResource(R.string.bot_editor_avatar_color), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier
-                                    .padding(vertical = 4.dp)
-                                    .selectableGroup()
-                            ) {
-                                items(AidenBotAvatarColor.values()) { col ->
-                                    AidenBotColorSwatch(
-                                        color = col,
-                                        selected = currentDraft.avatar.color == col,
-                                        onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(color = col)) }
-                                    )
-                                }
-                            }
-                        }
-
-                        // Eyes selector
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(stringResource(R.string.bot_editor_avatar_eyes), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                                items(AidenBotAvatarEyes.values()) { eyes ->
-                                    FilterChip(
-                                        border = null,
-                                        selected = currentDraft.avatar.eyes == eyes,
-                                        onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(eyes = eyes)) },
-                                        label = { Text(AidenBotAvatarColors.getEyeGlyph(eyes)) }
-                                    )
-                                }
-                            }
-                        }
-
-                        // Accessory selector
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(stringResource(R.string.bot_editor_avatar_accessory), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                                items(AidenBotAvatarDetail.entries) { detail ->
-                                    FilterChip(
-                                        border = null,
-                                        selected = currentDraft.avatar.detail == detail,
-                                        onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(detail = detail)) },
-                                        label = { Text(detail.name.lowercase().replaceFirstChar { it.uppercase() }) }
-                                    )
-                                }
-                            }
-                        }
-
-                        // Generated Photo section if editing bot
-                        avatarModel?.let { model ->
-                            Divider(modifier = Modifier.padding(vertical = 8.dp), color = palette.canvas)
-                            AidenBotGeneratedAvatarLifecycleView(
-                                model = model,
-                                semanticAvatar = AidenBotSemanticAvatar.Recipe(currentDraft.avatar),
-                                botName = currentDraft.name.ifEmpty { stringResource(R.string.bot_profile_bot_fallback) }
-                            )
-                        }
-
-                        OutlinedButton(
-                            border = null,
-                            onClick = { showImagePlaygroundSheet = true },
-                            shape = MaterialTheme.shapes.small,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.bot_editor_image_studio))
-                        }
-                    }
-                }
-
-                // Capability Access Section
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text(stringResource(R.string.bot_editor_access_mode), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
-
-                        AidenBotEditorAccessModeSelector(
-                            usesFullAccess = currentDraft.usesFullAccess,
-                            onUsesFullAccessChange = { draft = currentDraft.copy(usesFullAccess = it) }
-                        )
-
-                        // AI Provider and Model picker
-                        Text(stringResource(R.string.bot_editor_provider_model), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                        val pickerProviders = remember(currentCat.providers) {
-                            currentCat.providers.map { it.toModelPickerProvider() }
-                        }
-                        AidenModelPickerField(
-                            title = stringResource(R.string.model_picker_bot_title),
-                            providers = pickerProviders,
-                            selection = AidenModelRoute(currentDraft.customAccess.providerID, currentDraft.customAccess.modelID),
-                            onSelect = { entry ->
-                                draft = currentDraft.copy(
-                                    customAccess = currentDraft.customAccess.copy(
-                                        providerID = entry.provider.id,
-                                        modelID = entry.model.id
-                                    )
-                                )
-                            }
-                        )
-
-                        // Detailed custom switches if in custom mode
-                        AnimatedVisibility(visible = !currentDraft.usesFullAccess) {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Divider(color = palette.canvas)
-
-                                // File scopes
-                                Text(stringResource(R.string.bot_editor_file_scopes), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                currentCat.fileScopes.forEach { scopeItem ->
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                val nextSet = if (currentDraft.customAccess.fileScopeIDs.contains(scopeItem.id))
-                                                    currentDraft.customAccess.fileScopeIDs - scopeItem.id
-                                                else
-                                                    currentDraft.customAccess.fileScopeIDs + scopeItem.id
-                                                draft = currentDraft.copy(customAccess = currentDraft.customAccess.copy(fileScopeIDs = nextSet))
-                                            }
-                                            .padding(vertical = 4.dp)
-                                    ) {
-                                        Checkbox(
-                                            checked = currentDraft.customAccess.fileScopeIDs.contains(scopeItem.id),
-                                            onCheckedChange = { checked ->
-                                                val nextSet = if (checked)
-                                                    currentDraft.customAccess.fileScopeIDs + scopeItem.id
-                                                else
-                                                    currentDraft.customAccess.fileScopeIDs - scopeItem.id
-                                                draft = currentDraft.copy(customAccess = currentDraft.customAccess.copy(fileScopeIDs = nextSet))
-                                            },
-                                            colors = CheckboxDefaults.colors(checkedColor = palette.accent)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(scopeItem.label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                                    }
-                                }
-
-                                // Shell
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                    Text(stringResource(R.string.bot_editor_terminal), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground, modifier = Modifier.weight(1f))
-                                    Switch(
-                                        checked = currentDraft.customAccess.shellEnabled,
-                                        onCheckedChange = { draft = currentDraft.copy(customAccess = currentDraft.customAccess.copy(shellEnabled = it)) },
-                                        enabled = currentCat.shellAvailable,
-                                        colors = SwitchDefaults.colors(checkedTrackColor = palette.accent)
-                                    )
-                                }
-
-                                // Connections
-                                if (currentCat.connections.isNotEmpty()) {
-                                    Text(stringResource(R.string.bot_editor_mcp_connections), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                    currentCat.connections.forEach { conn ->
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    val nextSet = if (currentDraft.customAccess.connectionIDs.contains(conn.id))
-                                                        currentDraft.customAccess.connectionIDs - conn.id
-                                                    else
-                                                        currentDraft.customAccess.connectionIDs + conn.id
-                                                    draft = currentDraft.copy(customAccess = currentDraft.customAccess.copy(connectionIDs = nextSet))
-                                                }
-                                                .padding(vertical = 4.dp)
-                                        ) {
-                                            Checkbox(
-                                                checked = currentDraft.customAccess.connectionIDs.contains(conn.id),
-                                                onCheckedChange = { checked ->
-                                                    val nextSet = if (checked)
-                                                        currentDraft.customAccess.connectionIDs + conn.id
-                                                    else
-                                                        currentDraft.customAccess.connectionIDs - conn.id
-                                                    draft = currentDraft.copy(customAccess = currentDraft.customAccess.copy(connectionIDs = nextSet))
-                                                },
-                                                colors = CheckboxDefaults.colors(checkedColor = palette.accent)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(conn.label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                saveError?.let { err ->
-                    Text(err, color = palette.danger, style = MaterialTheme.typography.bodySmall)
+            scope.launch {
+                isSaving = true
+                error = null
+                try {
+                    val saved = cl.updateBotIdentity(b.id, b.revision, AidenBotIdentityPatch(instructions = trimmed))
+                    coordinator.botCache.putBotDetail(saved)
+                    onBotSaved(saved.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    error = resources.getString(R.string.bot_save_failed)
+                } finally {
+                    isSaving = false
                 }
             }
         }
-    }
-
-    if (showImagePlaygroundSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showImagePlaygroundSheet = false },
-            sheetState = rememberAidenFullSheetState(),
-            containerColor = palette.canvas
-        ) {
-            AidenBotImagePlaygroundSheet(
-                botName = draft?.name ?: stringResource(R.string.bot_profile_bot_fallback),
-                botPurpose = draft?.purpose ?: "",
-                onDismiss = { showImagePlaygroundSheet = false },
-                onImageSelected = { bytes ->
-                    showImagePlaygroundSheet = false
-                    avatarModel?.let { model ->
-                        scope.launch { model.ingestCopiedCandidate(bytes) }
-                    }
-                }
-            )
-        }
-    }
-
-    if (isConfirmingDiscard) {
-        AlertDialog(
-            onDismissRequest = { isConfirmingDiscard = false },
-            title = { Text(stringResource(R.string.bot_editor_discard_title)) },
-            text = { Text(stringResource(R.string.bot_editor_discard_body)) },
-            confirmButton = {
-                AidenDialogConfirmButton(
-                    text = stringResource(R.string.action_discard),
-                    destructive = true,
-                    onClick = {
-                        isConfirmingDiscard = false
-                        onNavigateBack()
-                    }
-                )
-            },
-            dismissButton = {
-                AidenDialogDismissButton(onClick = { isConfirmingDiscard = false })
-            },
-            shape = AidenShape.Dialog,
-            containerColor = palette.raised
-        )
-    }
-}
-
-enum class AidenBotEditorAccessMode(@StringRes val label: Int) {
-    FULL(R.string.bot_editor_access_full),
-    CUSTOM(R.string.bot_editor_access_custom)
-}
-
-/** Connected segmented choice between Full Access and Custom Access. */
-@Composable
-fun AidenBotEditorAccessModeSelector(
-    usesFullAccess: Boolean,
-    onUsesFullAccessChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val labels = AidenBotEditorAccessMode.entries.associateWith { stringResource(it.label) }
-    AidenSegmentedPillRow(
-        options = AidenBotEditorAccessMode.entries,
-        selected = if (usesFullAccess) AidenBotEditorAccessMode.FULL else AidenBotEditorAccessMode.CUSTOM,
-        onSelect = { onUsesFullAccessChange(it == AidenBotEditorAccessMode.FULL) },
-        label = { labels.getValue(it) },
-        modifier = modifier
-    )
-}
-
-fun aidenBotAvatarColorLabel(color: AidenBotAvatarColor): String =
-    color.name.lowercase().replaceFirstChar { it.uppercase() }
-
-/**
- * Avatar colour swatch: a radio choice whose selection is a checkmark on the fill plus
- * selected semantics, never a decorative ring.
- */
-@Composable
-fun AidenBotColorSwatch(
-    color: AidenBotAvatarColor,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val interaction = remember { MutableInteractionSource() }
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = modifier
-            .size(34.dp)
-            .tactilePress(interaction)
-            .clip(CircleShape)
-            .background(AidenBotAvatarColors.getGradient(color).first())
-            .selectable(
-                selected = selected,
-                interactionSource = interaction,
-                indication = ripple(),
-                role = Role.RadioButton,
-                onClick = onClick
-            )
-            .semantics { contentDescription = aidenBotAvatarColorLabel(color) }
     ) {
-        if (selected) {
-            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-        }
+        TextField(
+            value = text,
+            onValueChange = { text = it.take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH) },
+            enabled = loaded,
+            placeholder = { Text(stringResource(R.string.bot_editor_instructions_placeholder, current?.name ?: stringResource(R.string.bot_name_fallback_your_bot))) },
+            colors = aidenTextFieldColors(),
+            shape = MaterialTheme.shapes.large,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            minLines = 8,
+            modifier = Modifier.fillMaxWidth()
+        )
+        error?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+@Composable
+private fun AidenBotLabeledField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    singleLine: Boolean
+) {
+    val palette = AidenTheme.palette
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = palette.secondary, modifier = Modifier.padding(horizontal = 4.dp))
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = { Text(placeholder) },
+            singleLine = singleLine,
+            minLines = if (singleLine) 1 else 3,
+            colors = aidenTextFieldColors(),
+            shape = MaterialTheme.shapes.large,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }

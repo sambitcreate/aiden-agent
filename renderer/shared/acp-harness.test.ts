@@ -3,8 +3,11 @@ import test from "node:test";
 
 import { projectRuntime } from "../../main/services/acp/status.js";
 import {
+  acpHarnessChatReason,
+  acpHarnessReadinessMessage,
   acpHarnessUnavailableReason,
   formatHarnessBytes,
+  harnessSignInHint,
   harnessRuntimeSummary,
   parseAcpHarnessStatus,
   unattendedFallbackProviderId,
@@ -48,7 +51,37 @@ test("summaries describe sizes and progress in plain terms", () => {
     "Downloading 50 MB of 111 MB…",
   );
   assert.equal(harnessRuntimeSummary({ status: "installing", phase: "validating" }), "Starting it once to confirm it works…");
-  assert.equal(harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962 }), "Not installed. 111 MB download from Google.");
+  assert.equal(
+    harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962, downloadHost: "dl.google.com" }),
+    "Not installed.",
+  );
+});
+
+test("the publisher and download host reach the renderer only as plain names", () => {
+  const parsed = parseAcpHarnessStatus({
+    providerId: "antigravity",
+    publisher: "Google",
+    runtime: projectRuntime({ status: "not_installed", version: "1.3.0", downloadBytes: 1, requiredBytes: 2 }, "dl.google.com"),
+    signedIn: false,
+    busy: false,
+  });
+  assert.equal(parsed?.publisher, "Google");
+  assert.equal(parsed?.runtime.downloadHost, "dl.google.com");
+  // Anything that is not a bare host name (a URL, a path, credentials) is dropped.
+  for (const downloadHost of ["https://dl.google.com/x.zip", "user@dl.google.com", "dl.google.com/agy", "", 42]) {
+    const rejected = parseAcpHarnessStatus({
+      providerId: "antigravity",
+      runtime: { status: "not_installed", downloadHost },
+      signedIn: false,
+      busy: false,
+    });
+    assert.equal(rejected?.runtime.downloadHost, undefined, String(downloadHost));
+  }
+  assert.equal(
+    parseAcpHarnessStatus({ providerId: "antigravity", publisher: "x".repeat(65), runtime: { status: "installed" }, signedIn: false, busy: false })
+      ?.publisher,
+    undefined,
+  );
 });
 
 test("unattended surfaces never inherit an agent-backed last-used provider", () => {
@@ -57,4 +90,50 @@ test("unattended surfaces never inherit an agent-backed last-used provider", () 
   assert.equal(unattendedFallbackProviderId(undefined), undefined);
   assert.match(acpHarnessUnavailableReason("antigravity") ?? "", /^Google Antigravity runs only in chats/u);
   assert.equal(acpHarnessUnavailableReason("openai"), undefined);
+});
+
+test("the sign-in hint tells the user what the runtime still needs, and only that", () => {
+  assert.equal(harnessSignInHint({ status: "not_installed" }), "Install the runtime above before signing in.");
+  assert.equal(harnessSignInHint({ status: "failed", message: "Disk full." }), "Install the runtime above before signing in.");
+  // There is no Install button to point at in these states.
+  assert.equal(harnessSignInHint({ status: "update_available" }), "Update the runtime above before signing in.");
+  assert.equal(harnessSignInHint({ status: "installing", phase: "extracting" }), "You can sign in when the installation finishes.");
+  assert.equal(
+    harnessSignInHint({ status: "unsupported", message: "No build for this computer." }),
+    "Sign-in needs the runtime, which isn't available for this computer.",
+  );
+  // Still loading, or ready: no hint.
+  assert.equal(harnessSignInHint(null), undefined);
+  assert.equal(harnessSignInHint({ status: "installed", version: "1.3.0" }), undefined);
+});
+
+test("Assistant and Bot chats explain up front that an agent-backed model cannot answer there", () => {
+  assert.equal(
+    acpHarnessChatReason("antigravity", "Google Antigravity", "assistant"),
+    "Google Antigravity runs only in ordinary desktop chats, not in Assistant chats. Choose another model.",
+  );
+  assert.equal(
+    acpHarnessChatReason("antigravity", "Google Antigravity", "bot"),
+    "Google Antigravity runs only in ordinary desktop chats, not in Bot chats. Choose another model.",
+  );
+  // Ordinary chats, and every other provider, are unaffected.
+  assert.equal(acpHarnessChatReason("antigravity", "Google Antigravity", undefined), undefined);
+  assert.equal(acpHarnessChatReason("openai", "OpenAI", "assistant"), undefined);
+  assert.equal(acpHarnessChatReason(undefined, "", "bot"), undefined);
+});
+
+test("a signed-out agent model explains the surface first, then asks for a sign-in, never an API key", () => {
+  const signedOut = { id: "antigravity", label: "Google Antigravity", hasKey: false, needsKey: true };
+  // Signing in would not help in an Assistant chat, so that reason wins.
+  assert.equal(
+    acpHarnessReadinessMessage(signedOut, "assistant"),
+    "Google Antigravity runs only in ordinary desktop chats, not in Assistant chats. Choose another model.",
+  );
+  assert.equal(
+    acpHarnessReadinessMessage(signedOut, undefined),
+    "Sign in to Google Antigravity in Settings → Providers to use it.",
+  );
+  assert.equal(acpHarnessReadinessMessage({ ...signedOut, hasKey: true }, undefined), undefined);
+  // Other providers keep the composer's ordinary API-key copy.
+  assert.equal(acpHarnessReadinessMessage({ id: "openai", label: "OpenAI", hasKey: false, needsKey: true }, "assistant"), undefined);
 });

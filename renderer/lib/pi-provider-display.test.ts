@@ -148,6 +148,8 @@ test("onboarding distinguishes ready providers from unavailable setup methods", 
 
 test("resolves provider logos without branding unknown custom or future providers", () => {
   assert.equal(resolveProviderIconSlug("openai"), "openai");
+  // Agent-backed providers get their own mark, not the generic Google one.
+  assert.equal(resolveProviderIconSlug("antigravity"), "antigravity");
   assert.equal(resolveProviderIconSlug("concentrate"), "concentrate");
   assert.equal(resolveProviderIconSlug("together"), "together");
   assert.equal(resolveProviderIconSlug("custom:lmstudio"), "lmstudio");

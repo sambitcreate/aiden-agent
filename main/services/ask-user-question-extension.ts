@@ -51,20 +51,47 @@ export function resolveAskUserQuestionTimeoutMs(
   );
 }
 
+/**
+ * Questionnaires run where someone can answer them: attended desktop or
+ * paired-device chats, including Bot chats (their A–E quick replies).
+ * Telegram and Assistant turns have no questionnaire surface.
+ */
 export function shouldEnableAskUserQuestionExtension(
   scope: AskUserQuestionExtensionScope,
 ): boolean {
   return (
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
-    !scope.botBound &&
     (scope.rendererOwner || scope.remoteOwner === true) &&
     !scope.excluded &&
     !scope.assistantMode
   );
 }
 
-function formatResult(
+/** The `questions` argument, shared by the desktop/paired-device tool and the Bot tool. */
+export function askUserQuestionsSchema() {
+  return Type.Array(
+    Type.Object({
+      question: Type.String({ minLength: 1, maxLength: 1_000 }),
+      header: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_HEADER_LENGTH }),
+      options: Type.Array(
+        Type.Object({
+          label: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_LABEL_LENGTH }),
+          description: Type.String({
+            minLength: 1,
+            maxLength: ASK_USER_MAX_DESCRIPTION_LENGTH,
+          }),
+        }),
+        { minItems: ASK_USER_MIN_OPTIONS, maxItems: ASK_USER_MAX_OPTIONS },
+      ),
+      multiSelect: Type.Optional(Type.Boolean({ default: false })),
+    }),
+    { minItems: 1, maxItems: ASK_USER_MAX_QUESTIONS },
+  );
+}
+
+/** The model-facing tool result for one answered, skipped, cancelled or expired questionnaire. */
+export function formatAskUserQuestionResponse(
   questions: readonly AskUserQuestionV1[],
   response: AskUserQuestionResponseV1,
 ): string {
@@ -90,30 +117,13 @@ export function createAskUserQuestionExtension(options: {
       name: ASK_USER_QUESTION_TOOL_NAME,
       label: "Ask User Question",
       description:
-        "Ask the user 1-4 concise structured questions when a material choice cannot be inferred safely. Each question needs 2-4 distinct options with short labels and useful descriptions. The UI automatically offers a custom answer and Skip, so do not add Other or a skip option. Set timeoutSeconds when the task can reasonably continue without an answer (for example, state a default in the question): after that long you receive a no-answer result and should proceed with your best judgement. Some unattended surfaces always apply a short deadline.",
+        "Ask the user 1-4 concise structured questions when a material choice cannot be inferred safely. Each question needs 2-5 distinct options with short labels and useful descriptions. The UI automatically offers a custom answer and Skip, so do not add Other or a skip option. Set timeoutSeconds when the task can reasonably continue without an answer (for example, state a default in the question): after that long you receive a no-answer result and should proceed with your best judgement. Some unattended surfaces always apply a short deadline.",
       // A second questionnaire cannot replace the first composer surface while
       // it is awaiting its owner. Serialize calls so every prompt is answered
       // or cancelled before another questionnaire can be published.
       executionMode: "sequential" as const,
       parameters: Type.Object({
-        questions: Type.Array(
-          Type.Object({
-            question: Type.String({ minLength: 1, maxLength: 1_000 }),
-            header: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_HEADER_LENGTH }),
-            options: Type.Array(
-              Type.Object({
-                label: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_LABEL_LENGTH }),
-                description: Type.String({
-                  minLength: 1,
-                  maxLength: ASK_USER_MAX_DESCRIPTION_LENGTH,
-                }),
-              }),
-              { minItems: ASK_USER_MIN_OPTIONS, maxItems: ASK_USER_MAX_OPTIONS },
-            ),
-            multiSelect: Type.Optional(Type.Boolean({ default: false })),
-          }),
-          { minItems: 1, maxItems: ASK_USER_MAX_QUESTIONS },
-        ),
+        questions: askUserQuestionsSchema(),
         timeoutSeconds: Type.Optional(
           Type.Integer({
             minimum: ASK_USER_MIN_TIMEOUT_SECONDS,
@@ -131,7 +141,7 @@ export function createAskUserQuestionExtension(options: {
         );
         const response = await options.request(toolCallId, questions, signal, timeoutSeconds);
         return {
-          content: [{ type: "text", text: formatResult(questions, response) }],
+          content: [{ type: "text", text: formatAskUserQuestionResponse(questions, response) }],
           details: null,
         };
       },

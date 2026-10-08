@@ -42,6 +42,7 @@ class AidenModelPreferenceTest {
     fun azureProviderIdentityKeepsItsArtwork() {
         assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure"))
         assertEquals("azure-openai-responses", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("azure-openai-responses"))
+        assertEquals("antigravity", sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIconResolver.slug("antigravity"))
     }
 
     @get:Rule
@@ -72,6 +73,32 @@ class AidenModelPreferenceTest {
         providerId = providerId, modelId = modelId,
         messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
     )
+
+    @Test
+    fun desktopStartedAgentChatSaysWhichModelRepliesFromThisPhone() {
+        // The Mac omits agent-backed providers from the phone's catalog.
+        val inventory = catalog(catalogWithoutRemembered)
+        val chat = workspaceChat(providerId = "antigravity", modelId = "gemini-3.8-flash")
+        val resolved = AidenChatModelAuthority.resolvedSelection(
+            chat = chat,
+            catalog = inventory,
+            selectedProviderId = chat.providerId,
+            selectedModelId = chat.modelId,
+            selectedThinkingLevel = null
+        )
+        assertEquals("google", resolved.providerId)
+        assertEquals(
+            "This chat used Google Antigravity, which runs only on your Mac. Replies from here use Gemini Flash.",
+            AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, "Gemini Flash")
+        )
+        assertEquals(
+            "This chat used Google Antigravity, which runs only on your Mac. Choose a model for replies from here.",
+            AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, null)
+        )
+        // A chat on a model this phone can use, or a Bot chat, says nothing.
+        assertNull(AidenChatModelAuthority.macOnlyAgentNotice(workspaceChat("google", "gemini-flash"), inventory, "Gemini Flash"))
+        assertNull(AidenChatModelAuthority.macOnlyAgentNotice(chat.copy(botId = "bot-1"), inventory, "Gemini Flash"))
+    }
 
     @Test
     fun rememberedHostChoiceWinsOverChatPairWhileTheHostStillOffersIt() {

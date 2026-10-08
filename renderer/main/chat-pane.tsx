@@ -42,7 +42,6 @@ import {
   createAgentsInstructionNoticeLog,
 } from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
-import { BotAvatar } from "../components/bot-avatar";
 import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
@@ -95,7 +94,6 @@ import {
   refreshCodexProviderState,
   useAllRegularChats,
   useChat,
-  useBot,
   useComputerUseStatus,
   useGitInfo,
   useModelInfo,
@@ -191,7 +189,12 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
-import { isAcpHarnessProvider } from "../shared/acp-harness";
+import {
+  acpHarnessChatReason,
+  acpHarnessReadinessMessage,
+  isAcpHarnessProvider,
+  type AcpHarnessBlockedSurface,
+} from "../shared/acp-harness";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -223,7 +226,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : persistedChat;
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
-  const bot = useBot(chat.data?.botId);
+  // A Bot's conversation lives at its own route, rendered from the live projection.
+  const botChatId = chat.data?.botId;
+  React.useEffect(() => {
+    if (!botChatId) return;
+    void navigate({ to: "/bots/$botId/chat", params: { botId: botChatId }, replace: true });
+  }, [botChatId, navigate]);
   const settings = useSettings();
   const computerUseGloballyEnabled =
     capabilities.computerUse && settings.data?.computerUseEnabled === true;
@@ -235,11 +243,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  // Agent-backed models need someone answering approvals in an ordinary chat.
+  const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
+    chat.data?.botId || bot.data ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
   const sideQuestionBlockedReason = draft
     ? "Send the first message before asking a side question."
-    : chat.data?.botId || bot.data
-      ? "Side questions are not available in Bot chats."
-      : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
+    : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
         ? "Side questions are not available in Assistant chats."
         : isAcpHarnessProvider(chat.data?.providerId ?? "")
           ? "Side questions are not available with agent-backed models."
@@ -284,7 +293,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
       settings.data?.hiddenModelsByProvider,
       hasMessages,
     ) &&
-    (selectedProvider.hasKey || !selectedProvider.needsKey),
+    (selectedProvider.hasKey || !selectedProvider.needsKey) &&
+    !acpHarnessChatReason(selectedProvider.id, selectedProvider.label, agentBlockedSurface),
+  );
+  // Assistant and Bot chats do not offer agent-backed models at all.
+  const pickerProviders = React.useMemo(
+    () =>
+      !settings.data
+        ? []
+        : agentBlockedSurface
+          ? (providers.data ?? []).filter((provider) => !isAcpHarnessProvider(provider.id))
+          : (providers.data ?? []),
+    [agentBlockedSurface, providers.data, settings.data],
   );
   const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
@@ -293,6 +313,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "Sign in with ChatGPT in Settings → Providers to use Codex."
         : "Choose a chat model, or add one in Settings → Providers.";
     }
+    const agentReason = acpHarnessReadinessMessage(selectedProvider, agentBlockedSurface);
+    if (agentReason) return agentReason;
     if (selectedProvider.needsKey && !selectedProvider.hasKey) {
       if (selectedProvider.id === OPENAI_CODEX_PROVIDER_ID) {
         return "Sign in with ChatGPT in Settings → Providers to use Codex.";
@@ -312,7 +334,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
     }
     return undefined;
-  }, [hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
+  }, [agentBlockedSurface, hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
   const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
   const computerUseReady = computerUseReadinessReady(
     computerUseStatus.data?.ready === true,
@@ -338,20 +360,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         : detachedGenerationDraining && !visibleDetachedProjection
           ? "Response continues in the background…"
           : undefined;
-  const botReadinessMessage = chat.data?.botId
-    ? bot.isLoading
-      ? "Loading bot…"
-      : !bot.data
-        ? "This bot is no longer available."
-        : bot.data.archivedAt
-          ? "Restore this bot before continuing the conversation."
-          : undefined
-    : undefined;
-  const ready =
-    modelReady && !computerUseReadinessMessage && !chatReadinessMessage && !botReadinessMessage;
+  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
   const readinessMessage =
     chatReadinessMessage ??
-    botReadinessMessage ??
     modelReadinessMessage ??
     computerUseReadinessMessage;
 
@@ -941,7 +952,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
-  const forkLineage = chat.data?.botId ? undefined : chat.data?.forkedFrom;
+  const forkLineage = chat.data?.forkedFrom;
   const allChats = useAllRegularChats(Boolean(forkLineage));
   const forkSource = forkLineage
     ? allChats.data?.find((candidate) => candidate.id === forkLineage.chatId)
@@ -973,7 +984,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         await copyChat({ messageId, position }, undefined, summary);
         return;
       }
-      if (chat.data?.botId) throw new Error("Bot chats can only fork after a reply.");
       const index = messages.findIndex((message) => message.id === messageId);
       const message = messages[index];
       if (!message || message.role !== "user") {
@@ -998,7 +1008,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.info("Aiden could not open the new chat.");
       }
     },
-    [chat.data?.botId, chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
+    [chat.data?.workspaceId, copyChat, forkDisabledReason, messages, navigate, selectWorkspace],
   );
 
   const forkFromTranscript = React.useCallback(
@@ -2505,34 +2515,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : undefined;
   const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
 
+  // A Bot chat redirects to its Bot route above; render nothing while it leaves.
+  if (botChatId) return null;
+
   return (
     <>
       <ScrollArea
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
-          bot.data ? (
-            <span className="flex min-w-0 items-center gap-2">
-              <BotAvatar
-                botId={bot.data.id}
-                avatar={bot.data.avatar}
-                name={bot.data.name}
-                photoLoading="immediate"
-                size="small"
-              />
-              <span className="min-w-0">
-                <span className="flex items-center gap-2">
-                  <span className="truncate">{bot.data.name}</span>
-                  <span className="rounded-pill bg-control px-2 py-0.5 text-mini font-medium text-secondary">
-                    Bot
-                  </span>
-                </span>
-                <span className="block truncate text-small font-normal text-secondary">
-                  {chat.data?.title ?? "New conversation"}
-                </span>
-              </span>
-            </span>
-          ) : forkSourceLabel ? (
+          forkSourceLabel ? (
             <span className="block min-w-0" data-chat-fork-lineage>
               <span className="block truncate">{chat.data?.title ?? "New agent"}</span>
               <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
@@ -2668,7 +2660,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 key={chatId}
                 ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
                 readinessSettingsSection={
-                  !chatReadinessMessage && !botReadinessMessage
+                  !chatReadinessMessage
                     ? modelReadinessMessage
                       ? "providers"
                       : computerUseReadinessMessage
@@ -2726,8 +2718,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onChangePermission={changePermission}
                 workspacePickerEnabled={isNewChat}
                 machinePicker={
-                  // A new chat may run on a paired Mac instead; a Bot's chat stays with its Bot.
-                  isNewChat && !chat.data?.botId && newChatMachines.length > 0 ? (
+                  // A new chat may run on a paired Mac instead.
+                  isNewChat && newChatMachines.length > 0 ? (
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
@@ -2795,10 +2787,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 authenticatedProviders={authenticatedProviders}
                 onCloneChat={() => copyChat()}
                 onForkChat={(messageId, position) => forkFromMessage(messageId, position)}
-                onForkWithSummary={
-                  chat.data?.botId
-                    ? undefined
-                    : (messageId, position) => setForkSummaryRequest({ messageId, position })
+                onForkWithSummary={(messageId, position) =>
+                  setForkSummaryRequest({ messageId, position })
                 }
                 onExportChat={exportChat}
                 onCompactChat={
@@ -2910,7 +2900,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onDraftChange={onDraftContextChange}
                 modelPicker={
                   <ModelPicker
-                    providers={settings.data ? (providers.data ?? []) : []}
+                    providers={pickerProviders}
                     providerId={providerId}
                     model={model}
                     onChange={(nextProviderId, nextModel) => {
@@ -2991,12 +2981,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             agentActivity={visibleAgentActivity}
             readAloudMessageId={readAloudCandidateId}
             readAloud={readAloudProps}
-            onFork={chat.data?.botId ? undefined : forkFromTranscript}
+            onFork={forkFromTranscript}
             forkDisabledReason={forkDisabledReason}
-            onForkWithSummary={
-              chat.data?.botId
-                ? undefined
-                : (messageId, position) => setForkSummaryRequest({ messageId, position })
+            onForkWithSummary={(messageId, position) =>
+              setForkSummaryRequest({ messageId, position })
             }
             forkSummary={
               forkSummary

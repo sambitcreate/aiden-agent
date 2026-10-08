@@ -145,6 +145,8 @@ interface ComposerProps {
   chatId: string;
   /** Initial text for an explicitly seeded renderer-only chat draft. */
   initialText?: string;
+  /** Overrides the prompt hint while the composer is ready (a Bot's "Ask {name}"). */
+  placeholder?: string;
   onSend: (
     text: string,
     attachments: Attachment[],
@@ -337,6 +339,7 @@ export function Composer({
   hasMessages,
   chatId,
   initialText = "",
+  placeholder,
   onSend,
   onStop,
   onQueue,
@@ -2113,12 +2116,16 @@ export function Composer({
               }
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
-              placeholder={composerPlaceholder({
-                ready,
-                readinessMessage,
-                hasMessages,
-                chatId,
-              })}
+              placeholder={
+                ready && placeholder
+                  ? placeholder
+                  : composerPlaceholder({
+                      ready,
+                      readinessMessage,
+                      hasMessages,
+                      chatId,
+                    })
+              }
               className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />

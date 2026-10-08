@@ -75,6 +75,15 @@ const CARD_TOOL: Record<AcpApprovalRequest["kind"], string> = {
   other: "agent_tool",
 };
 
+const FILE_CHANGE_CARD_TOOL = { delete: "delete_file", move: "move_file" } as const;
+
+/** The tool the approval card names, matching the activity row it waits on. */
+export function approvalCardTool(request: Pick<AcpApprovalRequest, "kind" | "fileChange">): string {
+  return request.kind === "file_change" && request.fileChange
+    ? FILE_CHANGE_CARD_TOOL[request.fileChange]
+    : CARD_TOOL[request.kind];
+}
+
 const VERB: Record<AcpApprovalRequest["kind"], string> = {
   command: "run a command",
   file_change: "change files",
@@ -83,8 +92,11 @@ const VERB: Record<AcpApprovalRequest["kind"], string> = {
   other: "use a tool",
 };
 
+const FILE_CHANGE_VERB = { delete: "delete files", move: "move files" } as const;
+
 export function approvalSummary(label: string, request: AcpApprovalRequest): string {
-  const lines = [`${label} wants to ${VERB[request.kind]}: ${request.title}`];
+  const verb = request.kind === "file_change" && request.fileChange ? FILE_CHANGE_VERB[request.fileChange] : VERB[request.kind];
+  const lines = [`${label} wants to ${verb}: ${request.title}`];
   if (request.paths.length > 0) lines.push(`Files: ${request.paths.join(", ")}`);
   if (request.warning) lines.push(`Warning from ${label}: ${request.warning}`);
   return lines.join("\n");
@@ -150,7 +162,7 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
         {
           streamId: options.streamId,
           toolCallId: publicId,
-          toolName: CARD_TOOL[request.kind],
+          toolName: approvalCardTool(request),
           summary: approvalSummary(options.label, request),
           ...(request.offersAlways ? { scopes: ["once", "chat"] as const } : {}),
         },

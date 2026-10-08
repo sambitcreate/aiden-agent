@@ -161,7 +161,6 @@ test("authorized persistent surfaces share admission, saved-model authority, and
     const deps: ContextLifecycleServiceDeps = {
       getChat: async (requestedChatId) => requestedChatId === chatId ? chat : null,
       listChatsByBot: async () => [chat],
-      isBotArchived: async () => false,
       beginChatTurn: (requestedChatId, _turnId, ownerId) => {
         calls.push({ chatId: requestedChatId, ownerId });
         return lifecycleLease(requestedChatId, leaseEvents);
@@ -254,7 +253,6 @@ test("production Mac and bound-Telegram adapters share one canonical Bot journal
   const service = new ContextLifecycleService({
     getChat: async () => chat,
     listChatsByBot: async () => [chat],
-    isBotArchived: async () => false,
     beginChatTurn: (requestedChatId, _turnId, ownerId) => {
       assert.equal(requestedChatId, chatId);
       admittedOwners.push(ownerId);

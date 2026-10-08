@@ -1,3 +1,4 @@
+import { app, logger } from "../platform.js";
 import { createBotApplicationService } from "./bot-application-service.js";
 import {
   botCapabilityCatalog,
@@ -17,7 +18,9 @@ import {
 } from "./telegram/telegram-bot-bindings.js";
 import { reconcileTelegramBotBindings } from "./telegram/telegram-bot-binding-reconciliation.js";
 import { assertTelegramBackingChatMayBeDeleted } from "./telegram/telegram-bot-chat-lifecycle.js";
-import { removeArchivedBotFavorite } from "./bot-favorites-main.js";
+import { botAvatarStore } from "./bot-avatar-store-main.js";
+import { createBotLegacyTranscriptWipeMarker } from "./bot-legacy-transcript-wipe.js";
+import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 
 export const botApplicationService = createBotApplicationService({
@@ -32,11 +35,10 @@ export const botApplicationService = createBotApplicationService({
   inventoryLeases: botRuntimeInventoryLeases,
   deleteChatWithEffects: (chatId, assertCurrent, onDeletionRollForward) =>
     chatApplicationService.remove(chatId, { assertCurrent, onDeletionRollForward }),
-  onArchiveBot: async (botId) => {
-    if (await telegramBotBindings.get(botId)) {
-      await telegramBotBindingAuthority.disableBot(botId);
-    }
-    await removeArchivedBotFavorite(botId);
+  deleteBotPhoto: (botId) => botAvatarStore.deleteBot(botId),
+  legacyTranscriptWipe: {
+    ...createBotLegacyTranscriptWipeMarker(() => app.getPath("userData")),
+    clearChatJournal: (chatId) => piCompactionSessionStore.deleteChat(chatId),
   },
   assertChatDeletionAllowed: (botId, chatId) =>
     assertTelegramBackingChatMayBeDeleted({
@@ -61,6 +63,12 @@ export function initializeBotApplicationService(): Promise<void> {
         getChat: (chatId) => chatStore.get(chatId),
         getChatAccess: (chatId) => botApplicationService.getChatAccess(chatId),
       });
+      // The durable Bot runtime starts once Bot identity is restored: it sweeps
+      // orphaned sessions and records interrupted turns, and never resumes one.
+      // A failure leaves Bots unavailable without blocking the rest of Aiden.
+      void import("./bot-runtime/bot-session-main.js")
+        .then(({ initializeBotSessionRuntime }) => initializeBotSessionRuntime())
+        .catch((error: unknown) => logger.error("bots", "The Bot runtime could not start.", error));
     })
     .catch((error) => {
       initialization = undefined;

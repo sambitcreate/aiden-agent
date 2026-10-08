@@ -8,6 +8,31 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    /// Per-test stores for models that do not bring their own, so one test's
+    /// cached transcript, active stream, draft or model choice for the shared
+    /// fixture chat never reaches the next test.
+    private var storageRoot: URL!
+    private var preferenceSuite: String!
+    private var testCache: AidenChatCache!
+    private var testDraftStore: AidenChatDraftStore!
+    private var testModelPreferences: AidenModelPreferenceStore!
+
+    override func setUp() {
+        super.setUp()
+        AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+        storageRoot = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-tests-\(UUID())")
+        preferenceSuite = "AidenChatTests.\(UUID().uuidString)"
+        testCache = AidenChatCache(root: storageRoot.appending(path: "cache"))
+        testDraftStore = AidenChatDraftStore(root: storageRoot.appending(path: "drafts"))
+        testModelPreferences = AidenModelPreferenceStore(defaults: UserDefaults(suiteName: preferenceSuite)!)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: storageRoot)
+        UserDefaults(suiteName: preferenceSuite)?.removePersistentDomain(forName: preferenceSuite)
+        super.tearDown()
+    }
+
     private var agentNavigationScope: AidenAgentNavigationScope {
         .init(instanceId: "mac-a", deviceId: "device-a", chatId: "chat-a", epoch: "epoch-a", turnId: "turn-a")
     }
@@ -448,7 +473,7 @@ final class AidenChatTests: XCTestCase {
         }
 
         model.startProgressObservation()
-        try await waitForProgressRequestCount(1)
+        await waitForProgressRequestCount(1)
         XCTAssertTrue(model.isProgressObservationRunning)
 
         // The completed SSE response leaves the observer in its reconnect
@@ -456,8 +481,10 @@ final class AidenChatTests: XCTestCase {
         // the old task's completion must not clear the new task handle.
         model.stopProgressObservation()
         model.startProgressObservation()
-        try await waitForProgressRequestCount(2)
-        try await Task.sleep(for: .milliseconds(150))
+        await waitForProgressRequestCount(2)
+        // The new observer's snapshot clears the stale label; the finished
+        // stream that follows restores it while it waits to reconnect.
+        try await waitUntil { model.isProgressStale }
         XCTAssertTrue(model.isProgressObservationRunning)
         XCTAssertTrue(model.isProgressStale, "A finished stream should retain a last-known label while reconnecting.")
     }
@@ -478,7 +505,7 @@ final class AidenChatTests: XCTestCase {
 
         // The observer that load() hands off to opens the live channel, which
         // carries its own initial snapshot, without fetching the roster again.
-        try await waitForProgressRequestCount(1)
+        await waitForProgressRequestCount(1)
         XCTAssertTrue(model.isProgressObservationRunning)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
 
@@ -500,8 +527,10 @@ final class AidenChatTests: XCTestCase {
         }
 
         model.startProgressObservation()
-        try await waitForAgentRequestCount(2)
-        try await Task.sleep(for: .milliseconds(150))
+        await waitForAgentRequestCount(2)
+        // The observer opens its next channel only after it has applied that
+        // snapshot round, and this mode's second channel stays open.
+        await waitForProgressRequestCount(2)
 
         XCTAssertFalse(model.isTaskProgressStale)
         XCTAssertTrue(model.isAgentRosterStale)
@@ -558,14 +587,14 @@ final class AidenChatTests: XCTestCase {
         }
 
         model.startProgressObservation()
-        try await waitForAgentRequestCount(2)
+        await waitForAgentRequestCount(2)
         try await Task.sleep(for: .milliseconds(150))
 
         XCTAssertEqual(model.agentRoster?.epoch, "epoch-old")
         XCTAssertTrue(model.historicalAgentRosters.contains { $0.turnId == "turn-current-old" })
 
-        try await waitForAgentRequestCount(3)
-        try await Task.sleep(for: .milliseconds(150))
+        await waitForAgentRequestCount(3)
+        try await waitUntil { model.agentRoster?.epoch == "epoch-new" }
 
         XCTAssertEqual(model.agentRoster?.epoch, "epoch-new")
         XCTAssertTrue(model.historicalAgentRosters.isEmpty)
@@ -939,9 +968,9 @@ final class AidenChatTests: XCTestCase {
     @MainActor
     private func makeProgressLifecycleModel(
         mode: AidenChatProgressLifecycleURLProtocol.Mode,
-        cache: AidenChatCache = .shared,
-        draftStore: AidenChatDraftStore = .shared,
-        modelPreferenceStore: AidenModelPreferenceStore = .shared,
+        cache: AidenChatCache? = nil,
+        draftStore: AidenChatDraftStore? = nil,
+        modelPreferenceStore: AidenModelPreferenceStore? = nil,
         onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
         initialChat: AidenChat? = nil,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
@@ -949,6 +978,9 @@ final class AidenChatTests: XCTestCase {
         networkPath: AidenNetworkPathSource? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
+        let cache = cache ?? testCache!
+        let draftStore = draftStore ?? testDraftStore!
+        let modelPreferenceStore = modelPreferenceStore ?? testModelPreferences!
         AidenChatProgressLifecycleURLProtocol.reset(mode: mode)
         if let responseOverride {
             AidenChatProgressLifecycleURLProtocol.setResponseOverride(responseOverride)
@@ -974,6 +1006,9 @@ final class AidenChatTests: XCTestCase {
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AidenChatProgressLifecycleURLProtocol.self]
+        configuration.httpAdditionalHeaders = [
+            AidenChatProgressLifecycleURLProtocol.epochHeader: AidenChatProgressLifecycleURLProtocol.epoch,
+        ]
         let session = URLSession(configuration: configuration)
         let coordinator = AidenRemoteCoordinator(
             installationStore: store,
@@ -1090,7 +1125,7 @@ final class AidenChatTests: XCTestCase {
             chat: fork,
             cache: cache,
             draftStore: draftStore,
-            modelPreferenceStore: .shared,
+            modelPreferenceStore: testModelPreferences,
             onChatUpdated: { _ in }
         )
         await forkModel.load(observeProgress: false)
@@ -2734,43 +2769,39 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testHeldBotPermissionCannotOutliveWriteOrNoticePolicy() async {
-        for downgradeNotice in [false, true] {
-            let owner = AidenBotPresentationOwner()
-            let attempt = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", fullAccessAllowed: true)
-            var canWrite = true
-            var fullAccess = true
-            let gate = AidenChatWriteTestGate()
-            await gate.arm()
-            let resolving = Task {
-                await gate.waitIfArmed()
-                return owner.ownsPermission(attempt, canWrite: canWrite, fullAccessAllowed: fullAccess)
-            }
-            await waitForChatWrite(gate)
-            if downgradeNotice { fullAccess = false }
-            else { canWrite = false }
-            await gate.release()
-            let allowed = await resolving.value
-            XCTAssertFalse(allowed)
-            let refreshed = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", fullAccessAllowed: fullAccess)
-            XCTAssertEqual(owner.ownsPermission(refreshed, canWrite: canWrite, fullAccessAllowed: fullAccess), canWrite)
+    func testHeldBotPermissionCannotOutliveWritePolicy() async {
+        let owner = AidenBotPresentationOwner()
+        let attempt = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true)
+        var canWrite = true
+        let gate = AidenChatWriteTestGate()
+        await gate.arm()
+        let resolving = Task {
+            await gate.waitIfArmed()
+            return owner.ownsPermission(attempt, canWrite: canWrite)
         }
+        await waitForChatWrite(gate)
+        canWrite = false
+        await gate.release()
+        let allowed = await resolving.value
+        XCTAssertFalse(allowed)
+        let refreshed = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: canWrite)
+        XCTAssertFalse(owner.ownsPermission(refreshed, canWrite: canWrite))
+        XCTAssertFalse(owner.ownsPermission(attempt, canWrite: true), "a superseded attempt never grants")
     }
 
     @MainActor
     func testRestorationAdoptsOnlyInFlightOpenUnderSamePolicy() {
         let owner = AidenBotPresentationOwner()
-        func adopts(chat: String = "chat", device: String = "device", canWrite: Bool = true, fullAccess: Bool = false) -> Bool {
-            owner.adoptsRestoration(instanceID: "one", deviceID: device, chatID: chat, canWrite: canWrite, fullAccessAllowed: fullAccess)
+        func adopts(chat: String = "chat", device: String = "device", canWrite: Bool = true) -> Bool {
+            owner.adoptsRestoration(instanceID: "one", deviceID: device, chatID: chat, canWrite: canWrite)
         }
         // The open's own path change re-runs restoration mid-load.
-        let open = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true, fullAccessAllowed: false, adoptable: true)
+        let open = owner.begin(instanceID: "one", deviceID: "device", chatID: "chat", canWrite: true, adoptable: true)
         XCTAssertTrue(adopts())
         XCTAssertTrue(owner.owns(open))
         XCTAssertFalse(adopts(chat: "other"))
         XCTAssertFalse(adopts(device: "new-device"))
         XCTAssertFalse(adopts(canWrite: false))
-        XCTAssertFalse(adopts(fullAccess: true))
         // A settled open keeps ownership but later restoration inputs reload.
         owner.finish(open)
         XCTAssertTrue(owner.owns(open))
@@ -2787,25 +2818,21 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testRestorationRevalidationKeepsOnlySamePolicyLiveGrant() {
+    func testRestorationRevalidationKeepsOnlyALiveGrantWhileWritable() {
         typealias Presentation = AidenBotPresentationOwner.Presentation
         let chat = sampleChat()
-        for fullAccess in [false, true] {
-            let granted = Presentation.resolved(chat, allowsMutations: true, fullAccessAllowed: fullAccess)
-            let kept = granted.revalidating(canWrite: true, fullAccessAllowed: fullAccess)
-            XCTAssertTrue(kept.allowsMutations)
-            XCTAssertEqual(kept.revalidating(canWrite: true, fullAccessAllowed: fullAccess).allowsMutations, true)
-            XCTAssertFalse(granted.revalidating(canWrite: false, fullAccessAllowed: fullAccess).allowsMutations)
-            let noticeChanged = granted.revalidating(canWrite: true, fullAccessAllowed: !fullAccess)
-            XCTAssertFalse(noticeChanged.allowsMutations)
-            XCTAssertFalse(noticeChanged.revalidating(canWrite: true, fullAccessAllowed: fullAccess).allowsMutations,
-                           "a revoked grant cannot come back without a fresh live check")
-        }
-        XCTAssertFalse(Presentation.resolved(chat, allowsMutations: false, fullAccessAllowed: false)
-            .revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
-        XCTAssertFalse(Presentation.awaitingPermission(chat).revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
+        let granted = Presentation.resolved(chat, allowsMutations: true)
+        let kept = granted.revalidating(canWrite: true)
+        XCTAssertTrue(kept.allowsMutations)
+        XCTAssertTrue(kept.revalidating(canWrite: true).allowsMutations)
+        let revoked = granted.revalidating(canWrite: false)
+        XCTAssertFalse(revoked.allowsMutations)
+        XCTAssertFalse(revoked.revalidating(canWrite: true).allowsMutations,
+                       "a revoked grant cannot come back without a fresh live check")
+        XCTAssertFalse(Presentation.resolved(chat, allowsMutations: false).revalidating(canWrite: true).allowsMutations)
+        XCTAssertFalse(Presentation.awaitingPermission(chat).revalidating(canWrite: true).allowsMutations)
         // Grants that did not come from a live check (deep links) fail closed.
-        XCTAssertFalse(Presentation(chat: chat, allowsMutations: true).revalidating(canWrite: true, fullAccessAllowed: false).allowsMutations)
+        XCTAssertFalse(Presentation(chat: chat, allowsMutations: true).revalidating(canWrite: true).allowsMutations)
     }
 
     @MainActor
@@ -2973,10 +3000,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(persisted?.messages.last?.id, "final-reply")
         XCTAssertEqual(model.draft, "Saved composer")
         XCTAssertNotNil(model.catalog)
-        for _ in 0..<100 {
-            if AidenChatProgressLifecycleURLProtocol.progressRequestCount > 0 { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        await waitForProgressRequestCount(1)
         XCTAssertGreaterThan(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 0)
         model.stopProgressObservation()
     }
@@ -3707,22 +3731,26 @@ final class AidenChatTests: XCTestCase {
         XCTFail("Timed out waiting for condition.", file: file, line: line)
     }
 
+    /// Resumes when the stub counts the request, however long a loaded
+    /// simulator takes to issue it; the ceiling only bounds a real failure.
     @MainActor
-    private func waitForProgressRequestCount(_ expected: Int) async throws {
-        for _ in 0..<100 {
-            if AidenChatProgressLifecycleURLProtocol.progressRequestCount >= expected { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTFail("Timed out waiting for progress SSE request (expected).")
+    private func waitForRequests(
+        _ counter: AidenChatProgressLifecycleURLProtocol.Counter,
+        reach expected: Int
+    ) async {
+        let reached = expectation(description: "\(counter) request \(expected)")
+        AidenChatProgressLifecycleURLProtocol.whenRequests(counter, reach: expected) { reached.fulfill() }
+        await fulfillment(of: [reached], timeout: 30)
     }
 
     @MainActor
-    private func waitForAgentRequestCount(_ expected: Int) async throws {
-        for _ in 0..<200 {
-            if AidenChatProgressLifecycleURLProtocol.agentRequestCount >= expected { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTFail("Timed out waiting for agent snapshot requests (expected).")
+    private func waitForProgressRequestCount(_ expected: Int) async {
+        await waitForRequests(.progress, reach: expected)
+    }
+
+    @MainActor
+    private func waitForAgentRequestCount(_ expected: Int) async {
+        await waitForRequests(.agents, reach: expected)
     }
 
     func testTranscriptAndTaskListsOpenAtTheLatestContent() {
@@ -4233,6 +4261,30 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testAgentRunActivityMatchesMacPresentationLanguage() throws {
+        // Persisted labels as Google Antigravity steps record them; the Mac and
+        // Android presentation tests expect the same lines.
+        let expected: [(String, String, AidenAgentStepStatus, String?, String?, String)] = [
+            ("delete_file", "Delete file", .running, "old.ts", nil, "Deleting old.ts"),
+            ("delete_file", "Delete file", .completed, "old.ts", nil, "Deleted old.ts"),
+            ("move_file", "Move file", .completed, "src/a.ts", nil, "Moved src/a.ts"),
+            ("web_fetch", "Fetch web page", .completed, nil, nil, "Fetched web page"),
+            ("agent_subagents", "Run subagents", .completed, nil, nil, "Ran subagents"),
+            ("agent_tool", "Use agent tool", .running, nil, nil, "Using an agent tool"),
+            ("agent_context_rebuilt", "Started a fresh agent session from this chat", .completed, nil, nil, "Started a fresh agent session"),
+            ("run_command", "Run command", .completed, nil, "a command", "Ran a command")
+        ]
+        for (index, (toolName, label, status, target, detail, line)) in expected.enumerated() {
+            let step = AidenAgentStep(
+                id: "tool-\(index)", order: index, kind: .tool, toolName: toolName,
+                label: label, status: status, startedAt: 1_000, updatedAt: 2_000,
+                finishedAt: status == .completed ? 2_000 : nil, contentOffset: 0, durationMs: nil,
+                target: target, detail: detail, lineChanges: nil
+            )
+            XCTAssertEqual(AidenAgentActivityPresentation.line(for: step), line, toolName)
+        }
+    }
+
     func testModelCatalogHidesPresentationOnlyModelsWithoutDroppingTheirIdentity() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
@@ -4411,6 +4463,46 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(resolved.modelId, "gemini-flash")
         XCTAssertEqual(turn.providerId, "google")
         XCTAssertEqual(turn.modelId, "gemini-flash")
+    }
+
+    func testDesktopStartedAgentChatSaysWhichModelRepliesFromThisPhone() throws {
+        // The Mac omits agent-backed providers from the phone's catalog.
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+        var chat = sampleChat()
+        chat.botId = nil
+        chat.providerId = "antigravity"
+        chat.modelId = "gemini-3.8-flash"
+
+        let resolved = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: chat.providerId,
+            selectedModelId: chat.modelId,
+            selectedThinkingLevel: nil
+        )
+        XCTAssertEqual(resolved.providerId, "google")
+        XCTAssertEqual(
+            AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: "Gemini Flash"),
+            "This chat used Google Antigravity, which runs only on your Mac. Replies from here use Gemini Flash."
+        )
+        XCTAssertEqual(
+            AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: nil),
+            "This chat used Google Antigravity, which runs only on your Mac. Choose a model for replies from here."
+        )
+
+        // A chat on a model this phone can use, or a Bot chat, says nothing.
+        var ordinary = chat
+        ordinary.providerId = "google"
+        ordinary.modelId = "gemini-flash"
+        XCTAssertNil(AidenChatModelAuthority.macOnlyAgentNotice(chat: ordinary, catalog: catalog, replyModelLabel: "Gemini Flash"))
+        var bot = chat
+        bot.botId = "bot-1"
+        XCTAssertNil(AidenChatModelAuthority.macOnlyAgentNotice(chat: bot, catalog: catalog, replyModelLabel: "Gemini Flash"))
     }
 
     func testRememberedHostModelChoiceWinsWhileTheHostStillOffersIt() throws {
@@ -4652,6 +4744,11 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "custom:lmstudio-2"), "lmstudio")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "custom:ollama-42"), "ollama")
+        // A desktop-started Google Antigravity chat shows its own mark, not a "G" monogram.
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "antigravity"), "antigravity")
+        for slug in AidenProviderIconResolver.supportedSlugs {
+            XCTAssertNotNil(UIImage(named: "ProviderLogo-\(slug)"), "\(slug) needs a bundled logo")
+        }
         XCTAssertNil(AidenProviderIconResolver.slug(providerID: "custom:lmstudio-1"))
         XCTAssertNil(AidenProviderIconResolver.slug(providerID: "future-provider"))
     }
@@ -7400,6 +7497,54 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var mode: Mode = .denied
     nonisolated(unsafe) private static var _progressRequestCount = 0
     nonisolated(unsafe) private static var _agentRequestCount = 0
+
+    /// Sessions carry the epoch of the test that made them. Models from
+    /// earlier tests keep observing and reconnecting; their requests fail
+    /// here instead of reaching this test's counters, overrides and holds.
+    static let epochHeader = "X-Aiden-Test-Epoch"
+    nonisolated(unsafe) private static var _epoch = UUID().uuidString
+    static var epoch: String { lock.withLock { _epoch } }
+    static func beginTestEpoch() {
+        lock.withLock {
+            _epoch = UUID().uuidString
+            countWaiters = []
+        }
+    }
+
+    enum Counter: Sendable { case progress, agents }
+    private struct CountWaiter {
+        let counter: Counter
+        let target: Int
+        let reached: @Sendable () -> Void
+    }
+    nonisolated(unsafe) private static var countWaiters: [CountWaiter] = []
+
+    /// Calls `reached` once `counter` has counted `target` requests.
+    static func whenRequests(_ counter: Counter, reach target: Int, _ reached: @escaping @Sendable () -> Void) {
+        let alreadyReached = lock.withLock {
+            if count(counter) >= target { return true }
+            countWaiters.append(CountWaiter(counter: counter, target: target, reached: reached))
+            return false
+        }
+        if alreadyReached { reached() }
+    }
+
+    /// Requires `lock`.
+    private static func count(_ counter: Counter) -> Int {
+        switch counter {
+        case .progress: _progressRequestCount
+        case .agents: _agentRequestCount
+        }
+    }
+
+    private static func notifyCountWaiters() {
+        let reached = lock.withLock {
+            let ready = countWaiters.filter { count($0.counter) >= $0.target }
+            countWaiters.removeAll { count($0.counter) >= $0.target }
+            return ready.map(\.reached)
+        }
+        reached.forEach { $0() }
+    }
     nonisolated(unsafe) private static var _agentInterruptPaths: [String] = []
     static var agentInterruptPaths: [String] { lock.withLock { _agentInterruptPaths } }
     nonisolated(unsafe) private static var _attachmentDeleteCount = 0
@@ -7468,6 +7613,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        guard request.value(forHTTPHeaderField: Self.epochHeader) == Self.epoch else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
         let path = request.url?.path ?? ""
         if path.contains("/attachments/"), request.httpMethod == "DELETE" { Self.lock.withLock { Self._attachmentDeleteCount += 1 } }
         if path.hasSuffix("/attachments"), request.httpMethod == "POST" { Self.lock.withLock { Self._uploadRequestCount += 1 } }
@@ -7568,6 +7717,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case "/api/aiden/v1/chats/chat-progress-lifecycle/agents"
             where Self.lock.withLock({ Self.mode == .agentInterrupt }):
             Self.lock.withLock { Self._agentRequestCount += 1 }
+            Self.notifyCountWaiters()
             result = Self.response(
                 for: request,
                 status: 200,
@@ -7586,6 +7736,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             requestCount = Self._agentRequestCount
             currentMode = Self.mode
             Self.lock.unlock()
+            Self.notifyCountWaiters()
             if currentMode == .rosterEpochRotates, requestedTurn == "turn-old" {
                 result = Self.response(
                     for: request,
@@ -7629,6 +7780,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             let requestCount = Self._progressRequestCount
             currentMode = Self.mode
             Self.lock.unlock()
+            Self.notifyCountWaiters()
             if currentMode == .denied {
                 result = Self.response(
                     for: request,
