@@ -415,7 +415,12 @@ function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
   });
 }
 const AGENT_ACCESS_OFF = "Agent access to simulators is off. Ask the user to allow it in the Simulator tab.";
-const chatKey = (chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
+/** The revoke counters an install was approved under, taken when the user asked for it. */
+interface InstallApproval {
+  streaming: number;
+  agent: number;
+}
+const chatKey =(chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -460,6 +465,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let consentEpoch = 0;
   /** Bumped only by a streaming revoke, so an agent-access or sharing change never aborts an open. */
   let streamingEpoch = 0;
+  /** Bumped by a streaming or agent-access revoke, so agent-tool installs approved before it never run. */
+  let agentEpoch = 0;
   let saving: Promise<void> = Promise.resolve();
   let granting: Promise<unknown> = Promise.resolve();
   /** A running "Remove installed tools"; grants wait for it so nothing reinstalls mid-delete. */
@@ -1084,6 +1091,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     await load();
     consentEpoch += 1;
     if (kind === "streaming") streamingEpoch += 1;
+    if (kind === "streaming" || kind === "agentAccess") agentEpoch += 1;
     if (kind === "peerSharing" || kind === "mobileSharing") {
       consent = { ...consent, [kind]: false };
       await saveConsent();
@@ -1274,11 +1282,28 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     );
   }
 
-  /** Installs one pinned helper on this Mac. Callers have checked the matching consent. */
-  async function installLocalTool(tool: "hub" | "agent"): Promise<void> {
+  const installApproval = (): InstallApproval => ({ streaming: streamingEpoch, agent: agentEpoch });
+
+  /**
+   * Called immediately before every install side effect. A queued or
+   * in-flight update whose approving consent was revoked since `approval` was
+   * taken refuses here, so nothing installs after the user turned it off.
+   */
+  function requireInstallConsent(tool: "hub" | "agent", approval: InstallApproval): void {
+    if (approval.streaming !== streamingEpoch || !consent.streaming) {
+      throw new Error("Simulator streaming was turned off, so nothing was installed.");
+    }
+    if (tool === "agent" && (approval.agent !== agentEpoch || !consent.agentAccess)) {
+      throw new Error("Agent access was turned off, so agent tools were not installed.");
+    }
+  }
+
+  /** Installs one pinned helper on this Mac, if the consent behind `approval` still holds. */
+  async function installLocalTool(tool: "hub" | "agent", approval: InstallApproval): Promise<void> {
     if (!host.installTool) throw new Error("This Mac cannot update simulator helpers.");
     const spec = tool === "hub" ? DEVICE_HUB : AGENT_DEVICE;
     const before = localTools ?? (await readLocalTools());
+    requireInstallConsent(tool, approval);
     setHost({
       status: "installing",
       detail: deviceToolInstallMessage(tool === "hub" ? "the device hub" : "agent tools", before[tool]),
@@ -1301,6 +1326,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   /** The explicit Start, Try again, or Retry for this Mac. */
   async function startLocal(): Promise<void> {
     if (!consent.streaming) throw new Error(STREAMING_OFF);
+    const approval = installApproval();
     await removing?.catch(() => undefined);
     await refreshLocalTools();
     const hubUpdate = toolNeedsUpdate(localTools?.hub);
@@ -1315,7 +1341,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     }
     if (hubUpdate) await reclaimLocal([DEVICE_HUB]);
     if (consent.agentAccess && toolNeedsUpdate(localTools?.agent)) {
-      await installLocalTool("agent").catch(() => undefined);
+      await installLocalTool("agent", approval).catch(() => undefined);
     }
     await listDevices(ready).catch((error) => setHost({ status: "error", detail: errorMessage(error) }));
     await refreshLocalTools();
@@ -1815,10 +1841,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (tool === "agent" && !consent.agentAccess) {
         throw new Error("Turn on agent access before installing agent tools.");
       }
+      // Every install below rechecks this approval right before it runs, so a
+      // revoke while the update waits its turn or connects wins.
+      const approval = installApproval();
       if (hostId === host.id) {
         // Local consent toggles are the install approval for this Mac.
         const run = granting.then(async () => {
-          await installLocalTool(tool);
+          await installLocalTool(tool, approval);
           if (tool === "hub" && !host.current()) {
             const ready = await start(false);
             if (ready) await listDevices(ready).catch(() => undefined);
@@ -1834,8 +1863,20 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       const approved = sshConsent(hostId);
       const nextConsent: SshHostToolConsent = tool === "hub" ? { ...approved, hub: true } : { hub: true, agent: true };
       await saveSshStore({ ...sshStored, toolConsent: { ...sshStored.toolConsent, [hostId]: nextConsent } });
+      try {
+        requireInstallConsent(tool, approval);
+      } catch (error) {
+        // A streaming revoke that raced this save cleared every approval; keep this host's cleared too.
+        if (approval.streaming !== streamingEpoch && sshStored.toolConsent[hostId]) {
+          const { [hostId]: _revoked, ...kept } = sshStored.toolConsent;
+          await saveSshStore({ ...sshStored, toolConsent: kept }).catch(() => undefined);
+        }
+        throw error;
+      }
+      // connectSsh rechecks streaming itself right before a hub install.
       if (tool === "hub" || entry.state.status !== "ready") await connectSsh(entry, { allowInstall: true });
       if (tool === "agent" && ssh.get(hostId) === entry && entry.state.status === "ready") {
+        requireInstallConsent("agent", approval);
         try {
           await entry.host.ensureAgentReady(
             (phase, detail) => setSsh(entry, { status: phase, ...(detail ? { detail } : {}) }),

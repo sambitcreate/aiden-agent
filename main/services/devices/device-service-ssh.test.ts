@@ -32,6 +32,9 @@ interface FakeSshOptions {
   probeFails?: string;
   agentMissing?: boolean;
   port?: number;
+  /** Holds `ensureReady` until it settles, so a test can act mid-connect. */
+  hold?: Promise<void>;
+  onEnsureReady?(): void;
 }
 
 function fakeSshHost(config: SshDeviceHostConfig, options: FakeSshOptions) {
@@ -54,6 +57,8 @@ function fakeSshHost(config: SshDeviceHostConfig, options: FakeSshOptions) {
     agentInstalled: async () => !options.agentMissing,
     async ensureReady(onPhase, start) {
       log.push(`ensureReady:${start?.allowInstall === true}`);
+      options.onEnsureReady?.();
+      await options.hold;
       if (options.fails) throw new Error(options.fails);
       if (options.missing) {
         if (!start?.allowInstall) throw new DeviceToolsMissingError("expo-device-hub");
@@ -95,7 +100,7 @@ function fakeSshHost(config: SshDeviceHostConfig, options: FakeSshOptions) {
   return { host, log, health: (value: DeviceHostHealth, detail?: string) => health?.(value, detail) };
 }
 
-function fakeLocalHost(options: { installed?: boolean } = {}) {
+function fakeLocalHost(options: { installed?: boolean; install?(tool: "hub" | "agent"): Promise<void> } = {}) {
   const calls: string[] = [];
   let ready: DeviceHostReady | null = null;
   let installed = options.installed ?? true;
@@ -125,6 +130,7 @@ function fakeLocalHost(options: { installed?: boolean } = {}) {
     },
     async installTool(tool) {
       calls.push(`installTool:${tool}`);
+      await options.install?.(tool);
     },
     current: () => ready,
     onHealth: () => () => undefined,
@@ -168,6 +174,7 @@ async function withService(
     ssh?: Record<string, FakeSshOptions>;
     localTargets?: string[];
     localInstalled?: boolean;
+    localInstall?(tool: "hub" | "agent"): Promise<void>;
     prepare?(baseDir: string): Promise<void>;
   } = {},
 ) {
@@ -180,7 +187,7 @@ async function withService(
     );
   }
   await options.prepare?.(baseDir);
-  const local = fakeLocalHost({ installed: options.localInstalled });
+  const local = fakeLocalHost({ installed: options.localInstalled, install: options.localInstall });
   const ssh = new Map<string, ReturnType<typeof fakeSshHost>>();
   const created: string[] = [];
   const hubCalls: string[] = [];
@@ -513,5 +520,95 @@ test("quitting stops every SSH host", async () => {
       assert.ok(sshLog(context, STUDIO.id).includes("stop"));
     },
     { consent: STREAMING, hosts: [MINI, STUDIO] },
+  );
+});
+
+/** A gate a fake can wait on, plus a signal that the fake reached it. */
+function gate() {
+  let release!: () => void;
+  let reached!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  return { held, entered, release, reached };
+}
+
+const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
+const localInstalls = (context: Context) => context.local.calls.filter((call) => call.startsWith("installTool:"));
+
+test("a queued local agent-tool update never installs after agent access is revoked", async () => {
+  const first = gate();
+  let installs = 0;
+  await withService(
+    async (context) => {
+      await context.service.load();
+      const running = context.service.updateTool({ hostId: "local", tool: "agent" });
+      await first.entered;
+      const queued = context.service.updateTool({ hostId: "local", tool: "agent" });
+      await settled(); // the second update has passed its checks and is waiting its turn
+      await context.service.revokeConsent("agentAccess");
+      first.release();
+      await running;
+      await assert.rejects(queued, /Agent access was turned off/u);
+      assert.deepEqual(localInstalls(context), ["installTool:agent"], "only the install already under way ran");
+    },
+    {
+      consent: AGENT,
+      localInstall: async () => {
+        if (installs++ > 0) return;
+        first.reached();
+        await first.held;
+      },
+    },
+  );
+});
+
+test("a queued local hub update never installs after streaming is turned off", async () => {
+  const first = gate();
+  let installs = 0;
+  await withService(
+    async (context) => {
+      await context.service.load();
+      const running = context.service.updateTool({ hostId: "local", tool: "hub" });
+      await first.entered;
+      const queued = context.service.updateTool({ hostId: "local", tool: "hub" });
+      await settled(); // the second update has passed its checks and is waiting its turn
+      await context.service.revokeConsent("streaming");
+      first.release();
+      await running;
+      await assert.rejects(queued, /streaming was turned off/u);
+      assert.deepEqual(localInstalls(context), ["installTool:hub"]);
+    },
+    {
+      consent: STREAMING,
+      localInstall: async () => {
+        if (installs++ > 0) return;
+        first.reached();
+        await first.held;
+      },
+    },
+  );
+});
+
+test("an SSH agent-tool update that loses an agent-access revoke while connecting installs nothing", async () => {
+  const connecting = gate();
+  await withService(
+    async (context) => {
+      await context.service.load();
+      const updating = context.service.updateTool({ hostId: MINI.id, tool: "agent" });
+      await connecting.entered;
+      await context.service.revokeConsent("agentAccess");
+      connecting.release();
+      await assert.rejects(updating, /Agent access was turned off/u);
+      assert.ok(!sshLog(context, MINI.id).includes("ensureAgentReady:true"), sshLog(context, MINI.id).join(", "));
+    },
+    {
+      consent: AGENT,
+      hosts: [MINI],
+      ssh: { [MINI.id]: { agentMissing: true, hold: connecting.held, onEnsureReady: () => connecting.reached() } },
+    },
   );
 });
