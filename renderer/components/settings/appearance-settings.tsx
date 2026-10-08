@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import {
   Button,
+  Field, FieldSet, Switch,
   toast,
 } from "../ui";
 import { settingsApi } from "../../lib/ipc";
@@ -513,6 +514,11 @@ export function AppearanceSettings() {
         <p className="appearance-current-theme">Current theme: {currentThemeLabel}</p>
       </section>
 
+      <FieldSet title="Chat">
+        <Field label="Show context usage in composer" description="Show the token meter beside your message. Context details remain available in the workspace panel.">
+          <Switch checked={config.showComposerContextUsage} onCheckedChange={(checked) => update((current) => ({ ...current, showComposerContextUsage: checked }))} aria-label="Show context usage in composer" />
+        </Field>
+      </FieldSet>
       <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-chat-width-title">
         <h2 id="appearance-chat-width-title">Chat width</h2>
         <p className="appearance-section-description">Sets how wide messages and the composer can grow in the conversation.</p>

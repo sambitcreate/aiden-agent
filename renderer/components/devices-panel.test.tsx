@@ -246,16 +246,5 @@ test("viewer status labels", () => {
   assert.equal(deviceStatusLabel("error", false), "Disconnected");
 });
 
-test("Environment panel renders the Simulator tab and panel only with the devices capability", () => {
-  const source = readFileSync(new URL("./environment-panel.tsx", import.meta.url), "utf8");
-  assert.match(
-    source,
-    /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u,
-  );
-  assert.match(source, /tab === "devices"\s+\? Smartphone/u);
-  assert.match(source, /tab === "devices"\s+\? "Simulator"/u);
-  assert.match(source, /panel\.devicesEnabled \? \(\s*<div\s+id="environment-devices-panel"/u);
-  assert.match(source, /hidden=\{panel\.tab !== "devices"\}/u);
-  assert.match(source, /active=\{presented && panel\.tab === "devices"\}/u);
-  assert.match(source, /chatId=\{panel\.activeChat\.chatId \?\? undefined\}/u);
-});
+// Simulator discovery and capability loss are exercised in
+// tests/e2e/environment-devices-tab.spec.ts against the rendered launcher/panel.

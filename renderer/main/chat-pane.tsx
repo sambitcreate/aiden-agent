@@ -71,6 +71,7 @@ import { ariaKeyShortcut } from "../shared/keybindings";
 import type { ToolApprovalScope } from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
+import { APPEARANCE_CHANGE_EVENT, readCachedAppearance } from "../lib/appearance-runtime";
 import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
@@ -364,6 +365,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Composer context meter: the runtime's next-request projection, refreshed
   // on the ambient triggers (open, model change, settle, draft typing) and
   // pushed live during a generation via chat:context-pressure.
+  const showComposerContextUsage = React.useSyncExternalStore(
+    React.useCallback((listener: () => void) => { window.addEventListener(APPEARANCE_CHANGE_EVENT, listener); return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, listener); }, []),
+    () => readCachedAppearance()?.showComposerContextUsage ?? true,
+    () => true,
+  );
   const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
   const [contextCompactPending, setContextCompactPending] = React.useState(false);
   const [contextCompactedFlash, setContextCompactedFlash] = React.useState(false);
@@ -1095,6 +1101,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (!effectiveWorkspaceId) return;
     return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
   }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
+
+  React.useEffect(() => {
+    environmentPanel.setContextDetails(!draft && chat.data ? {
+      chat: chat.data,
+      providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
+      modelLabel: model ?? "Unavailable",
+      pressure: contextPressure,
+      compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
+    } : null);
+    return () => environmentPanel.setContextDetails(null);
+  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
@@ -2545,7 +2562,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               workspaceId={effectiveWorkspace?.id}
               folderPath={effectiveWorkspace?.folderPath}
             />
-            <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+            <EnvironmentPanelToggle />
             <QuickViewToggle disabled={!effectiveWorkspace} />
             <Button
               iconOnly
@@ -2873,8 +2890,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : undefined
                 }
                 contextMeter={
-                  draft ? undefined : (
+                  draft || !showComposerContextUsage ? undefined : (
                     <ContextMeter
+                      onViewDetails={() => environmentPanel.showTools("context")}
                       pressure={contextPressure}
                       compacting={
                         contextCompactPending ||
