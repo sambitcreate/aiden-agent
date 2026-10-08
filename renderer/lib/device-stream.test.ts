@@ -12,6 +12,7 @@ import {
   IOS_MSG_DUO_CONTROL,
   IOS_MSG_HARDWARE_KEYBOARD,
   IOS_MSG_KEY,
+  IOS_MSG_MULTI_TOUCH,
   IOS_MSG_ORIENTATION,
   IOS_MSG_TOUCH,
   IOS_TAG_CONTROL_REPLY,
@@ -705,5 +706,34 @@ test("an unanswered Duo command times out and reports that its position is unkno
   assert.equal(h.log[h.log.length - 1], "duo:true:");
   h.clock.advance(5_000);
   assert.match(h.log[h.log.length - 1]!, /^duo:false:Device control timed out/u);
+  h.client.stop();
+});
+
+test("two-finger input is one multi-touch packet, remapped like single touches on a rotated device", async () => {
+  const h = harness();
+  h.client.start();
+  await settle();
+  const socket = h.sockets[0]!;
+  socket.open();
+  h.client.sendMultiTouch("begin", { x: 0.25, y: 0.5 }, { x: 0.75, y: 0.5 });
+  assert.deepEqual(decodePacket(socket.sent[socket.sent.length - 1]!), {
+    tag: IOS_MSG_MULTI_TOUCH,
+    body: { type: "begin", x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 },
+  });
+
+  const config = new TextEncoder().encode(JSON.stringify({ width: 390, height: 844, orientation: "landscape_right" }));
+  const message = new Uint8Array(config.length + 1);
+  message[0] = IOS_TAG_SCREEN_CONFIG;
+  message.set(config, 1);
+  socket.onmessage?.({ data: message.buffer });
+  // Each contact lands where a single touch at the same displayed point would.
+  h.client.sendMultiTouch("move", { x: 0.2, y: 0.3 }, { x: 0.8, y: 0.7 });
+  h.client.sendTouch("move", 0.2, 0.3);
+  h.client.sendTouch("move", 0.8, 0.7);
+  const [multi, first, second] = socket.sent.slice(-3).map(decodePacket);
+  assert.equal(multi!.tag, IOS_MSG_MULTI_TOUCH);
+  assert.ok(Math.abs(multi!.body.x1 - first!.body.x) < 1e-9 && Math.abs(multi!.body.y1 - first!.body.y) < 1e-9);
+  assert.ok(Math.abs(multi!.body.x2 - second!.body.x) < 1e-9 && Math.abs(multi!.body.y2 - second!.body.y) < 1e-9);
+  assert.ok(Math.abs(multi!.body.x1 - 0.7) < 1e-9 && Math.abs(multi!.body.y1 - 0.2) < 1e-9);
   h.client.stop();
 });

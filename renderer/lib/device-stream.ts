@@ -145,6 +145,8 @@ const SOFT_DECODE_QUEUE = 8;
 // serve-sim binary WS message tags (browser -> helper).
 export const IOS_MSG_TOUCH = 0x03;
 export const IOS_MSG_BUTTON = 0x04;
+/** Two contacts in one packet: `{ type, x1, y1, x2, y2 }`, normalized like a single touch. */
+export const IOS_MSG_MULTI_TOUCH = 0x05;
 export const IOS_MSG_KEY = 0x06;
 export const IOS_MSG_ORIENTATION = 0x07;
 export const IOS_MSG_HARDWARE_KEYBOARD = 0x0d;
@@ -336,6 +338,12 @@ export interface DeviceStreamClient {
   setMjpegImage(image: HTMLImageElement | null): void;
   /** Normalized 0..1 coordinates in the displayed frame. */
   sendTouch(phase: "begin" | "move" | "end", x: number, y: number): void;
+  /** Two simultaneous contacts (pinch, rotate, two-finger pan), normalized like `sendTouch`. */
+  sendMultiTouch(
+    phase: "begin" | "move" | "end",
+    first: { x: number; y: number },
+    second: { x: number; y: number },
+  ): void;
   sendKey(code: string, phase: "down" | "up"): void;
   pressButton(button: DeviceHardwareButton): void;
   /** Rotates to the next orientation. On an iPhone Duo this goes through the hinge command queue. */
@@ -846,6 +854,11 @@ export function createDeviceStreamClient(
     stop,
     setMjpegImage,
     sendTouch: (phase, x, y) => send(taggedJson(IOS_MSG_TOUCH, { type: phase, ...rawPoint(x, y) })),
+    sendMultiTouch: (phase, first, second) => {
+      const a = rawPoint(first.x, first.y);
+      const b = rawPoint(second.x, second.y);
+      send(taggedJson(IOS_MSG_MULTI_TOUCH, { type: phase, x1: a.x, y1: a.y, x2: b.x, y2: b.y }));
+    },
     sendKey: (code, phase) => {
       const usage = hidUsageForCode(code);
       if (usage !== null) send(taggedJson(IOS_MSG_KEY, { type: phase, usage }));
