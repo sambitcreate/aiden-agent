@@ -414,7 +414,19 @@ final class AidenSimulatorViewerModel: Identifiable {
         do {
             let request = try client.simulatorStreamRequest(deviceId: deviceId)
             let sink = AidenSimulatorEventSink(self)
+            let frames = AidenLatestFrameSlot<CGImage>()
             let stream = try currentTransport().makeFrameStream(request: request) { event in
+                if case .frame(let image) = event {
+                    // At most one frame waits for the main thread; newer ones replace it.
+                    guard frames.offer(image) else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let image = frames.take() else { return }
+                            sink.model?.handle(.frame(image), deviceId: deviceId, generation: current)
+                        }
+                    }
+                    return
+                }
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated { sink.model?.handle(event, deviceId: deviceId, generation: current) }
                 }

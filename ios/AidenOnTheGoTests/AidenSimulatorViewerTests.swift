@@ -147,6 +147,30 @@ final class AidenSimulatorViewerTests: XCTestCase {
         XCTAssertTrue(mailbox.offer(Data([4])), "the pass ended, so the next frame starts another")
     }
 
+    func testDecodedFramesWaitForTheMainThreadOneAtATime() {
+        let slot = AidenLatestFrameSlot<Int>()
+        // The first frame schedules the only hop; frames decoded while it waits replace it.
+        XCTAssertTrue(slot.offer(1))
+        XCTAssertFalse(slot.offer(2))
+        XCTAssertFalse(slot.offer(3))
+        XCTAssertEqual(slot.take(), 3)
+        // Nothing is left behind, and the next frame schedules a new hop.
+        XCTAssertNil(slot.take())
+        XCTAssertTrue(slot.offer(4))
+        XCTAssertEqual(slot.take(), 4)
+
+        // A stalled main thread: thousands of frames from the decoder schedule one hop.
+        let stalled = AidenLatestFrameSlot<Int>()
+        let hops = NSLock()
+        var scheduled = 0
+        DispatchQueue.concurrentPerform(iterations: 2_000) { index in
+            if stalled.offer(index) { hops.withLock { scheduled += 1 } }
+        }
+        XCTAssertEqual(scheduled, 1)
+        XCTAssertNotNil(stalled.take())
+        XCTAssertNil(stalled.take())
+    }
+
     func testFrameDecoderDecodesARealJPEG() throws {
         let data = NSMutableData()
         let context = try XCTUnwrap(CGContext(
