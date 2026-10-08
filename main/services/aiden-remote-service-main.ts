@@ -863,7 +863,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   // phone tap converge on one Bot, and only the creator sends the self-intro.
                   create: async (presetId, { audienceId }) => {
                     const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
-                    const result = await botStarter().startFromPreset(presetId, undefined, { audienceId });
+                    const result = await botStarter().startFromPreset(presetId, {
+                      // Created for the phone's audience; the key is remembered by the shared starter.
+                      createBot: (bot) => botApplicationService.createBot({ audienceId, bot }),
+                    });
                     return { botId: result.bot.id, created: result.created };
                   },
                 },

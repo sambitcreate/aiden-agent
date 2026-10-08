@@ -33,9 +33,22 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
   const { handle } = dependencies;
   /** owner key → botId → unsubscribe. */
   const subscriptions = new Map<string, Map<string, () => void>>();
+  /**
+   * owner key → botId → the newest subscribe request still wanted. An
+   * unsubscribe (or a newer subscribe) withdraws it, so a subscribe that
+   * finishes afterwards releases itself instead of leaking a live feed.
+   */
+  const wanted = new Map<string, Map<string, number>>();
+  let nextRequest = 0;
   const watched = new Map<string, () => void>();
 
   const release = (ownerKey: string, botId?: string) => {
+    const requests = wanted.get(ownerKey);
+    if (requests) {
+      if (botId === undefined) requests.clear();
+      else requests.delete(botId);
+      if (requests.size === 0) wanted.delete(ownerKey);
+    }
     const byBot = subscriptions.get(ownerKey);
     if (!byBot) return;
     for (const [id, unsubscribe] of [...byBot]) {
@@ -60,6 +73,10 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
       );
     }
     release(owner.key, botId);
+    const request = (nextRequest += 1);
+    let requests = wanted.get(owner.key);
+    if (!requests) wanted.set(owner.key, (requests = new Map()));
+    requests.set(botId, request);
     const subscription = await dependencies.projection().subscribe(botId, {
       send: (live) => {
         if (owner.isDestroyed()) throw new Error(INACTIVE);
@@ -70,9 +87,13 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
       subscription.unsubscribe();
       throw new Error(INACTIVE);
     }
+    if (wanted.get(owner.key)?.get(botId) !== request) {
+      // Unsubscribed, or superseded by a newer subscribe, while this one opened.
+      subscription.unsubscribe();
+      return subscription.snapshot;
+    }
     let byBot = subscriptions.get(owner.key);
     if (!byBot) subscriptions.set(owner.key, (byBot = new Map()));
-    // A newer subscribe for this Bot that finished first wins.
     byBot.get(botId)?.();
     byBot.set(botId, subscription.unsubscribe);
     return subscription.snapshot;

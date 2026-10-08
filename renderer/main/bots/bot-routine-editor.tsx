@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Button, Dialog, Input, Text, Textarea, toast } from "../../components/ui";
+import { Button, Dialog, Input, Text, Textarea } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { BotRoutine } from "../../../main/services/scheduled-bot-routines";
@@ -113,7 +113,7 @@ export function BotRoutineEditor({
     if (!routine || busy) return;
     setBusy(true);
     try {
-      await deleteBotRoutine(bot.id, routine);
+      await botsApi.routines.delete({ botId: bot.id, id: routine.id, expectedUpdatedAt: routine.updatedAt });
       onDeleted?.();
       onOpenChange(false);
     } catch (caught) {
@@ -299,14 +299,4 @@ export function BotRoutineEditor({
       </div>
     </Dialog>
   );
-}
-
-/** Removes one routine after the person confirms. */
-export async function deleteBotRoutine(botId: string, routine: BotRoutine): Promise<void> {
-  try {
-    await botsApi.routines.delete({ botId, id: routine.id, expectedUpdatedAt: routine.updatedAt });
-  } catch (error) {
-    toast.error(userFacingErrorMessage(error, "Aiden couldn’t delete this routine."));
-    throw error;
-  }
 }

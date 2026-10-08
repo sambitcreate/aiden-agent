@@ -4,7 +4,9 @@
 // `startFromPreset` is idempotent per preset (`preset:<id>`): repeat and
 // concurrent taps return the same Bot, and only the call that created it sends
 // the self-intro. Desktop IPC and the Remote `POST /bots/from-preset` route
-// share this one instance (`botStarter()` in `bot-starter-main.ts`).
+// share this one instance (`botStarter()` in `bot-starter-main.ts`; Remote
+// passes a `createBot` for the phone's audience), so a tap on the Mac and a tap
+// on a phone converge on one Bot, one key store and one in-flight lane.
 
 import type { BotAccessUpdate } from "../../../renderer/shared/bot-capabilities.js";
 import {
@@ -14,21 +16,15 @@ import {
 } from "../../../renderer/shared/bot-presets.js";
 import type { BotCreateInput, BotDefinition } from "../../../renderer/shared/bots.js";
 import { sendBotIntro } from "./bot-intro.js";
-import type { BotSessionService } from "./bot-session-service.js";
+import type { BotSessionRuntime } from "./bot-session-service.js";
 
 export interface BotStarterDeps {
   findBotByCreationKey(key: string): Promise<BotDefinition | null>;
-  /**
-   * Create the Bot and remember `creationKey` for it. `audienceId` is the
-   * requester's audience (a paired device for Remote); absent means the Mac.
-   */
-  createBot(
-    input: BotCreateInput,
-    access: BotAccessUpdate | undefined,
-    creationKey: string,
-    audienceId?: string,
-  ): Promise<BotDefinition>;
-  session: Pick<BotSessionService, "send" | "state">;
+  /** Create the Bot (the desktop default) and remember `creationKey` for it. */
+  createBot(input: BotCreateInput, access: BotAccessUpdate | undefined, creationKey: string): Promise<BotDefinition>;
+  /** Remember `creationKey` for a Bot that a caller-supplied `createBot` made. */
+  rememberCreation(creationKey: string, botId: string): Promise<void>;
+  session: Pick<BotSessionRuntime, "send" | "state" | "conversation">;
   onIntroError?(botId: string, error: unknown): void;
 }
 
@@ -37,20 +33,30 @@ export interface BotStartResult extends BotPresetCreateResult {
   introduced: boolean;
 }
 
+export interface BotStartOptions {
+  /** The access the person confirmed (desktop). */
+  access?: BotAccessUpdate;
+  /** Creates the Bot for another audience (a paired phone); the key is still remembered here. */
+  createBot?(input: BotCreateInput): Promise<BotDefinition>;
+}
+
 export interface BotStarter {
-  startFromPreset(presetId: string, access?: BotAccessUpdate, options?: { audienceId?: string }): Promise<BotStartResult>;
+  startFromPreset(presetId: string, options?: BotStartOptions): Promise<BotStartResult>;
   /** The self-intro for a Bot created some other way (the create flow). */
   introduce(botId: string): Promise<boolean>;
 }
 
 export function createBotStarter(deps: BotStarterDeps): BotStarter {
-  // The first caller of a key owns how the Bot is created; joiners get its Bot.
-  const ownerByKey = new Map<string, { access: BotAccessUpdate | undefined; audienceId: string | undefined }>();
+  /** The options of the call that owns each in-flight creation. */
+  const optionsByKey = new Map<string, BotStartOptions>();
   const create = createBotPresetCreator({
     findBotByCreationKey: deps.findBotByCreationKey,
-    createBot: (input, key) => {
-      const owner = ownerByKey.get(key);
-      return deps.createBot(input, owner?.access, key, owner?.audienceId);
+    async createBot(input, key) {
+      const options = optionsByKey.get(key) ?? {};
+      if (!options.createBot) return deps.createBot(input, options.access, key);
+      const bot = await options.createBot(input);
+      await deps.rememberCreation(key, bot.id);
+      return bot;
     },
   });
 
@@ -65,16 +71,16 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
   };
 
   return {
-    async startFromPreset(presetId, access, options) {
+    async startFromPreset(presetId, options = {}) {
       const key = botPresetIdempotencyKey(presetId);
-      const owner = !ownerByKey.has(key);
-      if (owner) ownerByKey.set(key, { access, audienceId: options?.audienceId });
+      const owner = !optionsByKey.has(key);
+      if (owner) optionsByKey.set(key, options);
       try {
         const result = await create(presetId);
         const introduced = result.created ? await introduce(result.bot.id) : false;
         return { ...result, introduced };
       } finally {
-        if (owner) ownerByKey.delete(key);
+        if (owner) optionsByKey.delete(key);
       }
     },
     introduce,

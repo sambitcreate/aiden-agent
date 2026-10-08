@@ -306,6 +306,60 @@ test("Stop ends the running reply, keeps what was written, and the Bot is idle a
   }
 });
 
+test("two windows on one Bot both follow the reply, and one leaving does not stop the other", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("first answer"), fauxAssistantMessage("second answer")]);
+  const live = await start(fauxModels);
+  try {
+    const left = recorder();
+    const right = recorder();
+    const a = await live.projection.subscribe("bot:a", left.sink);
+    left.start(a.snapshot);
+    const b = await live.projection.subscribe("bot:a", right.sink);
+    right.start(b.snapshot);
+    const sent = await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const answered = (tape: ReturnType<typeof recorder>, text: string) =>
+      visibleText(tape.view).includes(`assistant:${text}`) && tape.view?.state.kind === "idle";
+    await waitFor(() => answered(left, "first answer") && answered(right, "first answer"), { what: "both windows" });
+
+    a.unsubscribe();
+    const again = await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
+    await live.service.awaitReply("bot:a", again.submissionId, new AbortController().signal);
+    await waitFor(() => answered(right, "second answer"), { what: "the remaining window" });
+    assert.equal(visibleText(left.view).includes("assistant:second answer"), false);
+    assert.equal(left.gaps + right.gaps, 0);
+    b.unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a Bot deleted while its chat is open sends that chat nothing more and cannot be reopened", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("hello")]);
+  const flushes: Array<() => void> = [];
+  const live = await start(fauxModels, { projection: { schedule: (flush) => flushes.push(flush) } });
+  try {
+    const tape = recorder();
+    const { snapshot } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    const sent = await live.service.send("bot:a", { text: "hi", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    // Events are waiting to be flushed when the Bot is deleted.
+    await waitFor(() => flushes.length > 0, { what: "pending events" });
+    await live.service.deleteBot("bot:a");
+    await live.projection.close("bot:a");
+    for (const flush of flushes.splice(0)) flush();
+    assert.equal(tape.events.length, 0, "nothing is delivered after the delete");
+    // A late state change for the deleted Bot opens nothing.
+    live.projection.notifyState("bot:a", { kind: "idle" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(tape.events.length, 0);
+    await assert.rejects(live.projection.subscribe("bot:a", recorder().sink));
+  } finally {
+    await live.close();
+  }
+});
+
 test("connect cards carry their current status, and refresh re-sends a changed one", async () => {
   const dismissed = new Set<string>();
   const fauxModels = createFauxModels([]);

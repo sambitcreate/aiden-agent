@@ -568,7 +568,6 @@ async function assertRuntimeIsolation(
   }
 }
 
-/** Complete first-run setup with the disposable keyless LM Studio connection. */
 /**
  * Hosts with Bots offer "Meet Your First Bot" after provider setup. Flows that
  * only need the feature tour skip it; the Bots starter test drives it directly.
@@ -583,6 +582,7 @@ export async function skipBotsOnboardingStep(onboarding: Locator): Promise<void>
   await expect(tourHeading).toBeVisible();
 }
 
+/** Complete first-run setup with the disposable keyless LM Studio connection. */
 export async function finishLmStudioOnboarding(page: Page): Promise<void> {
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await expect(onboarding).toBeVisible();

@@ -255,6 +255,8 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     resolveModel,
     knownBotIds: async () => new Set((await botStore.list()).map(({ id }) => id)),
     deleteEffects: [
+      // Open chats of the deleted Bot stop receiving its live view.
+      async (botId) => liveProjection?.close(botId),
       (botId) => toolSources.forgetBot(botId),
       deleteRoutines,
       (botId) => dismissals.forgetBot(botId),

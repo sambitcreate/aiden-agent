@@ -496,22 +496,30 @@ test("Start Chat from phones with different request keys and the Mac makes one B
   const sent: string[] = [];
   const store = new Map<string, BotDefinition>();
   const keys = new Map<string, string>();
+  const make = async (input: { name: string }, audience: string) => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const made = { ...bot(`bot_preset_${created.length + 1}`), name: input.name };
+    created.push(audience);
+    store.set(made.id, made);
+    return made;
+  };
   const starter = createBotStarter({
     async findBotByCreationKey(key) {
       const id = keys.get(key);
       return id ? store.get(id) ?? null : null;
     },
-    async createBot(input, _access, key, audienceId) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      const made = { ...bot(`bot_preset_${created.length + 1}`), name: input.name };
-      created.push(audienceId ?? "desktop");
-      store.set(made.id, made);
+    async createBot(input, _access, key) {
+      const made = await make(input, "desktop");
       keys.set(key, made.id);
       return made;
+    },
+    async rememberCreation(key, botId) {
+      keys.set(key, botId);
     },
     session: {
       state: async () => ({ kind: "idle" }),
       send: async (botId) => { sent.push(botId); return { submissionId: "1", deduped: false }; },
+      conversation: async () => ({ context: async () => ({ entries: [] }) }) as never,
     },
   });
   const bots = new AidenRemoteBotService({
@@ -524,7 +532,7 @@ test("Start Chat from phones with different request keys and the Mac makes one B
     presets: {
       list: () => BOT_PRESETS,
       create: async (presetId, { audienceId }) => {
-        const result = await starter.startFromPreset(presetId, undefined, { audienceId });
+        const result = await starter.startFromPreset(presetId, { createBot: (input) => make(input, audienceId) });
         return { botId: result.bot.id, created: result.created };
       },
     },

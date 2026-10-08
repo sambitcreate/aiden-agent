@@ -12,7 +12,8 @@ interface SetupTarget {
 
 /**
  * The existing preset setup dialog, opened for a Bot connection by plugin id.
- * `open` returns false when the plugin has no setup entry on this Mac.
+ * `open` returns false, after telling the person why, when the plugin has no
+ * setup entry on this Mac; callers add no message of their own.
  */
 export function useConnectionSetup(onSaved: () => void | Promise<void>) {
   const servers = useMcpServers();
@@ -22,11 +23,14 @@ export function useConnectionSetup(onSaved: () => void | Promise<void>) {
   const open = React.useCallback(
     (pluginId: string): boolean => {
       const suggestion = connectionSuggestionFor(pluginId);
-      if (!suggestion) return false;
+      if (!suggestion) {
+        toast.error("This connection can't be set up from here.");
+        return false;
+      }
       const presetId = suggestion.setupEntry.presetId;
       const state = presets.data?.find((entry) => entry.preset.id === presetId);
       if (!state) {
-        toast.error("This connection is unavailable. Reload Settings and try again.");
+        toast.error(`${suggestion.name} isn't available to connect right now. Try again in a moment.`);
         return false;
       }
       const server = servers.data?.find((entry) => entry.id === state.serverId && entry.presetId === presetId);
