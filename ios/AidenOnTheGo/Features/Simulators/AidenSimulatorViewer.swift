@@ -200,6 +200,7 @@ struct AidenSimulatorViewer: View {
         if let frame = model.frame, model.selectedDevice?.platform.isViewableOnPhone == true {
             AidenSimulatorFrameView(
                 frame: frame,
+                screen: model.screen,
                 deviceName: deviceName,
                 onTouchChanged: { inside, clamped in model.touchChanged(inside: inside, clamped: clamped) },
                 onTouchEnded: { clamped in model.touchEnded(clamped: clamped) },
@@ -450,11 +451,13 @@ final class AidenShakeMonitor {
     }
 }
 
-/// The newest decoded frame, aspect-fit, forwarding touches as normalized
-/// points. The model decides where a touch begins and moves; this view also
-/// reports a gesture the system cancelled, which never reaches `onEnded`.
+/// The newest decoded frame, turned to the device's orientation and
+/// aspect-fit, forwarding touches as points normalized to what is shown. The
+/// model decides where a touch begins and moves; this view also reports a
+/// gesture the system cancelled, which never reaches `onEnded`.
 private struct AidenSimulatorFrameView: View {
     let frame: CGImage
+    let screen: AidenSimulatorScreenConfig?
     let deviceName: String
     /// The point on the frame (nil outside it) and the same point pinned to the frame.
     let onTouchChanged: (CGPoint?, CGPoint?) -> Void
@@ -467,10 +470,17 @@ private struct AidenSimulatorFrameView: View {
     var body: some View {
         GeometryReader { proxy in
             let imageSize = CGSize(width: frame.width, height: frame.height)
+            let rotation = AidenSimulatorDisplayRotation(screen: screen)
+            let shown = AidenSimulatorTouchMapping.displayRect(imageSize: imageSize, rotation: rotation, in: proxy.size)
+            // The image takes the unturned size of the shown rect and turns about its center.
             Image(decorative: frame, scale: 1)
                 .resizable()
                 .interpolation(.medium)
-                .aspectRatio(contentMode: .fit)
+                .frame(
+                    width: rotation.isSideways ? shown.height : shown.width,
+                    height: rotation.isSideways ? shown.width : shown.height
+                )
+                .rotationEffect(.degrees(rotation.degrees))
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .contentShape(Rectangle())
                 .gesture(
@@ -479,16 +489,18 @@ private struct AidenSimulatorFrameView: View {
                         .onChanged { value in
                             onTouchChanged(
                                 AidenSimulatorTouchMapping.normalizedPoint(
-                                    value.location, imageSize: imageSize, container: proxy.size
+                                    value.location, imageSize: imageSize, rotation: rotation, container: proxy.size
                                 ),
                                 AidenSimulatorTouchMapping.normalizedPoint(
-                                    value.location, imageSize: imageSize, container: proxy.size, clamped: true
+                                    value.location, imageSize: imageSize, rotation: rotation,
+                                    container: proxy.size, clamped: true
                                 )
                             )
                         }
                         .onEnded { value in
                             onTouchEnded(AidenSimulatorTouchMapping.normalizedPoint(
-                                value.location, imageSize: imageSize, container: proxy.size, clamped: true
+                                value.location, imageSize: imageSize, rotation: rotation,
+                                container: proxy.size, clamped: true
                             ))
                         }
                 )
