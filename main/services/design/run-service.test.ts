@@ -85,7 +85,11 @@ async function waitFor(condition: () => boolean, label: string): Promise<void> {
  */
 function fakeGeneration(
   responses: FauxResponseStep[],
-  options: { failStart?: Error; effects?: Pick<PiRuntimeEffectStore, "listEffectsNeedingRecoveryByChat"> } = {},
+  options: {
+    failStart?: Error;
+    failAfterAccept?: Error;
+    effects?: Pick<PiRuntimeEffectStore, "listEffectsNeedingRecoveryByChat">;
+  } = {},
 ) {
   const core = createFauxCore({ provider: `aiden-design-run-${Math.random().toString(36).slice(2)}` });
   core.setResponses(responses);
@@ -94,6 +98,7 @@ function fakeGeneration(
   const stopped = new WeakSet<PiAgentRuntimeHarness>();
   const runs: Promise<void>[] = [];
   const state = { starts: 0, crashed: false, recoveryAtStart: [] as number[] };
+  let pendingInitFailure = options.failAfterAccept;
   return {
     core,
     state,
@@ -130,6 +135,14 @@ function fakeGeneration(
         state.recoveryAtStart.push((await options.effects.listEffectsNeedingRecoveryByChat(params.chatId)).length);
       }
       run.onTurnAccepted();
+      if (pendingInitFailure) {
+        // llmClient accepts the turn before it resolves credentials, the model and the
+        // harness; an initialization failure then releases its lease and throws.
+        const failure = pendingInitFailure;
+        pendingInitFailure = undefined;
+        busy.delete(params.chatId);
+        throw failure;
+      }
       const profile = resolveGenerationProfile(
         { owner: { kind: "design-project", projectId: run.designRun.projectId } },
         run,
@@ -177,7 +190,7 @@ function fakeGeneration(
   };
 }
 
-type FixtureOptions = { failStart?: Error; io?: DesignProjectStoreOptions["io"] };
+type FixtureOptions = { failStart?: Error; failAfterAccept?: Error; io?: DesignProjectStoreOptions["io"] };
 
 async function fixture(t: TestContext, responses: FauxResponseStep[], options: FixtureOptions = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-run-"));
@@ -206,6 +219,7 @@ async function fixture(t: TestContext, responses: FauxResponseStep[], options: F
     const generation = fakeGeneration(nextResponses, {
       effects,
       ...(extra.failStart ? { failStart: extra.failStart } : {}),
+      ...(extra.failAfterAccept ? { failAfterAccept: extra.failAfterAccept } : {}),
     });
     const service = new DesignRunService({
       store,
@@ -520,6 +534,30 @@ test("a provider start that fails before accepting the turn records a failed run
   assert.equal(f.store.get(project.id)!.runs[result.runId!]!.status, "failed");
   assert.equal(f.events[f.events.length - 1]?.status, "failed");
   assert.ok(f.generation.beginChatTurn(project.chatId, "next-turn", "doc-1"));
+});
+
+test("a start that fails after accepting the turn records a failed run, and the next run is admitted", async (t) => {
+  const f = await fixture(t, [turn(render("Calm")), turn(render("Bold"))], {
+    failAfterAccept: new Error("No credentials for openrouter."),
+  });
+  const project = await f.store.create();
+  const failed = await f.service.start(startInput(project.id, explore(2)));
+  assert.match(failed.error ?? "", /No credentials/u);
+  const afterFailure = f.store.get(project.id)!;
+  assert.equal(afterFailure.runs[failed.runId!]!.status, "failed");
+  assert.deepEqual(afterFailure.directionSets, {}, "an empty direction set is not left behind");
+  assert.deepEqual(f.events[f.events.length - 1], {
+    projectId: project.id,
+    runId: failed.runId,
+    status: "failed",
+    acceptedRevisionIds: [],
+  });
+
+  const next = await f.service.start(startInput(project.id, explore(2)));
+  assert.equal(next.accepted, true, next.error);
+  await f.generation.settled();
+  await f.service.drain();
+  assert.equal(f.store.get(project.id)!.runs[next.runId!]!.status, "complete");
 });
 
 test("the chat port finds a project's hidden chats by owner and never lists another project's", async (t) => {

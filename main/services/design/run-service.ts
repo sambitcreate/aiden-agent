@@ -229,12 +229,15 @@ export class DesignRunService {
       }
       return { accepted: true, runId, outputCap: plan.cap, model: { ...model } };
     } catch (error) {
-      // Once llmClient has accepted the turn, it owns the lease and the run's settlement.
+      // Once llmClient has accepted the turn it owns the chat lease. Its settlement,
+      // though, comes only from a started run's completion: a start that throws,
+      // before or after accepting the turn, never settles the run itself.
       if (!accepted) {
         turn.release();
         turn.settleAsyncWork();
-        if (runRecorded) await this.settle(projectId, runId, "failed");
       }
+      // finishRun ends a run only while it is still running, so this cannot double-settle.
+      if (runRecorded) await this.settle(projectId, runId, "failed");
       return { accepted, ...(runRecorded ? { runId } : {}), error: errorMessage(error) };
     }
   }
