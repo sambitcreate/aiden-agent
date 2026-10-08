@@ -8,11 +8,21 @@
 
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
+import type { AskUserQuestionV1 } from "./ask-user-question.js";
 
 export type { BotSessionState };
 
 /** The exact reply a routine gives when it has nothing new; kept, never shown. */
 export const BOT_SILENT_REPLY = "[SILENT]";
+
+/** A question the Bot is waiting on: the A–E quick-reply card. One per Bot at a time. */
+export interface BotPendingQuestion {
+  botId: string;
+  /** The durable wait id; the answer is posted against it. */
+  waitId: string;
+  toolCallId: string;
+  questions: AskUserQuestionV1[];
+}
 
 export interface BotTranscriptToolCall {
   id: string;
@@ -60,6 +70,13 @@ export type BotTranscriptEntry =
       id: string;
       type: "connect_card";
       card: ConnectCardEntry;
+    }
+  /** The person's answer to an A–E question, shown where the question was. */
+  | {
+      id: string;
+      type: "question_answer";
+      text: string;
+      at?: number;
     };
 
 export interface BotLiveSnapshot {
@@ -70,12 +87,15 @@ export interface BotLiveSnapshot {
   /** Text of the reply being written right now, or null. */
   partial: string | null;
   state: BotSessionState;
+  /** The question the Bot is waiting on, or null. */
+  question: BotPendingQuestion | null;
 }
 
 export type BotLiveEventBody =
   | { type: "entry"; entry: BotTranscriptEntry }
   | { type: "partial"; text: string | null }
   | { type: "state"; state: BotSessionState }
+  | { type: "question"; question: BotPendingQuestion | null }
   /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
   | { type: "snapshot"; snapshot: BotLiveSnapshot };
 
@@ -132,5 +152,7 @@ export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent
       return { ...snapshot, seq: event.seq, partial: event.text };
     case "state":
       return { ...snapshot, seq: event.seq, state: event.state };
+    case "question":
+      return { ...snapshot, seq: event.seq, question: event.question };
   }
 }

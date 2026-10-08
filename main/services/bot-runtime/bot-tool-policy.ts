@@ -19,6 +19,7 @@ import { summarizeToolCall } from "../coding-tools.js";
 import { SHARE_IMAGE_TOOL_NAME } from "../share-image-tool.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 
 export const WEB_SEARCH_TOOL = "web_search";
 export const SUBAGENT_TOOL = "subagent";
@@ -41,6 +42,8 @@ export interface BotToolFacts {
 export interface BotToolTurn {
   /** Telegram turns get no routine tool, as on the legacy path. */
   telegram?: boolean;
+  /** Routine runs get no question card: nobody is waiting on the other end. */
+  routine?: boolean;
 }
 
 export type BotToolVerdict = { allowed: true } | { allowed: false; reason: string };
@@ -71,6 +74,9 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
   if (name === SHARE_IMAGE_TOOL_NAME) return verdict(authority.files.botHome, "Sharing images is off for this Bot.");
   if (name === ROUTINE_TOOL) {
     return verdict(hasCapability(facts, "schedules") && turn.telegram !== true, "Routines are off for this Bot.");
+  }
+  if (name === ASK_USER_QUESTION_TOOL_NAME) {
+    return verdict(turn.telegram !== true && turn.routine !== true, "Questions are off for this Bot.");
   }
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
   if ((await facts.skillToolNames()).has(name)) return { allowed: true };

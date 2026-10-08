@@ -4,6 +4,7 @@
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
@@ -13,7 +14,8 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
 import { useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
-import type { BotTranscriptEntry } from "../../shared/bot-live";
+import type { BotPendingQuestion, BotTranscriptEntry } from "../../shared/bot-live";
+import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import { BotChatActions, BotChatTitle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
@@ -139,6 +141,17 @@ export function BotApprovalCard({
   );
 }
 
+/** The Bot's pending A–E question as the shared quick-reply composer's prompt. */
+export function questionPrompt(question: BotPendingQuestion): AskUserQuestionPromptV1 {
+  return {
+    version: 1,
+    promptId: question.waitId,
+    streamId: "s-bot",
+    toolCallId: question.toolCallId,
+    questions: question.questions,
+  };
+}
+
 function attachmentText(attachments: readonly Attachment[]): string {
   return attachments
     .filter((attachment) => attachment.kind === "text" && attachment.text)
@@ -225,6 +238,11 @@ function TranscriptEntries({
           />,
         );
         break;
+      case "question_answer":
+        rows.push(
+          <SafeMessageBubble key={entry.id} role="user" content={entry.text} showCopy={false} />,
+        );
+        break;
       case "tool_result":
         break;
     }
@@ -251,6 +269,7 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
+  const [answering, setAnswering] = React.useState(false);
 
   React.useEffect(() => {
     const node = scrollRef.current;
@@ -327,6 +346,18 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  const answerQuestion = async (question: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
+    setAnswering(true);
+    try {
+      const { answered } = await botsApi.answerQuestion(current.id, question.waitId, response);
+      if (!answered) toast.error("That question is no longer waiting.");
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
+    } finally {
+      setAnswering(false);
+    }
+  };
+
   const dismissConnection = async (pluginId: string) => {
     try {
       await botsApi.dismissConnection(current.id, pluginId);
@@ -364,6 +395,14 @@ export function BotChatPane({ botId }: { botId: string }) {
               onResume={() => void resume()}
               onDismiss={() => void dismiss()}
               onReviewAccess={openProfile}
+            />
+          ) : null}
+          {snapshot.question ? (
+            <AskUserQuestionComposer
+              key={snapshot.question.waitId}
+              prompt={questionPrompt(snapshot.question)}
+              submitting={answering}
+              onRespond={(response) => answerQuestion(snapshot.question!, response)}
             />
           ) : null}
           {approvals.prompts.map((prompt) => (

@@ -787,7 +787,7 @@
         "createdAt": "2026-08-19T15:00:05.000Z"
       }
     ],
-    "hasOlder": false
+    "hasOlder": false, "question": null
   },
   "botSessionNeedsModel": {
     "botId": "bot_fixture_02",
@@ -796,7 +796,7 @@
     "state": "needs_model",
     "interrupted": false,
     "entries": [],
-    "hasOlder": false
+    "hasOlder": false, "question": null
   },
   "botSessionEvents": [
     {
@@ -859,7 +859,7 @@
               "createdAt": "2026-08-19T15:00:05.000Z"
             }
           ],
-          "hasOlder": false
+          "hasOlder": false, "question": null
         }
       }
     },
@@ -919,8 +919,38 @@
         "state": "idle",
         "interrupted": false
       }
+    },
+  {
+    "protocolVersion": 1,
+    "botId": "bot_fixture_01",
+    "epoch": "epoch_fixture_01",
+    "seq": 17,
+    "type": "question",
+    "payload": {
+      "question": {
+        "waitId": "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c",
+        "toolCallId": "call_fixture_01",
+        "questions": [
+          {
+            "question": "Which colour should the banner use?",
+            "header": "Colour",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Blue",
+                "description": "Calm and cool."
+              },
+              {
+                "label": "Red",
+                "description": "Loud and warm."
+              }
+            ]
+          }
+        ]
+      }
     }
-  ],
+  }
+],
   "botSessionSend": {
     "request": {
       "text": "Plan my week, please."
@@ -944,6 +974,21 @@
     "response": {
       "state": "idle",
       "interrupted": false
+    }
+  },
+  "botSessionQuestionAnswer": {
+    "request": {
+      "cancelled": false,
+      "answers": [
+        {
+          "questionIndex": 0,
+          "kind": "option",
+          "answer": "Blue"
+        }
+      ]
+    },
+    "response": {
+      "waitId": "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c"
     }
   },
   "botRoutines": {

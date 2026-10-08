@@ -900,6 +900,7 @@ export const AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES = [
   "partial",
   "entry",
   "state",
+  "question",
   "closed",
 ] as const;
 export type AidenRemoteBotSessionEventType = (typeof AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES)[number];
@@ -938,6 +939,42 @@ export interface AidenRemoteBotSessionStateView {
   blocked?: AidenRemoteBotSessionBlockedReason;
 }
 
+/** One option of an A–E quick-reply question. */
+export interface AidenRemoteBotQuestionOption {
+  label: string;
+  description: string;
+}
+
+/** One question of a Bot's quick-reply card (the legacy `ask_user_question` shape). */
+export interface AidenRemoteBotQuestionItem {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: AidenRemoteBotQuestionOption[];
+}
+
+/** A question the Bot is waiting on. Answered by `waitId`, once. */
+export interface AidenRemoteBotQuestion {
+  waitId: string;
+  toolCallId: string;
+  questions: AidenRemoteBotQuestionItem[];
+}
+
+export type AidenRemoteBotQuestionAnswer =
+  | { questionIndex: number; kind: "option" | "custom"; answer: string }
+  | { questionIndex: number; kind: "multi"; selected: string[] };
+
+/** `POST /bots/{botId}/questions/{waitId}/answer`; the `Idempotency-Key` header is the request UUID. */
+export interface AidenRemoteBotQuestionAnswerRequest {
+  cancelled: boolean;
+  answers: AidenRemoteBotQuestionAnswer[];
+}
+
+/** The same receipt on every repeat of one request UUID. */
+export interface AidenRemoteBotQuestionAnswerReceipt {
+  waitId: string;
+}
+
 /** `GET /bots/{botId}/session`: the newest entries plus the in-flight partial. */
 export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   botId: string;
@@ -949,6 +986,8 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   partial?: string;
   entries: AidenRemoteBotSessionEntry[];
   hasOlder: boolean;
+  /** The question the Bot is waiting on, or null. */
+  question: AidenRemoteBotQuestion | null;
 }
 
 export type AidenRemoteBotSessionEventPayload =
@@ -956,6 +995,7 @@ export type AidenRemoteBotSessionEventPayload =
   | { type: "partial"; payload: { text: string } }
   | { type: "entry"; payload: { entry: AidenRemoteBotSessionEntry } }
   | { type: "state"; payload: AidenRemoteBotSessionStateView }
+  | { type: "question"; payload: { question: AidenRemoteBotQuestion | null } }
   | { type: "closed"; payload: Record<string, never> };
 
 /** One frame of `GET /bots/{botId}/session/events`. */
@@ -1189,6 +1229,10 @@ export interface AidenRemoteContractFixture {
   botSessionSend: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
   botSessionResume: { request: Record<string, never>; response: AidenRemoteBotSessionStateView };
   botSessionDismiss: { request: Record<string, never>; response: AidenRemoteBotSessionStateView };
+  botSessionQuestionAnswer: {
+    request: AidenRemoteBotQuestionAnswerRequest;
+    response: AidenRemoteBotQuestionAnswerReceipt;
+  };
   botRoutines: AidenRemoteBotRoutineList;
   botRoutineCreate: { request: AidenRemoteBotRoutineCreateRequest; response: AidenRemoteBotRoutine };
   botRoutineUpdate: { request: AidenRemoteBotRoutineUpdateRequest; response: AidenRemoteBotRoutine };
@@ -1572,6 +1616,15 @@ function isAllowedBotIdentityField(root: string, path: readonly string[]): boole
   return false;
 }
 
+/**
+ * A waiting question's `header` is the card's short user-facing label, not an
+ * HTTP header. Only that path inside a Bot session may carry the name.
+ */
+function isAllowedBotQuestionHeader(root: string, path: readonly string[]): boolean {
+  const SESSION_ROOTS = new Set(["botSession", "botSessionNeedsModel", "botSessionEvents"]);
+  return SESSION_ROOTS.has(root) && path.slice(-4).join(".") === "question.questions.[].header";
+}
+
 function assertNoPrivateBotWireFields(value: unknown): void {
   if (!isRecord(value)) return;
   const visit = (current: unknown, root: string, path: readonly string[]): void => {
@@ -1584,7 +1637,8 @@ function assertNoPrivateBotWireFields(value: unknown): void {
       const childPath = [...path, key];
       if (
         isPrivateBotWireKey(key) &&
-        !isAllowedBotIdentityField(root, childPath)
+        !isAllowedBotIdentityField(root, childPath) &&
+        !isAllowedBotQuestionHeader(root, childPath)
       ) {
         throw new Error(`Forbidden private Bot wire key ${key} at ${root}.${childPath.join(".")}.`);
       }
@@ -4616,9 +4670,10 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
   if (!isRecord(value)) throw new Error("Bot session must be an object.");
   assertExactKeys(
     value,
-    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder"],
+    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question"],
     "Bot session",
   );
+  if (!hasOwn(value, "question")) throw new Error("Bot session question is required.");
   if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
     throw new Error(`Bot session entries must contain at most ${AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES} items.`);
   }
@@ -4636,6 +4691,7 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
       : {}),
     entries,
     hasOlder: requiredBooleanValue(value.hasOlder, "Bot session hasOlder"),
+    question: value.question === null ? null : parseAidenRemoteBotQuestion(value.question),
   };
 }
 
@@ -4675,6 +4731,13 @@ export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotS
       return { ...base, type, payload: { entry: parseAidenRemoteBotSessionEntry(payload.entry) } };
     case "state":
       return { ...base, type, payload: parseAidenRemoteBotSessionStateView(payload) };
+    case "question":
+      assertExactKeys(payload, ["question"], "Bot session question event");
+      return {
+        ...base,
+        type,
+        payload: { question: payload.question === null ? null : parseAidenRemoteBotQuestion(payload.question) },
+      };
     case "closed":
       assertExactKeys(payload, [], "Bot session closed event");
       return { ...base, type, payload: {} };
@@ -4687,6 +4750,77 @@ export function parseAidenRemoteBotMessageRequest(value: unknown): AidenRemoteBo
   const text = boundedText(value.text, "Bot message text", AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS);
   if (text.trim().length === 0) throw new Error("Bot message text must not be blank.");
   return { text };
+}
+
+const BOT_QUESTION_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
+export const AIDEN_REMOTE_BOT_QUESTION_MAX_OPTIONS = ASK_USER_MAX_OPTIONS;
+export const AIDEN_REMOTE_BOT_QUESTION_MAX_ANSWERS = ASK_USER_MAX_QUESTIONS;
+
+function parseBotQuestionWaitId(value: unknown, label: string): string {
+  const waitId = boundedText(value, label, 64);
+  if (!BOT_QUESTION_WAIT_ID.test(waitId)) throw new Error(`${label} is invalid.`);
+  return waitId;
+}
+
+/** A Bot's waiting question. `null` in a session means nothing is waiting. */
+export function parseAidenRemoteBotQuestion(value: unknown): AidenRemoteBotQuestion {
+  if (!isRecord(value)) throw new Error("Bot question must be an object.");
+  assertExactKeys(value, ["waitId", "toolCallId", "questions"], "Bot question");
+  const questions = parseAskUserQuestions(value.questions);
+  if (!questions) throw new Error("Bot question questions are invalid.");
+  return {
+    waitId: parseBotQuestionWaitId(value.waitId, "Bot question waitId"),
+    toolCallId: boundedText(value.toolCallId, "Bot question toolCallId", 128),
+    questions,
+  };
+}
+
+function parseAidenRemoteBotQuestionAnswer(value: unknown): AidenRemoteBotQuestionAnswer {
+  if (!isRecord(value)) throw new Error("Bot question answer must be an object.");
+  const questionIndex = boundedIntegerValue(
+    value.questionIndex,
+    "Bot question answer questionIndex",
+    0,
+    AIDEN_REMOTE_BOT_QUESTION_MAX_ANSWERS - 1,
+  );
+  if (value.kind === "multi") {
+    assertExactKeys(value, ["questionIndex", "kind", "selected"], "Bot question multi answer");
+    if (!Array.isArray(value.selected) || value.selected.length < 1 || value.selected.length > AIDEN_REMOTE_BOT_QUESTION_MAX_OPTIONS) {
+      throw new Error("Bot question multi answer selected is invalid.");
+    }
+    return {
+      questionIndex,
+      kind: "multi",
+      selected: value.selected.map((label) => boundedText(label, "Bot question selected option", ASK_USER_MAX_LABEL_LENGTH)),
+    };
+  }
+  assertExactKeys(value, ["questionIndex", "kind", "answer"], "Bot question answer");
+  if (value.kind !== "option" && value.kind !== "custom") throw new Error("Bot question answer kind is invalid.");
+  return {
+    questionIndex,
+    kind: value.kind,
+    answer: boundedText(value.answer, "Bot question answer", ASK_USER_MAX_CUSTOM_ANSWER_LENGTH),
+  };
+}
+
+export function parseAidenRemoteBotQuestionAnswerRequest(value: unknown): AidenRemoteBotQuestionAnswerRequest {
+  if (!isRecord(value)) throw new Error("Bot question answer request must be an object.");
+  assertExactKeys(value, ["cancelled", "answers"], "Bot question answer request");
+  const cancelled = requiredBooleanValue(value.cancelled, "Bot question cancelled");
+  if (!Array.isArray(value.answers) || value.answers.length > AIDEN_REMOTE_BOT_QUESTION_MAX_ANSWERS) {
+    throw new Error("Bot question answers are invalid.");
+  }
+  const answers = value.answers.map(parseAidenRemoteBotQuestionAnswer);
+  if (cancelled !== (answers.length === 0)) {
+    throw new Error("A Bot question carries answers unless it is cancelled.");
+  }
+  return { cancelled, answers };
+}
+
+export function parseAidenRemoteBotQuestionAnswerReceipt(value: unknown): AidenRemoteBotQuestionAnswerReceipt {
+  if (!isRecord(value)) throw new Error("Bot question answer receipt must be an object.");
+  assertExactKeys(value, ["waitId"], "Bot question answer receipt");
+  return { waitId: parseBotQuestionWaitId(value.waitId, "Bot question answer receipt waitId") };
 }
 
 export function parseAidenRemoteBotMessageReceipt(value: unknown): AidenRemoteBotMessageReceipt {
@@ -5114,6 +5248,11 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   const botSessionDismiss = {
     request: parseAidenRemoteEmptyRequest(dismissRecord.request, "Bot dismiss request"),
     response: parseAidenRemoteBotSessionStateView(dismissRecord.response),
+  };
+  const questionAnswerRecord = requestResponseRecord(value.botSessionQuestionAnswer, "Bot question answer");
+  const botSessionQuestionAnswer = {
+    request: parseAidenRemoteBotQuestionAnswerRequest(questionAnswerRecord.request),
+    response: parseAidenRemoteBotQuestionAnswerReceipt(questionAnswerRecord.response),
   };
   const botRoutines = parseAidenRemoteBotRoutineList(value.botRoutines);
   const routineCreateRecord = requestResponseRecord(value.botRoutineCreate, "Bot routine create");
@@ -5668,6 +5807,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botSessionSend,
     botSessionResume,
     botSessionDismiss,
+    botSessionQuestionAnswer,
     botRoutines,
     botRoutineCreate,
     botRoutineUpdate,

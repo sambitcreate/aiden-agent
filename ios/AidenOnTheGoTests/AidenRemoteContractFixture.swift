@@ -161,6 +161,7 @@ struct AidenBotRequestResponseFixture<Request: Codable & Equatable & Sendable, R
 
 typealias AidenBotSessionSendFixture = AidenBotRequestResponseFixture<AidenBotMessageRequest, AidenBotMessageReceipt>
 typealias AidenBotSessionActionFixture = AidenBotRequestResponseFixture<AidenBotSessionActionRequest, AidenBotSessionStateView>
+typealias AidenBotQuestionAnswerFixture = AidenBotRequestResponseFixture<AidenQuestionRespondRequest, AidenBotQuestionAnswerReceipt>
 typealias AidenBotRoutineCreateFixture = AidenBotRequestResponseFixture<AidenBotRoutineCreateRequest, AidenBotRoutine>
 typealias AidenBotRoutineUpdateFixture = AidenBotRequestResponseFixture<AidenBotRoutineUpdateRequest, AidenBotRoutine>
 typealias AidenBotConnectionRequestFixture = AidenBotRequestResponseFixture<
@@ -359,6 +360,7 @@ struct AidenRemoteContractFixture: Decodable {
     let botSessionSend: AidenBotSessionSendFixture
     let botSessionResume: AidenBotSessionActionFixture
     let botSessionDismiss: AidenBotSessionActionFixture
+    let botSessionQuestionAnswer: AidenBotQuestionAnswerFixture
     let botRoutines: AidenBotRoutineList
     let botRoutineCreate: AidenBotRoutineCreateFixture
     let botRoutineUpdate: AidenBotRoutineUpdateFixture
@@ -421,6 +423,7 @@ struct AidenRemoteContractFixture: Decodable {
         botSessionSend = try values.decode(AidenBotSessionSendFixture.self, forKey: .botSessionSend)
         botSessionResume = try values.decode(AidenBotSessionActionFixture.self, forKey: .botSessionResume)
         botSessionDismiss = try values.decode(AidenBotSessionActionFixture.self, forKey: .botSessionDismiss)
+        botSessionQuestionAnswer = try values.decode(AidenBotQuestionAnswerFixture.self, forKey: .botSessionQuestionAnswer)
         botRoutines = try values.decode(AidenBotRoutineList.self, forKey: .botRoutines)
         botRoutineCreate = try values.decode(AidenBotRoutineCreateFixture.self, forKey: .botRoutineCreate)
         botRoutineUpdate = try values.decode(AidenBotRoutineUpdateFixture.self, forKey: .botRoutineUpdate)
@@ -544,7 +547,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botChatCreate, botCapabilityCatalog, botPolicy, botPolicyUpdate
         case botAvatarUpload, botAvatarMetadata
         case botSession, botSessionNeedsModel, botSessionEvents, botSessionSend
-        case botSessionResume, botSessionDismiss, botRoutines, botRoutineCreate, botRoutineUpdate
+        case botSessionResume, botSessionDismiss, botSessionQuestionAnswer, botRoutines, botRoutineCreate, botRoutineUpdate
         case botConnectionRequest, botPresets, botPresetCreate
         case legacyNonNegotiating
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents

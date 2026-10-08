@@ -19,9 +19,20 @@ function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
     entries: [],
     partial: null,
     state: { kind: "idle" },
+    question: null,
     ...overrides,
   };
 }
+
+const COLOUR_QUESTION = {
+  question: "Which colour should the banner use?",
+  header: "Colour",
+  multiSelect: false,
+  options: [
+    { label: "Blue", description: "Calm and cool." },
+    { label: "Red", description: "Loud and warm." },
+  ],
+};
 
 function userEntry(id: string, text: string): BotTranscriptEntry {
   return { id, type: "user", text, imageCount: 0 };
@@ -48,6 +59,58 @@ test("a reply still being written is folded under Working and opens to its text"
   const working = await screen.findByRole("button", { name: /Working/u });
   fireEvent.click(working);
   assert.ok(await screen.findByText("Checking your calendar now"));
+});
+
+test("a Bot's A–E question shows its card, and choosing an option answers it by wait id", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        question: { botId: "bot-1", waitId: "wait-1", toolCallId: "tool-1", questions: [COLOUR_QUESTION] },
+      }),
+    "bots:answerQuestion": () => ({ answered: true }),
+  });
+  assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
+  fireEvent.click(screen.getByRole("button", { name: /Blue/u }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:answerQuestion").length, 1));
+  const input = calls.find((call) => call.channel === "bots:answerQuestion")!.args[0] as {
+    botId: string;
+    waitId: string;
+    answer: unknown;
+  };
+  assert.equal(input.botId, "bot-1");
+  assert.equal(input.waitId, "wait-1");
+  assert.deepEqual(input.answer, {
+    version: 1,
+    promptId: "wait-1",
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "option", answer: "Blue" }],
+  });
+});
+
+test("a question leaves the chat when the live view reports it settled, and its answer stays in the transcript", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        question: { botId: "bot-1", waitId: "wait-1", toolCallId: "tool-1", questions: [COLOUR_QUESTION] },
+      }),
+  });
+  assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "question",
+    question: null,
+  });
+  await waitFor(() => assert.equal(screen.queryByRole("heading", { name: "Which colour should the banner use?" }), null));
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 2,
+    type: "entry",
+    entry: { id: "qa1", type: "question_answer", text: "1. Which colour should the banner use?\nAnswer: Blue" },
+  });
+  assert.ok(await screen.findByText(/Answer: Blue/u));
 });
 
 test("a sequence gap re-subscribes and shows the fresh snapshot", async () => {

@@ -1206,6 +1206,35 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 18)
     }
 
+    /// A quick-reply answer posts to its own question's route under the request
+    /// UUID, and the receipt must name that same wait id.
+    func testBotQuestionAnswerPostsToItsWaitIdUnderTheRequestKey() async throws {
+        let client = makeClient()
+        let botID = "bot_fixture_01"
+        let waitID = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c"
+        let key = UUID(uuidString: "6A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D")!
+        let answer = AidenQuestionRespondRequest(
+            cancelled: false,
+            answers: [.option(questionIndex: 0, answer: "Blue")]
+        )
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/questions/\(waitID)/answer")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            return Self.response(for: request, status: 200, data: Data("{\"waitId\":\"\(waitID)\"}".utf8))
+        }
+        let receipt = try await client.answerBotQuestion(
+            botId: botID,
+            waitId: waitID,
+            request: answer,
+            idempotencyKey: key
+        )
+        XCTAssertEqual(receipt.waitId, waitID)
+        XCTAssertEqual(step, 1)
+    }
+
     @MainActor
     func testLostBotChatCreateResponseRetainsTheExactAttemptKey() throws {
         let keychain = AidenRemoteMemoryKeychain()

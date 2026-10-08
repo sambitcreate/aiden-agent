@@ -31,6 +31,7 @@ import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
 import { botApprovals } from "./bot-approvals-main.js";
+import { botQuestions } from "./bot-questions-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import {
@@ -228,11 +229,29 @@ async function connectCardStatus(botId: string, card: ConnectCardEntry) {
 
 let liveProjection: BotLiveProjection | undefined;
 
+// A question appearing or settling reaches open desktop chats at once; the
+// Remote session projector listens to the same bridge (`remote-service-main`).
+botQuestions.onChange((botId) => {
+  void liveProjection?.refreshQuestion(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} question view report.`, error),
+  );
+});
+
+/**
+ * Answer the question waiting under `waitId` for this Bot. `rejected` when it
+ * is no longer waiting (answered elsewhere, withdrawn, or never belonged to it).
+ */
+export function answerBotQuestion(botId: string, waitId: string, answer: unknown): "answered" | "rejected" {
+  if (!botQuestions.pending(botId).some((prompt) => prompt.waitId === waitId)) return "rejected";
+  return botQuestions.answer(waitId, answer);
+}
+
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({
     conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
     state: async (botId) => (await botSessionRuntime()).state(botId),
+    question: (botId) => botQuestions.pending(botId)[0] ?? null,
     connectCardStatus,
     onRunSettled: broadcastState,
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),

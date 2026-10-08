@@ -1585,6 +1585,26 @@ final class AidenRemoteClient: @unchecked Sendable {
         try await botSessionAction("stop", botId: botId, idempotencyKey: idempotencyKey)
     }
 
+    /// Answers the Bot's waiting A–E question. The request UUID is the idempotency key,
+    /// so a retried answer replays the same receipt.
+    func answerBotQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotQuestionAnswerReceipt {
+        try validateBotIdentifier(botId)
+        let receipt: AidenBotQuestionAnswerReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "questions", waitId, "answer"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
     private func botSessionAction(
         _ action: String,
         botId: String,

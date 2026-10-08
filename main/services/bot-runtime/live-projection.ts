@@ -22,10 +22,12 @@ import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall } from "@earendil-works/pi-ai";
 import type { Conversation, ConversationWatch, EntryRecord } from "@earendil-works/pi-durable";
 import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shared/bot-connections.js";
+import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import {
   BOT_SILENT_REPLY,
   botTranscriptPreview,
   type BotLiveEvent,
+  type BotPendingQuestion,
   type BotLiveEventBody,
   type BotLiveSnapshot,
   type BotLiveSummary,
@@ -159,6 +161,14 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === "pi.tool-result" && message?.role === "toolResult") {
+      if (message.toolName === ASK_USER_QUESTION_TOOL_NAME && !message.isError) {
+        // The person's answer to a quick-reply card reads as a transcript entry.
+        mapped.push({
+          entry: { id, type: "question_answer", text: textOf(message.content), at: message.timestamp },
+          turn,
+        });
+        continue;
+      }
       mapped.push({
         entry: {
           id,
@@ -204,6 +214,8 @@ export interface BotLiveSink {
 export interface BotLiveProjectionDeps {
   conversation(botId: string): Promise<Conversation>;
   state(botId: string): Promise<BotSessionState>;
+  /** The question the Bot is waiting on right now, if any. */
+  question?(botId: string): BotPendingQuestion | null;
   /** The current status of a connect card (connected or dismissed since it was offered). */
   connectCardStatus?(botId: string, card: ConnectCardEntry): Promise<ConnectCardStatus>;
   /** Schedules a subscriber flush. Defaults to the next macrotask. */
@@ -226,6 +238,8 @@ export interface BotLiveProjection {
   notifyState(botId: string, state: BotSessionState): void;
   /** Re-read the transcript and push a snapshot, e.g. after a connection status changed. */
   refresh(botId: string): Promise<void>;
+  /** The Bot's pending question changed (asked, answered, withdrawn): push a `question` event. */
+  refreshQuestion(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
   summary(botId: string): Promise<BotLiveSummary>;
   /** Stop every feed (the Bot was deleted, or the app is quitting). */
@@ -247,6 +261,7 @@ interface Feed {
   entries: BotTranscriptEntry[];
   partial: string | null;
   state: BotSessionState;
+  question: BotPendingQuestion | null;
   runActive: boolean;
   watch: ConversationWatch;
   cancel: () => void;
@@ -279,6 +294,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       entries: feed.entries,
       partial: feed.partial,
       state: feed.state,
+      question: feed.question,
     };
   }
 
@@ -415,6 +431,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         entries: await resolveCards(botId, projectBotTranscript(initial.entries)),
         partial: livePartialText(initial.docs),
         state: await deps.state(botId),
+        question: deps.question?.(botId) ?? null,
         runActive: liveRunActive(initial.docs),
         watch,
         cancel: () => cancel(new Error("Bot live feed closed.")),
@@ -510,6 +527,17 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const feed = feeds.get(botId);
       if (!feed || feed.ended) return;
       await reproject(feed);
+    },
+
+    async refreshQuestion(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      await enqueueWork(feed, async () => {
+        const question = deps.question?.(botId) ?? null;
+        if (JSON.stringify(question) === JSON.stringify(feed.question)) return;
+        feed.question = question;
+        emit(feed, { type: "question", question });
+      });
     },
 
     async summary(botId) {

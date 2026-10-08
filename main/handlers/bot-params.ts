@@ -217,6 +217,22 @@ export function parseBotApprovalDecision(input: unknown): { waitId: string; deci
   return { waitId: fields.waitId, decision: fields.decision };
 }
 
+/**
+ * A Bot question answer: the wait id and the composer's response (`promptId`
+ * is the wait id). The answer's shape is checked against the question itself
+ * when it is settled, so only its envelope is validated here.
+ */
+export function parseBotQuestionAnswer(input: unknown): { botId: string; waitId: string; answer: unknown } {
+  const fields = exact(input, new Set(["botId", "waitId", "answer"]), "bot question answer fields");
+  if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId)) {
+    throw new Error("Invalid bot question id.");
+  }
+  if (!fields.answer || typeof fields.answer !== "object" || Array.isArray(fields.answer)) {
+    throw new Error("Invalid bot question answer.");
+  }
+  return { botId: parseBotId(fields.botId), waitId: fields.waitId, answer: fields.answer };
+}
+
 export function parseBotChatCreate(value: unknown) {
   const record = exact(value, CHAT_KEYS, "bot chat creation fields");
   // Legacy desktop renderers still send the visible workspace selection. Bot

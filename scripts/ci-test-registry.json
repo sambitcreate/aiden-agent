@@ -352,6 +352,7 @@
         "main/services/bot-runtime/bot-starter.test.ts",
         "main/services/bot-runtime/live-projection.test.ts",
         "main/services/bot-runtime/bot-extension.test.ts",
+        "main/services/bot-runtime/bot-question-tool.test.ts",
         "main/services/bot-runtime/bot-session-service.test.ts",
         "main/services/bot-runtime/bot-tool-assembly.test.ts",
         "main/services/bot-runtime/harness-host.test.ts",

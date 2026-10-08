@@ -2002,6 +2002,67 @@
         }
       }
     },
+    "/bots/{botId}/questions/{waitId}/answer": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "waitId",
+          "in": "path",
+          "required": true,
+          "description": "The waitId of the question the Bot is waiting on (BotSession.question.waitId).",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "answerBotQuestion",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "description": "Answers the Bot's quick-reply question. The Idempotency-Key is the request UUID: a repeat with the same key returns the same receipt. Another key for a question that is no longer waiting returns 409 question_expired.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotQuestionAnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer was recorded for this question. A repeat with the same Idempotency-Key returns the same receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotQuestionAnswerReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bots/{botId}/routines": {
       "parameters": [
         {
@@ -13805,7 +13866,8 @@
           "state",
           "interrupted",
           "entries",
-          "hasOlder"
+          "hasOlder",
+          "question"
         ],
         "properties": {
           "botId": {
@@ -13837,6 +13899,16 @@
           },
           "hasOlder": {
             "type": "boolean"
+          },
+          "question": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -13877,6 +13949,7 @@
               "partial",
               "entry",
               "state",
+              "question",
               "closed"
             ]
           },
@@ -14389,6 +14462,182 @@
           },
           "bot": {
             "$ref": "#/components/schemas/BotSummary"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQuestionOption": {
+        "type": "object",
+        "required": [
+          "label",
+          "description"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQuestionItem": {
+        "type": "object",
+        "required": [
+          "question",
+          "header",
+          "multiSelect",
+          "options"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "header": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "multiSelect": {
+            "type": "boolean"
+          },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 5,
+            "items": {
+              "$ref": "#/components/schemas/BotQuestionOption"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQuestion": {
+        "description": "A question the Bot is waiting on. Answered by waitId, once.",
+        "type": "object",
+        "required": [
+          "waitId",
+          "toolCallId",
+          "questions"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "toolCallId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/BotQuestionItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQuestionAnswerRequest": {
+        "type": "object",
+        "required": [
+          "cancelled",
+          "answers"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "answers": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "questionIndex",
+                    "kind",
+                    "answer"
+                  ],
+                  "properties": {
+                    "questionIndex": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3
+                    },
+                    "kind": {
+                      "enum": [
+                        "option",
+                        "custom"
+                      ]
+                    },
+                    "answer": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4000
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "questionIndex",
+                    "kind",
+                    "selected"
+                  ],
+                  "properties": {
+                    "questionIndex": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3
+                    },
+                    "kind": {
+                      "const": "multi"
+                    },
+                    "selected": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 5,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 60
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQuestionAnswerReceipt": {
+        "type": "object",
+        "required": [
+          "waitId"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
           }
         },
         "additionalProperties": false

@@ -1225,6 +1225,12 @@ export const botsApi = {
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
   approve: (waitId: string, decision: "allow" | "deny") =>
     invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  /**
+   * Answer the Bot's A–E question by its wait id; `answered` is false once the
+   * question is no longer waiting (answered elsewhere or withdrawn).
+   */
+  answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
+    invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
   pendingApprovals: (botId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
       "bots:pendingApprovals",

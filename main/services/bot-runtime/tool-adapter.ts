@@ -29,6 +29,11 @@ export interface BotToolCall {
   entries(): Promise<EntryRecord[]>;
   /** Append a display/bookkeeping entry to the calling conversation. */
   appendEntry(kind: string, data: JsonValue): Promise<void>;
+  /**
+   * The tool task's memo: the first `candidate` for `name` is stored and
+   * returned on every later call of the same task, including after a restart.
+   */
+  memo<T extends JsonValue>(name: string, candidate: T): Promise<T>;
 }
 
 export interface AdaptOptions {
@@ -57,6 +62,7 @@ function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal): 
     appendEntry: async (kind, data) => {
       await api.commit((tx) => tx.appendEntry(api.conversationId, { kind, data }), context);
     },
+    memo: (name, candidate) => api.memo(name, candidate, context),
   };
 }
 

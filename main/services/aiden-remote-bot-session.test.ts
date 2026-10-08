@@ -4,9 +4,12 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
+  projectBotSessionEntries,
   projectBotSessionState,
   type AidenRemoteBotSessionRuntime,
 } from "./aiden-remote-bot-session.js";
+import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
+import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import type { BotSessionState } from "./bot-runtime/bot-session-service.js";
 
 const BOT_ID = "bot_session_1";
@@ -183,4 +186,86 @@ test("a session reopened on the host gets a new epoch, so clients refetch instea
   assert.notEqual(after.epoch, before.epoch);
   assert.equal(after.seq, 0);
   await service.close();
+});
+
+const WAIT_ID = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c";
+const COLOUR: AskUserQuestionV1[] = [
+  {
+    question: "Which colour should the banner use?",
+    header: "Colour",
+    multiSelect: false,
+    options: [
+      { label: "Blue", description: "Calm and cool." },
+      { label: "Red", description: "Loud and warm." },
+    ],
+  },
+];
+const BLUE = { cancelled: false, answers: [{ questionIndex: 0, kind: "option" as const, answer: "Blue" }] };
+
+function questionSession(runtime: AidenRemoteBotSessionRuntime) {
+  const questions = createBotQuestions();
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => runtime,
+    questions,
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+  return { questions, service };
+}
+
+test("a Bot's waiting question is in its session, and answering it is idempotent per request UUID", async () => {
+  const { questions, service } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const asked = questions.request({ botId: BOT_ID, waitId: WAIT_ID, toolCallId: "call_1", questions: COLOUR, signal: undefined });
+
+  const waiting = await service.session(BOT_ID);
+  assert.equal(waiting.question?.waitId, WAIT_ID);
+  assert.deepEqual(waiting.question?.questions.map((item) => item.options.map((option) => option.label)), [["Blue", "Red"]]);
+
+  const receipt = await service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0001", BLUE);
+  assert.deepEqual(receipt, { waitId: WAIT_ID });
+  assert.deepEqual((await asked).answers, BLUE.answers, "the Bot receives the answer once");
+  assert.deepEqual(
+    await service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0001", BLUE),
+    receipt,
+    "the same request UUID replays the receipt",
+  );
+  await assert.rejects(
+    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0002", BLUE),
+    (error: { code?: string; status?: number }) => error.code === "question_expired" && error.status === 409,
+    "another request for a question that is no longer waiting is refused",
+  );
+  assert.equal((await service.session(BOT_ID)).question, null);
+  await service.close();
+});
+
+test("an answer that does not fit the question is refused and the question keeps waiting", async () => {
+  const { questions, service } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  void questions.request({ botId: BOT_ID, waitId: WAIT_ID, toolCallId: "call_1", questions: COLOUR, signal: undefined });
+  await assert.rejects(
+    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0003", {
+      cancelled: false,
+      answers: [{ questionIndex: 0, kind: "option", answer: "Purple" }],
+    }),
+  );
+  assert.equal((await service.session(BOT_ID)).question?.waitId, WAIT_ID);
+  await service.close();
+});
+
+test("an answered question reads as the person's message in the session transcript", () => {
+  const entries = projectBotSessionEntries([
+    {
+      id: 7,
+      kind: "pi.tool-result",
+      model: [{
+        role: "toolResult",
+        toolName: "ask_user_question",
+        isError: false,
+        content: [{ type: "text", text: "1. Which colour should the banner use?\nAnswer: Blue" }],
+      }],
+    },
+  ] as never);
+  assert.deepEqual(entries, [
+    { type: "message", id: "entry_7", role: "user", text: "1. Which colour should the banner use?\nAnswer: Blue" },
+  ]);
 });

@@ -24,6 +24,7 @@ import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-st
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import {
+  answerBotQuestion,
   botLiveProjection,
   botSessionRuntime,
   dismissBotConnection,
@@ -54,6 +55,7 @@ import {
   parseBotSend,
   parseBotSessionAction,
   parseBotApprovalDecision,
+  parseBotQuestionAnswer,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -255,6 +257,11 @@ export function registerBotHandlers(): void {
     return { decided: botApprovals.decide(waitId, decision) };
   });
   ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
+  // Bot quick-reply questions: any desktop window may answer; the first answer wins.
+  ipcMain.handle("bots:answerQuestion", async (_event, input: unknown) => {
+    const { botId, waitId, answer } = parseBotQuestionAnswer(input);
+    return { answered: answerBotQuestion(botId, waitId, answer) === "answered" };
+  });
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });

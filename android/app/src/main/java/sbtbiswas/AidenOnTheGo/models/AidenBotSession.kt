@@ -11,8 +11,11 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -139,6 +142,95 @@ sealed class AidenBotSessionEntry {
     }
 }
 
+/**
+ * A Bot's waiting A–E question (`question` on the session and on `question`
+ * events). The card is the shared `ask_user_question` card; the answer is posted
+ * once by [waitId].
+ */
+data class AidenBotQuestion(
+    val waitId: String,
+    val toolCallId: String,
+    val questions: List<AidenRemoteQuestion>
+) {
+    init {
+        AidenBotWire.validateIdentifier(waitId, "waitId", 64)
+        AidenBotWire.validateIdentifier(toolCallId, "toolCallId", 128)
+        if (questions.size !in 1..AidenRemoteProtocol.MAX_QUESTION_COUNT) {
+            throw AidenBotContractException.InvalidField("questions")
+        }
+    }
+
+    fun toJson(): JsonObject = buildJsonObject {
+        put("waitId", JsonPrimitive(waitId))
+        put("toolCallId", JsonPrimitive(toolCallId))
+        put(
+            "questions",
+            JsonArray(
+                questions.map { question ->
+                    buildJsonObject {
+                        put("question", JsonPrimitive(question.question))
+                        put("header", JsonPrimitive(question.header))
+                        put("multiSelect", JsonPrimitive(question.multiSelect))
+                        put(
+                            "options",
+                            JsonArray(
+                                question.options.map { option ->
+                                    buildJsonObject {
+                                        put("label", JsonPrimitive(option.label))
+                                        put("description", JsonPrimitive(option.description))
+                                    }
+                                }
+                            )
+                        )
+                    }
+                }
+            )
+        )
+    }
+
+    companion object {
+        fun parse(element: JsonElement): AidenBotQuestion {
+            val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("question")
+            if (obj.keys != setOf("waitId", "toolCallId", "questions")) {
+                throw AidenBotContractException.InvalidField("question")
+            }
+            val waitId = (obj["waitId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw AidenBotContractException.InvalidField("waitId")
+            val toolCallId = (obj["toolCallId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw AidenBotContractException.InvalidField("toolCallId")
+            val questions = obj["questions"] as? JsonArray ?: throw AidenBotContractException.InvalidField("questions")
+            return AidenBotQuestion(
+                waitId = waitId,
+                toolCallId = toolCallId,
+                questions = AidenQuestionContractCodec.parseQuestions(questions, "Bot question")
+            )
+        }
+    }
+}
+
+/** Reads and writes the nullable `question` slot of a Bot session. */
+object AidenBotQuestionSerializer : KSerializer<AidenBotQuestion> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("AidenBotQuestion")
+
+    override fun serialize(encoder: Encoder, value: AidenBotQuestion) {
+        val jsonEncoder = encoder as? JsonEncoder ?: throw SerializationException("Bot questions are JSON only")
+        jsonEncoder.encodeJsonElement(value.toJson())
+    }
+
+    override fun deserialize(decoder: Decoder): AidenBotQuestion {
+        val jsonDecoder = decoder as? JsonDecoder ?: throw SerializationException("Bot questions are JSON only")
+        return AidenBotQuestion.parse(jsonDecoder.decodeJsonElement())
+    }
+}
+
+/** `POST /bots/{botId}/questions/{waitId}/answer` receipt: the same wait id on every repeat. */
+@Serializable
+data class AidenBotQuestionAnswerReceipt(val waitId: String) {
+    init {
+        AidenBotWire.validateIdentifier(waitId, "waitId", 64)
+    }
+}
+
 /** `GET /bots/{botId}/session`: the newest entries plus the in-flight partial. */
 @Serializable
 data class AidenBotSession(
@@ -150,7 +242,10 @@ data class AidenBotSession(
     val blocked: AidenBotSessionBlock? = null,
     val partial: String? = null,
     val entries: List<AidenBotSessionEntry>,
-    val hasOlder: Boolean
+    val hasOlder: Boolean,
+    /** The question the Bot is waiting on, or null. */
+    @Serializable(with = AidenBotQuestionSerializer::class)
+    val question: AidenBotQuestion? = null
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -243,6 +338,8 @@ sealed class AidenBotSessionEventPayload {
     /** Append, or replace by id; clears the partial. */
     data class Entry(val entry: AidenBotSessionEntry) : AidenBotSessionEventPayload()
     data class State(val view: AidenBotSessionStateView) : AidenBotSessionEventPayload()
+    /** The waiting question appeared (non-null) or was settled (null). */
+    data class Question(val question: AidenBotQuestion?) : AidenBotSessionEventPayload()
     /** The host closed this Bot's session; reconnect for a new epoch. */
     object Closed : AidenBotSessionEventPayload() {
         override fun toString(): String = "Closed"
@@ -274,6 +371,7 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.Partial -> "partial"
             is AidenBotSessionEventPayload.Entry -> "entry"
             is AidenBotSessionEventPayload.State -> "state"
+            is AidenBotSessionEventPayload.Question -> "question"
             AidenBotSessionEventPayload.Closed -> "closed"
         }
 }
@@ -296,6 +394,9 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             }
             is AidenBotSessionEventPayload.State ->
                 wire.encodeToJsonElement(AidenBotSessionStateView.serializer(), p.view).jsonObject
+            is AidenBotSessionEventPayload.Question -> buildJsonObject {
+                put("question", p.question?.toJson() ?: JsonNull)
+            }
             AidenBotSessionEventPayload.Closed -> JsonObject(emptyMap())
         }
         jsonEncoder.encodeJsonElement(buildJsonObject {
@@ -346,6 +447,11 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             "state" -> AidenBotSessionEventPayload.State(
                 wire.decodeFromJsonElement(AidenBotSessionStateView.serializer(), payload)
             )
+            "question" -> {
+                payload.requireKeys(setOf("question"))
+                val element = payload.getValue("question")
+                AidenBotSessionEventPayload.Question(if (element is JsonNull) null else AidenBotQuestion.parse(element))
+            }
             "closed" -> {
                 payload.requireKeys(emptySet())
                 AidenBotSessionEventPayload.Closed

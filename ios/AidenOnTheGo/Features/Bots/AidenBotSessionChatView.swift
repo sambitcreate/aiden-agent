@@ -186,6 +186,20 @@ struct AidenBotSessionChatView: View {
     @ViewBuilder
     private func footer(_ model: AidenBotSessionModel) -> some View {
         VStack(spacing: 10) {
+            if let question = model.question, !model.needsModel {
+                // The Bot's A–E quick replies. A Bot question has no deadline.
+                AidenQuestionCard(
+                    prompt: AidenPendingQuestion(
+                        id: question.waitId,
+                        questions: question.questions,
+                        expiresAt: .distantFuture,
+                        canRespond: canWrite
+                    ),
+                    onSubmit: { request in Task { await model.answerQuestion(request) } }
+                )
+                .disabled(!canWrite || !model.canAnswerQuestion)
+                .id(question.waitId)
+            }
             if model.needsModel {
                 AidenBotNeedsModelCard()
             } else if model.isInterrupted {
