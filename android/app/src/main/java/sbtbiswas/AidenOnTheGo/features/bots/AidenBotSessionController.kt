@@ -228,6 +228,8 @@ class AidenBotSessionController(
      * Sends [text]. Nothing is sent while the Bot needs an AI model or another send is in
      * flight. A failed send keeps its key, so retrying the same text cannot post twice.
      */
+    private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
+
     suspend fun send(text: String): Boolean {
         val trimmed = text.trim()
         val current = _state.value
@@ -277,18 +279,23 @@ class AidenBotSessionController(
     )
 
     /**
-     * Answers the waiting A–E question once. The key is kept across a failure, so a retry
-     * replays the Mac's receipt instead of answering twice; a second tap while one is in
-     * flight sends nothing.
+     * Answers the waiting A–E question once. A failed answer keeps its key, so retrying the
+     * same answer replays the Mac's receipt instead of answering twice; a different answer
+     * gets a new key. A second tap while one is in flight sends nothing.
      */
     suspend fun answerQuestion(response: AidenQuestionRespondRequest): Boolean {
         val question = _state.value.session?.question ?: return false
         if (_state.value.isAnsweringQuestion) return false
         val action = "$ANSWER_QUESTION:${question.waitId}"
+        if (pendingAnswer != action to response) {
+            keys.complete(action)
+            pendingAnswer = action to response
+        }
         _state.update { it.copy(isAnsweringQuestion = true, actionError = null) }
         return try {
             transport.answerQuestion(botId, question.waitId, response, keys.key(action))
             keys.complete(action)
+            pendingAnswer = null
             _state.update { current ->
                 val session = current.session
                 if (session?.question?.waitId == question.waitId) {

@@ -55,6 +55,7 @@ import {
 } from "./aiden-remote-protocol.js";
 import { openCursorSse, sseFrame, type CursorSseHandle } from "./aiden-remote-sse.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../renderer/shared/ask-user-question.js";
+import { botQuestionAnswerText } from "../../renderer/shared/bot-live.js";
 import type { BotQuestions } from "./bot-runtime/bot-questions.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -165,17 +166,22 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
   let pendingLabel: string | undefined;
   for (const entry of entries) {
     const message = entry.model?.[0] as
-      | { role?: string; content?: unknown; stopReason?: string; toolName?: string; isError?: boolean }
+      | { role?: string; content?: unknown; stopReason?: string; toolName?: string; isError?: boolean; details?: unknown }
       | undefined;
     if (entry.kind === "pi.tool-result" && message?.role === "toolResult") {
       // The person's answer to a quick-reply question reads as their message.
-      if (message.toolName === ASK_USER_QUESTION_TOOL_NAME && message.isError !== true) {
+      // A stopped question (an error result) recorded no answer and stays hidden.
+      const answerText =
+        message.toolName === ASK_USER_QUESTION_TOOL_NAME && message.isError !== true
+          ? botQuestionAnswerText(message.details)
+          : undefined;
+      if (answerText !== undefined) {
         const createdAt = timestampOf(message);
         output.push({
           type: "message",
           id: wireEntryId(entry),
           role: "user",
-          text: bounded(textOf(message.content)),
+          text: bounded(answerText),
           ...(createdAt ? { createdAt } : {}),
         });
       }
@@ -549,16 +555,16 @@ export class AidenRemoteBotSessionService {
         { deviceId, route: "POST /bots/{id}/questions/{waitId}/answer", resourceId: `${bot.id}:${waitId}`, key },
         { waitId, ...parsed },
         async () => {
-          const waiting = questions.pending(bot.id).some((prompt) => prompt.waitId === waitId);
-          const outcome = waiting
-            ? questions.answer(waitId, {
-                version: 1,
-                promptId: waitId,
-                cancelled: parsed.cancelled,
-                answers: parsed.answers,
-              })
-            : "rejected";
-          if (outcome !== "answered") {
+          const outcome = questions.answer(bot.id, waitId, {
+            version: 1,
+            promptId: waitId,
+            cancelled: parsed.cancelled,
+            answers: parsed.answers,
+          });
+          if (outcome === "invalid") {
+            throw new AidenRemoteServiceError("invalid_request", "The answer does not match the question.", 400);
+          }
+          if (outcome === "not_waiting") {
             throw new AidenRemoteServiceError("question_expired", "This question prompt is no longer available.", 409);
           }
           return { waitId };

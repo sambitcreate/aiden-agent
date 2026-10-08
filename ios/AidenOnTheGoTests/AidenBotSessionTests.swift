@@ -41,6 +41,26 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertFalse(model.canAnswerQuestion)
     }
 
+    func testALostAnswerIsRetriedUnderItsKeyAndAnotherAnswerIsANewRequest() async throws {
+        let transport = QuestionTransport(snapshot: try session(question: questionJSON))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        let blue = AidenQuestionRespondRequest(cancelled: false, answers: [.option(questionIndex: 0, answer: "Blue")])
+        let red = AidenQuestionRespondRequest(cancelled: false, answers: [.option(questionIndex: 0, answer: "Red")])
+
+        transport.nextAnswerError = URLError(.networkConnectionLost)
+        await model.answerQuestion(blue)
+        XCTAssertEqual(model.question?.waitId, waitID, "the card stays until the Mac confirms")
+        transport.nextAnswerError = URLError(.networkConnectionLost)
+        await model.answerQuestion(blue)
+        await model.answerQuestion(red)
+
+        XCTAssertEqual(transport.answers.count, 3)
+        XCTAssertEqual(transport.answers[0].key, transport.answers[1].key, "the same answer replays under one key")
+        XCTAssertNotEqual(transport.answers[1].key, transport.answers[2].key, "another answer is another request")
+        XCTAssertNil(model.question)
+    }
+
     func testQuestionEventsShowAndSettleTheWaitingQuestion() async throws {
         let transport = QuestionTransport(snapshot: try session(question: "null"))
         let model = AidenBotSessionModel(botID: botID, transport: transport)
@@ -60,6 +80,8 @@ final class AidenBotSessionTests: XCTestCase {
 private final class QuestionTransport: AidenBotSessionTransport, @unchecked Sendable {
     let snapshot: AidenBotSession
     private(set) var answers: [(waitId: String, key: UUID, request: AidenQuestionRespondRequest)] = []
+    /// Thrown by the next answer instead of a receipt.
+    var nextAnswerError: Error?
 
     init(snapshot: AidenBotSession) {
         self.snapshot = snapshot
@@ -98,6 +120,10 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
         idempotencyKey: UUID
     ) async throws -> AidenBotQuestionAnswerReceipt {
         answers.append((waitId, idempotencyKey, request))
+        if let error = nextAnswerError {
+            nextAnswerError = nil
+            throw error
+        }
         return try JSONDecoder().decode(
             AidenBotQuestionAnswerReceipt.self,
             from: Data("{\"waitId\":\"\(waitId)\"}".utf8)

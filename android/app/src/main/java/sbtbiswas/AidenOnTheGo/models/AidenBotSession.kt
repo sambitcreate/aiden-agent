@@ -208,21 +208,6 @@ data class AidenBotQuestion(
     }
 }
 
-/** Reads and writes the nullable `question` slot of a Bot session. */
-object AidenBotQuestionSerializer : KSerializer<AidenBotQuestion> {
-    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("AidenBotQuestion")
-
-    override fun serialize(encoder: Encoder, value: AidenBotQuestion) {
-        val jsonEncoder = encoder as? JsonEncoder ?: throw SerializationException("Bot questions are JSON only")
-        jsonEncoder.encodeJsonElement(value.toJson())
-    }
-
-    override fun deserialize(decoder: Decoder): AidenBotQuestion {
-        val jsonDecoder = decoder as? JsonDecoder ?: throw SerializationException("Bot questions are JSON only")
-        return AidenBotQuestion.parse(jsonDecoder.decodeJsonElement())
-    }
-}
-
 /** `POST /bots/{botId}/questions/{waitId}/answer` receipt: the same wait id on every repeat. */
 @Serializable
 data class AidenBotQuestionAnswerReceipt(val waitId: String) {
@@ -232,7 +217,7 @@ data class AidenBotQuestionAnswerReceipt(val waitId: String) {
 }
 
 /** `GET /bots/{botId}/session`: the newest entries plus the in-flight partial. */
-@Serializable
+@Serializable(with = AidenBotSessionSerializer::class)
 data class AidenBotSession(
     val botId: String,
     val epoch: String,
@@ -243,9 +228,8 @@ data class AidenBotSession(
     val partial: String? = null,
     val entries: List<AidenBotSessionEntry>,
     val hasOlder: Boolean,
-    /** The question the Bot is waiting on, or null. */
-    @Serializable(with = AidenBotQuestionSerializer::class)
-    val question: AidenBotQuestion? = null
+    /** The question the Bot is waiting on, or null. Always on the wire, as `null` when nothing waits. */
+    val question: AidenBotQuestion?
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -256,6 +240,54 @@ data class AidenBotSession(
         if (entries.size > AidenBotSessionWire.MAX_ENTRIES || entries.map { it.id }.toSet().size != entries.size) {
             throw AidenBotContractException.InvalidField("entries")
         }
+    }
+}
+
+/** Every session field except `question`, which the Bot wire's omitted-null rule would drop. */
+@Serializable
+private data class AidenBotSessionFields(
+    val botId: String,
+    val epoch: String,
+    val seq: Long,
+    val state: AidenBotSessionState,
+    val interrupted: Boolean,
+    val blocked: AidenBotSessionBlock? = null,
+    val partial: String? = null,
+    val entries: List<AidenBotSessionEntry>,
+    val hasOlder: Boolean
+)
+
+/** Writes `question` explicitly (`null` when nothing waits) and requires it on read. */
+object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("AidenBotSession")
+
+    override fun serialize(encoder: Encoder, value: AidenBotSession) {
+        val jsonEncoder = encoder as? JsonEncoder ?: throw SerializationException("Bot sessions are JSON only")
+        val fields = AidenBotSessionFields(
+            value.botId, value.epoch, value.seq, value.state, value.interrupted,
+            value.blocked, value.partial, value.entries, value.hasOlder
+        )
+        val body = jsonEncoder.json.encodeToJsonElement(AidenBotSessionFields.serializer(), fields).jsonObject
+        jsonEncoder.encodeJsonElement(JsonObject(body + ("question" to (value.question?.toJson() ?: JsonNull))))
+    }
+
+    override fun deserialize(decoder: Decoder): AidenBotSession {
+        val jsonDecoder = decoder as? JsonDecoder ?: throw SerializationException("Bot sessions are JSON only")
+        val body = jsonDecoder.decodeJsonElement() as? JsonObject ?: throw AidenBotContractException.InvalidField("session")
+        val question = body["question"] ?: throw AidenBotContractException.InvalidField("question")
+        val fields = jsonDecoder.json.decodeFromJsonElement(AidenBotSessionFields.serializer(), JsonObject(body - "question"))
+        return AidenBotSession(
+            botId = fields.botId,
+            epoch = fields.epoch,
+            seq = fields.seq,
+            state = fields.state,
+            interrupted = fields.interrupted,
+            blocked = fields.blocked,
+            partial = fields.partial,
+            entries = fields.entries,
+            hasOlder = fields.hasOlder,
+            question = if (question is JsonNull) null else AidenBotQuestion.parse(question)
+        )
     }
 }
 

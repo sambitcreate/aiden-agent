@@ -960,15 +960,11 @@ export interface AidenRemoteBotQuestion {
   questions: AidenRemoteBotQuestionItem[];
 }
 
-export type AidenRemoteBotQuestionAnswer =
-  | { questionIndex: number; kind: "option" | "custom"; answer: string }
-  | { questionIndex: number; kind: "multi"; selected: string[] };
-
-/** `POST /bots/{botId}/questions/{waitId}/answer`; the `Idempotency-Key` header is the request UUID. */
-export interface AidenRemoteBotQuestionAnswerRequest {
-  cancelled: boolean;
-  answers: AidenRemoteBotQuestionAnswer[];
-}
+/**
+ * `POST /bots/{botId}/questions/{waitId}/answer`: the same body as a workspace
+ * chat's question response. The `Idempotency-Key` header is the request UUID.
+ */
+export type AidenRemoteBotQuestionAnswerRequest = AidenRemoteQuestionRespondRequest;
 
 /** The same receipt on every repeat of one request UUID. */
 export interface AidenRemoteBotQuestionAnswerReceipt {
@@ -4753,8 +4749,6 @@ export function parseAidenRemoteBotMessageRequest(value: unknown): AidenRemoteBo
 }
 
 const BOT_QUESTION_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
-export const AIDEN_REMOTE_BOT_QUESTION_MAX_OPTIONS = ASK_USER_MAX_OPTIONS;
-export const AIDEN_REMOTE_BOT_QUESTION_MAX_ANSWERS = ASK_USER_MAX_QUESTIONS;
 
 function parseBotQuestionWaitId(value: unknown, label: string): string {
   const waitId = boundedText(value, label, 64);
@@ -4775,46 +4769,9 @@ export function parseAidenRemoteBotQuestion(value: unknown): AidenRemoteBotQuest
   };
 }
 
-function parseAidenRemoteBotQuestionAnswer(value: unknown): AidenRemoteBotQuestionAnswer {
-  if (!isRecord(value)) throw new Error("Bot question answer must be an object.");
-  const questionIndex = boundedIntegerValue(
-    value.questionIndex,
-    "Bot question answer questionIndex",
-    0,
-    AIDEN_REMOTE_BOT_QUESTION_MAX_ANSWERS - 1,
-  );
-  if (value.kind === "multi") {
-    assertExactKeys(value, ["questionIndex", "kind", "selected"], "Bot question multi answer");
-    if (!Array.isArray(value.selected) || value.selected.length < 1 || value.selected.length > AIDEN_REMOTE_BOT_QUESTION_MAX_OPTIONS) {
-      throw new Error("Bot question multi answer selected is invalid.");
-    }
-    return {
-      questionIndex,
-      kind: "multi",
-      selected: value.selected.map((label) => boundedText(label, "Bot question selected option", ASK_USER_MAX_LABEL_LENGTH)),
-    };
-  }
-  assertExactKeys(value, ["questionIndex", "kind", "answer"], "Bot question answer");
-  if (value.kind !== "option" && value.kind !== "custom") throw new Error("Bot question answer kind is invalid.");
-  return {
-    questionIndex,
-    kind: value.kind,
-    answer: boundedText(value.answer, "Bot question answer", ASK_USER_MAX_CUSTOM_ANSWER_LENGTH),
-  };
-}
-
+/** Structural only; answers are checked against the waiting question when it settles. */
 export function parseAidenRemoteBotQuestionAnswerRequest(value: unknown): AidenRemoteBotQuestionAnswerRequest {
-  if (!isRecord(value)) throw new Error("Bot question answer request must be an object.");
-  assertExactKeys(value, ["cancelled", "answers"], "Bot question answer request");
-  const cancelled = requiredBooleanValue(value.cancelled, "Bot question cancelled");
-  if (!Array.isArray(value.answers) || value.answers.length > AIDEN_REMOTE_BOT_QUESTION_MAX_ANSWERS) {
-    throw new Error("Bot question answers are invalid.");
-  }
-  const answers = value.answers.map(parseAidenRemoteBotQuestionAnswer);
-  if (cancelled !== (answers.length === 0)) {
-    throw new Error("A Bot question carries answers unless it is cancelled.");
-  }
-  return { cancelled, answers };
+  return parseAidenRemoteQuestionRespondRequest(value);
 }
 
 export function parseAidenRemoteBotQuestionAnswerReceipt(value: unknown): AidenRemoteBotQuestionAnswerReceipt {

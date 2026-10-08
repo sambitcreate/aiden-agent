@@ -85,26 +85,26 @@ class AidenBotSessionControllerTest {
             AidenBotConnectionRequestReceipt(pluginId, "Google Calendar", AidenBotConnectionRequestStatus.SENT)
     }
 
-    @Test
-    fun aQuestionAnswerIsRetriedUnderOneKeyAndClearsWhenTheMacReceipts() = runTest {
-        val waitId = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c"
-        val question = AidenBotQuestion(
-            waitId = waitId,
-            toolCallId = "call_1",
-            questions = listOf(
-                AidenRemoteQuestion(
-                    question = "Which colour should the banner use?",
-                    header = "Colour",
-                    multiSelect = false,
-                    options = listOf(
-                        AidenRemoteQuestionOption("Blue", "Calm and cool."),
-                        AidenRemoteQuestionOption("Red", "Loud and warm.")
-                    )
+    private val colourQuestion = AidenBotQuestion(
+        waitId = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c",
+        toolCallId = "call_1",
+        questions = listOf(
+            AidenRemoteQuestion(
+                question = "Which colour should the banner use?",
+                header = "Colour",
+                multiSelect = false,
+                options = listOf(
+                    AidenRemoteQuestionOption("Blue", "Calm and cool."),
+                    AidenRemoteQuestionOption("Red", "Loud and warm.")
                 )
             )
         )
+    )
+
+    @Test
+    fun aQuestionAnswerIsRetriedUnderOneKeyAndClearsWhenTheMacReceipts() = runTest {
         val transport = FakeTransport(
-            interruptedSession.copy(state = AidenBotSessionState.IDLE, interrupted = false, question = question)
+            interruptedSession.copy(state = AidenBotSessionState.IDLE, interrupted = false, question = colourQuestion)
         )
         val controller = AidenBotSessionController(transport.session.botId, transport, backgroundScope)
         controller.refetch()
@@ -114,10 +114,26 @@ class AidenBotSessionControllerTest {
         assertFalse(controller.answerQuestion(answer))
         assertTrue(controller.answerQuestion(answer))
 
-        assertEquals("the retry reuses the key of the ambiguous attempt", 2, transport.answerKeys.size)
+        assertEquals("the retry reuses the key of the failed attempt", 2, transport.answerKeys.size)
         assertEquals(transport.answerKeys[0], transport.answerKeys[1])
         assertEquals(null, controller.state.value.session?.question)
         assertFalse(controller.state.value.isAnsweringQuestion)
+        assertFalse("nothing is waiting any more", controller.answerQuestion(answer))
+        assertEquals(2, transport.answerKeys.size)
+    }
+
+    @Test
+    fun aDifferentAnswerAfterAFailureGetsANewKey() = runTest {
+        val transport = FakeTransport(
+            interruptedSession.copy(state = AidenBotSessionState.IDLE, interrupted = false, question = colourQuestion)
+        )
+        val controller = AidenBotSessionController(transport.session.botId, transport, backgroundScope)
+        controller.refetch()
+        transport.failNextAnswer = true
+        assertFalse(controller.answerQuestion(AidenQuestionRespondRequest(false, listOf(AidenQuestionAnswer.Option(0, "Blue")))))
+        assertTrue(controller.answerQuestion(AidenQuestionRespondRequest(false, listOf(AidenQuestionAnswer.Option(0, "Red")))))
+        assertEquals(2, transport.answerKeys.size)
+        assertNotEquals("another answer is another request", transport.answerKeys[0], transport.answerKeys[1])
     }
 
     @Test

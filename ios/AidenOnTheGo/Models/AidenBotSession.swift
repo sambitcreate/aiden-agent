@@ -248,8 +248,6 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// `GET /bots/{botId}/session`: the newest entries (newest last) plus the
-/// in-flight assistant text, stamped with the `(epoch, seq)` it reflects.
 /// A Bot's waiting A–E question (`question` on the session and `question` events).
 /// Answered by `waitId`, once; the card is the shared `ask_user_question` card.
 struct AidenRemoteBotQuestion: Codable, Equatable, Sendable {
@@ -293,6 +291,8 @@ struct AidenBotQuestionAnswerReceipt: Codable, Equatable, Sendable {
     }
 }
 
+/// `GET /bots/{botId}/session`: the newest entries (newest last) plus the
+/// in-flight assistant text, stamped with the `(epoch, seq)` it reflects.
 struct AidenBotSession: Codable, Equatable, Sendable {
     let botId: String
     let epoch: String

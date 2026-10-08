@@ -120,7 +120,7 @@ final class AidenBotSessionModel {
 
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
     @ObservationIgnored private var retainedMessage: (text: String, key: UUID)?
-    @ObservationIgnored private var retainedQuestion: (waitId: String, key: UUID)?
+    @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     @ObservationIgnored private var connectionKeys: [String: UUID] = [:]
 
     init(botID: String, transport: any AidenBotSessionTransport) {
@@ -244,15 +244,16 @@ final class AidenBotSessionModel {
     }
 
     /// Answers the waiting question. The request UUID is kept across an ambiguous
-    /// failure, so a retry replays the Mac's receipt instead of answering twice.
+    /// failure, so retrying the same answer replays the Mac's receipt instead of
+    /// answering twice; a different answer is a new request.
     func answerQuestion(_ response: AidenQuestionRespondRequest) async {
         guard canAnswerQuestion, let waitId = question?.waitId else { return }
         let key: UUID
-        if let retainedQuestion, retainedQuestion.waitId == waitId {
+        if let retainedQuestion, retainedQuestion.waitId == waitId, retainedQuestion.request == response {
             key = retainedQuestion.key
         } else {
             key = UUID()
-            retainedQuestion = (waitId, key)
+            retainedQuestion = (waitId, response, key)
         }
         inFlight.insert(.answerQuestion)
         defer { inFlight.remove(.answerQuestion) }

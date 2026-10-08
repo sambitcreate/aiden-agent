@@ -2041,7 +2041,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/BotQuestionAnswerRequest"
+                "$ref": "#/components/schemas/QuestionRespondRequest"
               }
             }
           }
@@ -14466,59 +14466,6 @@
         },
         "additionalProperties": false
       },
-      "BotQuestionOption": {
-        "type": "object",
-        "required": [
-          "label",
-          "description"
-        ],
-        "properties": {
-          "label": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 60
-          },
-          "description": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          }
-        },
-        "additionalProperties": false
-      },
-      "BotQuestionItem": {
-        "type": "object",
-        "required": [
-          "question",
-          "header",
-          "multiSelect",
-          "options"
-        ],
-        "properties": {
-          "question": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 1000
-          },
-          "header": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 16
-          },
-          "multiSelect": {
-            "type": "boolean"
-          },
-          "options": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 5,
-            "items": {
-              "$ref": "#/components/schemas/BotQuestionOption"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
       "BotQuestion": {
         "description": "A question the Bot is waiting on. Answered by waitId, once.",
         "type": "object",
@@ -14544,84 +14491,7 @@
             "minItems": 1,
             "maxItems": 4,
             "items": {
-              "$ref": "#/components/schemas/BotQuestionItem"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
-      "BotQuestionAnswerRequest": {
-        "type": "object",
-        "required": [
-          "cancelled",
-          "answers"
-        ],
-        "properties": {
-          "cancelled": {
-            "type": "boolean"
-          },
-          "answers": {
-            "type": "array",
-            "maxItems": 4,
-            "items": {
-              "oneOf": [
-                {
-                  "type": "object",
-                  "required": [
-                    "questionIndex",
-                    "kind",
-                    "answer"
-                  ],
-                  "properties": {
-                    "questionIndex": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 3
-                    },
-                    "kind": {
-                      "enum": [
-                        "option",
-                        "custom"
-                      ]
-                    },
-                    "answer": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 4000
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "questionIndex",
-                    "kind",
-                    "selected"
-                  ],
-                  "properties": {
-                    "questionIndex": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 3
-                    },
-                    "kind": {
-                      "const": "multi"
-                    },
-                    "selected": {
-                      "type": "array",
-                      "minItems": 1,
-                      "maxItems": 5,
-                      "items": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 60
-                      }
-                    }
-                  },
-                  "additionalProperties": false
-                }
-              ]
+              "$ref": "#/components/schemas/PendingQuestionItem"
             }
           }
         },

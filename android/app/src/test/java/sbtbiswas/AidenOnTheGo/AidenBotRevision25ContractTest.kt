@@ -87,11 +87,12 @@ class AidenBotRevision25ContractTest {
 
         val events = roundTrip(ListSerializer(AidenBotSessionEvent.serializer()), fixture.getValue("botSessionEvents"))
         assertEquals(
-            listOf("snapshot", "partial", "entry", "state", "closed", "state", "question"),
+            listOf("snapshot", "partial", "entry", "state", "closed", "state", "question", "question"),
             events.map { it.type }
         )
         assertEquals(AidenBotSessionBlock.ACCESS_CHANGED, (events[3].payload as AidenBotSessionEventPayload.State).view.blocked)
-        val asked = (events.last().payload as AidenBotSessionEventPayload.Question).question
+        assertEquals(null, (events.last().payload as AidenBotSessionEventPayload.Question).question)
+        val asked = (events[events.size - 2].payload as AidenBotSessionEventPayload.Question).question
         assertEquals("5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c", asked?.waitId)
         assertEquals("Blue", asked?.questions?.first()?.options?.first()?.label)
 
