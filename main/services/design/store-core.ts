@@ -37,10 +37,11 @@ import {
   type DesignRunStatus,
   type DesignScreenFrame,
 } from "../../../renderer/shared/design/types.js";
+import type { DesignFailureReason } from "../../../renderer/shared/design/ids.js";
 import { parseDesignProjectManifestV1 } from "./manifest-core.js";
 import { parseDesignTitle } from "./ops-parse.js";
 
-export type DesignStoreErrorCode = "invalid" | "quota" | "busy" | "not_found" | "stale" | "unavailable";
+export type DesignStoreErrorCode = DesignFailureReason;
 
 export class DesignStoreError extends Error {
   constructor(

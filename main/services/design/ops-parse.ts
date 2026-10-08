@@ -1,5 +1,6 @@
 // Exact-shape parsers for renderer-supplied Design Studio payloads.
 import { hasExactKeys, isRecord } from "../../shared/guards.js";
+import { isDesignId } from "../../../renderer/shared/design/ids.js";
 import {
   MAX_DESIGN_CONTEXT_TARGETS,
   MAX_DESIGN_CONTEXT_TARGET_BYTES,
@@ -17,7 +18,6 @@ import {
   type DesignViewport,
 } from "../../../renderer/shared/design/types.js";
 
-const DESIGN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 const TAG_NAME = /^[a-z][a-z0-9-]{0,31}$/u;
 const ELEMENT_ID = /^[A-Za-z0-9._:-]{1,120}$/u;
 const ROLE = /^[a-z][a-z-]{0,63}$/u;
@@ -25,9 +25,7 @@ const COORDINATE_LIMIT = 1_000_000;
 const ASPECTS: ReadonlySet<string> = new Set(["layout", "color", "typography", "content"]);
 
 /** Ids become directory and file names, so dots and slashes are never allowed. */
-export function isDesignId(value: unknown): value is string {
-  return typeof value === "string" && DESIGN_ID.test(value);
-}
+export { isDesignId };
 
 /**
  * True for text that must never reach a title, label or prompt: ASCII and C1 controls, line and

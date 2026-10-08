@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { DESIGN_ID_PATTERN } from "../../../renderer/shared/design/ids.js";
 import { syncDirectory, writeFileAtomic, writeJsonAtomic } from "../durable-fs.js";
 import {
   MAX_DESIGN_MANIFEST_BYTES,
@@ -87,7 +88,7 @@ const LIBRARY_GATE = "#library";
 const DEFAULT_TITLE = "Untitled design";
 const FILE_MODE = 0o600;
 const DIRECTORY_MODE = 0o700;
-const REVISION_FILE = /^([A-Za-z0-9][A-Za-z0-9_-]{0,63})\.html$/u;
+const REVISION_FILE = new RegExp(`^(${DESIGN_ID_PATTERN})\\.html$`, "u");
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");

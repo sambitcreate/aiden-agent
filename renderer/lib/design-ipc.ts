@@ -6,11 +6,17 @@
 // DesignIpcError, and turns any response with an unknown shape into the same
 // typed error, so callers never receive an unchecked payload.
 import { invoke, onNotification } from "./ipc-bridge";
+import {
+  DESIGN_FAILURE_REASONS,
+  DESIGN_PROJECT_HEALTH,
+  DESIGN_RUN_STATUSES,
+  isDesignId,
+  type DesignFailureReason,
+} from "../shared/design/ids";
 import type {
   DesignDeletePreview,
   DesignMutateResult,
   DesignPreviewTheme,
-  DesignProjectHealth,
   DesignProjectOp,
   DesignProjectSnapshot,
   DesignProjectSummary,
@@ -21,7 +27,7 @@ import type {
   DesignRunStatus,
 } from "../shared/design/types";
 
-export type DesignIpcFailureReason = "invalid" | "quota" | "busy" | "not_found" | "stale" | "unavailable";
+export type DesignIpcFailureReason = DesignFailureReason;
 
 /** A refused or unrecognized Design Studio call. `reason` is "unexpected" for an unknown shape. */
 export class DesignIpcError extends Error {
@@ -34,35 +40,16 @@ export class DesignIpcError extends Error {
   }
 }
 
-const DESIGN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
-const FAILURE_REASONS: ReadonlySet<string> = new Set<DesignIpcFailureReason>([
-  "invalid",
-  "quota",
-  "busy",
-  "not_found",
-  "stale",
-  "unavailable",
-]);
+const FAILURE_REASONS: ReadonlySet<string> = new Set(DESIGN_FAILURE_REASONS);
 const MUTATE_REFUSAL_REASONS: ReadonlySet<string> = new Set<string>(["stale", "quota", "invalid", "busy"]);
-const RUN_STATUSES: ReadonlySet<string> = new Set<DesignRunStatus>([
-  "running",
-  "complete",
-  "partial",
-  "cancelled",
-  "interrupted",
-  "failed",
-]);
-const PROJECT_HEALTH: ReadonlySet<string> = new Set<DesignProjectHealth>(["ok", "unreadable", "interrupted"]);
+const RUN_STATUSES: ReadonlySet<string> = new Set(DESIGN_RUN_STATUSES);
+const PROJECT_HEALTH: ReadonlySet<string> = new Set(DESIGN_PROJECT_HEALTH);
 const MAX_ACCEPTED_REVISIONS = 4;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function isDesignId(value: unknown): value is string {
-  return typeof value === "string" && DESIGN_ID.test(value);
 }
 
 function isCount(value: unknown): value is number {

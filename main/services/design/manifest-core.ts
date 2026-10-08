@@ -1,6 +1,7 @@
 // The one Design Studio manifest schema. There is no migration code: later
 // phases add only optional fields, and the parser learns each one then.
 import { hasExactKeys, isRecord } from "../../shared/guards.js";
+import { DESIGN_RUN_STATUSES } from "../../../renderer/shared/design/ids.js";
 import {
   MAX_DESIGN_REVISION_BYTES,
   MAX_DESIGN_REVISIONS_PER_PROJECT,
@@ -29,7 +30,7 @@ import {
 } from "./ops-parse.js";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
-const RUN_STATUSES = new Set(["running", "complete", "partial", "cancelled", "interrupted", "failed"]);
+const RUN_STATUSES: ReadonlySet<string> = new Set(DESIGN_RUN_STATUSES);
 const RUN_END_REASONS = new Set(["stopped", "provider_failed", "host_failed", "interrupted", "short"]);
 const REVISION_STATES = new Set(["draft", "published", "missing"]);
 
