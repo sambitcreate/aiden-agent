@@ -5,15 +5,15 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 // open (bots:list fails with "Bot bootstrap marker could not be updated"). Only
 // the Bot IPC is substituted, as in guided-setup.spec.ts; the onboarding,
 // navigation, carousel, chat route and composer are the shipped renderer.
-// A Bot turn cannot post an ask_user_question card yet: the durable Bot runtime
-// does not offer that tool, so this flow ends at the sent message and the reply
-// the live events stream back.
-test("an empty Bots list opens a starter Bot chat and sends the message to it", async ({ aiden }) => {
+// The turn streams back as live events from main, then the Bot asks a
+// quick-reply question the way the durable runtime publishes a waiting
+// ask_user_question card.
+test("an empty Bots list opens a starter Bot chat, sends to it, and answers its quick-reply card", async ({ aiden }) => {
   const { page } = aiden;
   const bot = botFixture({ id: "bot-chief", name: "Chief of Staff", description: "Keeps your week on track" });
   await finishLmStudioOnboarding(page);
   await aiden.app.evaluate(({ ipcMain }, fixture) => {
-    const state = { created: false, sends: [] as unknown[] };
+    const state = { created: false, sends: [] as unknown[], answers: [] as unknown[] };
     (globalThis as unknown as { botStarterE2e: typeof state }).botStarterE2e = state;
     for (const channel of [
       "bots:list",
@@ -24,6 +24,7 @@ test("an empty Bots list opens a starter Bot chat and sends the message to it", 
       "bots:getCanonicalPhoto",
       "bots:pendingApprovals",
       "bots:send",
+      "bots:answerQuestion",
     ]) ipcMain.removeHandler(channel);
     const idle = { botId: fixture.id, preview: null, updatedAt: null, state: { kind: "idle" } };
     ipcMain.handle("bots:list", () => (state.created ? [fixture] : []));
@@ -32,7 +33,7 @@ test("an empty Bots list opens a starter Bot chat and sends the message to it", 
       state.created = true;
       return { bot: fixture, created: true };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null }));
     ipcMain.handle("bots:live:summary", () => idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
@@ -54,6 +55,10 @@ test("an empty Bots list opens a starter Bot chat and sends the message to it", 
         push(6, { type: "state", state: { kind: "idle" } });
       }, 50);
       return { submissionId: "s-1", deduped: false };
+    });
+    ipcMain.handle("bots:answerQuestion", (_event, input: unknown) => {
+      state.answers.push(input);
+      return { answered: true };
     });
   }, bot);
 
@@ -81,4 +86,50 @@ test("an empty Bots list opens a starter Bot chat and sends the message to it", 
   // The streamed turn renders from the live events: the question and the Bot's reply.
   await expect(page.getByText("Start with your 10am review.")).toBeVisible();
   await expect(page.getByText(question, { exact: true })).toBeVisible();
+
+  // The Bot asks an A–E question: the card takes the composer's place.
+  await aiden.app.evaluate(({ BrowserWindow }, botId) => {
+    const question = {
+      question: "Which area matters most this week?",
+      header: "Focus",
+      multiSelect: false,
+      options: [
+        { label: "Work", description: "Meetings and deadlines." },
+        { label: "Family", description: "Plans at home." },
+      ],
+    };
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("bots:live:event", {
+        botId,
+        epoch: "e1",
+        seq: 7,
+        type: "question",
+        question: { botId, waitId: "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c", toolCallId: "call-1", questions: [question] },
+      });
+    }
+  }, bot.id);
+  await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
+  await expect(composer).toBeHidden();
+  await page.getByRole("button", { name: /Family/u }).click();
+
+  await expect
+    .poll(() =>
+      aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { answers: unknown[] } }).botStarterE2e.answers.length),
+    )
+    .toBe(1);
+  const answers = await aiden.app.evaluate(
+    () => (globalThis as unknown as { botStarterE2e: { answers: unknown[] } }).botStarterE2e.answers,
+  );
+  expect(answers).toEqual([
+    {
+      botId: "bot-chief",
+      waitId: "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c",
+      answer: {
+        version: 1,
+        promptId: "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c",
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "option", answer: "Family" }],
+      },
+    },
+  ]);
 });

@@ -24,6 +24,12 @@ interface AidenBotSessionTransport {
     suspend fun resume(botId: String, key: UUID): AidenBotSessionStateView
     suspend fun dismiss(botId: String, key: UUID): AidenBotSessionStateView
     suspend fun stop(botId: String, key: UUID): AidenBotSessionStateView
+    suspend fun answerQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        key: UUID
+    ): AidenBotQuestionAnswerReceipt
     suspend fun requestConnection(botId: String, pluginId: String, key: UUID): AidenBotConnectionRequestReceipt
 }
 
@@ -34,6 +40,12 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
     override suspend fun resume(botId: String, key: UUID) = client.resumeBotSession(botId, key)
     override suspend fun dismiss(botId: String, key: UUID) = client.dismissBotSession(botId, key)
     override suspend fun stop(botId: String, key: UUID) = client.stopBotSession(botId, key)
+    override suspend fun answerQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        key: UUID
+    ) = client.answerBotQuestion(botId, waitId, request, key)
     override suspend fun requestConnection(botId: String, pluginId: String, key: UUID) =
         client.requestBotConnection(botId, pluginId, key)
 }
@@ -88,6 +100,8 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
                 blocked = payload.view.blocked
             )
         )
+        is AidenBotSessionEventPayload.Question ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, question = payload.question))
         AidenBotSessionEventPayload.Closed -> AidenBotSessionEventOutcome.Reconnect
         is AidenBotSessionEventPayload.Snapshot -> AidenBotSessionEventOutcome.Applied(payload.session)
     }
@@ -131,6 +145,7 @@ data class AidenBotSessionUiState(
     val isResuming: Boolean = false,
     val isDismissing: Boolean = false,
     val isStopping: Boolean = false,
+    val isAnsweringQuestion: Boolean = false,
     val actionError: String? = null,
     val connectRequests: Map<String, AidenBotConnectRequestPhase> = emptyMap(),
     /** The Bot's state from the home list, used until the session loads. */
@@ -238,6 +253,8 @@ class AidenBotSessionController(
      * Sends [text]. Nothing is sent while the Bot needs an AI model or another send is in
      * flight. A failed send keeps its key, so retrying the same text cannot post twice.
      */
+    private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
+
     suspend fun send(text: String): Boolean {
         val trimmed = text.trim()
         val current = _state.value
@@ -287,6 +304,43 @@ class AidenBotSessionController(
         mark = { s, v -> s.copy(isStopping = v) },
         call = { key -> transport.stop(botId, key) }
     )
+
+    /**
+     * Answers the waiting A–E question once. A failed answer keeps its key, so retrying the
+     * same answer replays the Mac's receipt instead of answering twice; a different answer
+     * gets a new key. A second tap while one is in flight sends nothing.
+     */
+    suspend fun answerQuestion(response: AidenQuestionRespondRequest): Boolean {
+        val question = _state.value.session?.question ?: return false
+        if (_state.value.isAnsweringQuestion) return false
+        val action = "$ANSWER_QUESTION:${question.waitId}"
+        if (pendingAnswer != action to response) {
+            keys.complete(action)
+            pendingAnswer = action to response
+        }
+        _state.update { it.copy(isAnsweringQuestion = true, actionError = null) }
+        return try {
+            transport.answerQuestion(botId, question.waitId, response, keys.key(action))
+            keys.complete(action)
+            pendingAnswer = null
+            _state.update { current ->
+                val session = current.session
+                if (session?.question?.waitId == question.waitId) {
+                    current.copy(session = session.copy(question = null))
+                } else {
+                    current
+                }
+            }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _state.update { it.copy(actionError = "Aiden couldn’t send that answer. Try again.") }
+            false
+        } finally {
+            _state.update { it.copy(isAnsweringQuestion = false) }
+        }
+    }
 
     suspend fun requestConnection(pluginId: String) {
         val phase = _state.value.connectRequests[pluginId]
@@ -348,6 +402,7 @@ class AidenBotSessionController(
         const val RESUME = "resume"
         const val DISMISS = "dismiss"
         const val STOP = "stop"
+        const val ANSWER_QUESTION = "answerQuestion"
     }
 }
 

@@ -87,8 +87,15 @@ class AidenBotRevision25ContractTest {
         assertEquals(AidenBotSessionState.NEEDS_MODEL, needsModel.state)
 
         val events = roundTrip(ListSerializer(AidenBotSessionEvent.serializer()), fixture.getValue("botSessionEvents"))
-        assertEquals(listOf("snapshot", "partial", "entry", "state", "closed", "state"), events.map { it.type })
+        assertEquals(
+            listOf("snapshot", "partial", "entry", "state", "closed", "state", "question", "question"),
+            events.map { it.type }
+        )
         assertEquals(AidenBotSessionBlock.ACCESS_CHANGED, (events[3].payload as AidenBotSessionEventPayload.State).view.blocked)
+        assertEquals(null, (events.last().payload as AidenBotSessionEventPayload.Question).question)
+        val asked = (events[events.size - 2].payload as AidenBotSessionEventPayload.Question).question
+        assertEquals("5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c", asked?.waitId)
+        assertEquals("Blue", asked?.questions?.first()?.options?.first()?.label)
 
         roundTrip(AidenBotSessionSendRequest.serializer(), pair("botSessionSend", "request"))
         assertFalse(roundTrip(AidenBotSessionSendResponse.serializer(), pair("botSessionSend", "response")).deduped)
@@ -96,6 +103,12 @@ class AidenBotRevision25ContractTest {
             roundTrip(AidenBotEmptyRequest.serializer(), pair(key, "request"))
             roundTrip(AidenBotSessionStateView.serializer(), pair(key, "response"))
         }
+        val answer = AidenQuestionContractCodec.parseRespondRequest(pair("botSessionQuestionAnswer", "request"))
+        assertEquals(listOf(AidenQuestionAnswer.Option(0, "Blue")), answer.answers)
+        assertEquals(
+            "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c",
+            roundTrip(AidenBotQuestionAnswerReceipt.serializer(), pair("botSessionQuestionAnswer", "response")).waitId
+        )
     }
 
     @Test

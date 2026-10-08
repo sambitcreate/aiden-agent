@@ -2775,6 +2775,12 @@ private enum AidenBotPrivateResponseValidator {
         root: String,
         parentPath: [String]
     ) -> Bool {
+        // A waiting question's `header` is the card's short label, not an HTTP header.
+        if key == "header",
+           ["botSession", "botSessionNeedsModel", "botSessionEvents"].contains(root),
+           Array(parentPath.suffix(3)) == ["question", "questions", "[]"] {
+            return true
+        }
         if key == "reasoning", root == "regularChat", parentPath == ["messages", "[]"] {
             return true
         }

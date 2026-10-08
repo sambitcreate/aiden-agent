@@ -68,7 +68,30 @@ export function shouldEnableAskUserQuestionExtension(
   );
 }
 
-function formatResult(
+/** The `questions` argument, shared by the desktop/paired-device tool and the Bot tool. */
+export function askUserQuestionsSchema() {
+  return Type.Array(
+    Type.Object({
+      question: Type.String({ minLength: 1, maxLength: 1_000 }),
+      header: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_HEADER_LENGTH }),
+      options: Type.Array(
+        Type.Object({
+          label: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_LABEL_LENGTH }),
+          description: Type.String({
+            minLength: 1,
+            maxLength: ASK_USER_MAX_DESCRIPTION_LENGTH,
+          }),
+        }),
+        { minItems: ASK_USER_MIN_OPTIONS, maxItems: ASK_USER_MAX_OPTIONS },
+      ),
+      multiSelect: Type.Optional(Type.Boolean({ default: false })),
+    }),
+    { minItems: 1, maxItems: ASK_USER_MAX_QUESTIONS },
+  );
+}
+
+/** The model-facing tool result for one answered, skipped, cancelled or expired questionnaire. */
+export function formatAskUserQuestionResponse(
   questions: readonly AskUserQuestionV1[],
   response: AskUserQuestionResponseV1,
 ): string {
@@ -100,24 +123,7 @@ export function createAskUserQuestionExtension(options: {
       // or cancelled before another questionnaire can be published.
       executionMode: "sequential" as const,
       parameters: Type.Object({
-        questions: Type.Array(
-          Type.Object({
-            question: Type.String({ minLength: 1, maxLength: 1_000 }),
-            header: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_HEADER_LENGTH }),
-            options: Type.Array(
-              Type.Object({
-                label: Type.String({ minLength: 1, maxLength: ASK_USER_MAX_LABEL_LENGTH }),
-                description: Type.String({
-                  minLength: 1,
-                  maxLength: ASK_USER_MAX_DESCRIPTION_LENGTH,
-                }),
-              }),
-              { minItems: ASK_USER_MIN_OPTIONS, maxItems: ASK_USER_MAX_OPTIONS },
-            ),
-            multiSelect: Type.Optional(Type.Boolean({ default: false })),
-          }),
-          { minItems: 1, maxItems: ASK_USER_MAX_QUESTIONS },
-        ),
+        questions: askUserQuestionsSchema(),
         timeoutSeconds: Type.Optional(
           Type.Integer({
             minimum: ASK_USER_MIN_TIMEOUT_SECONDS,
@@ -135,7 +141,7 @@ export function createAskUserQuestionExtension(options: {
         );
         const response = await options.request(toolCallId, questions, signal, timeoutSeconds);
         return {
-          content: [{ type: "text", text: formatResult(questions, response) }],
+          content: [{ type: "text", text: formatAskUserQuestionResponse(questions, response) }],
           details: null,
         };
       },

@@ -4470,3 +4470,75 @@ test("forking is advertised with the host wiring and needs a revision and an ide
     await summary.close();
   }
 });
+
+test("the Bot question answer route passes its waitId, request key and answer through", async () => {
+  const seen: string[] = [];
+  const session = {
+    supportsRoutines: true,
+    supportsPresets: true,
+    supportsConnectionRequests: true,
+    answerQuestion: async (deviceId: string, botId: string, waitId: string, key: string, input: unknown) => {
+      seen.push(`answer:${deviceId.length > 0}:${botId}:${waitId}:${key}:${JSON.stringify(input)}`);
+      return { waitId };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+    botSessions: session,
+  });
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const jsonHeaders = { ...headers, "content-type": "application/json" };
+  const waitId = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c";
+  const answer = { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "Blue" }] };
+  try {
+    const response = await fetch(`${app.base}/bots/bot-1/questions/${waitId}/answer`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "idempotency-key": "answer-request-0001" },
+      body: JSON.stringify(answer),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { waitId });
+    assert.deepEqual(seen, [`answer:true:bot-1:${waitId}:answer-request-0001:${JSON.stringify(answer)}`]);
+
+    // Without an Idempotency-Key the answer is refused before the session service runs.
+    assert.equal((await fetch(`${app.base}/bots/bot-1/questions/${waitId}/answer`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify(answer),
+    })).status, 400);
+    assert.equal(seen.length, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("the Bot question answer route needs Bot write access", async () => {
+  let reached = 0;
+  const session = {
+    supportsRoutines: true,
+    supportsPresets: true,
+    supportsConnectionRequests: true,
+    answerQuestion: async () => {
+      reached += 1;
+      return { waitId: "x" };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const app = await fixture({ capabilities: ["bot:read"], acceptsBotCapabilities: true, botSessions: session });
+  try {
+    const response = await fetch(`${app.base}/bots/bot-1/questions/5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c/answer`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        "idempotency-key": "answer-request-0009",
+      },
+      body: JSON.stringify({ cancelled: true, answers: [] }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(reached, 0, "a read-only device never reaches the Bot");
+  } finally {
+    await app.close();
+  }
+});

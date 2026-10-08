@@ -4,6 +4,7 @@
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { toolLabel } from "../../components/chat-approval-card";
@@ -14,7 +15,8 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
 import { useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
-import type { BotTranscriptEntry } from "../../shared/bot-live";
+import type { BotPendingQuestion, BotTranscriptEntry } from "../../shared/bot-live";
+import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import { BotChatActions, BotChatTitle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
@@ -145,6 +147,17 @@ export function BotApprovalCard({
   );
 }
 
+/** The Bot's pending A–E question as the shared quick-reply composer's prompt. */
+export function questionPrompt(question: BotPendingQuestion): AskUserQuestionPromptV1 {
+  return {
+    version: 1,
+    promptId: question.waitId,
+    streamId: "s-bot",
+    toolCallId: question.toolCallId,
+    questions: question.questions,
+  };
+}
+
 function attachmentText(attachments: readonly Attachment[]): string {
   return attachments
     .filter((attachment) => attachment.kind === "text" && attachment.text)
@@ -231,6 +244,11 @@ function TranscriptEntries({
           />,
         );
         break;
+      case "question_answer":
+        rows.push(
+          <SafeMessageBubble key={entry.id} role="user" content={entry.text} showCopy={false} />,
+        );
+        break;
       case "tool_result":
         break;
     }
@@ -261,6 +279,7 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const connectionSetup = useConnectionSetup(() => live.reload());
   const approvals = useBotApprovals(botId);
+  const [answering, setAnswering] = React.useState(false);
 
   React.useEffect(() => {
     const node = scrollRef.current;
@@ -303,6 +322,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       />
     );
   }
+
+  const question = snapshot.question;
 
   const send = async (
     text: string,
@@ -350,6 +371,18 @@ export function BotChatPane({ botId }: { botId: string }) {
       toast.error(userFacingErrorMessage(error, `Aiden couldn’t dismiss that for ${current.name}.`));
     } finally {
       setPausedBusy(false);
+    }
+  };
+
+  const answerQuestion = async (question: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
+    setAnswering(true);
+    try {
+      const { answered } = await botsApi.answerQuestion(current.id, question.waitId, response);
+      if (!answered) toast.error("That question was already answered or closed.");
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
+    } finally {
+      setAnswering(false);
     }
   };
 
@@ -412,26 +445,36 @@ export function BotChatPane({ botId }: { botId: string }) {
         </div>
       </div>
       <div className="mx-auto w-full max-w-3xl shrink-0 px-2 pb-4">
-        <Composer
-          key={`bot:${current.id}`}
-          ready={!state || state.kind !== "unavailable"}
-          readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
-          hasMessages={snapshot.entries.length > 0}
-          chatId={`bot:${current.id}`}
-          placeholder={`Ask ${current.name}`}
-          onSend={(text, attachments) => send(text, attachments)}
-          onQueue={(text, attachments) => send(text, attachments, "followUp")}
-          onSteer={(text, attachments) => send(text, attachments, "steer")}
-          onStop={() => {
-            void botsApi.stop(current.id).catch((error) => {
-              toast.error(userFacingErrorMessage(error, `Aiden couldn’t stop ${current.name}.`));
-            });
-          }}
-          isGenerating={running}
-          canStopGeneration={running}
-          inputRef={composerRef}
-          surfaces={BOT_CHAT_COMPOSER_SURFACES}
-        />
+        {/* A waiting A–E question takes the composer's place, as in workspace chats. */}
+        {question ? (
+          <AskUserQuestionComposer
+            key={question.waitId}
+            prompt={questionPrompt(question)}
+            submitting={answering}
+            onRespond={(response) => answerQuestion(question, response)}
+          />
+        ) : (
+          <Composer
+            key={`bot:${current.id}`}
+            ready={!state || state.kind !== "unavailable"}
+            readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
+            hasMessages={snapshot.entries.length > 0}
+            chatId={`bot:${current.id}`}
+            placeholder={`Ask ${current.name}`}
+            onSend={(text, attachments) => send(text, attachments)}
+            onQueue={(text, attachments) => send(text, attachments, "followUp")}
+            onSteer={(text, attachments) => send(text, attachments, "steer")}
+            onStop={() => {
+              void botsApi.stop(current.id).catch((error) => {
+                toast.error(userFacingErrorMessage(error, `Aiden couldn’t stop ${current.name}.`));
+              });
+            }}
+            isGenerating={running}
+            canStopGeneration={running}
+            inputRef={composerRef}
+            surfaces={BOT_CHAT_COMPOSER_SURFACES}
+          />
+        )}
       </div>
       <BotDeleteDialog bot={current} open={deleteOpen} onOpenChange={setDeleteOpen} />
       {connectionSetup.dialog}

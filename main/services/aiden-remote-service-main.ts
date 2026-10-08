@@ -118,6 +118,7 @@ import {
   AidenRemoteBotSessionService,
   projectBotSessionState,
 } from "./aiden-remote-bot-session.js";
+import { botQuestions } from "./bot-runtime/bot-questions-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
 import {
@@ -857,6 +858,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   return botSessionRuntime();
                 },
                 routines: botRoutineService,
+                questions: botQuestions,
                 presets: {
                   list: () => BOT_PRESETS,
                   // The one process-wide starter the desktop uses: a Mac tap and a

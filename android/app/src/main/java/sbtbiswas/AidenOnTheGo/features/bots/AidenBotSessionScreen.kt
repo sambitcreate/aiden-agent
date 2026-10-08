@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.features.chat.AidenQuestionCard
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
@@ -43,6 +44,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
+import java.time.Instant
 
 /** The glyph a connect card or preset chip shows for a host `iconId`. */
 enum class AidenBotConnectionGlyph(val icon: ImageVector) {
@@ -273,6 +275,21 @@ fun AidenBotSessionScreen(
                             onResume = { scope.launch { controller.resume() } },
                             onDismiss = { scope.launch { controller.dismiss() } },
                             onOpenAdvanced = ::openAdvanced
+                        )
+                    }
+                }
+                ui.session?.question?.let { question ->
+                    item(key = "question-${question.waitId}") {
+                        // The Bot's A–E quick replies. A Bot question has no deadline.
+                        AidenQuestionCard(
+                            prompt = AidenPendingQuestion(
+                                id = question.waitId,
+                                questions = question.questions,
+                                expiresAt = Instant.MAX,
+                                canRespond = true
+                            ),
+                            enabled = !ui.isAnsweringQuestion && !ui.needsModel,
+                            onSubmit = { request -> scope.launch { controller.answerQuestion(request) } }
                         )
                     }
                 }

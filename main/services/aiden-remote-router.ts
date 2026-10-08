@@ -259,6 +259,7 @@ export interface AidenRemoteRouterDependencies {
     | "resume"
     | "dismiss"
     | "stop"
+    | "answerQuestion"
     | "listRoutines"
     | "createRoutine"
     | "updateRoutine"
@@ -333,6 +334,7 @@ export type AidenRemoteRouteLabel =
   | "bot"
   | "botSession"
   | "botSessionEvents"
+  | "botQuestionAnswer"
   | "botRoutines"
   | "botConnectionRequests"
   | "botPresets"
@@ -411,6 +413,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/bots/:botId/stop",
   ],
   botSessionEvents: ["/bots/:botId/session/events"],
+  botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
   botConnectionRequests: ["/bots/:botId/connection-requests"],
   botPresets: ["/bot-presets"],
@@ -2117,6 +2120,28 @@ export function createAidenRemoteRequestHandler(
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         writeJson(response, 200, await botSessionsOrNotFound(dependencies).dismiss(device.id, botDismissMatch[1]!, key, body));
+        return;
+      }
+      const botQuestionAnswerMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/questions\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
+      if (botQuestionAnswerMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botQuestionAnswer";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read"]);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await botSessionsOrNotFound(dependencies).answerQuestion(
+            device.id,
+            botQuestionAnswerMatch[1]!,
+            botQuestionAnswerMatch[2]!,
+            key,
+            body,
+          ),
+        );
         return;
       }
       const botStopMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/stop$/u.exec(path);

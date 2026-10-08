@@ -43,6 +43,11 @@ export interface BotToolCandidate {
   /** A connection (MCP) tool: never replay-safe. */
   mcp?: boolean;
   bind?: (call: BotToolCall) => AgentTool;
+  /**
+   * The call waits on the person (a question card). It holds no authority
+   * admission while it waits, so it runs unfenced.
+   */
+  interactive?: true;
 }
 
 export interface BotCandidateSet {
@@ -119,15 +124,17 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const facts = await ports.sources.facts(botId, admission);
         const set = await ports.sources.candidates(botId, admission, facts, turn);
         const telegram = isTelegramTurn(turn);
+        const routine = turn.requestId?.startsWith("routine:") ?? false;
         const entries: BotToolEntry[] = [];
         for (const candidate of set.tools) {
-          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram })).allowed) continue;
+          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine })).allowed) continue;
           const bind = candidate.bind;
+          const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool));
           entries.push({
-            tool: fenced(botId, candidate.tool),
+            tool: guard(candidate.tool),
             replay: replayOf(candidate),
             ...(candidate.mcp ? { mcp: true } : {}),
-            ...(bind === undefined ? {} : { bind: (call: BotToolCall) => fenced(botId, bind(call)) }),
+            ...(bind === undefined ? {} : { bind: (call: BotToolCall) => guard(bind(call)) }),
           });
         }
         offered.set(botId, {

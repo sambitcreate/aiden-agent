@@ -7,6 +7,10 @@
 //   close, restart, corrupt-file reset) always reaches clients as a new epoch.
 // - Send, Resume, Dismiss and Stop are idempotent per request UUID through the
 //   shared Bot idempotency ledger; the UUID is also the session `requestId`.
+// - A waiting A–E question is the snapshot's `question` and a `question` frame,
+//   published through the same serialized projection as entries and state.
+//   Answering it is idempotent per request UUID; another UUID for a question
+//   that is no longer waiting is `question_expired`.
 // - Routines, connection requests and starter presets call their main services.
 
 import { randomUUID } from "node:crypto";
@@ -36,12 +40,15 @@ import {
   parseAidenRemoteBotRoutineUpdateRequest,
   parseAidenRemoteBotPresetCreateRequest,
   parseAidenRemoteBotPresetList,
+  parseAidenRemoteBotQuestionAnswerRequest,
   parseAidenRemoteBotSession,
   parseAidenRemoteEmptyRequest,
   type AidenRemoteBotConnectionRequestReceipt,
   type AidenRemoteBotMessageReceipt,
   type AidenRemoteBotPresetCreateResult,
   type AidenRemoteBotPresetList,
+  type AidenRemoteBotQuestion,
+  type AidenRemoteBotQuestionAnswerReceipt,
   type AidenRemoteBotRoutine,
   type AidenRemoteBotRoutineList,
   type AidenRemoteBotSession,
@@ -52,6 +59,7 @@ import {
   type AidenRemoteBotSummary,
 } from "./aiden-remote-protocol.js";
 import { openCursorSse, sseFrame, type CursorSseHandle } from "./aiden-remote-sse.js";
+import type { BotQuestions } from "./bot-runtime/bot-questions.js";
 import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import { livePartialText, projectBotTranscript } from "./bot-runtime/live-projection.js";
 import {
@@ -92,6 +100,8 @@ export interface AidenRemoteBotSessionServiceOptions {
     ): Promise<Result>;
   };
   runtime(): Promise<AidenRemoteBotSessionRuntime>;
+  /** The Bot's waiting A–E questions (the same bridge the desktop answers through). */
+  questions?: Pick<BotQuestions, "pending" | "answer" | "onChange">;
   routines?: Pick<BotRoutineService, "list" | "create" | "update" | "delete">;
   presets?: {
     list(): readonly BotPreset[];
@@ -199,6 +209,12 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
         });
         break;
       }
+      case "question_answer": {
+        // The person's choice on a quick-reply card reads as their message.
+        const createdAt = isoOf(entry.at);
+        output.push({ type: "message", id, role: "user", text: bounded(entry.text), ...(createdAt ? { createdAt } : {}) });
+        break;
+      }
       case "notice":
         if (entry.notice === "session_reset") {
           output.push({ type: "notice", id, notice: "session_reset" });
@@ -277,6 +293,7 @@ class BotLiveProjector {
   entries: AidenRemoteBotSessionEntry[] = [];
   partial: string | undefined;
   state: AidenRemoteBotSessionStateView = { state: "idle", interrupted: false };
+  question: AidenRemoteBotQuestion | null = null;
   readonly subscribers = new Set<Subscriber>();
   private view: ConversationView | undefined;
   private stopWatch: (() => Promise<unknown>) | undefined;
@@ -290,6 +307,7 @@ class BotLiveProjector {
     private readonly resolveEntries: (entries: AidenRemoteBotSessionEntry[]) => Promise<AidenRemoteBotSessionEntry[]>,
     private readonly idleMs: number,
     private readonly onClosed: () => void,
+    private readonly readQuestion: () => AidenRemoteBotQuestion | null = () => null,
   ) {}
 
   async attach(conversation: Conversation): Promise<void> {
@@ -299,6 +317,7 @@ class BotLiveProjector {
     this.entries = await this.resolveEntries(projectBotSessionEntries(watch.value.entries));
     this.partial = projectBotSessionPartial(watch.value);
     this.state = await this.readState();
+    this.question = this.readQuestion();
     watch.start(async (view) => {
       await this.advance(view);
     });
@@ -314,6 +333,7 @@ class BotLiveProjector {
       ...this.state,
       ...(this.partial !== undefined ? { partial: this.partial } : {}),
       ...windowed(this.entries),
+      question: this.question,
     });
   }
 
@@ -388,6 +408,7 @@ class BotLiveProjector {
     const next = await this.resolveEntries(projectBotSessionEntries(view.entries));
     const partial = projectBotSessionPartial(view);
     const state = await this.readState().catch(() => this.state);
+    const question = this.readQuestion();
     if (this.closed) return;
 
     const previous = this.entries;
@@ -403,6 +424,7 @@ class BotLiveProjector {
     if (rewritten) {
       this.partial = partial;
       this.state = state;
+      this.question = question;
       this.seq += 1;
       this.broadcast(this.snapshotFrame());
       return;
@@ -420,6 +442,10 @@ class BotLiveProjector {
     if (JSON.stringify(state) !== JSON.stringify(this.state)) {
       this.state = state;
       this.frame({ type: "state", payload: state });
+    }
+    if (question?.waitId !== this.question?.waitId) {
+      this.question = question;
+      this.frame({ type: "question", payload: { question } });
     }
   }
 
@@ -544,7 +570,12 @@ export class AidenRemoteBotSessionService {
   private readonly projectors = new Map<string, Promise<BotLiveProjector>>();
   private readonly subscriptions = new Map<string, Set<CursorSseHandle>>();
 
-  constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {}
+  constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
+    // A question asked or settled is published in order with entries and state.
+    options.questions?.onChange((botId) => {
+      void this.projectors.get(botId)?.then((projector) => projector.refresh(), () => undefined);
+    });
+  }
 
   get supportsRoutines(): boolean {
     return Boolean(this.options.routines);
@@ -560,6 +591,62 @@ export class AidenRemoteBotSessionService {
 
   private async stateView(botId: string): Promise<AidenRemoteBotSessionStateView> {
     return projectBotSessionState(await (await this.options.runtime()).state(botId));
+  }
+
+  /** The Bot's one waiting question, in the wire shape. */
+  private questionOf(botId: string): AidenRemoteBotQuestion | null {
+    const prompt = this.options.questions?.pending(botId)[0];
+    return prompt === undefined
+      ? null
+      : { waitId: prompt.waitId, toolCallId: prompt.toolCallId, questions: prompt.questions };
+  }
+
+  private questionService() {
+    if (!this.options.questions) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    return this.options.questions;
+  }
+
+  /**
+   * Answer the Bot's waiting question. Idempotent per request UUID: a repeat
+   * gets the same receipt. An answer the question does not accept is
+   * `invalid_request`; a question that is no longer waiting is `question_expired`.
+   */
+  async answerQuestion(
+    deviceId: string,
+    botId: string,
+    waitId: string,
+    key: string,
+    input: unknown,
+  ): Promise<AidenRemoteBotQuestionAnswerReceipt> {
+    const questions = this.questionService();
+    const parsed = parseOrInvalid(parseAidenRemoteBotQuestionAnswerRequest, input, "The question answer is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    try {
+      return await this.options.bots.executeIdempotent(
+        { deviceId, route: "POST /bots/{id}/questions/{waitId}/answer", resourceId: `${bot.id}:${waitId}`, key },
+        { waitId, ...parsed },
+        async () => {
+          const outcome = questions.answer(bot.id, waitId, {
+            version: 1,
+            promptId: waitId,
+            cancelled: parsed.cancelled,
+            answers: parsed.answers,
+          });
+          if (outcome === "invalid") {
+            throw new AidenRemoteServiceError("invalid_request", "The answer does not match the question.", 400);
+          }
+          if (outcome === "not_waiting") {
+            throw new AidenRemoteServiceError("question_expired", "This question prompt is no longer available.", 409);
+          }
+          return { waitId };
+        },
+      );
+    } catch (error) {
+      if (error instanceof AidenRemoteServiceError) throw error;
+      return mapSessionError(error);
+    }
   }
 
   /** Pending connect cards show what is true now (connected, or Not now). */
@@ -591,6 +678,7 @@ export class AidenRemoteBotSessionService {
         () => {
           if (this.projectors.get(botId) === created) this.projectors.delete(botId);
         },
+        () => this.questionOf(botId),
       );
       await projector.attach(conversation);
       return projector;
@@ -615,7 +703,7 @@ export class AidenRemoteBotSessionService {
       if (state.state === "unavailable") {
         // Bots are held by another Aiden process: nothing can be opened.
         return parseAidenRemoteBotSession({
-          botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false,
+          botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false, question: null,
         });
       }
       const projector = await this.liveProjector(bot.id);

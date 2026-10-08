@@ -1453,6 +1453,33 @@ class AidenRemoteClient(
     suspend fun stopBotSession(botId: String, idempotencyKey: UUID): AidenBotSessionStateView =
         botSessionControl(botId, "stop", idempotencyKey)
 
+    /**
+     * Answers the Bot's waiting A–E question. The request UUID is the idempotency key,
+     * so a retried answer replays the same receipt.
+     */
+    suspend fun answerBotQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ): AidenBotQuestionAnswerReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotWire.validateIdentifier(waitId, "waitId", 64)
+        return executeRequest(
+            "/bots/$botId/questions/$waitId/answer",
+            method = "POST",
+            bodyJson = request.toJson().toString(),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botSessionQuestionAnswer")
+        ) { bytes ->
+            val receipt = botJson.decodeFromString(AidenBotQuestionAnswerReceipt.serializer(), String(bytes, Charsets.UTF_8))
+            if (receipt.waitId != waitId) throw AidenRemoteClientException.InvalidResponse()
+            receipt
+        }
+    }
+
     private suspend fun botSessionControl(botId: String, action: String, idempotencyKey: UUID): AidenBotSessionStateView {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         return executeRequest(

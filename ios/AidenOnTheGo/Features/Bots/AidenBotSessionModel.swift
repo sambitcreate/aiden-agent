@@ -55,6 +55,12 @@ protocol AidenBotSessionTransport: Sendable {
     func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
     func dismissBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
     func stopBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
+    func answerBotQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotQuestionAnswerReceipt
     func requestBotConnection(
         botId: String,
         request: AidenBotConnectionRequest,
@@ -100,7 +106,7 @@ func aidenBotSessionFailureIsAmbiguous(_ error: Error) -> Bool {
 @Observable
 final class AidenBotSessionModel {
     enum Action: Hashable, Sendable {
-        case send, resume, dismiss, stop
+        case send, resume, dismiss, stop, answerQuestion
     }
 
     let botID: String
@@ -109,6 +115,8 @@ final class AidenBotSessionModel {
     private(set) var entries: [AidenBotSessionEntry] = []
     private(set) var partial: String?
     private(set) var stateView: AidenBotSessionStateView?
+    /// The A–E question the Bot is waiting on, or nil.
+    private(set) var question: AidenRemoteBotQuestion?
     private(set) var epoch: String?
     private(set) var seq = 0
     private(set) var hasLoaded = false
@@ -118,6 +126,7 @@ final class AidenBotSessionModel {
 
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
     @ObservationIgnored private var retainedMessage: (text: String, key: UUID)?
+    @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     @ObservationIgnored private var connectionKeys: [String: UUID] = [:]
 
     init(botID: String, transport: any AidenBotSessionTransport) {
@@ -221,6 +230,8 @@ final class AidenBotSessionModel {
             }
         case let .state(view):
             stateView = view
+        case let .question(next):
+            question = next
         case .closed:
             return .closed
         }
@@ -246,7 +257,45 @@ final class AidenBotSessionModel {
         entries = session.entries
         partial = session.partial.flatMap { $0.isEmpty ? nil : $0 }
         stateView = session.stateView
+        question = session.question
         hasLoaded = true
+    }
+
+    // MARK: Quick-reply questions
+
+    var canAnswerQuestion: Bool {
+        hasLoaded && question != nil && !needsModel && !inFlight.contains(.answerQuestion)
+    }
+
+    /// Answers the waiting question. The request UUID is kept across an ambiguous
+    /// failure, so retrying the same answer replays the Mac's receipt instead of
+    /// answering twice; a different answer is a new request.
+    func answerQuestion(_ response: AidenQuestionRespondRequest) async {
+        guard canAnswerQuestion, let waitId = question?.waitId else { return }
+        let key: UUID
+        if let retainedQuestion, retainedQuestion.waitId == waitId, retainedQuestion.request == response {
+            key = retainedQuestion.key
+        } else {
+            key = UUID()
+            retainedQuestion = (waitId, response, key)
+        }
+        inFlight.insert(.answerQuestion)
+        defer { inFlight.remove(.answerQuestion) }
+        do {
+            _ = try await transport.answerBotQuestion(
+                botId: botID,
+                waitId: waitId,
+                request: response,
+                idempotencyKey: key
+            )
+            retainedQuestion = nil
+            if question?.waitId == waitId { question = nil }
+        } catch is CancellationError {
+            return
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedQuestion = nil }
+            errorMessage = "That answer wasn’t sent. Please try again."
+        }
     }
 
     // MARK: Turn controls

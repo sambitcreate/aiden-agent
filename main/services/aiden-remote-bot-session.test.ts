@@ -17,6 +17,8 @@ import {
   redactRemoteError,
   type AidenRemoteBotSessionRuntime,
 } from "./aiden-remote-bot-session.js";
+import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
+import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { parseAidenRemoteBotSession, parseAidenRemoteBotSessionEvent } from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -212,6 +214,140 @@ test("a session reopened on the host gets a new epoch, so clients refetch instea
   await service.close();
 });
 
+const WAIT_ID = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c";
+const COLOUR: AskUserQuestionV1[] = [
+  {
+    question: "Which colour should the banner use?",
+    header: "Colour",
+    multiSelect: false,
+    options: [
+      { label: "Blue", description: "Calm and cool." },
+      { label: "Red", description: "Loud and warm." },
+    ],
+  },
+];
+const option = (answer: string) => ({ cancelled: false, answers: [{ questionIndex: 0, kind: "option" as const, answer }] });
+
+function questionSession(runtime: AidenRemoteBotSessionRuntime) {
+  const questions = createBotQuestions();
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => runtime,
+    questions,
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+  const ask = (signal?: AbortSignal) => {
+    const asked = questions.request({ botId: BOT_ID, waitId: WAIT_ID, toolCallId: "call_1", questions: COLOUR, signal });
+    asked.catch(() => undefined);
+    return asked;
+  };
+  return { questions, service, ask };
+}
+
+const isError = (code: string, status: number) => (error: { code?: string; status?: number }) =>
+  error.code === code && error.status === status;
+
+test("a question asked and settled while a client watches moves the session forward with it", async () => {
+  const { service, ask, questions } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const before = await service.session(BOT_ID);
+  assert.equal(before.question, null);
+
+  ask();
+  const asked = await service.session(BOT_ID);
+  assert.equal(asked.question?.waitId, WAIT_ID);
+  assert.deepEqual(asked.question?.questions.map((item) => item.options.map((choice) => choice.label)), [["Blue", "Red"]]);
+  assert.equal(asked.seq, before.seq + 1, "the question went out as one frame");
+
+  assert.equal(questions.answer(BOT_ID, WAIT_ID, { version: 1, promptId: WAIT_ID, ...option("Red") }), "answered");
+  const settled = await service.session(BOT_ID);
+  assert.equal(settled.question, null);
+  assert.equal(settled.seq, asked.seq + 1);
+  await service.close();
+});
+
+test("answering is idempotent per request UUID, and a second device's answer is refused", async () => {
+  const { service, ask } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const asked = ask();
+  const [phone, tablet] = await Promise.allSettled([
+    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0001", option("Blue")),
+    service.answerQuestion("device_2", BOT_ID, WAIT_ID, "answer-request-0002", option("Red")),
+  ]);
+  assert.deepEqual(phone, { status: "fulfilled", value: { waitId: WAIT_ID } });
+  assert.equal(tablet.status, "rejected");
+  assert.ok(isError("question_expired", 409)((tablet as PromiseRejectedResult).reason));
+  assert.deepEqual((await asked).answers, option("Blue").answers, "the Bot gets the first answer only");
+
+  assert.deepEqual(
+    await service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0001", option("Blue")),
+    { waitId: WAIT_ID },
+    "a retry with the same request UUID replays the receipt",
+  );
+  await assert.rejects(
+    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0001", option("Red")),
+    "the same request UUID with another answer is not a replay",
+  );
+  await service.close();
+});
+
+test("an answer after the question was withdrawn is refused and records nothing", async () => {
+  const { service, ask, questions } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const controller = new AbortController();
+  const asked = ask(controller.signal);
+  controller.abort(); // Stop, Dismiss, delete or quit
+  await assert.rejects(asked);
+  await assert.rejects(
+    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0004", option("Blue")),
+    isError("question_expired", 409),
+  );
+  assert.deepEqual(questions.pending(), []);
+  await service.close();
+});
+
+test("an answer the question does not accept is invalid and the question keeps waiting", async () => {
+  const { service, ask } = questionSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  ask();
+  for (const [key, body] of [
+    ["answer-request-0005", option("Purple")],
+    ["answer-request-0006", { cancelled: false, answers: [{ questionIndex: 3, kind: "option", answer: "Blue" }] }],
+  ] as const) {
+    await assert.rejects(service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, key, body), isError("invalid_request", 400));
+  }
+  await assert.rejects(
+    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0007", { cancelled: false, answers: [], extra: 1 }),
+    isError("invalid_request", 400),
+    "a malformed body",
+  );
+  await assert.rejects(
+    service.answerQuestion(DEVICE_ID, "bot_missing", WAIT_ID, "answer-request-0008", option("Blue")),
+    "an unknown Bot",
+  );
+  assert.equal((await service.session(BOT_ID)).question?.waitId, WAIT_ID);
+  await service.close();
+});
+
+test("an answered question reads as the person's message; a stopped one shows nothing", () => {
+  const entries = projectBotSessionEntries([
+    {
+      id: 7,
+      kind: "pi.tool-result",
+      model: [{
+        role: "toolResult",
+        toolName: "ask_user_question",
+        isError: false,
+        content: [{ type: "text", text: "1. Which colour should the banner use?\nAnswer: Blue" }],
+        details: { answerText: "Blue" },
+      }],
+    },
+    {
+      id: 8,
+      kind: "pi.tool-result",
+      model: [{ role: "toolResult", toolName: "ask_user_question", isError: true, content: [{ type: "text", text: "aborted" }] }],
+    },
+  ] as never);
+  assert.deepEqual(entries, [{ type: "message", id: "entry_7", role: "user", text: "Blue" }]);
+});
+
 // ---------------------------------------------------------------------------
 // Projection parity, live stream, and edge cases
 // ---------------------------------------------------------------------------
@@ -265,7 +401,7 @@ test("a routine label cut at the wire bound never splits an emoji, so the sessio
     user(2, "Cook something \uD83D"),
   ] as never);
   const session = parseAidenRemoteBotSession({
-    botId: BOT_ID, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries, hasOlder: false,
+    botId: BOT_ID, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries, hasOlder: false, question: null,
   });
   const message = session.entries[0];
   assert.equal(message?.type, "message");

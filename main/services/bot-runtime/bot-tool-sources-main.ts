@@ -44,6 +44,8 @@ import { buildAgentTools } from "../tools.js";
 import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import { shareImageCandidate, visionCandidate } from "./bot-tool-candidates.js";
+import { botQuestionCandidate } from "./bot-question-tool.js";
+import { botQuestions } from "./bot-questions-main.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
 import { SUBAGENT_TOOL } from "./bot-tool-policy.js";
 
@@ -297,6 +299,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         }),
         replay: "unsafe",
       });
+      // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
+      tools.push(botQuestionCandidate(botId, botQuestions));
       return {
         tools,
         guidance: collector.snapshot(),

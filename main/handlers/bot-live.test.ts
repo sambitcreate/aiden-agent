@@ -31,11 +31,20 @@ function fakeProjection() {
     async subscribe(botId, sink) {
       const id = (next += 1);
       sinks.set(id, { botId, sink });
-      const snapshot: BotLiveSnapshot = { botId, epoch: "e1", seq: id, entries: [], partial: null, state: { kind: "idle" } };
+      const snapshot: BotLiveSnapshot = {
+        botId,
+        epoch: "e1",
+        seq: id,
+        entries: [],
+        partial: null,
+        state: { kind: "idle" },
+        question: null,
+      };
       return { snapshot, unsubscribe: () => sinks.delete(id) };
     },
     notifyState: () => undefined,
     refresh: async () => undefined,
+    refreshQuestion: async () => undefined,
     summary: async (botId) => ({ botId, preview: "hi", updatedAt: 1, state: { kind: "idle" } }),
     close: async () => undefined,
   };

@@ -418,6 +418,9 @@ object AidenBotPrivateResponseValidator {
         parentPath: List<String>,
         regularChat: Boolean
     ): Boolean {
+        // A waiting question's `header` is the card's short label, not an HTTP header.
+        if (key == "header" && root in listOf("botSession", "botSessionNeedsModel", "botSessionEvents") &&
+            parentPath.takeLast(3) == listOf("question", "questions", "[]")) return true
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true

@@ -7176,7 +7176,8 @@ private struct AidenApprovalCard: View {
 /// plus a custom-answer field; a non-empty custom draft wins over selections.
 /// Submit requires at least one addressed question; skipping the card resolves
 /// the whole prompt as cancelled.
-private struct AidenQuestionCard: View {
+/// Shared with the Bot session chat (`AidenBotSessionChatView`).
+struct AidenQuestionCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
 
