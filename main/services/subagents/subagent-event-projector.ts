@@ -24,6 +24,8 @@ import {
   type SubagentContextUsageV1,
 } from "../../../renderer/shared/subagent-context-usage.js";
 import type { SubagentTaskRequest, SubagentTaskResult } from "./contracts.js";
+import type { GenerationThinkingLevel } from "../../../renderer/shared/generation-thinking.js";
+import type { SubagentModelSelectionSource } from "../../../renderer/shared/subagent-runs.js";
 import { sanitizeSubagentSnapshotTextWithFacts } from "../../../renderer/shared/subagent-safe-text.js";
 
 const MAX_DURABLE_LIVE_MILESTONES = 4;
@@ -32,6 +34,15 @@ export interface SubagentRunIdentity {
   runId: string;
   groupId: string;
   childId: string;
+}
+
+/** The model one child actually runs with, when per-child selection resolved it. */
+export interface SubagentRunModelProjection {
+  providerId: string;
+  modelId: string;
+  thinkingLevel: GenerationThinkingLevel;
+  modelSelection: SubagentModelSelectionSource;
+  contextWindow?: number;
 }
 
 export interface SubagentRunProjectorInput {
@@ -227,6 +238,7 @@ function stateForResult(result: SubagentTaskResult): SubagentRunState {
 export class SubagentEventProjector {
   private readonly records = new Map<string, SubagentRunSnapshotV1>();
   private readonly durableLiveMilestones = new Map<string, number>();
+  private readonly contextWindows = new Map<string, number | undefined>();
   private readonly now: () => number;
   private persistenceTail: Promise<void> = Promise.resolve();
   private persistenceError: unknown;
@@ -235,7 +247,11 @@ export class SubagentEventProjector {
     this.now = input.now ?? Date.now;
   }
 
-  begin(identity: SubagentRunIdentity, request: SubagentTaskRequest): void {
+  begin(
+    identity: SubagentRunIdentity,
+    request: SubagentTaskRequest,
+    model?: SubagentRunModelProjection,
+  ): void {
     if (this.records.has(identity.runId)) {
       throw new Error("Subagent run identity was reused.");
     }
@@ -248,14 +264,18 @@ export class SubagentEventProjector {
     );
     const label = boundedRequiredSingleLineProjection(request.label, 120, "Subagent task");
     const modelId = boundedRequiredSingleLineProjection(
-      this.input.modelId,
+      model?.modelId ?? this.input.modelId,
       160,
       "Unknown model",
     );
+    const providerId = model
+      ? boundedRequiredSingleLineProjection(model.providerId, 160, "Unknown provider")
+      : undefined;
     const projectionNotices = mergeProjectionNotices(
       undefined,
       taskPreview.truncated && "task_truncated",
-      (taskPreview.displayFiltered || label.displayFiltered || modelId.displayFiltered) &&
+      (taskPreview.displayFiltered || label.displayFiltered || modelId.displayFiltered ||
+        providerId?.displayFiltered === true) &&
         "display_filtered",
     );
     this.publish({
@@ -273,6 +293,13 @@ export class SubagentEventProjector {
       startedAt: now,
       updatedAt: now,
       modelId: modelId.text,
+      ...(model && providerId
+        ? {
+            providerId: providerId.text,
+            thinkingLevel: model.thinkingLevel,
+            modelSelection: model.modelSelection,
+          }
+        : {}),
       turns: 0,
       tools: 0,
       tokens: 0,
@@ -281,6 +308,7 @@ export class SubagentEventProjector {
       warnings: [],
     });
     this.durableLiveMilestones.set(identity.runId, 0);
+    this.contextWindows.set(identity.runId, model ? model.contextWindow : this.input.contextWindow);
   }
 
   starting(runId: string): void {
@@ -435,6 +463,9 @@ export class SubagentEventProjector {
         JSON.stringify(current.projectionNotices ?? []) ||
       control.startedAt !== current.startedAt ||
       control.modelId !== current.modelId ||
+      control.providerId !== current.providerId ||
+      control.thinkingLevel !== current.thinkingLevel ||
+      control.modelSelection !== current.modelSelection ||
       control.updatedAt < current.updatedAt ||
       control.turns < current.turns ||
       control.tools < current.tools ||
@@ -470,7 +501,10 @@ export class SubagentEventProjector {
 
   private publishContextUsage(current: SubagentRunSnapshotV1, reported: number): void {
     if (current.finishedAt !== undefined || !this.input.onContextUsage) return;
-    const usage = subagentContextUsageFromReport(reported, this.input.contextWindow);
+    const usage = subagentContextUsageFromReport(
+      reported,
+      this.contextWindows.has(current.runId) ? this.contextWindows.get(current.runId) : this.input.contextWindow,
+    );
     if (!usage) return;
     try {
       this.input.onContextUsage(current.runId, usage);
