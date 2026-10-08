@@ -78,17 +78,11 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
+  "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkEvaluator.swift",
+  "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkMapping.swift",
+  "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkSpec.swift",
+  "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkView.swift",
   "AidenOnTheGo/Features/Shared/AidenProviderIcon.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Core.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Lattice.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Morph.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/OrbSpec.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Orbits.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Presets.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Snapshot.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Strands.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/ThinkingOrb.swift",
-  "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Web.swift",
   "AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift",
   "AidenOnTheGo/LiveActivities/AidenDeepLink.swift",
   "AidenOnTheGo/LiveActivities/AidenLatestValueThrottle.swift",
@@ -115,6 +109,7 @@ const testSources = [
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotImagePlaygroundTests.swift",
   "AidenBotPrototypeSnapshotTests.swift",
+  "AidenActivityMarkTests.swift",
   "AidenBotCacheTests.swift",
   "AidenChatTests.swift",
   "AidenNativeIntegrationTests.swift",
@@ -1026,7 +1021,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     scheduledTasks,
     /Picker\("Model"[\s\S]*?ForEach\(models\)[\s\S]*?Text\(candidate\.label\)\.tag/u,
   );
-  assert.match(chat, /ThinkingOrb\(state: activity\.orb, size: \.px20\)/u);
+  assert.match(chat, /AidenActivityMark\(mark: activity\.mark, size: 20, color: palette\.foreground\)/u);
   assert.match(
     chat,
     /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\(AidenApprovalPresentation\.title\(for: kind\)\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
@@ -1168,7 +1163,6 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
     "NOTICE.txt",
     "NetworkImage-LICENSE.txt",
     "ProviderLogos-NOTICE.md",
-    "ThinkingOrbs-LICENSE.txt",
     "swift-cmark-COPYING.txt",
   ]);
   assert.match(license, /MIT License/u);
@@ -1179,9 +1173,8 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
   assert.match(notice, /MarkdownUI 2\.4\.1/u);
   assert.match(notice, /NetworkImage 6\.0\.1/u);
   assert.match(notice, /swift-cmark 0\.8\.0/u);
-  assert.match(notice, /Thinking Orbs 0\.3\.1/u);
   assert.match(notice, /Provider logos/u);
-  assert.doesNotMatch(notice, /swift-eventsource|Splash|Highlightr|SwiftMath|Lucide/u);
+  assert.doesNotMatch(notice, /swift-eventsource|Splash|Highlightr|SwiftMath|Lucide|Thinking Orbs/u);
 });
 
 test("the shipping app icon is the reviewed opaque RayChat artwork", async () => {

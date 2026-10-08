@@ -79,7 +79,7 @@ export function BtwCard({
   return (
     <div className="aiden-dock-inset chat-content-column pb-2">
       <section
-        className="overflow-hidden rounded-dialog border border-field/80 bg-popover shadow-composer"
+        className="overflow-hidden rounded-dialog bg-popover shadow-composer"
         aria-labelledby="btw-card-title"
         aria-busy={running}
       >

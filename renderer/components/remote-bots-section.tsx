@@ -43,7 +43,7 @@ export function RemoteBotsSection({
                   disabled={Boolean(host.disabledReason) || opening !== null}
                   aria-busy={busy || undefined}
                   aria-label={`${bot.name}, on ${host.label}`}
-                  className="flex min-h-28 items-start gap-3 rounded-card border border-field bg-well p-4 text-left outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control focus-visible:bg-control-hover disabled:cursor-default disabled:opacity-60 disabled:hover:border-field disabled:hover:bg-well disabled:hover:shadow-none"
+                  className="flex min-h-28 items-start gap-3 rounded-card bg-well p-4 text-left outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control focus-visible:bg-control-hover disabled:cursor-default disabled:opacity-60 disabled:hover:bg-well disabled:hover:shadow-none"
                   onClick={() => onOpen(host.id, bot.id)}
                 >
                   <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-control text-secondary" aria-hidden="true">

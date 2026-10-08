@@ -358,7 +358,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Aiden Live",
     description:
-      "Talk to Aiden, share screen context, and approve each app action one at a time from the new orb.",
+      "Talk to Aiden, share screen context, and approve each app action one at a time from the Live button.",
     icon: AudioWaveform,
     imageUrl: FEATURE_ILLUSTRATIONS.geminiLive,
     size: "hero",

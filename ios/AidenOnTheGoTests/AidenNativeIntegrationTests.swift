@@ -25,7 +25,14 @@ final class AidenNativeIntegrationTests: XCTestCase {
 
     func testBinaryContractRejectionsEmitExactlyOneDiagnosticEach() async throws {
         var records: [(AidenDiagnosticArea, AidenDiagnosticEvent, AidenDiagnosticOutcome, AidenDiagnosticCode)] = []
-        AidenDiagnostics.testSink = { records.append(($0, $1, $2, $3)) }
+        // The sink is process-wide, and other suites trigger the same contract rejections from
+        // async work that can finish while this test runs. Count only diagnostics emitted inside
+        // this test's own task, so the "exactly one each" check measures these two calls alone.
+        let scope = UUID()
+        AidenDiagnostics.testSink = { area, event, outcome, code in
+            guard DiagnosticsTestScope.current == scope else { return }
+            records.append((area, event, outcome, code))
+        }
         defer {
             AidenDiagnostics.testSink = nil
             AidenNativeActivityURLProtocol.handler = nil
@@ -38,40 +45,42 @@ final class AidenNativeIntegrationTests: XCTestCase {
             session: URLSession(configuration: configuration)
         )
 
-        AidenNativeActivityURLProtocol.handler = { request in
-            let response = try XCTUnwrap(HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "image/gif"]
-            ))
-            return (response, Data("GIF89a".utf8))
-        }
-        do {
-            _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
-            XCTFail("Expected the attachment MIME contract to be rejected.")
-        } catch AidenRemoteClientError.invalidResponse {}
+        try await DiagnosticsTestScope.$current.withValue(scope) {
+            AidenNativeActivityURLProtocol.handler = { request in
+                let response = try XCTUnwrap(HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "image/gif"]
+                ))
+                return (response, Data("GIF89a".utf8))
+            }
+            do {
+                _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
+                XCTFail("Expected the attachment MIME contract to be rejected.")
+            } catch AidenRemoteClientError.invalidResponse {}
 
-        AidenNativeActivityURLProtocol.handler = { request in
-            let response = try XCTUnwrap(HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "image/png",
-                    "Cache-Control": "public",
-                    "X-Content-Type-Options": "nosniff",
-                ]
-            ))
-            return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+            AidenNativeActivityURLProtocol.handler = { request in
+                let response = try XCTUnwrap(HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "image/png",
+                        "Cache-Control": "public",
+                        "X-Content-Type-Options": "nosniff",
+                    ]
+                ))
+                return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+            }
+            do {
+                _ = try await client.botAvatar(
+                    botId: "bot-1",
+                    assetRevision: "avatar_revision_0123456789abcdef0123456789abcdef"
+                )
+                XCTFail("Expected the avatar cache/security contract to be rejected.")
+            } catch AidenRemoteClientError.invalidResponse {}
         }
-        do {
-            _ = try await client.botAvatar(
-                botId: "bot-1",
-                assetRevision: "avatar_revision_0123456789abcdef0123456789abcdef"
-            )
-            XCTFail("Expected the avatar cache/security contract to be rejected.")
-        } catch AidenRemoteClientError.invalidResponse {}
 
         XCTAssertEqual(records.count, 2)
         XCTAssertTrue(records.allSatisfy {
@@ -1101,6 +1110,11 @@ private final class AidenDeliveryRace<Value: Sendable> {
         continuation?.resume(returning: outcome)
         continuation = nil
     }
+}
+
+/// Tags diagnostics with the test task that caused them (see the binary contract test).
+private enum DiagnosticsTestScope {
+    @TaskLocal static var current: UUID?
 }
 
 private final class AidenNativeActivityURLProtocol: URLProtocol, @unchecked Sendable {

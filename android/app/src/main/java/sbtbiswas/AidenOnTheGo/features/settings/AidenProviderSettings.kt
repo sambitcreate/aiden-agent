@@ -44,6 +44,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import java.util.UUID
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 /**
  * Providers connected on the paired desktop. The list renders from cache and refreshes in
@@ -191,7 +192,7 @@ fun AidenAddProviderScreen(
         navigationIcon = Icons.Outlined.Close,
         navigationContentDescription = stringResource(R.string.action_cancel),
         actions = {
-            TextButton(onClick = ::save, enabled = !saving && draft.isValid, shape = AidenShape.Button) {
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = ::save, enabled = !saving && draft.isValid, shape = AidenShape.Button) {
                 Text(stringResource(if (saving) R.string.action_saving else R.string.action_save))
             }
         }

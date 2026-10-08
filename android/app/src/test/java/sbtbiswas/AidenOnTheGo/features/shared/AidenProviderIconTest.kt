@@ -8,6 +8,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
+import sbtbiswas.AidenOnTheGo.config.AidenPalette
+import sbtbiswas.AidenOnTheGo.config.AidenThemeCatalog
+import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenColorScheme
 
 class AidenProviderIconTest {
     private val resolver = AidenProviderIconResolver
@@ -83,5 +87,19 @@ class AidenProviderIconTest {
         assertNull(resolver.slug("custom:ollama-01"))
         assertNull(resolver.slug("custom:my-server"))
         assertNull(resolver.logoRes("radius"))
+    }
+
+    @Test
+    fun neutralFallbackInitialStaysReadableForEveryPreset() {
+        // The fallback initial draws onSurfaceVariant on surfaceContainerHigh.
+        AidenThemePresetID.entries.filterNot { it.isDynamic }.forEach { preset ->
+            listOf(true, false).forEach { isDark ->
+                val scheme = aidenColorScheme(AidenThemeCatalog.palette(preset, isDark), isDark)
+                assertTrue(
+                    "fallback initial on $preset ${if (isDark) "dark" else "light"} must stay readable",
+                    AidenPalette.contrastRatio(scheme.onSurfaceVariant, scheme.surfaceContainerHigh) >= 3f
+                )
+            }
+        }
     }
 }

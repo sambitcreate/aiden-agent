@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
@@ -31,6 +32,9 @@ val LocalAidenPalette = staticCompositionLocalOf {
 val LocalAidenAppearanceConfig = staticCompositionLocalOf {
     AidenAppearanceConfig()
 }
+
+/** `outlineVariant` (Material's divider role) is a soft separator: secondary at this alpha. */
+private const val SeparatorAlpha = 0.18f
 
 /**
  * Material 3 corner scale. Screens take radii from `MaterialTheme.shapes` (or the
@@ -97,8 +101,9 @@ fun AidenTheme(
             typography = typography,
             shapes = AidenShapes
         ) {
-            // Typography carries no color, so text and icons outside a Material container
-            // read the theme foreground; containers still supply their own content color.
+            // Typography carries no colour, so Text inherits LocalContentColor: foreground
+            // here, onSurface in surfaces, and onPrimary (palette.onAccent) inside accent
+            // buttons; containers still supply their own content color.
             CompositionLocalProvider(LocalContentColor provides palette.foreground, content = content)
         }
     }
@@ -159,7 +164,8 @@ fun aidenColorScheme(palette: AidenPalette, isDark: Boolean): ColorScheme {
     val tertiaryContainer = tint(palette.success, if (isDark) 0.22f else 0.12f)
     val errorContainer = tint(palette.danger, if (isDark) 0.22f else 0.12f)
     val outline = palette.foreground.copy(alpha = if (isDark) 0.50f else 0.55f).compositeOver(base)
-    val outlineVariant = palette.foreground.copy(alpha = if (isDark) 0.16f else 0.12f).compositeOver(base)
+    // Soft separator for dividers and menu rules (Untitled: secondary @ 18%).
+    val outlineVariant = palette.secondary.copy(alpha = SeparatorAlpha).compositeOver(base)
     val seed = if (isDark) darkColorScheme() else lightColorScheme()
     return seed.copy(
         primary = palette.accent,
@@ -241,6 +247,10 @@ fun aidenTonalSurfaces(palette: AidenPalette, isDark: Boolean): AidenTonalSurfac
  * label roles open up slightly. Styles carry no color: Material components and
  * `LocalContentColor` decide it, so labels on filled buttons and chips stay readable. Every role trims font padding and centers glyphs inside
  * the line box so icon-and-label rows align on the cap height.
+ *
+ * Untitled type-step ratios (shared with desktop): body 14/20, small 12/16. bodyLarge
+ * (the default text style) and labelLarge carry no colour so they inherit
+ * LocalContentColor (onPrimary inside accent buttons).
  */
 fun aidenTypography(scale: Float): Typography {
     val optical = LineHeightStyle(
@@ -275,7 +285,7 @@ fun aidenTypography(scale: Float): Typography {
         bodySmall = style(FontWeight.Normal, 12f, 16f, 0.3),
         labelLarge = style(FontWeight.SemiBold, 14f, 20f, 0.1),
         labelMedium = style(FontWeight.SemiBold, 12f, 16f, 0.4),
-        labelSmall = style(FontWeight.Medium, 11f, 14f, 0.5)
+        labelSmall = style(FontWeight.Medium, 12f, 16f, 0.5)
     )
 }
 

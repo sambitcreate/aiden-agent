@@ -13,8 +13,13 @@ import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeFixtures
 import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeScreen
 import sbtbiswas.AidenOnTheGo.features.bots.prototype.AidenBotPrototypeState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import java.io.File
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class AidenBotPrototypeSnapshotTest {
     @get:Rule
@@ -25,7 +30,7 @@ class AidenBotPrototypeSnapshotTest {
         // Every fixed preset ships its own light and dark palettes; only the dynamic
         // (Material You) preset is derived at runtime and borrows Aiden's as a fallback.
         val fixed = AidenThemePresetID.entries.filterNot { it.isDynamic }
-        assertEquals(9, fixed.size)
+        assertEquals(10, fixed.size)
         assertEquals(fixed.toSet(), AidenThemeCatalog.palettes.filterValues { it.size == 2 }.keys)
 
         for (preset in AidenThemePresetID.values()) {
@@ -74,6 +79,49 @@ class AidenBotPrototypeSnapshotTest {
             assertNotNull(darkPalette.warning)
             assertNotNull(darkPalette.danger)
         }
+    }
+
+    @Test
+    fun testSharedPresetPalettesMatchElectronFixture() {
+        // Android keeps its own Aiden palette (see testAndroidVisualFoundationContract);
+        // every other preset must match the shared desktop/iOS fixture exactly.
+        val fixtureFile = generateSequence(File("").absoluteFile) { it.parentFile }
+            .map { File(it, "protocol/aiden-appearance-v1.json") }
+            .first { it.isFile }
+        val presets = Json.parseToJsonElement(fixtureFile.readText()).jsonObject["presets"]!!.jsonArray
+        // The dynamic (Material You) preset is Android-only and has no fixed palette.
+        assertEquals(
+            AidenThemePresetID.entries.filterNot { it.isDynamic }.map { it.name.lowercase() },
+            presets.map { it.jsonObject["id"]!!.jsonPrimitive.content }
+        )
+        for (entry in presets.map { it.jsonObject }) {
+            val id = entry["id"]!!.jsonPrimitive.content
+            val preset = AidenThemePresetID.valueOf(id.uppercase())
+            assertEquals(entry["label"]!!.jsonPrimitive.content, preset.title)
+            if (preset == AidenThemePresetID.AIDEN) continue
+            for ((scheme, isDark) in listOf("light" to false, "dark" to true)) {
+                val expected = entry[scheme]!!.jsonObject
+                val palette = AidenThemeCatalog.palette(preset, isDark)
+                val actual = mapOf(
+                    "canvas" to palette.canvasHex, "sidebar" to palette.sidebarHex, "raised" to palette.raisedHex,
+                    "foreground" to palette.foregroundHex, "secondary" to palette.secondaryHex, "accent" to palette.accentHex,
+                    "success" to palette.successHex, "warning" to palette.warningHex, "danger" to palette.dangerHex
+                )
+                assertEquals("$id $scheme", expected.mapValues { it.value.jsonPrimitive.content }, actual)
+            }
+        }
+    }
+
+    @Test
+    fun testMonochromeAccentContentInvertsWithScheme() {
+        val light = AidenThemeCatalog.palette(AidenThemePresetID.MONOCHROME, false)
+        val dark = AidenThemeCatalog.palette(AidenThemePresetID.MONOCHROME, true)
+        // Black accent carries light content; the white dark-mode accent must not carry white.
+        assertEquals(androidx.compose.ui.graphics.Color.Black, light.accent)
+        assertEquals(androidx.compose.ui.graphics.Color.White, light.onAccent)
+        assertEquals(androidx.compose.ui.graphics.Color.White, dark.accent)
+        assertNotEquals(androidx.compose.ui.graphics.Color.White, dark.onAccent)
+        assertTrue(dark.onAccent.luminance() < 0.05f)
     }
 
     @Test

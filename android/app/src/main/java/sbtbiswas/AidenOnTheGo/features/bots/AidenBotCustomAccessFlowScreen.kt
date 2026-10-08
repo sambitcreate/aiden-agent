@@ -35,6 +35,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 fun aidenBotCustomAccessIsDirty(
     draft: AidenBotCustomAccessDraft?,
@@ -182,7 +183,7 @@ fun AidenBotCustomAccessFlowScreen(
                     }
                 },
                 actions = {
-                    TextButton(
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
                         onClick = {
                             val curDraft = draft ?: return@TextButton
                             val cat = catalog ?: return@TextButton
