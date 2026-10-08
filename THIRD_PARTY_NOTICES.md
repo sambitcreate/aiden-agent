@@ -137,6 +137,14 @@ its stream client, simulator controls, and procedural 3D device frame
 Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
 not included; the device-motion spring is Aiden's own.
 
+The per-device workspace tabs (`renderer/lib/device-tabs.ts`), the floating
+device player and its layout (`renderer/components/device-mini-player.tsx`,
+`renderer/lib/device-mini-player-layout.ts`), and Quick View docking beside the
+chat (`resolveChatCardInset` in `renderer/lib/environment-panel-layout.ts`) are
+adapted from T3 Code's right-panel device surfaces and commits `8bbe2bf660`
+(floating device streams) and `429c625a85` (workspace card beside chat), under
+the same MIT license. Copyright (c) 2026 T3 Tools Inc.
+
 ## three.js
 
 Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is

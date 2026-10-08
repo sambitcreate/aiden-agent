@@ -6,7 +6,7 @@ The feature is on by default on macOS and needs Xcode installed. It is never ava
 
 ## Using it
 
-1. Open a chat, then the Environment panel, and select **Simulator**.
+1. Open a chat, then the Environment panel, and choose **+ → More tools… → Device**.
 2. Choose **Set up simulator streaming**. Aiden asks before downloading anything (see [Network and privacy](#network-and-privacy)).
 3. Pick a simulator and choose **Open** (or **Boot & open**). The live screen appears. Click to tap, drag to swipe, and type while the screen has focus.
 4. The rail on the side has Home, Lock, Rotate, appearance, text size, **Screenshot to chat**, the device tools drawer, **3D frame**, **Shut down** and **Close**.
@@ -14,6 +14,25 @@ The feature is on by default on macOS and needs Xcode installed. It is never ava
 ### 3D frame
 
 iPhone and iPad simulators can be shown inside a procedural 3D body. Drag the frame's edge to turn it, and choose **Reset 3D view** to straighten it. The flat view is used whenever the stream falls back to MJPEG, the simulator has a hinge, WebGL is unavailable, or the first frame has not arrived yet. The 3D view respects Reduce Motion.
+
+### Device tabs and the floating player
+
+Each device you open in a chat gets its own Environment tab, named after the device. **+ → More tools… → Device** opens the device picker; choosing a device there adds its tab. The picker also shows whenever the chat has no device open.
+
+- **Rename** a tab by double-clicking it, pressing F2 while it is focused, or choosing **Rename** from its context menu. Enter saves, Escape cancels, and an empty name goes back to the device's name. Names are kept per chat, so opening the same device again in that chat brings its name back.
+- **Close** a tab with its ×, Delete, or the context menu. That ends this chat's viewer session; the simulator keeps running (use **Shut down** in the rail to power it off). A closed tab stays closed: refreshing or relaunching never brings it back. Opening the device again from the picker, or an agent's `device_open`, does.
+- Only the tab you are looking at streams. Switching tabs, hiding the panel, or hiding the window stops decoding and closes the stream; both devices keep running.
+
+**Float over chat** (in the rail, or a tab's context menu) moves the device into a small player over the transcript while the panel shows something else:
+
+- Drag its header to move it. Released near an edge it slides flush to that edge, and near a corner it lands in the corner. Drag any edge or corner to resize it; the screen keeps its shape.
+- With the header focused, the arrow keys move it (Shift for bigger steps), + and − resize it, and Escape docks it back into its tab. The screen takes clicks, drags and typing like the full viewer, and the header has Home and Rotate.
+- Its size and position are kept for the window, and it always stays inside the chat area when the window or panels change size.
+- **Dock in tab** returns it to its tab; **Close floating device** just hides the player. The tab shows a placeholder while the device floats, so the device is never streamed twice.
+
+When a chat's agent opens a device, it floats over that chat. Turn off **Auto-show floating device** in **Settings → Simulator → Workspace** to open its tab instead. Device activity also shows in the chat's activity rows: *Opened simulator*, *Took simulator screenshot*, *Closed simulator*, and so on, on desktop and in Aiden On The Go.
+
+On narrower windows Quick View docks beside the chat: the conversation moves left only as far as the card needs and narrows only once it reaches the left edge. When even that would leave the chat too narrow, the card floats over it as before.
 
 ### Letting chats use simulators
 
