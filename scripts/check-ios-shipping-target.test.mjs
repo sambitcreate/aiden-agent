@@ -83,6 +83,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkSpec.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkView.swift",
   "AidenOnTheGo/Features/Shared/AidenProviderIcon.swift",
+  "AidenOnTheGo/Features/Simulators/AidenSimulatorViewer.swift",
+  "AidenOnTheGo/Features/Simulators/AidenSimulatorViewerModel.swift",
   "AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift",
   "AidenOnTheGo/LiveActivities/AidenDeepLink.swift",
   "AidenOnTheGo/LiveActivities/AidenLatestValueThrottle.swift",
@@ -93,11 +95,14 @@ const appSourcePaths = [
   "AidenOnTheGo/Models/AidenInstallation.swift",
   "AidenOnTheGo/Models/AidenScheduledTask.swift",
   "AidenOnTheGo/Models/AidenWorkspaceEnvironment.swift",
+  "AidenOnTheGo/Networking/AidenMJPEGMultipartParser.swift",
   "AidenOnTheGo/Networking/AidenNetworkPath.swift",
   "AidenOnTheGo/Networking/AidenRemoteClient.swift",
   "AidenOnTheGo/Networking/AidenRemoteContract.swift",
   "AidenOnTheGo/Networking/AidenSSEParser.swift",
   "AidenOnTheGo/Networking/AidenServerTrust.swift",
+  "AidenOnTheGo/Networking/AidenSimulatorContract.swift",
+  "AidenOnTheGo/Networking/AidenSimulatorStream.swift",
   "AidenOnTheGo/Persistence/AidenBotCache.swift",
   "AidenOnTheGo/Persistence/AidenChatCache.swift",
   "AidenOnTheGo/Persistence/AidenChatDraftStore.swift",
@@ -118,6 +123,7 @@ const testSources = [
   "AidenRemoteClientTests.swift",
   "AidenRemotePhase0Tests.swift",
   "AidenScheduledTaskTests.swift",
+  "AidenSimulatorViewerTests.swift",
   "AidenStreamingPerformanceTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
 ];
@@ -1163,6 +1169,7 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
     "NOTICE.txt",
     "NetworkImage-LICENSE.txt",
     "ProviderLogos-NOTICE.md",
+    "T3Code-LICENSE.txt",
     "swift-cmark-COPYING.txt",
   ]);
   assert.match(license, /MIT License/u);
@@ -1174,6 +1181,7 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
   assert.match(notice, /NetworkImage 6\.0\.1/u);
   assert.match(notice, /swift-cmark 0\.8\.0/u);
   assert.match(notice, /Provider logos/u);
+  assert.match(notice, /T3 Code \(adapted simulator device viewer logic\)/u);
   assert.doesNotMatch(notice, /swift-eventsource|Splash|Highlightr|SwiftMath|Lucide|Thinking Orbs/u);
 });
 
