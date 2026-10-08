@@ -271,7 +271,7 @@ function ModelPadBenchmarkConnection() {
           </div>
         </Callout>
 
-        <div className="mt-3 rounded-control border border-separator/70 bg-background/35 px-3 py-2.5">
+        <div className="mt-3 rounded-control bg-background/35 px-3 py-2.5">
           <Text as="p" variant="small-strong">
             Benchmark-only connection
           </Text>

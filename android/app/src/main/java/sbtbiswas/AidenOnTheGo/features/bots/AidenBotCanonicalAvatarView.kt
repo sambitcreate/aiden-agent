@@ -96,7 +96,7 @@ fun AidenBotCanonicalAvatarView(
         } else {
             Crossfade(
                 targetState = customBitmap,
-                animationSpec = AidenMotion.nonSpatialExpressiveSpring(),
+                animationSpec = AidenMotion.short(),
                 label = "bot_avatar_reveal"
             ) { bmp ->
                 AidenBotAvatarLayer(bmp, avatar, name, size)

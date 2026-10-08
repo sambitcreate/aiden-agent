@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -518,7 +519,7 @@ internal fun AidenScheduledTaskList(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(errorMessage, style = MaterialTheme.typography.bodySmall, color = palette.danger, modifier = Modifier.weight(1f))
-                        if (isConnected) TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
+                        if (isConnected) TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
                     }
                 }
             }
@@ -692,7 +693,7 @@ private fun AidenScheduledTaskRow(
             checked = task.enabled,
             onCheckedChange = { onToggleEnabled() },
             enabled = enabled,
-            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = palette.accent),
+            colors = SwitchDefaults.colors(checkedThumbColor = palette.onAccent, checkedTrackColor = palette.accent),
             modifier = Modifier.semantics { contentDescription = toggleDescription }
         )
     }

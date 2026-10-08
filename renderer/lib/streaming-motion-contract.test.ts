@@ -82,18 +82,6 @@ test("streaming and persisted messages reserve the same action and timeline shel
   );
 });
 
-test("main and subagent activity share Aiden's orb wrapper", () => {
-  const orb = source("../components/aiden-orb.tsx");
-  const list = source("../components/message-list.tsx");
-  const subagents = source("../components/subagent-chips.tsx");
-
-  assert.match(orb, /import \{\s*ThinkingOrb,/u);
-  assert.match(orb, /paused=\{appearance\.paused \|\| !active\}/u);
-  assert.match(list, /import \{ AidenOrb \} from "\.\/aiden-orb"/u);
-  assert.match(subagents, /import \{ AidenOrb \} from "\.\/aiden-orb"/u);
-  assert.doesNotMatch(list, /from "thinking-orbs"/u);
-});
-
 test("reasoning keeps its status and disclosure without a brain glyph", () => {
   const reasoning = source("../components/reasoning-block.tsx");
   assert.doesNotMatch(reasoning, /\bBrainCircuit\b/u);

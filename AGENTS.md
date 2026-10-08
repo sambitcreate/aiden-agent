@@ -12,6 +12,8 @@ The current plan inventory and status live in [`docs/plans/README.md`](docs/plan
 
 ## UI design references
 
+For UI work, follow `GUI.md` and use the `graphical-ui`, `graphical-convert`, or `graphical-audit` skill in `.agents/skills/` as appropriate. Aiden adopts the Untitled theme's structure (motion, borderless surfaces, filled inputs, button padding, type-step ratios) but keeps its own corner radii and preset palettes; the definitions in `renderer/styles.css` and `renderer/shared/appearance.ts` take precedence over the snapshot values in `gui/themes/`. Timeless Grotesk is not used.
+
 Follow `docs/design-guide.md` for reusable action shapes, semantic tokens, and accessibility. Reuse the shared squircle button treatment for new and existing actions rather than introducing per-screen button geometry.
 
 Before adding or materially restyling any UI element or component, always review both `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html` for interaction, styling, state, motion, and accessibility inspiration. Adapt the references to Aiden's existing visual language rather than copying them blindly, and use the semantic design tokens in `renderer/styles.css` and `renderer/shared/appearance.ts` instead of introducing one-off colors.

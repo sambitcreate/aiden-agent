@@ -40,7 +40,7 @@ test("scheduled task details reuse the reduced-motion-gated surface entrance", (
   assert.match(scheduledTasks, /className="scheduled-task-detail/u);
 });
 
-test("the Live orb trigger has tactile motion and a reduced-motion override", () => {
+test("the Live mark trigger has tactile motion and a reduced-motion override", () => {
   const styles = source("../styles.css");
   const trigger = between(styles, ".aiden-live-trigger {", ".aiden-live-trigger[data-kind");
   assert.match(trigger, /transition:/u);
@@ -48,18 +48,18 @@ test("the Live orb trigger has tactile motion and a reduced-motion override", ()
   assert.match(styles, /\.aiden-live-trigger:focus-visible/u);
   const orb = between(
     styles,
-    '.aiden-live-trigger[data-kind="orb"] {',
+    '.aiden-live-trigger[data-kind="mark"] {',
     ".aiden-live-trigger:hover",
   );
   assert.match(orb, /background: transparent/u);
   assert.match(orb, /box-shadow: none/u);
-  assert.match(styles, /\.aiden-live-trigger\[data-kind="orb"\]:focus-visible/u);
+  assert.match(styles, /\.aiden-live-trigger\[data-kind="mark"\]:focus-visible/u);
 });
 
 test("the dock has one trigger and no longer owns a competing composer", () => {
   const dock = source("../components/assistant/assistant-dock.tsx");
   const styles = source("../styles.css");
-  assert.match(dock, /data-kind=\{setupCompleted \? "orb" : "logo"\}/u);
+  assert.match(dock, /data-kind=\{setupCompleted \? "mark" : "logo"\}/u);
   assert.match(dock, /AssistantLiveSetupDialog/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble|setDraft|textarea/u);
   assert.doesNotMatch(styles, /\.assistant-live-(?:entry|presence|orb|control|signal)/u);

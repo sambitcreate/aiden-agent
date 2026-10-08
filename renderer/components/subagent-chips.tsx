@@ -1,5 +1,4 @@
 import * as React from "react";
-import { type OrbSize, type OrbState } from "thinking-orbs";
 import { subagentModelDisplay, subagentRunProgressLabel } from "../lib/subagent-panel-state";
 import { cn } from "../lib/ui-utils";
 import type {
@@ -10,30 +9,29 @@ import {
   type SubagentMessageReferenceV1,
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
-import { AidenOrb } from "./aiden-orb";
+import type { ActivityMark } from "../shared/activity-marks";
+import { AidenActivityMark } from "./aiden-activity-mark";
 import { Button, HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
 
-function fallbackOrbStateForRole(
-  role: SubagentRunViewRole | undefined,
-): OrbState {
-  if (role === "scout") return "searching";
-  if (role === "planner") return "solving";
-  return "working";
+function fallbackMarkForRole(role: SubagentRunViewRole | undefined): ActivityMark {
+  if (role === "scout") return "scan-grid";
+  if (role === "planner") return "tri-step";
+  return "quad-shuffle";
 }
 
-export function subagentOrbState(
+export function subagentActivityMark(
   state: SubagentRunViewState | "finished",
   role?: SubagentRunViewRole,
   activity?: string,
-): OrbState {
-  if (state === "queued" || state === "starting") return "shaping";
-  // A waiting child's activity is its free-form pending question, not a tool milestone.
-  if (state === "needs_attention") return fallbackOrbStateForRole(role);
+): ActivityMark {
+  if (state === "queued" || state === "starting") return "bounce";
+  // A waiting child is blocked on the user, whatever its free-form question says.
+  if (state === "needs_attention") return "glance";
   if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? ""))
-    return "searching";
-  if (activity === "Reviewing workspace context") return "solving";
-  if (activity === "Writing a bounded report") return "composing";
-  return fallbackOrbStateForRole(role);
+    return "scan-grid";
+  if (activity === "Reviewing workspace context") return "tri-step";
+  if (activity === "Writing a bounded report") return "compose";
+  return fallbackMarkForRole(role);
 }
 
 export function subagentStateLabel(
@@ -59,21 +57,21 @@ export function subagentStatusLabel(
   return subagentRunProgressLabel(state, activity);
 }
 
-export interface SubagentOrbProps {
+export interface SubagentMarkProps {
   role?: SubagentRunViewRole;
   state: SubagentRunViewState | "finished";
   activity?: string;
-  size?: OrbSize;
+  size?: number;
   className?: string;
 }
 
-export function SubagentOrb({
+export function SubagentMark({
   role,
   state,
   activity,
   size = 20,
   className,
-}: SubagentOrbProps) {
+}: SubagentMarkProps) {
   const active =
     state === "queued" ||
     state === "starting" ||
@@ -81,12 +79,12 @@ export function SubagentOrb({
     state === "needs_attention";
 
   return (
-    <AidenOrb
-      state={subagentOrbState(state, role, activity)}
+    <AidenActivityMark
+      mark={subagentActivityMark(state, role, activity)}
       size={size}
       active={active}
       className={cn("shrink-0 opacity-70", className)}
-      data-subagent-orb-state={active ? "active" : "terminal"}
+      data-subagent-mark-state={active ? "active" : "terminal"}
     />
   );
 }
@@ -141,7 +139,7 @@ export function SubagentChips({
             aria-label={`Open ${label}. Status: ${status}.${recordedModel ? ` ${recordedModel.spoken}.` : ""}`}
             onClick={(event) => onOpen(runId, event.currentTarget)}
           >
-            <SubagentOrb role={role} state={state} activity={run?.activity} />
+            <SubagentMark role={role} state={state} activity={run?.activity} />
             <span className="min-w-0 truncate">{label}</span>
             <span
               className={cn(

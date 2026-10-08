@@ -6833,23 +6833,12 @@ private struct AidenLiveResponseView: View {
         )
     }
 
-    private var activity: (label: String, orb: OrbState) {
-        if model.streamState == .waitingForApproval {
-            return ("Waiting for approval", .listening)
-        }
-        if let tool = model.tools.last(where: { $0.status == nil }) {
-            let name = tool.name.lowercased()
-            let isSearch = ["search", "find", "read", "list", "glob", "grep"]
-                .contains { name.contains($0) }
-            return (isSearch ? "Searching…" : "Working…", isSearch ? .searching : .working)
-        }
-        if !model.liveText.isEmpty {
-            return ("Responding…", .composing)
-        }
-        if model.streamState == .queued {
-            return ("Preparing…", .shaping)
-        }
-        return ("Thinking", .solving)
+    private var activity: (label: String, mark: AidenActivityMarkKind) {
+        AidenActivityMarkKind.liveResponse(
+            streamState: model.streamState,
+            runningToolName: model.tools.last(where: { $0.status == nil })?.name,
+            hasLiveText: !model.liveText.isEmpty
+        )
     }
 
     var body: some View {
@@ -6881,7 +6870,7 @@ private struct AidenLiveResponseView: View {
             } else if chronologicalRows == nil && model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 let activity = activity
                 HStack(spacing: 8) {
-                    ThinkingOrb(state: activity.orb, size: .px20)
+                    AidenActivityMark(mark: activity.mark, size: 20, color: palette.foreground)
                     Text(activity.label)
                         .foregroundStyle(palette.secondary)
                 }

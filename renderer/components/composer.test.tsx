@@ -250,7 +250,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.doesNotMatch(palette, /`\/\$\{result\.command\.name\}`/u);
   assert.doesNotMatch(palette, /`\/\$\{alias\}`/u);
   assert.match(palette, /const detail = unavailableReason \?\? description/u);
-  assert.match(palette, /rounded-dialog border border-separator/u);
+  assert.match(palette, /rounded-dialog bg-popover/u);
   assert.doesNotMatch(palette, /block truncate text-small text-secondary/u);
   assert.doesNotMatch(palette, /selected && available && "bg-list-selection"/u);
   assert.doesNotMatch(palette, /Commands and skills/u);

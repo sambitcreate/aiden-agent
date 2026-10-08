@@ -822,7 +822,8 @@
         "scripts/verify-macos-package.test.mjs",
         "renderer/components/bots/bot-connection-ui.test.tsx",
         "renderer/shared/bot-connections.test.ts",
-        "renderer/shared/bot-presets.test.ts"
+        "renderer/shared/bot-presets.test.ts",
+        "renderer/components/aiden-activity-mark.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",
