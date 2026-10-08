@@ -36,11 +36,12 @@ Profile and harness:
 - Layout: `userData/design-projects/<id>/manifest.json` and `revisions/<revId>.html`. Directories are 0700 and files are 0600.
 - Commit order: the revision file first (`writeFileAtomic`, fsync), then the manifest (`writeJsonAtomic`). The manifest is the commit point.
 - Mutations use compare-and-set on `expectedRevision`. A stale write returns the latest snapshot and writes nothing.
-- A per-project serial gate orders everything. A project with a running run refuses delete, duplicate and Screen removal with `busy`.
+- A per-project serial gate orders everything. A project with a running run refuses delete and duplicate with `busy`. Screen removal is refused as `busy` only for a Screen the run renders into (its draft, a Refine target) or one in the direction set the run is filling (PR #385 review: deleting a direction mid-Resume used to settle the set complete but incomplete, losing the Resume offer). Screens in other sets stay deletable.
+- Duplicate: a failed library-directory fsync after the final rename rejects with `unavailable`. The renamed copy is not rolled back; it stays listed (it is on disk), its chat is created or deferred, and the next start reconciles it.
 - Restart (`initialize`, called from `startDesignStudio` before IPC admission):
   - A `running` run becomes `partial` with `endReason: "interrupted"` if it accepted at least one draft. With none, it becomes `interrupted` and its empty direction set is dropped.
   - Unreferenced revision files and staging leftovers are collected.
-  - A referenced file that is missing or fails its sha256 check is marked `missing`. Checksums are checked on read too.
+  - A referenced file that is missing, resized, or fails its sha256 check is marked `missing` before interrupted runs are ended, so a damaged draft is never published. Startup hashes only files referenced by a non-missing revision at their recorded size (200-revision perf lane ~30-40 ms, was ~20 ms). Checksums are checked on read too.
   - `deleting` cascades resume (`resumeDeletions`).
   - An unreadable manifest is listed as unreadable and is never deleted automatically.
   - Restart sends zero provider requests.
