@@ -458,6 +458,7 @@ export class AcpHarnessRuntime {
       // Calls the agent abandoned must not keep a later stream waiting.
       cancelTools(binding, "The agent's turn ended before the tool finished.");
       binding.toolUpdatesSkipped.clear();
+      binding.tracker.clear();
       completeTurn?.();
       if (binding.turn === turn) binding.turn = undefined;
       binding.writer = undefined;
