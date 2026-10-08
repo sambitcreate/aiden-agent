@@ -1,5 +1,5 @@
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 // The e2e profile has no macOS Keychain authority, so the real Bot store cannot
 // open (bots:list fails with "Bot bootstrap marker could not be updated"). Only
@@ -132,4 +132,62 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
       },
     },
   ]);
+});
+
+// Onboarding decides whether to offer "Meet Your First Bot" when it loads, so
+// the Bot IPC is substituted first and the window reloaded.
+test("onboarding Start Chat creates the starter Bot and opens its chat when setup finishes", async ({ aiden }) => {
+  const { page } = aiden;
+  const bot = botFixture({ id: "bot-chief", name: "Chief of Staff", description: "Keeps your week on track" });
+  await aiden.app.evaluate(({ ipcMain }, fixture) => {
+    const state = { created: 0 };
+    (globalThis as unknown as { botOnboardingE2e: typeof state }).botOnboardingE2e = state;
+    for (const channel of [
+      "bots:list",
+      "bots:get",
+      "bots:createFromPreset",
+      "bots:live:subscribe",
+      "bots:live:summary",
+      "bots:getCanonicalPhoto",
+      "bots:pendingApprovals",
+    ]) ipcMain.removeHandler(channel);
+    const idle = { botId: fixture.id, preview: null, updatedAt: null, state: { kind: "idle" } };
+    ipcMain.handle("bots:list", () => (state.created > 0 ? [fixture] : []));
+    ipcMain.handle("bots:get", () => fixture);
+    ipcMain.handle("bots:createFromPreset", () => {
+      state.created += 1;
+      return { bot: fixture, created: true };
+    });
+    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null }));
+    ipcMain.handle("bots:live:summary", () => idle);
+    ipcMain.handle("bots:getCanonicalPhoto", () => null);
+    ipcMain.handle("bots:pendingApprovals", () => []);
+  }, bot);
+  await page.reload();
+
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await expect(onboarding).toBeVisible();
+  const next = onboarding.getByRole("button", { name: /^Next/u });
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  await next.click();
+  const lmStudio = onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u });
+  await lmStudio.click();
+  await next.click();
+
+  await expect(onboarding.getByRole("heading", { name: "Meet Your First Bot" })).toBeVisible();
+  const starters = onboarding.getByRole("list", { name: "Starter Bots" });
+  await starters
+    .getByRole("listitem")
+    .filter({ hasText: "Chief of Staff" })
+    .getByRole("button", { name: "Start Chat", exact: true })
+    .click();
+  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
+  await expect(onboarding).toBeHidden();
+
+  await expect(page.getByPlaceholder("Ask Chief of Staff")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Chief of Staff profile" })).toBeVisible();
+  expect(
+    await aiden.app.evaluate(() => (globalThis as unknown as { botOnboardingE2e: { created: number } }).botOnboardingE2e.created),
+  ).toBe(1);
 });

@@ -621,6 +621,9 @@ export function OnboardingFlow({
     return () => cancelAnimationFrame(frame);
   }, [index, open]);
 
+  /** The starter Bot Start Chat made; its chat opens when onboarding finishes. */
+  const startedBotIdRef = React.useRef<string | null>(null);
+
   if (!open) return null;
   const visibleSteps = onboardingFlowSteps(botsStepVisible);
   const step = visibleSteps[index];
@@ -660,9 +663,6 @@ export function OnboardingFlow({
     setProviderSkipped(false);
     setIndex(afterProviderIndex);
   };
-
-  /** The starter Bot Start Chat made; its chat opens when onboarding finishes. */
-  const startedBotIdRef = React.useRef<string | null>(null);
 
   const finishBotsStep = async (startedBotId?: string) => {
     if (savingRef.current) return;
