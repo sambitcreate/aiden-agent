@@ -4,6 +4,7 @@ import test from "node:test";
 import { projectRuntime } from "../../main/services/acp/status.js";
 import {
   acpHarnessChatReason,
+  acpHarnessReadinessMessage,
   acpHarnessUnavailableReason,
   formatHarnessBytes,
   harnessSignInHint,
@@ -119,4 +120,20 @@ test("Assistant and Bot chats explain up front that an agent-backed model cannot
   assert.equal(acpHarnessChatReason("antigravity", "Google Antigravity", undefined), undefined);
   assert.equal(acpHarnessChatReason("openai", "OpenAI", "assistant"), undefined);
   assert.equal(acpHarnessChatReason(undefined, "", "bot"), undefined);
+});
+
+test("a signed-out agent model explains the surface first, then asks for a sign-in, never an API key", () => {
+  const signedOut = { id: "antigravity", label: "Google Antigravity", hasKey: false, needsKey: true };
+  // Signing in would not help in an Assistant chat, so that reason wins.
+  assert.equal(
+    acpHarnessReadinessMessage(signedOut, "assistant"),
+    "Google Antigravity runs only in ordinary desktop chats, not in Assistant chats. Choose another model.",
+  );
+  assert.equal(
+    acpHarnessReadinessMessage(signedOut, undefined),
+    "Sign in to Google Antigravity in Settings → Providers to use it.",
+  );
+  assert.equal(acpHarnessReadinessMessage({ ...signedOut, hasKey: true }, undefined), undefined);
+  // Other providers keep the composer's ordinary API-key copy.
+  assert.equal(acpHarnessReadinessMessage({ id: "openai", label: "OpenAI", hasKey: false, needsKey: true }, "assistant"), undefined);
 });

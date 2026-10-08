@@ -191,7 +191,12 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
-import { acpHarnessChatReason, isAcpHarnessProvider, type AcpHarnessBlockedSurface } from "../shared/acp-harness";
+import {
+  acpHarnessChatReason,
+  acpHarnessReadinessMessage,
+  isAcpHarnessProvider,
+  type AcpHarnessBlockedSurface,
+} from "../shared/acp-harness";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -307,14 +312,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "Sign in with ChatGPT in Settings → Providers to use Codex."
         : "Choose a chat model, or add one in Settings → Providers.";
     }
+    const agentReason = acpHarnessReadinessMessage(selectedProvider, agentBlockedSurface);
+    if (agentReason) return agentReason;
     if (selectedProvider.needsKey && !selectedProvider.hasKey) {
       if (selectedProvider.id === OPENAI_CODEX_PROVIDER_ID) {
         return "Sign in with ChatGPT in Settings → Providers to use Codex.";
       }
       return `${selectedProvider.label} needs an API key. Add one in Settings → Providers.`;
     }
-    const agentReason = acpHarnessChatReason(selectedProvider.id, selectedProvider.label, agentBlockedSurface);
-    if (agentReason) return agentReason;
     if (selectedProvider.models.length === 0) {
       return `${selectedProvider.label} has no chat models. In Settings → Providers, discover models, then save.`;
     }

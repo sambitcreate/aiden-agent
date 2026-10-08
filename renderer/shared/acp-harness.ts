@@ -201,6 +201,23 @@ export function acpHarnessChatReason(
 }
 
 /**
+ * Why an agent-backed model cannot send yet in this desktop chat: first that
+ * this kind of chat cannot host it at all (signing in would not help), then
+ * that it is signed out. Agent providers sign in to an account; they never
+ * take an API key. Undefined for other providers, or when it can send.
+ */
+export function acpHarnessReadinessMessage(
+  provider: { id: string; label: string; hasKey: boolean; needsKey: boolean },
+  surface: AcpHarnessBlockedSurface | undefined,
+): string | undefined {
+  if (!isAcpHarnessProvider(provider.id)) return undefined;
+  const blocked = acpHarnessChatReason(provider.id, provider.label, surface);
+  if (blocked) return blocked;
+  if (provider.needsKey && !provider.hasKey) return `Sign in to ${provider.label} in Settings → Providers to use it.`;
+  return undefined;
+}
+
+/**
  * The app's last-used selection, unless it is agent-backed. Unattended
  * surfaces (schedules, Telegram, dictation cleanup) fall back to it and must
  * never inherit a provider that cannot run without someone watching.
