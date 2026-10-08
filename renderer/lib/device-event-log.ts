@@ -95,10 +95,13 @@ export function filterEventLog(entries: readonly DeviceEventLogEntry[], query: s
   );
 }
 
-/** `HH:MM:SS` from an ISO timestamp, or empty when there is none. */
+/** Local `HH:MM:SS` from an ISO timestamp (serve-sim sends UTC), or empty when there is none. */
 export function eventLogTime(timestamp: string): string {
-  const match = /T(\d{2}:\d{2}:\d{2})/u.exec(timestamp);
-  return match?.[1] ?? "";
+  if (!/T\d{2}:\d{2}:\d{2}/u.test(timestamp)) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 /** Plain text for the clipboard: one line per entry. */

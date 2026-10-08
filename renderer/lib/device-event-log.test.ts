@@ -13,7 +13,8 @@ import {
 const GRANT = { origin: "http://127.0.0.1:4100", token: "tok", expiresAt: Date.now() + 60_000 };
 const entry = (id: number, summary = `Touch ${id}`, kind = "touch"): DeviceEventLogEntry => ({
   id,
-  timestamp: `2026-10-08T12:00:${String(id % 60).padStart(2, "0")}.000Z`,
+  // 12:00:ss on this Mac's clock, whatever its time zone.
+  timestamp: new Date(2026, 9, 8, 12, 0, id % 60).toISOString(),
   kind,
   summary,
 });
@@ -68,9 +69,23 @@ test("filtering matches summary or kind, and copying formats one line per entry"
     filterEventLog(entries, "  ").map((item) => item.id),
     [1, 2, 3],
   );
-  assert.equal(eventLogTime("2026-10-08T09:41:07.123Z"), "09:41:07");
+  assert.equal(eventLogTime(new Date(2026, 9, 8, 9, 41, 7, 123).toISOString()), "09:41:07");
   assert.equal(eventLogTime(""), "");
+  assert.equal(eventLogTime("not a time"), "");
   assert.equal(formatEventLog(entries.slice(1, 2)), "12:00:02  button  Button home");
+});
+
+test("event times read in the Mac's local time, not the hub's UTC", () => {
+  // A real simulator's log showed 19:24 while the Mac's clock said 15:24.
+  const previous = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  try {
+    assert.equal(eventLogTime("2026-10-08T19:24:48.000Z"), "15:24:48");
+    assert.equal(eventLogTime("2026-01-08T19:24:48.000Z"), "14:24:48");
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
 });
 
 test("the feed reads SSE through the proxy until it is unsubscribed", async () => {
