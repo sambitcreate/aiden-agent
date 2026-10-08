@@ -2,7 +2,8 @@
 // target, from local git configuration only. Mirrors the parts of `gh`'s
 // resolution Aiden relied on: the base repository comes from the remote marked
 // `gh-resolved`, else upstream > github > origin > others; the head owner and
-// branch come from the branch's push remote and upstream merge ref.
+// branch come from the branch's push destination (`@{push}`), not the pull
+// upstream, so triangular workflows still find the feature PR.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -218,7 +219,13 @@ export class LocalRepositoryResolver {
     const pushRemote =
       lastValue(config, `branch.${branch}.pushremote`) ?? lastValue(config, "remote.pushdefault") ?? branchRemote;
     const merge = lastValue(config, `branch.${branch}.merge`);
-    const headBranch = merge?.startsWith("refs/heads/") ? merge.slice("refs/heads/".length) : branch;
+    const push = await this.git(
+      cwd,
+      ["rev-parse", "--verify", "--quiet", "--abbrev-ref", `${branch}@{push}`],
+      signal,
+    );
+    const pushRef = push.code === 0 ? push.stdout.trim() : "";
+    const headBranch = this.pushHeadBranch(branch, pushRemote, branchRemote, merge, pushRef);
     repository.headBranch = headBranch;
 
     let headLocation: GitRemoteLocation | undefined;
@@ -232,16 +239,31 @@ export class LocalRepositoryResolver {
     }
     if (headLocation && headLocation.host === base.host) repository.headOwner = headLocation.owner;
 
-    if (pushRemote && remotes.has(pushRemote)) {
-      const tracking = await this.git(
-        cwd,
-        ["rev-parse", "--verify", "--quiet", `refs/remotes/${pushRemote}/${headBranch}`],
-        signal,
-      );
+    const trackingRef = pushRef ? `${branch}@{push}` : pushRemote ? `refs/remotes/${pushRemote}/${headBranch}` : undefined;
+    if (trackingRef) {
+      const tracking = await this.git(cwd, ["rev-parse", "--verify", "--quiet", trackingRef], signal);
       const sha = tracking.code === 0 ? tracking.stdout.trim().toLowerCase() : "";
       if (/^[0-9a-f]{40,64}$/u.test(sha)) repository.headSha = sha;
     }
     return { ok: true, repository };
+  }
+
+  /**
+   * The branch Git would push. `branch.<name>.merge` is the pull upstream and
+   * is only the push head when the push remote is that same upstream.
+   */
+  private pushHeadBranch(
+    branch: string,
+    pushRemote: string | undefined,
+    branchRemote: string | undefined,
+    merge: string | undefined,
+    pushRef: string,
+  ): string {
+    if (pushRemote && pushRef.startsWith(`${pushRemote}/`)) return pushRef.slice(pushRemote.length + 1);
+    if (pushRef.includes("/")) return pushRef.slice(pushRef.indexOf("/") + 1);
+    if (pushRef) return pushRef;
+    const sameRemote = !pushRemote || pushRemote === branchRemote;
+    return sameRemote && merge?.startsWith("refs/heads/") ? merge.slice("refs/heads/".length) : branch;
   }
 
   private baseRemote(

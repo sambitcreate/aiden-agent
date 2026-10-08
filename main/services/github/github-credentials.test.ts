@@ -4,18 +4,22 @@ import {
   GitHubCredentialSource,
   environmentGitHubToken,
   githubCliEnvironment,
+  isAuthorizedGitHubHost,
+  parseGhHostsFile,
 } from "./github-credentials.js";
 
 function source(options: {
   env?: NodeJS.ProcessEnv;
   gh?: (host: string) => Promise<string>;
   clock?: { now: number };
+  knownHosts?: string[];
 }) {
   const asked: string[] = [];
   const clock = options.clock ?? { now: 0 };
   const credentials = new GitHubCredentialSource({
     env: () => options.env ?? {},
     now: () => clock.now,
+    knownHosts: async () => options.knownHosts ?? [],
     ghAuthToken: async (host) => {
       asked.push(host);
       if (!options.gh) throw new Error("gh: not logged in");
@@ -33,12 +37,52 @@ test("environment tokens follow gh's host precedence", () => {
   };
   assert.equal(environmentGitHubToken("github.com", env), "dotcom");
   assert.equal(environmentGitHubToken("acme.ghe.com", env), "dotcom");
-  assert.equal(environmentGitHubToken("github.acme.test", env), "enterprise");
+  assert.equal(environmentGitHubToken("github.acme.test", env), undefined);
+  assert.equal(
+    environmentGitHubToken("github.acme.test", { ...env, GH_HOST: "github.acme.test" }),
+    "enterprise",
+  );
   assert.equal(
     environmentGitHubToken("github.acme.test", { ...env, GH_HOST: "other.acme.test" }),
     undefined,
   );
+  assert.equal(environmentGitHubToken("attacker.example", env), undefined);
   assert.equal(environmentGitHubToken("github.com", { GITHUB_TOKEN: "only" }), "only");
+});
+
+test("an unknown remote host is not authorized by a global enterprise token", async () => {
+  const { credentials, asked } = source({ env: { GH_ENTERPRISE_TOKEN: "enterprise-secret" } });
+  assert.equal(isAuthorizedGitHubHost("attacker.example", { GH_ENTERPRISE_TOKEN: "enterprise-secret" }), false);
+  assert.equal(await credentials.authorizesHost("attacker.example"), false);
+  const result = await credentials.resolve("attacker.example");
+  assert.equal(result.ok, false);
+  assert.deepEqual(asked, []);
+
+  const configured = source({
+    env: { GH_ENTERPRISE_TOKEN: "enterprise-secret", GH_HOST: "git.corp.example" },
+  });
+  assert.equal(await configured.credentials.authorizesHost("git.corp.example"), true);
+  assert.equal(await configured.credentials.authorizesHost("attacker.example"), false);
+  const accepted = await configured.credentials.resolve("git.corp.example");
+  assert.ok(accepted.ok);
+  assert.equal(accepted.credential.token, "enterprise-secret");
+  const refused = await configured.credentials.resolve("attacker.example");
+  assert.equal(refused.ok, false);
+  assert.deepEqual(configured.asked, []);
+});
+
+test("gh hosts.yml records known enterprise hosts without exposing tokens", () => {
+  const hosts = parseGhHostsFile(
+    [
+      "github.com:",
+      "    oauth_token: gho_should-never-appear",
+      "    user: octocat",
+      "git.corp.example:",
+      "    oauth_token: ghe_should-never-appear",
+    ].join("\n"),
+  );
+  assert.deepEqual(hosts, ["github.com", "git.corp.example"]);
+  assert.ok(hosts.every((host) => !host.includes("gho_") && !host.includes("ghe_")));
 });
 
 test("an environment token is used without asking gh", async () => {
@@ -51,7 +95,10 @@ test("an environment token is used without asking gh", async () => {
 });
 
 test("gh auth token is asked per host and cached for five minutes", async () => {
-  const { credentials, asked, clock } = source({ gh: async (host) => `token-for-${host}\n` });
+  const { credentials, asked, clock } = source({
+    gh: async (host) => `token-for-${host}\n`,
+    knownHosts: ["github.acme.test"],
+  });
   const first = await credentials.resolve("github.com");
   await credentials.resolve("github.com");
   clock.now = 4 * 60_000;

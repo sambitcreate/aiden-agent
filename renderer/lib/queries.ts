@@ -440,6 +440,15 @@ export function useGitPullRequestStatus(workspaceId: string | undefined, enabled
   return useQuery(gitPullRequestStatusQueryOptions(workspaceId, enabled));
 }
 
+/** Sidebar Refresh: bypass the background PR cache and spend interactive budget. */
+export function refreshGitPullRequestStatus(queryClient: QueryClient, workspaceId: string) {
+  return queryClient.fetchQuery({
+    ...gitPullRequestStatusQueryOptions(workspaceId),
+    queryFn: () => gitApi.pullRequestStatus(workspaceId, { interactive: true }),
+    staleTime: 0,
+  });
+}
+
 export function useGitReview(workspaceId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.gitReview(workspaceId),

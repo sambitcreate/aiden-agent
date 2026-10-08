@@ -5,8 +5,11 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
+import { normalizeGitHubHost } from "../../../renderer/shared/chat-pull-requests.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,6 +83,8 @@ export interface GitHubCredentialSourceOptions {
   env?: () => NodeJS.ProcessEnv;
   ghAuthToken?: GhAuthTokenRunner;
   now?: () => number;
+  /** Hosts `gh` has stored credentials for; defaults to the GitHub CLI hosts file. */
+  knownHosts?: () => Promise<readonly string[]>;
 }
 
 export function githubTokenFingerprint(host: string, token: string): string {
@@ -90,6 +95,53 @@ function isDotComHost(host: string): boolean {
   return host === "github.com" || host.endsWith(".ghe.com");
 }
 
+export function configuredGitHubEnterpriseHost(env: NodeJS.ProcessEnv): string | undefined {
+  return normalizeGitHubHost(env.GH_HOST);
+}
+
+/**
+ * Hosts that may receive a token: github.com, GHE.com, an explicit GH_HOST,
+ * and hosts recorded in GitHub CLI's config. Token availability is not enough.
+ */
+export function isAuthorizedGitHubHost(
+  host: string,
+  env: NodeJS.ProcessEnv,
+  knownHosts: readonly string[] = [],
+): boolean {
+  if (isDotComHost(host)) return true;
+  if (configuredGitHubEnterpriseHost(env) === host) return true;
+  return knownHosts.some((known) => known === host);
+}
+
+/** Top-level host keys from `gh`'s hosts.yml. Values (tokens) are discarded. */
+export function parseGhHostsFile(contents: string): string[] {
+  const hosts: string[] = [];
+  for (const line of contents.split(/\r?\n/u)) {
+    if (!line || line.startsWith(" ") || line.startsWith("\t") || line.startsWith("#")) continue;
+    const match = /^([^:#\s][^:]*):/u.exec(line);
+    if (!match) continue;
+    const host = normalizeGitHubHost(match[1]!.trim());
+    if (host && !hosts.includes(host)) hosts.push(host);
+  }
+  return hosts;
+}
+
+export function defaultGhHostsPath(): string {
+  if (process.platform === "darwin") {
+    return join(homedir(), "Library", "Application Support", "GitHub CLI", "hosts.yml");
+  }
+  const base = process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
+  return join(base, "gh", "hosts.yml");
+}
+
+async function defaultKnownHosts(): Promise<string[]> {
+  try {
+    return parseGhHostsFile(await readFile(defaultGhHostsPath(), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
 /** Token from the environment, following gh's precedence for the host kind. */
 export function environmentGitHubToken(
   host: string,
@@ -98,9 +150,18 @@ export function environmentGitHubToken(
   const pick = (...keys: string[]) =>
     keys.map((key) => env[key]?.trim()).find((value) => value);
   if (isDotComHost(host)) return pick("GH_TOKEN", "GITHUB_TOKEN");
-  const configuredHost = env.GH_HOST?.trim().toLowerCase();
-  if (configuredHost && configuredHost !== host) return undefined;
+  if (configuredGitHubEnterpriseHost(env) !== host) return undefined;
   return pick("GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN");
+}
+
+function ghAuthTokenEnv(host: string): NodeJS.ProcessEnv {
+  const env = { ...githubCliEnvironment(), GH_PROMPT_DISABLED: "1", GH_DEBUG: "" };
+  // A global enterprise token must not be offered to gh for an unrelated host.
+  if (configuredGitHubEnterpriseHost(process.env) !== host) {
+    delete env.GH_ENTERPRISE_TOKEN;
+    delete env.GITHUB_ENTERPRISE_TOKEN;
+  }
+  return env;
 }
 
 async function defaultGhAuthToken(host: string): Promise<string> {
@@ -110,7 +171,7 @@ async function defaultGhAuthToken(host: string): Promise<string> {
     ["auth", "token", "--hostname", host],
     {
       encoding: "utf8",
-      env: { ...githubCliEnvironment(), GH_PROMPT_DISABLED: "1", GH_DEBUG: "" },
+      env: ghAuthTokenEnv(host),
       maxBuffer: 64 * 1024,
       timeout: GH_AUTH_TOKEN_TIMEOUT_MS,
     },
@@ -139,6 +200,7 @@ export class GitHubCredentialSource {
   private readonly env: () => NodeJS.ProcessEnv;
   private readonly ghAuthToken: GhAuthTokenRunner;
   private readonly now: () => number;
+  private readonly knownHosts: () => Promise<readonly string[]>;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<GitHubCredentialResult>>();
 
@@ -146,6 +208,12 @@ export class GitHubCredentialSource {
     this.env = options.env ?? (() => process.env);
     this.ghAuthToken = options.ghAuthToken ?? defaultGhAuthToken;
     this.now = options.now ?? Date.now;
+    this.knownHosts = options.knownHosts ?? defaultKnownHosts;
+  }
+
+  /** True when `host` is github.com, GHE.com, GH_HOST, or recorded by `gh`. */
+  async authorizesHost(host: string): Promise<boolean> {
+    return isAuthorizedGitHubHost(host, this.env(), await this.knownHosts());
   }
 
   async resolve(host: string): Promise<GitHubCredentialResult> {
@@ -179,6 +247,16 @@ export class GitHubCredentialSource {
   }
 
   private async read(host: string): Promise<GitHubCredentialResult> {
+    if (!(await this.authorizesHost(host))) {
+      return {
+        ok: false,
+        missing: {
+          host,
+          reason: "unauthenticated",
+          message: `Run \`gh auth login --hostname ${host}\` on this Mac, or set GH_HOST and GH_ENTERPRISE_TOKEN, then refresh.`,
+        },
+      };
+    }
     const fromEnv = environmentGitHubToken(host, this.env());
     if (fromEnv) return this.credential(host, fromEnv, "environment");
     try {

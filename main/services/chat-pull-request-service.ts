@@ -399,6 +399,8 @@ export class ChatPullRequestService {
           cwd,
           repoSelector(link.host, link.repository),
           link.number,
+          undefined,
+          { interactive: true },
         ),
       ),
     );

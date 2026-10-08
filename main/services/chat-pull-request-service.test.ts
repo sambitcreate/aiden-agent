@@ -13,6 +13,11 @@ import {
   type ChatPullRequestServiceDeps,
 } from "./chat-pull-request-service.js";
 import { ChatPullRequestStore } from "./chat-pull-request-store.js";
+import { GitHubApi } from "./github/github-api.js";
+import { FakeGitHub } from "./github/github-fake-server.js";
+import { BatchedPullRequestReader } from "./github/github-pull-request-reader.js";
+import { fixedCredentials, recordingFetch } from "./github/github-test-fetch.js";
+import { GitHubPullRequestService } from "./github-pull-request.js";
 import type {
   GitHubPullRequestCreateResult,
   GitHubPullRequestListStatus,
@@ -829,4 +834,61 @@ test("refresh reads every link together and announces only real changes", async 
   const refreshed = await service.refresh(CHAT);
   assert.equal(changes, linked + 1);
   assert.equal(refreshed.links.find((link) => link.number === 13)?.checksState, "failing");
+});
+
+test("explicit refresh bypasses a fresh background cache after remote CI changes", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const github = new FakeGitHub({
+    repositories: ["owner/repo"],
+    pullRequests: [
+      {
+        repository: "owner/repo",
+        number: 12,
+        title: "PR 12",
+        state: "OPEN",
+        headRefName: "feature/x",
+        baseRefName: "main",
+        headRefOid: "a".repeat(40),
+        headOwner: "owner",
+        checks: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  });
+  const recorded = recordingFetch(github.responder);
+  const pullRequests = new GitHubPullRequestService({
+    reader: new BatchedPullRequestReader({
+      api: new GitHubApi({
+        credentials: fixedCredentials({ "github.com": "token-a" }),
+        fetch: recorded.fetch,
+      }),
+    }),
+    repositories: {
+      resolve: async () => ({
+        ok: true,
+        repository: { host: "github.com", owner: "owner", name: "repo" },
+      }),
+    },
+    resolveBinary: async () => "gh",
+  });
+  const service = new ChatPullRequestService({
+    store: new ChatPullRequestStore(() => directory),
+    github: pullRequests,
+    gitInfo: async () => ({ isRepo: true, branch: "feature/x" }),
+    chatWorkspaceId: async () => "workspace-1",
+    workspaceFolderPath: async () => "/work/repo",
+  });
+
+  const linked = await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
+  assert.equal(linked.ok && linked.pullRequest?.checksState, "passing");
+  github.pullRequest("owner/repo", 12).checks = [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }];
+  const afterLink = recorded.requests.length;
+  const stale = await pullRequests.getPullRequest("/work/repo", "github.com/owner/repo", 12);
+  assert.equal(stale.pullRequest?.checksState, "passing");
+  assert.equal(recorded.requests.length, afterLink, "background reads reuse the cached snapshot");
+  const refreshed = await service.refresh(CHAT);
+  assert.equal(refreshed.links[0]?.checksState, "failing");
+  assert.ok(recorded.requests.length > afterLink);
 });

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { GitHubCredentialSource } from "./github-credentials.js";
 import { LocalRepositoryResolver, parseGitRemoteUrl } from "./github-local-repository.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -70,6 +71,9 @@ test("push remote, merge ref, and insteadOf rewrites shape the head", async (t) 
   git(dir, "config", "branch.local-name.remote", "origin");
   git(dir, "config", "branch.local-name.pushRemote", "fork");
   git(dir, "config", "branch.local-name.merge", "refs/heads/remote-name");
+  git(dir, "config", "push.default", "upstream");
+  const sha = git(dir, "rev-parse", "HEAD");
+  git(dir, "update-ref", "refs/remotes/fork/remote-name", sha);
 
   const result = await new LocalRepositoryResolver().resolve(dir);
 
@@ -77,6 +81,30 @@ test("push remote, merge ref, and insteadOf rewrites shape the head", async (t) 
   assert.equal(`${result.repository.owner}/${result.repository.name}`, "acme/app");
   assert.equal(result.repository.headBranch, "remote-name");
   assert.equal(result.repository.headOwner, "me");
+});
+
+test("a triangular feature branch targets the push head, not the pull upstream", async (t) => {
+  const dir = repository(t);
+  git(dir, "remote", "add", "origin", "https://github.com/me/app.git");
+  git(dir, "remote", "add", "upstream", "https://github.com/acme/app.git");
+  git(dir, "checkout", "--quiet", "-b", "feature");
+  git(dir, "config", "branch.feature.remote", "upstream");
+  git(dir, "config", "branch.feature.merge", "refs/heads/main");
+  git(dir, "config", "branch.feature.pushRemote", "origin");
+  git(dir, "config", "push.default", "current");
+  const sha = git(dir, "rev-parse", "HEAD");
+  git(dir, "update-ref", "refs/remotes/origin/feature", sha);
+  git(dir, "update-ref", "refs/remotes/upstream/main", sha);
+
+  assert.equal(git(dir, "rev-parse", "--abbrev-ref", "feature@{push}"), "origin/feature");
+
+  const result = await new LocalRepositoryResolver().resolve(dir);
+
+  assert.ok(result.ok);
+  assert.equal(`${result.repository.owner}/${result.repository.name}`, "acme/app");
+  assert.equal(result.repository.headOwner, "me");
+  assert.equal(result.repository.headBranch, "feature");
+  assert.equal(result.repository.headSha, sha);
 });
 
 test("SSH host aliases resolve to the GitHub host behind them", async (t) => {
@@ -95,6 +123,28 @@ test("SSH host aliases resolve to the GitHub host behind them", async (t) => {
 
   assert.equal(first.ok && first.repository.host, "github.com");
   assert.deepEqual(asked, ["github-work"]);
+});
+
+test("a global enterprise token does not accept an unknown workspace remote", async (t) => {
+  const dir = repository(t);
+  git(dir, "remote", "add", "origin", "https://attacker.example/acme/app.git");
+  const credentials = new GitHubCredentialSource({
+    env: () => ({ GH_ENTERPRISE_TOKEN: "enterprise-secret" }),
+    knownHosts: async () => [],
+    ghAuthToken: async () => {
+      throw new Error("gh must not run for an unauthorized host");
+    },
+  });
+  const resolver = new LocalRepositoryResolver({
+    isGitHubHost: (host) => credentials.authorizesHost(host),
+    sshHostname: async () => undefined,
+  });
+
+  assert.deepEqual(await resolver.resolve(dir), {
+    ok: false,
+    availability: "not-github",
+    message: "This repository's remote is not hosted on GitHub.",
+  });
 });
 
 test("enterprise hosts count only when the host check accepts them", async (t) => {

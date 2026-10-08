@@ -41,6 +41,35 @@ test("requests reach the API root for github.com, GHE.com and GHES", async () =>
   assert.equal(requests[0].headers["X-GitHub-Api-Version"], "2022-11-28");
 });
 
+test("an unauthorized discovered host never receives the enterprise token", async () => {
+  const recorded = recordingFetch(() => jsonResponse({ data: { viewer: { login: "me" } } }));
+  const credentials = new GitHubCredentialSource({
+    env: () => ({ GH_ENTERPRISE_TOKEN: "enterprise-secret" }),
+    knownHosts: async () => [],
+    ghAuthToken: async () => {
+      throw new Error("gh must not run for an unauthorized host");
+    },
+  });
+  const client = new GitHubApi({ credentials, fetch: recorded.fetch, now: () => NOW });
+  const attacker = await client.graphql({ ...read, host: "attacker.example", query: "query { viewer { login } }" });
+  assert.equal(attacker.kind, "unavailable");
+  assert.equal(recorded.requests.length, 0);
+
+  const configured = new GitHubApi({
+    credentials: new GitHubCredentialSource({
+      env: () => ({ GH_ENTERPRISE_TOKEN: "enterprise-secret", GH_HOST: "git.corp.example" }),
+      knownHosts: async () => [],
+    }),
+    fetch: recorded.fetch,
+    now: () => NOW,
+  });
+  const accepted = await configured.graphql({ ...read, host: "git.corp.example", query: "query { viewer { login } }" });
+  assert.equal(accepted.kind, "ok");
+  assert.equal(recorded.requests.length, 1);
+  assert.equal(recorded.requests[0]!.url, "https://git.corp.example/api/graphql");
+  assert.equal(recorded.requests[0]!.headers.Authorization, "Bearer enterprise-secret");
+});
+
 test("each host's token is only ever sent to that host", async () => {
   const { client, requests } = api(() => jsonResponse({}), {
     "github.com": "dotcom-secret",
@@ -101,6 +130,15 @@ test("rate limits are recognized in every shape GitHub uses, with the right retr
     [
       "403 secondary rate limit without headers",
       () => jsonResponse({ message: "You have exceeded a secondary rate limit." }, 403),
+      undefined,
+    ],
+    [
+      "403 secondary limit with leftover primary quota",
+      () =>
+        jsonResponse({ message: "You have exceeded a secondary rate limit." }, 403, {
+          "x-ratelimit-remaining": "4999",
+          "x-ratelimit-reset": String(resetSeconds),
+        }),
       undefined,
     ],
   ];

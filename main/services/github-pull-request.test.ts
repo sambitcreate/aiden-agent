@@ -4,6 +4,7 @@ import { GitHubApi } from "./github/github-api.js";
 import { FakeGitHub, type FakePullRequest } from "./github/github-fake-server.js";
 import type { LocalGitHubRepository, LocalRepositoryResult } from "./github/github-local-repository.js";
 import { DirectPullRequestReader } from "./github/github-pull-request-graphql.js";
+import { BatchedPullRequestReader } from "./github/github-pull-request-reader.js";
 import { GitHubRateLimitGate } from "./github/github-request-gate.js";
 import { fixedCredentials, jsonResponse, recordingFetch } from "./github/github-test-fetch.js";
 import {
@@ -525,6 +526,64 @@ test("create failures shown to the renderer drop credentials and workspace paths
     result.kind === "unknown" ? result.message : "",
     /secret-token|also-secret|\/Users\/alice\/project|\/opt\/homebrew\/bin\/gh/u,
   );
+});
+
+test("CI status includes a failing check past the first GraphQL page", async () => {
+  const checks = Array.from({ length: 101 }, (_, index) => ({
+    name: `check-${index}`,
+    status: "COMPLETED" as const,
+    conclusion: index === 100 ? ("FAILURE" as const) : ("SUCCESS" as const),
+  }));
+  const { service, github } = setup({
+    pullRequests: [pr({ number: 44, checks })],
+  });
+
+  const status = await service.getPullRequest("/repo", "acme/app", 44);
+
+  assert.equal(github.pullRequest("acme/app", 44).checks.length, 101);
+  assert.equal(status.availability, "ready");
+  assert.equal(status.pullRequest?.checks.length, 100);
+  assert.equal(status.pullRequest?.checksState, "failing");
+});
+
+test("an interactive current read sees CI that changed inside the background cache window", async () => {
+  const github = new FakeGitHub({
+    repositories: ["acme/app"],
+    pullRequests: [pr({ number: 7 })],
+  });
+  const recorded = recordingFetch(github.responder);
+  const service = new GitHubPullRequestService({
+    reader: new BatchedPullRequestReader({
+      api: new GitHubApi({
+        credentials: fixedCredentials({ "github.com": "token-a" }),
+        fetch: recorded.fetch,
+      }),
+    }),
+    repositories: {
+      resolve: async () => ({
+        ok: true,
+        repository: {
+          host: "github.com",
+          owner: "acme",
+          name: "app",
+          branch: "feature/login",
+          headBranch: "feature/login",
+          headOwner: "acme",
+        },
+      }),
+    },
+    resolveBinary: async () => "gh",
+  });
+
+  const first = await service.currentPullRequest("/repo");
+  github.pullRequest("acme/app", 7).checks = [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }];
+  const cached = await service.currentPullRequest("/repo");
+  const refreshed = await service.currentPullRequest("/repo", undefined, { interactive: true });
+
+  assert.equal(first.pullRequest?.checksState, "passing");
+  assert.equal(cached.pullRequest?.checksState, "passing");
+  assert.equal(refreshed.pullRequest?.checksState, "failing");
+  assert.equal(recorded.requests.length, 2);
 });
 
 test("aborted reads reject instead of becoming GitHub errors", async () => {

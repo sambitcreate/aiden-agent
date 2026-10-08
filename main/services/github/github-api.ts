@@ -131,10 +131,16 @@ export function readRateLimitHeaders(headers: Headers, now: number): RateLimitHe
   return result;
 }
 
-/** `retry-after` wins; otherwise the window reset, when GitHub sent one. */
+/**
+ * `retry-after` wins. The primary `x-ratelimit-reset` is only the deadline
+ * when that primary quota is exhausted; a secondary-limit 403 can still
+ * carry a future primary reset while remaining > 0.
+ */
 export function retryAtFrom(headers: RateLimitHeaders, now: number): number | undefined {
   if (headers.retryAfterMs !== undefined) return now + headers.retryAfterMs;
-  if (headers.resetAt !== undefined && headers.resetAt > now) return headers.resetAt;
+  if (headers.remaining === 0 && headers.resetAt !== undefined && headers.resetAt > now) {
+    return headers.resetAt;
+  }
   return undefined;
 }
 

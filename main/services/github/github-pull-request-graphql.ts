@@ -14,7 +14,7 @@ const PULL_REQUEST_FRAGMENT = `fragment AidenPullRequest on PullRequest {
   number title url state isDraft headRefName baseRefName headRefOid
   author { login } reviewDecision mergeable updatedAt
   headRepositoryOwner { login }
-  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+  commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { pageInfo { hasNextPage } nodes {
     __typename
     ... on CheckRun { name status conclusion detailsUrl startedAt completedAt checkSuite { workflowRun { workflow { name } } } }
     ... on StatusContext { context state description targetUrl createdAt }
@@ -132,18 +132,26 @@ function checkNode(node: unknown): Record<string, unknown> | undefined {
   };
 }
 
-function rollupNodes(node: Record<string, unknown>): unknown[] {
+function rollupPayload(node: Record<string, unknown>): Record<string, unknown> {
   const commits = isRecord(node.commits) && Array.isArray(node.commits.nodes) ? node.commits.nodes : [];
   const last = commits[commits.length - 1];
   const commit = isRecord(last) && isRecord(last.commit) ? last.commit : undefined;
   const rollup = commit && isRecord(commit.statusCheckRollup) ? commit.statusCheckRollup : undefined;
-  const contexts = rollup && isRecord(rollup.contexts) && Array.isArray(rollup.contexts.nodes) ? rollup.contexts.nodes : [];
-  return contexts.map(checkNode).filter((entry) => entry !== undefined);
+  const contexts = rollup && isRecord(rollup.contexts) ? rollup.contexts : undefined;
+  const nodes = contexts && Array.isArray(contexts.nodes) ? contexts.nodes : [];
+  const pageInfo = contexts && isRecord(contexts.pageInfo) ? contexts.pageInfo : undefined;
+  return {
+    ...(typeof rollup?.state === "string" ? { state: rollup.state } : {}),
+    contexts: {
+      ...(pageInfo ? { pageInfo } : {}),
+      nodes: nodes.map(checkNode).filter((entry) => entry !== undefined),
+    },
+  };
 }
 
 export function pullRequestFromGraphQl(node: unknown): PullRequestHeadSummary {
   if (!isRecord(node)) throw new Error("GitHub returned an invalid pull request response.");
-  const summary = parseRawPullRequest({ ...node, statusCheckRollup: rollupNodes(node) });
+  const summary = parseRawPullRequest({ ...node, statusCheckRollup: rollupPayload(node) });
   const owner = isRecord(node.headRepositoryOwner) ? boundedString(node.headRepositoryOwner.login, 128) : undefined;
   return owner ? { ...summary, headOwner: owner.toLowerCase() } : summary;
 }

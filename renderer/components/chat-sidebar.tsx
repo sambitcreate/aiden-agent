@@ -71,7 +71,7 @@ import {
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
 import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
-import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
+import { queryKeys, refreshGitPullRequestStatus, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
 import { formatGitHubPausedUntil, githubPausedUntil } from "../lib/github-pause";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
@@ -340,8 +340,10 @@ function pullRequestStateLabel(state: "open" | "closed" | "merged", isDraft?: bo
 }
 
 function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }: { workspace: Workspace; visible: boolean; accessibilityName: string }) {
+  const queryClient = useQueryClient();
   const enabled = visible && Boolean(workspace.folderPath && workspace.permission !== "none");
   const status = useGitPullRequestStatus(workspace.id, enabled);
+  const refreshStatus = () => void refreshGitPullRequestStatus(queryClient, workspace.id);
   const pullRequest = status.data?.pullRequest;
   if (!enabled || status.isLoading) return null;
   const pausedUntil = githubPausedUntil(status.data, Date.now());
@@ -398,7 +400,7 @@ function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }
           <p className="text-small-strong text-primary">GitHub status unavailable</p>
           <p className="mt-1 text-small text-secondary">{message}</p>
           <div className="mt-3 flex justify-end">
-            <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
+            <Button variant="muted" size="small" onClick={refreshStatus} disabled={status.isFetching}>
               {status.isFetching ? "Refreshing…" : "Refresh"}
             </Button>
           </div>
@@ -490,7 +492,7 @@ function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }
         ) : null}
         <div className="mt-3 flex items-center justify-between gap-2">
           {status.isFetching ? <span className="inline-flex items-center gap-1.5 text-small text-tertiary"><Loader2 className="size-3.5 animate-spin" />Refreshing…</span> : <span className="text-small text-tertiary">Refreshes every 30 seconds.</span>}
-          <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching || pausedLabel !== undefined}>
+          <Button variant="muted" size="small" onClick={refreshStatus} disabled={status.isFetching || pausedLabel !== undefined}>
             Refresh
           </Button>
         </div>

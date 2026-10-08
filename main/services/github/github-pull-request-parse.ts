@@ -123,6 +123,30 @@ function rawCheckUrl(node: RawStatusCheckNode): string | undefined {
   return safeHttpUrl(node.detailsUrl) ?? safeHttpUrl(node.targetUrl);
 }
 
+function normalizeRollupState(value: unknown): GitHubPullRequestChecksState | null {
+  switch (boundedString(value)?.toUpperCase()) {
+    case "FAILURE":
+    case "ERROR":
+      return "failing";
+    case "PENDING":
+    case "EXPECTED":
+      return "pending";
+    case "SUCCESS":
+      return "passing";
+    default:
+      return null;
+  }
+}
+
+function worseChecksState(
+  left: GitHubPullRequestChecksState | null,
+  right: GitHubPullRequestChecksState | null,
+): GitHubPullRequestChecksState | null {
+  const rank = (state: GitHubPullRequestChecksState | null) =>
+    state === "failing" ? 3 : state === "pending" ? 2 : state === "passing" ? 1 : 0;
+  return rank(left) >= rank(right) ? left : right;
+}
+
 function extractRawChecks(value: unknown): RawStatusCheckNode[] {
   const nodes =
     isRecord(value) &&
@@ -271,6 +295,15 @@ export function parseRawPullRequest(parsed: unknown): GitHubPullRequestSummary {
         ? "closed"
         : "open";
   const allChecks = dedupeGitHubChecks(extractRawChecks(raw.statusCheckRollup));
+  const rollup = isRecord(raw.statusCheckRollup) ? raw.statusCheckRollup : undefined;
+  const contexts = rollup && isRecord(rollup.contexts) ? rollup.contexts : undefined;
+  const pageInfo = contexts && isRecord(contexts.pageInfo) ? contexts.pageInfo : undefined;
+  const fromNodes = rollupGitHubChecksState(allChecks);
+  const fromRollup = normalizeRollupState(rollup?.state);
+  const checksState =
+    pageInfo?.hasNextPage === true || fromRollup
+      ? worseChecksState(fromNodes, fromRollup)
+      : fromNodes;
   const headSha = boundedString(raw.headRefOid, 64)?.toLowerCase();
   const author = isRecord(raw.author)
     ? boundedString(raw.author.login, 128)
@@ -290,7 +323,7 @@ export function parseRawPullRequest(parsed: unknown): GitHubPullRequestSummary {
     mergeable: normalizeMergeable(raw.mergeable),
     ...(updatedAt > 0 ? { updatedAt } : {}),
     checks: allChecks.slice(0, MAX_CHECKS),
-    checksState: rollupGitHubChecksState(allChecks),
+    checksState,
   };
 }
 

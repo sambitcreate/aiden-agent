@@ -5,7 +5,7 @@ import { logger } from "../../platform.js";
 import { GitHubPullRequestService } from "../github-pull-request.js";
 import { GitHubApi } from "./github-api.js";
 import { GitHubCredentialSource } from "./github-credentials.js";
-import { isWellKnownGitHubHost, LocalRepositoryResolver } from "./github-local-repository.js";
+import { LocalRepositoryResolver } from "./github-local-repository.js";
 import { BatchedPullRequestReader } from "./github-pull-request-reader.js";
 import { GitHubRateLimitGate } from "./github-request-gate.js";
 
@@ -16,7 +16,7 @@ export const githubGate = new GitHubRateLimitGate({ log: (line) => logger.info("
 export const githubApi = new GitHubApi({ credentials, gate: githubGate });
 
 const repositories = new LocalRepositoryResolver({
-  isGitHubHost: async (host) => isWellKnownGitHubHost(host) || (await credentials.resolve(host)).ok,
+  isGitHubHost: (host) => credentials.authorizesHost(host),
 });
 
 export const githubPullRequests = new GitHubPullRequestService({
@@ -24,5 +24,8 @@ export const githubPullRequests = new GitHubPullRequestService({
   repositories,
 });
 
-export const githubCurrentPullRequest = (folderPath: string, signal?: AbortSignal) =>
-  githubPullRequests.currentPullRequest(folderPath, signal);
+export const githubCurrentPullRequest = (
+  folderPath: string,
+  signal?: AbortSignal,
+  options?: { interactive?: boolean },
+) => githubPullRequests.currentPullRequest(folderPath, signal, options);

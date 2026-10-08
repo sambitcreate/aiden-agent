@@ -126,6 +126,8 @@ export class FakeGitHub {
   }
 
   private node(entry: FakePullRequest): Record<string, unknown> {
+    const pageSize = 100;
+    const visible = entry.checks.slice(0, pageSize);
     return {
       number: entry.number,
       title: entry.title,
@@ -145,8 +147,10 @@ export class FakeGitHub {
           {
             commit: {
               statusCheckRollup: {
+                state: fakeRollupState(entry.checks),
                 contexts: {
-                  nodes: entry.checks.map((check) => ({
+                  pageInfo: { hasNextPage: entry.checks.length > pageSize },
+                  nodes: visible.map((check) => ({
                     __typename: "CheckRun",
                     name: check.name,
                     status: check.status,
@@ -164,4 +168,12 @@ export class FakeGitHub {
       },
     };
   }
+}
+
+function fakeRollupState(checks: FakeCheck[]): string | undefined {
+  if (checks.length === 0) return undefined;
+  if (checks.some((check) => check.status !== "COMPLETED")) return "PENDING";
+  if (checks.some((check) => check.conclusion === "FAILURE" || check.conclusion === "CANCELLED")) return "FAILURE";
+  if (checks.some((check) => check.conclusion === "SUCCESS")) return "SUCCESS";
+  return "PENDING";
 }
