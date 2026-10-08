@@ -212,7 +212,7 @@ export function registerBotHandlers(): void {
   );
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
     const { presetId, access } = parseBotCreateFromPreset(input);
-    const { bot, created } = await botStarter().startFromPreset(presetId, access);
+    const { bot, created } = await botStarter().startFromPreset(presetId, access === undefined ? {} : { access });
     return { bot, created };
   });
   ipcMain.handle("bots:introduce", async (_event, id: unknown) => {

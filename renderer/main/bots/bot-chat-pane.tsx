@@ -6,6 +6,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
+import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { Button, EmptyState, Text, toast } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
@@ -20,7 +21,7 @@ import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
 import { resolveBotReplyProjection } from "./bot-reply-projection";
-import type { BotSessionState } from "./bot-session-state";
+import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { BotUpdates } from "./bot-updates";
 import { useConnectionSetup } from "./use-connection-setup";
 
@@ -98,7 +99,12 @@ function useBotApprovals(botId: string | undefined) {
     (waitId: string) => setPrompts((current) => current.filter((prompt) => prompt.waitId !== waitId)),
     [],
   );
-  return { prompts, remove };
+  /** Puts a prompt back after its answer failed to send, so it can be answered again. */
+  const restore = React.useCallback(
+    (prompt: BotApprovalPrompt) => setPrompts((current) => mergePrompts(current, [prompt])),
+    [],
+  );
+  return { prompts, remove, restore };
 }
 
 function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): BotApprovalPrompt[] {
@@ -120,7 +126,7 @@ export function BotApprovalCard({
   return (
     <div role="group" aria-label={`${name} needs approval`} className="flex max-w-md flex-col gap-3 rounded-2xl bg-control/50 p-4">
       <Text as="p" color="primary">
-        {`${name} wants to use ${prompt.toolName}.`}
+        {`${name} wants to use ${toolLabel(prompt.toolName)}.`}
       </Text>
       {prompt.summary ? (
         <Text as="p" variant="small" color="secondary" className="whitespace-pre-wrap break-words">
@@ -229,6 +235,10 @@ function TranscriptEntries({
         break;
     }
   });
+  if (running && partial === null && entries[entries.length - 1]?.type !== "assistant") {
+    // Just sent, or between tool calls: nothing written yet, but the Bot is working.
+    rows.push(<BotUpdates key="working" progressText="" timeline={null} active />);
+  }
   if (partial !== null) {
     const { progressText, finalText } = resolveBotReplyProjection(partial, null, true);
     if (progressText) rows.push(<BotUpdates key="partial-updates" progressText={progressText} timeline={null} active />);
@@ -257,11 +267,27 @@ export function BotChatPane({ botId }: { botId: string }) {
     if (node) node.scrollTop = node.scrollHeight;
   }, [snapshot?.entries.length, snapshot?.partial]);
 
-  if (bot.isLoading || snapshot === null) {
+  if (bot.isLoading) {
     return <Text color="secondary">Loading…</Text>;
   }
   if (!bot.data) {
     return <EmptyState title="Bot not found" description="This Bot may have been deleted." />;
+  }
+  if (snapshot === null) {
+    return live.failed ? (
+      <EmptyState
+        role="alert"
+        title="This chat didn’t open"
+        description={`Aiden couldn’t load ${bot.data.name}’s chat.`}
+        action={
+          <Button variant="accent" size="medium" onClick={live.reload}>
+            Try again
+          </Button>
+        }
+      />
+    ) : (
+      <Text color="secondary">Loading…</Text>
+    );
   }
   const current = bot.data;
   const back = () => void navigate({ to: "/bots" });
@@ -351,9 +377,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             entries={snapshot.entries}
             partial={snapshot.partial}
             running={running}
-            onConnect={(pluginId) => {
-              if (!connectionSetup.open(pluginId)) toast.error("This connection can't be set up from here.");
-            }}
+            onConnect={(pluginId) => void connectionSetup.open(pluginId)}
             onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
           />
           {state?.kind === "interrupted" ? (
@@ -374,6 +398,7 @@ export function BotChatPane({ botId }: { botId: string }) {
               onAnswer={(decision) => {
                 approvals.remove(prompt.waitId);
                 void botsApi.approve(prompt.waitId, decision).catch((error) => {
+                  approvals.restore(prompt);
                   toast.error(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
                 });
               }}
@@ -390,7 +415,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           ready={!state || state.kind !== "unavailable"}
-          readinessMessage={state?.kind === "unavailable" ? state.reason : undefined}
+          readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
           hasMessages={snapshot.entries.length > 0}
           chatId={`bot:${current.id}`}
           placeholder={`Ask ${current.name}`}
