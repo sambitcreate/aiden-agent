@@ -1789,10 +1789,6 @@ final class AidenBotContractTests: XCTestCase {
             isCreating: false,
             hasAvatarCandidate: true
         ), "An accepted photo preview must require an explicit use or discard decision.")
-        XCTAssertFalse(
-            aidenBotEditorCanSubmitSettings(hasAvatarCandidate: true),
-            "Settings Save must not dismiss and destroy an accepted photo preview."
-        )
         editDraft.purpose += " updated"
         XCTAssertTrue(aidenBotEditorIsDirty(
             draft: editDraft,

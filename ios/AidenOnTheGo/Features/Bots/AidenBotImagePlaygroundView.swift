@@ -254,6 +254,12 @@ func aidenBotImagePlaygroundCleanupAfterProcessLaunch(
     candidateStore.removeAllOwnedCandidates()
 }
 
+enum AidenBotImagePlaygroundCopy {
+    /// Shown just before Apple's system sheet opens. Apple owns the processing,
+    /// so the note must not promise on-device-only generation.
+    static let privacyNote = "Apple creates the image and may use Private Cloud Compute. Aiden receives only the image you choose."
+}
+
 /// Reads whether Apple's Image Playground can run here with Aiden's
 /// non-personalized styles (iOS 18.4 or later on a supported device).
 struct AidenBotImagePlaygroundSupportReader<Content: View>: View {

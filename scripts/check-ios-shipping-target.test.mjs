@@ -270,6 +270,10 @@ test("Bot Image Playground stays Apple-owned, non-personalized, and availability
   const app = shippingSources.find(([path]) => path.endsWith("/AidenOnTheGoApp.swift"))?.[1];
   assert.match(app, /init\(\) \{\s*aidenBotImagePlaygroundCleanupAfterProcessLaunch\(\)/u);
   assert.doesNotMatch(source, /imagePlaygroundPersonalizationPolicy\(\.(?:automatic|enabled)\)/u);
+  assert.match(source, /Private Cloud Compute/u);
+  const profile = shippingSources.find(([path]) => path.endsWith("/AidenBotProfileView.swift"))?.[1];
+  assert.match(profile, /"Create with Apple Intelligence"/u);
+  assert.match(profile, /Text\(AidenBotImagePlaygroundCopy\.privacyNote\)/u);
   for (const [path, shippingSource] of shippingSources) {
     assert.doesNotMatch(
       shippingSource,

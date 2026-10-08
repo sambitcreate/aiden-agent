@@ -51,6 +51,7 @@ struct AidenBotProfileView: View {
     @State private var avatarModel: AidenBotGeneratedAvatarModel?
     @State private var photoItem: PhotosPickerItem?
     @State private var isShowingImagePlayground = false
+    @State private var isConfirmingImagePlaygroundPrivacy = false
     @State private var isConfirmingPhotoRemoval = false
     @State private var isConfirmingDelete = false
     @State private var isShowingAdvanced = false
@@ -117,6 +118,16 @@ struct AidenBotProfileView: View {
         }
         .onChange(of: focusedField) { oldValue, _ in
             if let oldValue { Task { await commit(oldValue) } }
+        }
+        .confirmationDialog(
+            "Create with Apple Intelligence",
+            isPresented: $isConfirmingImagePlaygroundPrivacy,
+            titleVisibility: .visible
+        ) {
+            Button("Open Image Playground") { isShowingImagePlayground = true }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(AidenBotImagePlaygroundCopy.privacyNote)
         }
         .aidenBotImagePlaygroundSheet(
             isPresented: $isShowingImagePlayground,
@@ -300,8 +311,8 @@ struct AidenBotProfileView: View {
                     Label("Choose Photo", systemImage: "photo.on.rectangle")
                 }
                 if canGenerate {
-                    Button("Generate", systemImage: "sparkles") {
-                        isShowingImagePlayground = true
+                    Button("Create with Apple Intelligence", systemImage: "apple.intelligence") {
+                        isConfirmingImagePlaygroundPrivacy = true
                     }
                 }
                 if detail.avatar.asset != nil {
