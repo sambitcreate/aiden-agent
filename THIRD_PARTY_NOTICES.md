@@ -137,6 +137,14 @@ its stream client, simulator controls, and procedural 3D device frame
 Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
 not included; the device-motion spring is Aiden's own.
 
+The Android Emulator support (`main/services/devices/android-device-actions.ts`,
+the serve-emu stream path in `renderer/lib/device-stream.ts`, Android SDK
+discovery, the serve-emu proxy routes, and the Android fold controls in
+`renderer/lib/device-fold.ts` and
+`renderer/components/device-android-fold-controls.tsx`) is adapted from T3
+Code at commit `a6ec88f7`, under the same MIT license. The fold glyphs are
+Aiden's own.
+
 ## three.js
 
 Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is

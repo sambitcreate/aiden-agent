@@ -28,6 +28,21 @@ A Mac you paired as an Aiden desktop can share its simulators. On the Mac that h
 
 The paired Mac's simulators then appear under their own heading in your tab. Aiden checks paired Macs only when you open the tab or choose refresh. It never polls in the background. Agent tools use this Mac's simulators only.
 
+## Android Emulators
+
+The Simulator tab also shows Android Emulators, under the same feature flag and the same streaming consent. Nothing extra is installed: the pinned expo-device-hub already bundles serve-emu. The port follows T3 Code at commit `a6ec88f7`.
+
+- **Requirements.** The Android SDK with Platform-Tools, the Emulator, and Command-line Tools (latest), and at least one AVD from Android Studio's Device Manager. Aiden finds the SDK from `ANDROID_HOME` or `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, then the SDK that owns an `adb` on your PATH. It puts `platform-tools` and `emulator` first on PATH for the hub and for every host command. A Mac without Xcode can still run emulators: the hub starts when either platform can run.
+- **Listing.** Each host lists its devices in an **iOS Simulators** and an **Android Emulators** section. A platform that cannot run says why, for example "Android SDK not found." Running emulators come from the hub's `/api/devices`. AVDs the hub leaves out because they never booted come from `emulator -list-avds`. Physical Android phones are not listed. A stopped emulator's id is its AVD name; once it boots, its id becomes the adb serial (`emulator-5554`), and the session follows the serial.
+- **Booting and shutting down.** Both go through the hub (`/api/devices/boot` and `/api/devices/shutdown`). Boot failures are classified as in T3: not enough disk space, a timeout, or a launch failure.
+- **Stream.** One WebSocket, `/vendor/serve-emu/ws?device=<serial>&frame-meta=1`, carries H.264 Annex-B access units behind a 16-byte `SEMU` header (magic, version, key flag, pts) and takes JSON gestures upstream. The decoder configures from the keyframe's SPS and asks for keyframes with `reset-video`. When a fold or rotation changes the screen size, serve-emu restarts its encoder (`video-session`). The viewer keeps the last frame and input stays connected. After 2 seconds the viewer shows "Waiting for device video…". There is no MJPEG fallback on Android.
+- **Input.** Printable characters are sent as text. Arrows, Enter, Backspace, Tab, Delete, Home/End, and Page Up/Down are sent as Android keycodes, and Escape is Back. The rail has Back, Home, Recents, Power, and a Portrait/Landscape menu that tilts the emulator's accelerometer.
+- **Device tools.** Appearance, text size, Reduce Motion (the animation scales), the network switch (`svc wifi` and `svc data`), orientation, location, eight permission groups, open URL, launch, quit, and the focused app. Each one is a typed `adb -s <serial>` argv in `main/services/devices/android-device-actions.ts`. Arguments after `adb shell` are quoted for the device's shell, which parses them again. iOS-only controls such as Liquid Glass, color filters, and push notifications are hidden.
+- **Foldables.** When the emulator reports a hinge sensor, the flat view shows **Fold device** and **Unfold device**. The state is read from `/vendor/serve-emu/api/fold` and read again whenever the screen size changes. A failed read is retried every 3 seconds, and a command that does not finish in 12 seconds fails with "Fold command timed out." `useAndroidFold` (`renderer/lib/device-fold.ts`) exposes the posture and hinge angle, from 0 (closed) to 180 (open), for the 3D frame.
+- **Proxy.** The allowlist adds T3's serve-emu routes: `api/devices`, `screenshot`, `stream-mode`, `stream-settings`, `accessibility`, `fold`, `health`, and the `ws` socket. Device-scoped serve-emu routes need exactly one valid `?device=`. Each mutating route accepts only its own method: POST for screenshot and fold, PUT for stream-mode, and PATCH for stream-settings. `decideDeviceHubRoute` reports a scope. Reading fold state is `read`; folding, stream tuning, and input sockets are `operate`.
+- **Paired Macs.** The `/simulators` listing carries `platform`. The relay forwards the serve-emu stream, screenshots, and fold. It rebuilds the fold body from `posture` alone and never relays stream tuning.
+- **Agents.** `device_list` reports each device's platform and which platforms this Mac can run. `device_open` takes `platform`, which it needs when both platforms have devices and no `deviceId` is given. It pins agent-device with `--platform android --serial <serial>`. The Android quick start allows `adb -s` for builds, logs, and `adb reverse`, and forbids shutting down or wiping the watched emulator and stopping serve-emu.
+
 ## Settings → Simulator
 
 Settings → **Simulator** appears in the settings list and command palette only when the feature flag is on. It contains:
@@ -48,6 +63,8 @@ Settings → **Simulator** appears in the settings list and command palette only
 | Symptom | What to do |
 | --- | --- |
 | "Xcode was not found." | Install Xcode from the App Store and open it once so it can finish setting up, then choose refresh. |
+| "Android SDK not found." | Install Android Studio and its SDK Platform-Tools, Emulator, and Command-line Tools (latest), or set `ANDROID_HOME`, then choose refresh. |
+| An Android emulator shows "Waiting for device video…" | The emulator is restarting its encoder after a fold or rotation. If it does not recover, close the device and open it again. |
 | Setup fails with an npm error | Make sure `npm` is on your PATH and can reach your registry, then turn streaming on again. |
 | The screen stays black | Close the device and open it again. If the stream can't renew its grant three times in a minute, **Reconnect** appears. |
 | The 3D frame never shows | The stream is using MJPEG, the device has a hinge, or WebGL is unavailable. The flat view is intended in these cases. |
@@ -108,5 +125,5 @@ The 3D frame (`renderer/lib/device-3d/`) is procedural. T3's Apple GLB models ha
 ### Tests
 
 - `npm run test:devices`: unit and SSR suites.
-- `tests/e2e/environment-devices-*.spec.ts`: Electron E2E against `tests/e2e/device-hub-fake.mjs` and `agent-device-fake.mjs`.
+- `tests/e2e/environment-devices-*.spec.ts`: Electron E2E against `tests/e2e/device-hub-fake.mjs` and `agent-device-fake.mjs`. The Android spec also fakes the SDK's `adb` and `emulator`; the iOS specs pin `ANDROID_HOME` to an empty folder.
 - `scripts/devices-acceptance.mjs --allow-npm-install`: real-Mac acceptance.
