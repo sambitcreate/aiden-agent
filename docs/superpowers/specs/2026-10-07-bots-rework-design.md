@@ -234,7 +234,7 @@ Gaps in 1.0.3 are filled by borrowing Pi Durable OSS code into the extension or 
 ### 6.5 Live view and clients
 
 - **Desktop:** `live-projection.ts` runs `conv.watch(ctx)` and publishes a bounded IPC stream (entries plus `pi.live` partial) to any renderer window. A renderer reload re-attaches and gets a full snapshot. This replaces Bot use of the current per-owner delta path.
-- **Remote:** a new revision (claim the next number after `main`'s at merge; currently expected 25) is added:
+- **Remote:** a new revision is added. It is claimed at merge as **revision 25** (`main` is at 24). Its feature tokens are `bot-delete-v1`, `bot-durable-session-v1`, `bot-routines-v1`, `bot-connection-requests-v1` and `bot-presets-v1`:
   - Bot chat snapshot carries the entry window plus the in-flight partial text and an `interrupted` flag;
   - stream events are derived from watch diffs and carry a `(epoch, seq)` pair, where `epoch` changes when the harness reopens;
   - two new routes, `POST /bots/{botId}/resume` and `POST /bots/{botId}/dismiss`, are idempotent per request UUID.

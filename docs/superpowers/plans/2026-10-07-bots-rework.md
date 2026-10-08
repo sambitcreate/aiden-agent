@@ -33,7 +33,7 @@
   - must be behavioural; no source-grep oracles and no tautologies;
   - register every new test file in the appropriate `package.json` script and CI registry (`scripts/run-ci-tests.mjs`);
   - resolve `test` chain conflicts by union.
-- Remote protocol revision: the next number after `main`'s, claimed at merge, with iOS, Android and fixtures updated together.
+- Remote protocol revision: 25 (`main` is at 24), claimed at merge, with iOS, Android and fixtures updated together.
 - Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Review Focus
@@ -422,7 +422,7 @@ export type BotLiveEvent = { epoch: string; seq: number } & ({ type: "entry"; en
 
 **Spec:** §6.5 (Remote), §7 (mobile), §8.
 
-- [ ] Claim the next revision. Add:
+- [ ] Claim the next revision, which is 25 (`main` is at 24). Add:
   - Bot snapshot `{entries window, partial, interrupted}`;
   - `(epoch, seq)` on Bot stream events;
   - `POST /bots/{id}/resume` and `/dismiss` (idempotent per request UUID);
