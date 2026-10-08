@@ -163,7 +163,11 @@ export function environmentGitHubToken(
 }
 
 function ghAuthTokenEnv(host: string): NodeJS.ProcessEnv {
-  const env = { ...githubCliEnvironment(), GH_PROMPT_DISABLED: "1", GH_DEBUG: "" };
+  const env: NodeJS.ProcessEnv = {
+    ...githubCliEnvironment(),
+    GH_PROMPT_DISABLED: "1",
+    GH_DEBUG: "",
+  };
   // A global enterprise token must not be offered to gh for an unrelated host.
   if (configuredGitHubEnterpriseHost(process.env) !== host) {
     delete env.GH_ENTERPRISE_TOKEN;
