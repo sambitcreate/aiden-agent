@@ -10,6 +10,11 @@
 //   never replay-safe; the caller declares replay for the rest.
 // - Policy: `beforeTool` re-checks the Bot's current policy at every call and
 //   blocks a disallowed tool without running it.
+// - Ingress: the installed tools are the attended set. Each request and each
+//   call reads which inputs its run serves (`pi.live.run`, durable, so a
+//   queued or restarted input keeps its own sender) and withholds what those
+//   inputs may not use (routine and Telegram turns get no question card), so a
+//   turn never inherits the tools of whoever sent last.
 // - Images: a model without image input gets text references in place of the
 //   person's images, for that request only (see `bot-images.ts`).
 // - Approvals: an approval-gated call asks through `requestApproval` with a
@@ -21,16 +26,19 @@
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Message } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   createRegistry,
   defineExtension,
   GenerationTask,
   hook,
+  LiveDoc,
   section,
   ToolTask,
   type Extension,
   type Harness,
+  type HookApi,
   type Registry,
 } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
@@ -60,6 +68,8 @@ export interface BotToolCallCheck {
   callId: string;
   args: unknown;
   signal: AbortSignal | undefined;
+  /** Request ids of the inputs the calling run serves (one per input; `undefined` when it has none). */
+  requestIds?: readonly (string | undefined)[];
 }
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
@@ -103,6 +113,12 @@ export interface BotExtensionDeps {
   currentTools(bot: BotDefinition, turn: BotTurnContext): Promise<BotToolEntry[]>;
   checkPolicy(botId: string, toolName: string, call?: BotToolCallCheck): Promise<BotPolicyDecision>;
   /**
+   * Whether a run serving inputs with these request ids may use `toolName`
+   * (ingress rules only). Applied to every request's offer and every call.
+   * Absent: every tool installed is allowed.
+   */
+  turnAllows?(toolName: string, requestIds: readonly (string | undefined)[]): boolean;
+  /**
    * Ask the person. Resolves with their answer; rejects when `signal` aborts
    * (the turn stopped or the app is quitting), so the call stays unanswered
    * and is re-asked with the same `waitId` after Resume.
@@ -144,6 +160,21 @@ interface ApprovalMemo {
   summary: string;
 }
 
+/**
+ * The request's messages with the `withheld` tools taken out of every tool
+ * declaration, for that request only (the stored transcript is unchanged).
+ */
+function withoutTools(messages: readonly Message[], withheld: (name: string) => boolean): readonly Message[] {
+  if (!messages.some((message) => message.role === "system" && message.toolsAdded?.some((tool) => withheld(tool.name)))) {
+    return messages;
+  }
+  return messages.map((message) =>
+    message.role === "system" && message.toolsAdded !== undefined
+      ? { ...message, toolsAdded: message.toolsAdded.filter((tool) => !withheld(tool.name)) }
+      : message,
+  );
+}
+
 export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotRegistry {
   const registry = createRegistry();
   let sections: readonly string[] = [];
@@ -167,6 +198,16 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     throw error;
   }
 
+  /** Request ids of the inputs the current run of this conversation serves, read from durable state. */
+  async function runRequestIds(api: HookApi, context: Context): Promise<(string | undefined)[]> {
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    const inputs = live?.run?.inputs ?? [];
+    if (inputs.length === 0) return [];
+    if (harness === undefined) throw new Error("The Bot harness is not attached.");
+    const { submissions } = await harness.inspect(context);
+    return inputs.map((id) => submissions.find((submission) => submission.id === id)?.requestId);
+  }
+
   const hooks = [
     hook(GenerationTask, {
       beforeRequest: async (request, api, context) => {
@@ -179,16 +220,28 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           failure = null;
           admitted = true;
         }
-        if (deps.imageInput === undefined || (await deps.imageInput(botId))) return undefined;
-        return { messages: withImageReferences(request.messages) };
+        let messages = request.messages;
+        const turnAllows = deps.turnAllows;
+        if (turnAllows !== undefined) {
+          const requestIds = await runRequestIds(api, context);
+          messages = withoutTools(messages, (name) => !turnAllows(name, requestIds));
+        }
+        if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
+        return messages === request.messages ? undefined : { messages };
       },
     }),
     hook(ToolTask, {
       beforeTool: async (call, api, context) => {
+        // A throw here blocks the call, so an unreadable run fails closed.
+        const requestIds = await runRequestIds(api, context);
+        if (deps.turnAllows !== undefined && !deps.turnAllows(call.name, requestIds)) {
+          return { block: "This tool is not available on this turn." };
+        }
         const decision = await deps.checkPolicy(botId, call.name, {
           callId: call.id,
           args: call.arguments,
           signal: context.abortSignal,
+          requestIds,
         });
         if (!decision.allowed) return { block: decision.reason };
         if (decision.approval === undefined) return undefined;

@@ -307,18 +307,18 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     }
   }
 
-  /** Bind the Bot's current model and reload its extension before anything runs. */
-  async function prepareToRun(
-    botId: string,
-    conversation: Conversation,
-    registry: BotRegistry,
-    requestId: string | undefined,
-  ): Promise<void> {
+  /**
+   * Bind the Bot's current model and reload its extension before anything runs.
+   * The registry always holds the attended tool set: the input may queue behind
+   * other turns, so its own ingress rules are applied when its run makes each
+   * request and call (`turnAllows` in `bot-extension.ts`), never here.
+   */
+  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
     if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message);
     const model = resolved.ref;
-    await registry.refresh(requestId === undefined ? {} : { requestId });
+    await registry.refresh();
     const agent = await conversation.agent(ctx);
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
       await conversation.configure({ model }, ctx);
@@ -329,11 +329,6 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   async function dismissPaused(conversation: Conversation, submissionId: string): Promise<void> {
     await conversation.abort(ctx);
     await writeNotice(conversation, { notice: "interrupted", submissionId });
-  }
-
-  /** The request that started the paused turn, so its tools match a routine run. */
-  async function pausedRequestId(botId: string): Promise<string | undefined> {
-    return unfinishedInput(await requireHost().inspect(botId))?.requestId;
   }
 
   async function lookupRequest(conversation: Conversation, requestId: string) {
@@ -367,7 +362,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
-        await prepareToRun(botId, conversation, registry, input.requestId);
+        await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
           blocked.delete(botId);
@@ -408,7 +403,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         }
         blocked.delete(botId);
         const { conversation, registry } = await openBot(botId);
-        await prepareToRun(botId, conversation, registry, await pausedRequestId(botId));
+        await prepareToRun(botId, conversation, registry);
         const opened = await requireHost().open(botId);
         opened.harness.resume();
         requireHost().touch(botId);
@@ -425,8 +420,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind !== "interrupted") return remember(key, before);
         const { conversation, registry } = await openBot(botId);
         // Pending tool calls settle against the Bot's tools while aborting.
-        const requestId = await pausedRequestId(botId);
-        await registry.refresh(requestId === undefined ? {} : { requestId }).catch(() => undefined);
+        await registry.refresh().catch(() => undefined);
         await dismissPaused(conversation, before.submissionId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));

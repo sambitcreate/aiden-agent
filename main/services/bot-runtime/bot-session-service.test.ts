@@ -4,8 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
-import type { ModelRef } from "@earendil-works/pi-durable";
+import { getCurrentTools } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { ToolResultEntry, type ModelRef } from "@earendil-works/pi-durable";
+import { botQuestionCandidate } from "./bot-question-tool.js";
+import { createBotQuestions } from "./bot-questions.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
   BotSessionError,
@@ -15,7 +18,9 @@ import {
 } from "./bot-session-service.js";
 import { botDirectoryName } from "./harness-host.js";
 import { spawnHarnessChild } from "./test-support/child.js";
-import { recordingDeps } from "./test-support/fixtures.js";
+import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority } from "./test-support/assembly-fixtures.js";
+import { blockingUntilAborted, countingTool, recordingDeps } from "./test-support/fixtures.js";
+import { QUESTION_ARGS, QUESTION_TOOL_NAME } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -360,5 +365,127 @@ test("a second Aiden process holding the profile makes Bots unavailable", async 
     await service.shutdown();
   } finally {
     await child.kill();
+  }
+});
+
+test("each queued input runs with the tool policy of its own ingress", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-home-"));
+  roots.push(home);
+  const state = assemblyState(testAuthority({ mode: "full", home, ...FULL_GRANTS }));
+  const questions = createBotQuestions();
+  let asked = 0;
+  questions.onChange(() => (asked = Math.max(asked, questions.pending().length)));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const slow = countingTool("run_command", async () => {
+    await gate;
+    return "done";
+  });
+  const extension = assemblyDeps(state, {
+    candidates: () => [{ tool: slow }, botQuestionCandidate("bot:a", questions)],
+  });
+  const offered: string[][] = [];
+  const record =
+    (reply: () => ReturnType<typeof fauxAssistantMessage>) =>
+    (context: { messages: readonly { role: string }[] }) => {
+      offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return reply();
+    };
+  const fauxModels = createFauxModels([
+    record(() => fauxAssistantMessage([fauxToolCall("run_command", { text: "x" })], { stopReason: "toolUse" })),
+    record(() => fauxAssistantMessage("first done")),
+    // The routine asks a question anyway; nobody is there to answer it.
+    record(() => fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" })),
+    record(() => fauxAssistantMessage("routine done")),
+    record(() => fauxAssistantMessage("second done")),
+  ]);
+  const service = await serviceFor(tempProfile(), fauxModels, { extension });
+  try {
+    const first = await service.send("bot:a", { text: "run it", requestId: "desk-1" });
+    await waitFor(() => slow.executions.length === 1, { what: "the first turn's tool" });
+    const routine = await service.send("bot:a", {
+      text: "daily digest",
+      requestId: "routine:task-1:2026-10-07T09:00:00.000Z",
+      ifNotInterrupted: true,
+      label: "Daily digest",
+    });
+    const second = await service.send("bot:a", { text: "and then?", requestId: "desk-2" });
+    release();
+
+    const signal = new AbortController().signal;
+    assert.equal((await service.awaitReply("bot:a", first.submissionId, signal)).kind, "completed");
+    await waitFor(async () => asked > 0 || (await service.state("bot:a")).kind === "idle", {
+      what: "the queued turns to finish",
+    });
+    assert.equal(asked, 0, "the routine never shows a question card");
+    assert.deepEqual(await service.awaitReply("bot:a", routine.submissionId, signal), {
+      kind: "completed",
+      text: "routine done",
+    });
+    assert.deepEqual(await service.awaitReply("bot:a", second.submissionId, signal), {
+      kind: "completed",
+      text: "second done",
+    });
+
+    assert.ok(offered[0]!.includes(QUESTION_TOOL_NAME), "the desktop turn offers questions");
+    assert.equal(offered[2]!.includes(QUESTION_TOOL_NAME), false, "the routine's request offers no question tool");
+    assert.ok(offered[4]!.includes(QUESTION_TOOL_NAME), "the desktop follow-up offers questions again");
+
+    const view = await (await service.conversation("bot:a")).context(ctx);
+    const questionResults = view.entries
+      .filter((entry) => entry.kind === ToolResultEntry.kind)
+      .map((entry) => (entry as unknown as { model: Array<{ toolName: string; isError: boolean }> }).model[0]!)
+      .filter((result) => result.toolName === QUESTION_TOOL_NAME);
+    assert.equal(questionResults.length, 1);
+    assert.equal(questionResults[0]!.isError, true, "the routine's question call is refused");
+  } finally {
+    release();
+    await service.shutdown();
+  }
+});
+
+test("a routine queued before a quit keeps its own tool policy after Resume", async () => {
+  const profile = tempProfile();
+  const home = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-home-"));
+  roots.push(home);
+  const state = assemblyState(testAuthority({ mode: "full", home, ...FULL_GRANTS }));
+  const candidates = (questions: ReturnType<typeof createBotQuestions>) => () => [
+    { tool: countingTool("run_command", (_params, signal) => blockingUntilAborted(signal)) },
+    botQuestionCandidate("bot:a", questions),
+  ];
+  const before = await serviceFor(
+    profile,
+    createFauxModels([fauxAssistantMessage([fauxToolCall("run_command", { text: "x" })], { stopReason: "toolUse" })]),
+    { extension: assemblyDeps(state, { candidates: candidates(createBotQuestions()) }) },
+  );
+  await before.send("bot:a", { text: "run it", requestId: "desk-1" });
+  await waitFor(async () => (await before.state("bot:a")).kind === "running", { what: "the first turn" });
+  const routine = await before.send("bot:a", {
+    text: "daily digest",
+    requestId: "routine:task-1:2026-10-07T09:00:00.000Z",
+    ifNotInterrupted: true,
+  });
+  await before.shutdown();
+
+  const offered: string[][] = [];
+  const record = (text: string) => (context: { messages: readonly { role: string }[] }) => {
+    offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
+    return fauxAssistantMessage(text);
+  };
+  const service = await serviceFor(profile, createFauxModels([record("first done"), record("routine done")]), {
+    extension: assemblyDeps(state, { candidates: candidates(createBotQuestions()) }),
+  });
+  try {
+    await service.initialize();
+    assert.equal((await service.state("bot:a")).kind, "interrupted");
+    await service.resume("bot:a", "resume-1");
+    assert.deepEqual(await service.awaitReply("bot:a", routine.submissionId, new AbortController().signal), {
+      kind: "completed",
+      text: "routine done",
+    });
+    assert.ok(offered[0]!.includes(QUESTION_TOOL_NAME), "the resumed desktop turn offers questions");
+    assert.equal(offered[1]!.includes(QUESTION_TOOL_NAME), false, "the queued routine still offers none");
+  } finally {
+    await service.shutdown();
   }
 });

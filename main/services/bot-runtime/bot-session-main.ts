@@ -44,7 +44,7 @@ import { createBotToolAssembly } from "./bot-tool-assembly.js";
 import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
 
 import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
-import { isBotIntroRequest } from "./bot-intro.js";
+import { botIngressAllowsTool } from "./bot-tool-policy.js";
 
 export { BOT_CONNECT_CARD_ENTRY_KIND };
 const MODEL_CACHE_MS = 30_000;
@@ -156,10 +156,10 @@ const extension: BotExtensionDeps = {
       ];
     });
   },
-  currentTools: (bot, turn) =>
-    // The one-time self-intro answers from its instructions alone.
-    isBotIntroRequest(turn.requestId) ? Promise.resolve([]) : tools.currentTools(bot.id, turn),
+  currentTools: (bot, turn) => tools.currentTools(bot.id, turn),
   checkPolicy: (botId, toolName, call) => tools.checkPolicy(botId, toolName, call),
+  // Per run: the self-intro uses no tools; routine and Telegram turns get no question card.
+  turnAllows: botIngressAllowsTool,
   requestApproval: (request) => botApprovals.request(request),
   async readmit(botId) {
     if (!(await botStore.get(botId))) return { ok: false, reason: "bot_missing" };

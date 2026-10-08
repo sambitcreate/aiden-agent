@@ -25,7 +25,7 @@ import type {
   BotToolEntry,
   BotTurnContext,
 } from "./bot-extension.js";
-import { botToolApprovalSummary, botToolVerdict, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
+import { botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
 
 /** One admission of the Bot's current authority. Release it when done. */
@@ -82,10 +82,6 @@ export interface BotToolAssembly {
   skillSnapshot(botId: string): SkillRegistrySnapshot | undefined;
 }
 
-function isTelegramTurn(turn: BotTurnContext): boolean {
-  return turn.requestId?.startsWith("tg:") ?? false;
-}
-
 function replayOf(candidate: BotToolCandidate): ToolReplay {
   if (candidate.mcp || candidate.tool.name === SUBAGENT_TOOL) return "unsafe";
   if (candidate.replay !== undefined) return candidate.replay;
@@ -123,8 +119,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       try {
         const facts = await ports.sources.facts(botId, admission);
         const set = await ports.sources.candidates(botId, admission, facts, turn);
-        const telegram = isTelegramTurn(turn);
-        const routine = turn.requestId?.startsWith("routine:") ?? false;
+        const { telegram, routine } = botTurnOf(turn.requestId);
         const entries: BotToolEntry[] = [];
         for (const candidate of set.tools) {
           if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine })).allowed) continue;
@@ -157,7 +152,12 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       try {
         await admission.revalidateBeforeEffect();
         const facts = await ports.sources.facts(botId, admission);
-        const verdict = await botToolVerdict(toolName, facts);
+        // The calling run's own ingress, not whoever refreshed the tools last.
+        const turns = (call?.requestIds ?? []).map(botTurnOf);
+        const verdict = await botToolVerdict(toolName, facts, {
+          telegram: turns.some((turn) => turn.telegram),
+          routine: turns.some((turn) => turn.routine),
+        });
         if (!verdict.allowed) return verdict;
         if (call === undefined) return { allowed: true };
         const live = await ports.sources.approvalFor?.(botId, toolName, call);
