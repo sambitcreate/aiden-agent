@@ -9,11 +9,18 @@ The feature is on by default on macOS and needs Xcode installed. It is never ava
 1. Open a chat, then the Environment panel, and select **Simulator**.
 2. Choose **Set up simulator streaming**. Aiden asks before downloading anything (see [Network and privacy](#network-and-privacy)).
 3. Pick a simulator and choose **Open** (or **Boot & open**). The live screen appears. Click to tap, drag to swipe, and type while the screen has focus.
-4. The rail on the side has Home, Lock, Rotate, appearance, text size, **Screenshot to chat**, the device tools drawer, **3D frame**, **Shut down** and **Close**.
+4. The rail on the side has Home, Lock, Rotate, appearance, text size, **Screenshot to chat**, **3D view**, **Flat view**, **Restore 3D view** (while 3D is showing), the device tools drawer, **Shut down** and **Close**.
 
-### 3D frame
+### 3D view
 
-iPhone and iPad simulators can be shown inside a procedural 3D body. Drag the frame's edge to turn it, and choose **Reset 3D view** to straighten it. The flat view is used whenever the stream falls back to MJPEG, the simulator has a hinge, WebGL is unavailable, or the first frame has not arrived yet. The 3D view respects Reduce Motion.
+**3D view** shows the live screen inside a device body; **Flat view** shows the plain screen. Your choice is remembered on this Mac.
+
+- **Hardware models.** iPhone 17 Pro / 18 Pro, iPhone 17 Pro Max / 18 Pro Max, and the 13-inch iPad Pro (M4 and M5) get a body built to their published dimensions: the titanium frame and rounded rail, the Dynamic Island, Action button and Camera Control, the rear camera plateau, and the iPad's single rear camera. Other iPhones, iPads and Android devices get a generic phone or tablet body. Every body is Aiden's own procedural model; no Apple 3D assets are bundled or downloaded.
+- **Turning and zooming.** Drag around the device, or swipe with two fingers on a trackpad, to turn it. A flick coasts and settles on the nearest useful view. Pinch, or Control-scroll, zooms. Option-drag turns the device even over the screen. **Restore 3D view** straightens the device, resets zoom, and turns the simulator back to portrait.
+- **Touch.** Drag the screen to touch it, exactly as in the flat view, in any orientation.
+- **iPhone Duo.** The Duo opens and closes in 3D. Pinch over the device to fold the hinge: the model follows your fingers at once and the simulator follows. The **Fold shape** buttons (Closed, Book or Laptop, Open) animate the hinge and re-centre the device on it. The half-fold button reads **Book** when the phone is held upright and **Laptop** when it is held sideways, and the glyphs turn with the phone. **Device stance** sets the native Laptop and Tent stands; a fold button pressed on a stand first turns the phone back to how it was held. Turning the Duo over to the other display asks the simulator to switch displays; if it does not confirm within five seconds, the view turns back. Both displays stay live. The Duo controls also work in the flat view.
+
+The flat view is used whenever the stream falls back to MJPEG, WebGL is unavailable or lost, an iPhone Duo display feed cannot be decoded, or the first frame has not arrived yet. An iPhone Duo also needs a Device Hub that reports its hinge (0.11.0 or newer); otherwise the **3D view** button explains why it is off. All motion respects Reduce Motion.
 
 ### Letting chats use simulators
 
@@ -50,7 +57,7 @@ Settings → **Simulator** appears in the settings list and command palette only
 | "Xcode was not found." | Install Xcode from the App Store and open it once so it can finish setting up, then choose refresh. |
 | Setup fails with an npm error | Make sure `npm` is on your PATH and can reach your registry, then turn streaming on again. |
 | The screen stays black | Close the device and open it again. If the stream can't renew its grant three times in a minute, **Reconnect** appears. |
-| The 3D frame never shows | The stream is using MJPEG, the device has a hinge, or WebGL is unavailable. The flat view is intended in these cases. |
+| The 3D view never shows | The stream is using MJPEG, WebGL is unavailable, or an iPhone Duo's hub predates hinge reporting. Hover **3D view** for the reason. After a failure, close and reopen the simulator to try 3D again. |
 | A paired Mac shows no simulators | On that Mac, check **Share with paired Macs** and the simulator-control grant for this Mac. |
 
 ## Internals
@@ -103,7 +110,15 @@ A paired desktop serves `/simulators*` through the Aiden Remote router (`aiden-r
 
 `renderer/lib/device-stream.ts` decodes the iOS AVCC stream with WebCodecs. Simulators encode H.264 High 5.1, which some decoders reject, so the viewer probes `isConfigSupported` and falls back to MJPEG. Input goes over the hub's binary input WebSocket (`/vendor/serve-sim/helper/ws?device=<udid>`).
 
-The 3D frame (`renderer/lib/device-3d/`) is procedural. T3's Apple GLB models have no redistribution license and are never bundled. It renders the same decoded canvas as the flat view, in a lazily loaded `three` chunk.
+### 3D viewer
+
+`renderer/lib/device-3d/` ports T3's viewer code (motion, snapping, framing, interaction, trackpad, Duo scene and viewer, Android fold scene). T3 swaps in Apple GLB bodies, which have no redistribution licence; Aiden never bundles, downloads or derives anything from them. Instead `hardware-models.ts` and `duo-model.ts` build original procedural models in millimetres from public spec-sheet dimensions, then scale them to T3's normalized contract (front +Z, one `device-screen` 2.2 units tall; for the Duo, `left-half`/`right-half` hinge groups and `cover-display`, `inner-display-left`, `inner-display-right`). `model-registry.ts` maps exact simulator names to models and has no `three` import. Everything renders the decoded canvas the flat view already holds, in one lazily loaded chunk with three.js, a PMREM-filtered `RoomEnvironment` for PBR reflections, and the models.
+
+- Motion (`device-motion.ts`) is a quaternion spring with flick coast; release snaps to the nearest rest view with a yaw allowance (`view-snap.ts`). Framing (`framing.ts`) refits the camera with a critically damped spring so turning and folding never clip the device.
+- A trackpad orbit ends on Electron's native `gestureScrollEnd`, forwarded by main on `devices:trackpad-scroll-end` (`main/services/devices/trackpad-scroll-end.ts`), with a 1.2 s fallback elsewhere.
+- The iPhone Duo view (`duo-viewer.ts`) needs both displays, so `device-duo-stream.ts` replaces the stream's video with per-display feeds that share its grant and input socket: one elected feed when the hub supports physical orientation, otherwise the fixed `/helper/<udid>/panel/1|3/stream.avcc` feeds (already on the proxy allowlist). An inactive display's shutdown blank never overwrites its last image. Duo touches go through `sendRawTouch` in raw framebuffer space.
+- Each viewer exposes `capture()`, a PNG of the framed device as drawn. The viewports pass it through `onCaptureReady`; no UI uses it yet.
+- Android foldables: `android-fold-scene.ts` is selected when an Android profile has a fold angle. `DevicePhoneViewport` takes `foldAngle`; the Simulator tab passes `null` until Android fold state reaches it.
 
 ### Tests
 

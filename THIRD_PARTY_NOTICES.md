@@ -134,8 +134,13 @@ agent device tools, and agent-device PATH shim (`main/services/devices/`), and
 its stream client, simulator controls, and procedural 3D device frame
 (`renderer/lib/device-3d/`), are adapted from T3 Code at commit
 `1c127066`, under the same MIT license as the T3 Code browser entry above.
-Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
-not included; the device-motion spring is Aiden's own.
+The 3D viewer code (device motion, view snapping, framing, interaction,
+trackpad, iPhone Duo scene, viewer, controls and display feeds, Android fold
+scene, and the trackpad-scroll-end window hook) is adapted from T3 Code at
+commit `a6ec88f7` under the same license.
+Copyright (c) 2026 T3 Tools Inc. T3's imported Apple device models, Apple
+assets and Simulator-derived glyph art are not included: Aiden's device bodies
+(`hardware-models.ts`, `duo-model.ts`) and Duo glyphs are original work.
 
 ## three.js
 
