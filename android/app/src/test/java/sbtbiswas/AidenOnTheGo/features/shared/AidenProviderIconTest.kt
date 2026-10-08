@@ -81,6 +81,7 @@ class AidenProviderIconTest {
     fun modelAndCustomProviderIdsResolveToTheirLogo() {
         assertEquals("claude", resolver.slug("anthropic", "claude-sonnet-4"))
         assertEquals("anthropic", resolver.slug("anthropic"))
+        assertEquals("antigravity", resolver.slug("antigravity"))
         assertEquals("grok", resolver.slug("xai", "grok-4"))
         assertEquals("google", resolver.slug(" Gemini "))
         assertEquals("ollama", resolver.slug("custom:ollama-2"))

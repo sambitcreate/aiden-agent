@@ -27,6 +27,8 @@ the same identity map as desktop and iOS.
 - Official provider sites: Ant Ling, Fireworks, Groq, Together, Z.AI, OpenCode,
   Kimi/Moonshot, and their regional or product aliases.
 - Wikimedia Commons: xAI and Grok.
+- Google's official one-colour Antigravity icon: Google Antigravity, with the
+  viewBox fitted to the glyph.
 - Lobe Icons static SVG package: Cerebras, replacing an incorrect OpenAI asset
   in the supplied folder.
 

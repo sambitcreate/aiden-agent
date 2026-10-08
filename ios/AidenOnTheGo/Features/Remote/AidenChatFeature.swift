@@ -440,6 +440,28 @@ enum AidenChatModelAuthority {
         )
     }
 
+    /// Agent-backed providers (mirroring the Mac's ACP harness list) run only in
+    /// chats open on the Mac, so the host leaves them out of the phone's catalog.
+    static let macOnlyAgentProviders: [String: String] = ["antigravity": "Google Antigravity"]
+
+    /// For a chat the Mac last answered with a Mac-only agent model, which model
+    /// replies from this phone use instead. Nil when the chat's own model is
+    /// available here, or for Bot chats, whose model is fixed.
+    static func macOnlyAgentNotice(
+        chat: AidenChat,
+        catalog: AidenModelCatalog?,
+        replyModelLabel: String?
+    ) -> String? {
+        guard !chat.isBotChat,
+              let providerId = chat.providerId,
+              let agentLabel = macOnlyAgentProviders[providerId],
+              catalog?.providers.contains(where: { $0.id == providerId }) != true else { return nil }
+        if let replyModelLabel {
+            return String(localized: "This chat used \(agentLabel), which runs only on your Mac. Replies from here use \(replyModelLabel).")
+        }
+        return String(localized: "This chat used \(agentLabel), which runs only on your Mac. Choose a model for replies from here.")
+    }
+
     /// The per-host remembered choice applies only while the host's current
     /// inventory still offers it as a visible provider/model pair. A missing
     /// or hidden pair returns nil so the caller falls back to the chat's pair
@@ -1454,6 +1476,9 @@ final class AidenChatViewModel {
         return selectedModel?.acceptsImageInput ?? true
     }
     var selectedModelDisplayLabel: String { selectedModel?.label ?? selectedModelId ?? "Model unavailable" }
+    var macOnlyAgentNotice: String? {
+        AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: selectedModel?.label)
+    }
 
     func transcribeMacSpeech(_ pcm16: Data) async throws -> String {
         guard !isReadOnlyFixture else { throw AidenRemoteClientError.invalidResponse }
@@ -5019,6 +5044,14 @@ struct AidenChatDetailView: View {
                 openTasks: { progressSheet = .tasks },
                 openAgents: { progressSheet = .agents }
             )
+            if let notice = model.macOnlyAgentNotice {
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 6)
+            }
             AidenComposerView(
                 model: model,
                 autoStartVoice: autoStartVoice,

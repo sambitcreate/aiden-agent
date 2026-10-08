@@ -29,7 +29,8 @@ import sbtbiswas.AidenOnTheGo.models.AidenProviderArtwork
 
 object AidenProviderIconResolver {
     val supportedSlugs = setOf(
-        "amazon-bedrock", "ant-ling", "anthropic", "apple-foundation-models",
+        "amazon-bedrock", "ant-ling", "anthropic", "antigravity",
+        "apple-foundation-models",
         "azure-openai-responses", "cerebras", "claude", "cloudflare-ai-gateway",
         "cloudflare-workers-ai", "concentrate", "deepseek", "fireworks",
         "github-copilot", "google", "google-vertex", "grok", "groq",
@@ -51,6 +52,7 @@ object AidenProviderIconResolver {
         "amazon-bedrock" to R.drawable.ic_provider_amazon_bedrock,
         "ant-ling" to R.drawable.ic_provider_ant_ling,
         "anthropic" to R.drawable.ic_provider_anthropic,
+        "antigravity" to R.drawable.ic_provider_antigravity,
         "apple-foundation-models" to R.drawable.ic_provider_apple_foundation_models,
         "azure-openai-responses" to R.drawable.ic_provider_azure_openai_responses,
         "cerebras" to R.drawable.ic_provider_cerebras,

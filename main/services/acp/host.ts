@@ -21,6 +21,8 @@ export interface AcpApprovalRequest {
   /** Id of the activity row already started for this call, when there is one. */
   activityId?: string;
   kind: "command" | "file_change" | "file_read" | "fetch" | "other";
+  /** For a file change that removes or relocates files rather than editing them. */
+  fileChange?: "delete" | "move";
   title: string;
   /** Workspace-relative paths, when known. */
   paths: string[];

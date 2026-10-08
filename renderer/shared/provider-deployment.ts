@@ -1,3 +1,5 @@
+import { isAcpHarnessProvider } from "./acp-harness.js";
+
 /** Whether a provider runs on this machine (or a marked private host) vs a cloud API. */
 export type ProviderDeployment = "local" | "hosted";
 
@@ -39,4 +41,18 @@ export function resolveProviderDeployment(
 
 export function isLocalProviderDeployment(provider: ProviderDeploymentFields): boolean {
   return resolveProviderDeployment(provider) === "local";
+}
+
+/**
+ * Where a picker entry's model runs, as the short tag after the provider name
+ * and the matching phrase in its accessible description. Agent-backed providers
+ * run a full agent (with its own tools) on this computer, which is neither a
+ * local model nor a hosted API call.
+ */
+export function providerDeploymentLabel(
+  providerId: string,
+  isLocal: boolean,
+): { tag: "Agent" | "Local" | "Hosted"; description: string } {
+  if (isAcpHarnessProvider(providerId)) return { tag: "Agent", description: "Deployment agent on this computer" };
+  return isLocal ? { tag: "Local", description: "Deployment local" } : { tag: "Hosted", description: "Deployment hosted" };
 }

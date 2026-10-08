@@ -204,7 +204,8 @@ export function timelineStepFor(
     case "search":
       return { toolName: "grep", args: withPath };
     case "execute":
-      return { toolName: "run_command", args: {} };
+      // The title is the raw command line, which can carry secrets; never persist it.
+      return { toolName: "run_command", args: { description: "a command" } };
     case "fetch":
       return { toolName: "web_fetch", args: {} };
     case "think":

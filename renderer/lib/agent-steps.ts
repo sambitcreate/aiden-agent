@@ -51,6 +51,13 @@ const VERBS: Record<string, VerbPair> = {
   browser_recording_stop: { active: "Stopping browser recording", complete: "Stopped browser recording" },
   vcc_recall: { active: "Recalling chat history", complete: "Recalled chat history" },
   compact_context: { active: "Compacting context", complete: "Compacted context" },
+  // Activity an ACP agent (for example, Google Antigravity) ran itself.
+  delete_file: { active: "Deleting", complete: "Deleted" },
+  move_file: { active: "Moving", complete: "Moved" },
+  web_fetch: { active: "Fetching web page", complete: "Fetched web page" },
+  agent_subagents: { active: "Running subagents", complete: "Ran subagents" },
+  agent_tool: { active: "Using an agent tool", complete: "Used an agent tool" },
+  agent_context_rebuilt: { active: "Starting a fresh agent session", complete: "Started a fresh agent session" },
 };
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
