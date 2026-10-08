@@ -125,7 +125,7 @@ test.describe("Simulator agent tools", () => {
       const tools = page.getByRole("complementary", { name: "Environment work surface" });
       if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
       await tools.getByRole("button", { name: "More tools…", exact: true }).click();
-      await tools.getByRole("button", { name: "Simulator", exact: true }).click();
+      await tools.getByRole("button", { name: "Device", exact: true }).click();
       const panel = page.locator("#environment-devices-panel");
       await panel.getByRole("button", { name: "Start", exact: true }).click();
       const agentAccess = panel.getByRole("switch", { name: "Let Aiden use simulators" });
@@ -133,7 +133,7 @@ test.describe("Simulator agent tools", () => {
       await agentAccess.click();
       await expect(agentAccess).toHaveAttribute("aria-checked", "true", { timeout: 30_000 });
 
-      // Closed panel: device_open must bring the Simulator tab forward itself.
+      // Closed panel: device_open must show the device itself, floating over the chat by default.
       await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
       await expect(tools).toBeHidden();
 
@@ -173,9 +173,16 @@ test.describe("Simulator agent tools", () => {
       // The screenshot reached the model as an image.
       expect(JSON.stringify(lmStudio.requests.map(({ body }) => body))).toContain("data:image/png;base64,iVBORw0KGgo");
 
-      // device_open revealed the Simulator tab with this chat's live viewer.
+      // device_open floated this chat's live device over the transcript.
+      const player = page.locator("[data-device-mini-player]");
+      await expect(player).toBeVisible();
+      await expect(player.getByRole("status")).toHaveText("Live");
+      await expect(tools).toBeHidden();
+      // Docking puts it in its own tab, named after the device.
+      await player.getByRole("button", { name: "Dock device in its tab" }).click();
+      await expect(player).toHaveCount(0);
       await expect(tools).toBeVisible();
-      await expect(tools.getByRole("tab", { name: "Simulator", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(tools.getByRole("tab", { name: DEVICE_NAME, exact: true })).toHaveAttribute("aria-selected", "true");
       await expect(panel.locator(".device-viewer-status")).toHaveText("Live");
       // The agent daemon was started, and the launcher kept its token out of the CLI's env.
       const agentCalls = (await readFile(agentLog, "utf8"))
@@ -212,7 +219,9 @@ test.describe("Simulator agent tools", () => {
 
       // Revoking agent access removes the tools from the next generation.
       if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
-      await tools.getByRole("tab", { name: "Simulator", exact: true }).click();
+      // The agent closed the only device, so its tab is gone and the picker remains.
+      await expect(tools.getByRole("tab", { name: DEVICE_NAME, exact: true })).toHaveCount(0);
+      await tools.getByRole("tab", { name: "Device", exact: true }).click();
       await expect(panel.getByRole("button", { name: `Open ${DEVICE_NAME}` })).toBeVisible();
       await agentAccess.click();
       await expect(agentAccess).toHaveAttribute("aria-checked", "false");
