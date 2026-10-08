@@ -37,7 +37,11 @@ import {
 import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
 import { readAndroidDeviceSettings, runAndroidDeviceAction } from "./android-device-actions.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
-import type { AidenRemoteSimulatorAudience, AidenRemoteSimulatorHost } from "../aiden-remote-simulators.js";
+import {
+  MOBILE_SIMULATOR_REFUSAL,
+  type AidenRemoteSimulatorAudience,
+  type AidenRemoteSimulatorHost,
+} from "../aiden-remote-simulators.js";
 import { AidenRemoteServiceError } from "../aiden-remote-errors.js";
 import type { DevicePeerPort } from "./peer-devices.js";
 import {
@@ -911,6 +915,16 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
 
   function createShare(audience: AidenRemoteSimulatorAudience): AidenRemoteSimulatorHost {
     const sharing = () => sharingFor(audience);
+    /**
+     * Phones reach iOS Simulators only (they stream MJPEG, which only iOS
+     * Simulators serve), so every phone mutation of an Android emulator is
+     * refused here, before the hub is contacted.
+     */
+    const requirePhoneReachable = (device: DeviceSummary, refusal: string) => {
+      if (audience === "mobile" && device.platform !== "ios") {
+        throw new AidenRemoteServiceError("capability_denied", refusal, 403);
+      }
+    };
     return {
       sharing,
       async list(options) {
@@ -938,17 +952,16 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         const ready = requireSharing(audience);
         const device = devices.find((candidate) => candidate.id === deviceId);
         if (!device) throw new Error("That simulator is no longer available.");
-        // Phones stream MJPEG, which only iOS Simulators serve.
-        if (audience === "mobile" && device.platform !== "ios") {
-          throw new AidenRemoteServiceError("capability_denied", "Open this device on your Mac to view it.", 403);
-        }
+        requirePhoneReachable(device, "Open this device on your Mac to view it.");
         const { hostId: _hostId, ...attached } = await attach(ready, device);
         emit();
         return attached;
       },
       async shutdown(deviceId) {
         const ready = requireSharing(audience);
-        if (!devices.some((device) => device.id === deviceId)) throw new Error("That simulator is no longer available.");
+        const device = devices.find((candidate) => candidate.id === deviceId);
+        if (!device) throw new Error("That simulator is no longer available.");
+        requirePhoneReachable(device, "Shut this device down on your Mac.");
         await shutdownLocal(ready, deviceId);
         emit();
       },
@@ -958,6 +971,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       },
       async action(input) {
         const ready = requireSharing(audience);
+        // The relay refuses phone actions first; this keeps the share host safe on its own.
+        if (audience === "mobile") throw new AidenRemoteServiceError("capability_denied", MOBILE_SIMULATOR_REFUSAL, 403);
         const local = { ...input, hostId: host.id };
         return localAction(ready, requireKnownDevice(host.id, local.deviceId), local);
       },

@@ -1477,7 +1477,7 @@ test("phones reach this Mac's simulators only through their own consent", async 
 
 test("phones see shared Android emulators but open only iOS Simulators", async () => {
   await withService(
-    async ({ service, hub }) => {
+    async ({ service, hub, host }) => {
       await service.load();
       await service.grantConsent("mobileSharing");
       const mobile = service.shareHost("mobile");
@@ -1493,6 +1493,25 @@ test("phones see shared Android emulators but open only iOS Simulators", async (
       const iphone = listing.devices.find((device) => device.platform === "ios");
       assert.ok(iphone);
       assert.equal((await mobile.open(iphone.id)).id, iphone.id);
+
+      // A phone cannot shut an emulator down or change any device either.
+      const deniedBefore = hub.calls.length;
+      const commandsBefore = host.commands.length;
+      const denied = (error: unknown) => (error as { code?: string }).code === "capability_denied";
+      await assert.rejects(mobile.shutdown("emulator-5554"), denied);
+      await assert.rejects(mobile.action({ hostId: "local", deviceId: iphone.id, type: "setAppearance", value: "dark" }), denied);
+      assert.equal(hub.calls.length, deniedBefore, "refused phone mutations never reach the hub");
+      assert.equal(host.commands.length, commandsBefore, "refused phone mutations never run a device command");
+      assert.equal(
+        (await mobile.list()).devices.find((device) => device.id === "emulator-5554")?.booted,
+        true,
+        "the emulator is still running",
+      );
+
+      // A paired Mac still shuts it down.
+      await service.grantConsent("peerSharing");
+      await service.shareHost().shutdown("emulator-5554");
+      assert.ok(hub.calls.some((call) => call.url.endsWith("/api/devices/shutdown")));
     },
     { consent: { streaming: true }, android: true },
   );
