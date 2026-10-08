@@ -20,7 +20,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { type AgentMessage } from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access, mkdir, mkdtemp } from "node:fs/promises";
@@ -159,6 +159,7 @@ import type {
   Chat,
   ChatStartParams,
   WorkspacePermission,
+  StoredProvider,
 } from "./types.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
@@ -208,6 +209,7 @@ import {
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
+  appendPiMessages,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
@@ -393,6 +395,15 @@ import {
 } from "./generative-ui-extension.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
+import { createGenerationHarness } from "./generation-harness.js";
+import {
+  resolveGenerationProfile,
+  selectRuntimeExtensions,
+  type DesignRunBinding,
+  type GenerationProfile,
+} from "./generation-profile.js";
+import { designGenerationWiring, designRunOutcome } from "./design/design-generation.js";
+import type { DesignRunOutcome } from "./design/store-core.js";
 import {
   createAskUserQuestionExtension,
   resolveAskUserQuestionTimeoutMs,
@@ -463,6 +474,8 @@ export interface GenerationExecutionOptions {
   interactionSurface?: "telegram";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
+  /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
+  designRun?: DesignRunBinding;
 }
 
 interface BotGenerationAuthorityContext {
@@ -491,6 +504,8 @@ interface ActiveGeneration {
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
   releaseBotAuthority: () => void;
+  /** Runs that take no mid-flight input (Design Studio). */
+  inputClosed: boolean;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -751,6 +766,25 @@ function resetGenerationAgent(agent: PiAgentRuntimeHarness, streamId: string): v
   }
 }
 
+function savedGenerationThinkingLevel(
+  settings: Awaited<ReturnType<typeof configStore.getSettings>>,
+  providerId: string,
+  model: string,
+  provider: Pick<StoredProvider, "isBuiltin" | "kind" | "modelMetadata">,
+) {
+  return providerId === GOOGLE_PROVIDER_ID
+    ? settings.googleThinkingByModel?.[model]
+    : providerId === OPENAI_CODEX_PROVIDER_ID
+      ? settings.codexThinkingByModel?.[model]
+      : providerId === ANTHROPIC_PROVIDER_ID
+        ? settings.anthropicThinkingByModel?.[model]
+        : provider.isBuiltin ||
+            (provider.kind === "openai" &&
+              customModelThinkingLevels(provider.modelMetadata?.[model]?.overrides))
+          ? settings.providerThinkingByModel?.[providerId]?.[model]
+          : undefined;
+}
+
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -801,6 +835,55 @@ async function prepareGeneration(
   const runtime =
     botContext?.prepared.runtime ??
     (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
+
+  if (options.designRun) {
+    // A design run composes exactly its binding's extension (designGenerationWiring);
+    // createGenerationHarness refuses any other extension, tool or skill (ADR-DS §4).
+    const designSettings = await configStore.getSettings();
+    const designModel = runtime.model;
+    return {
+      runtime: { ...runtime, model: designModel },
+      agentsInstructions: undefined,
+      agentsInstructionRoots: undefined,
+      browserDiscovery: undefined,
+      browserSelection: { initialized: false } as { initialized: boolean; tabId?: string },
+      browserFileApprovals: new Map<string, PreparedBrowserFile>(),
+      browserActionApprovals: new Map<
+        string,
+        { approval: BrowserToolApproval; args: Record<string, unknown> }
+      >(),
+      permission: "none" as GenerationPermission,
+      folderPath: undefined,
+      git: await generationGitContext(undefined, signal),
+      tools: [] as AgentTool[],
+      generationExtensions,
+      modelImageReferences,
+      mcpServerInstructions: createMcpInstructionCollector().snapshot(),
+      displayedImages,
+      displayedHtmlArtifacts,
+      supportsImages: runtimeSupportsImages(designModel),
+      thinkingLevel: resolveGenerationThinkingLevel(
+        params.providerId,
+        designModel,
+        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model, runtime.provider),
+      ),
+      computerUse: undefined,
+      formFill: undefined,
+      googleWorkspaceSnapshot: undefined,
+      skillSnapshot: undefined,
+      workspaceId: undefined,
+      subagentSupervisor: undefined,
+      showLocalModelReasoning: designSettings.showLocalModelReasoning,
+      compactionEngine: compactionEngineFrom(designSettings.compactionEngine),
+      compactionModelOverrides: designSettings.compactionModelOverrides,
+      cacheWarmingEnabled: false,
+      sharedImages,
+      botContext: undefined,
+      botApprovedRoots: [] as string[],
+      botMutatingToolNames: new Set<string>(),
+      assistantSettingsPermission: designSettings.assistant?.settingsPermission ?? "ask",
+    };
+  }
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -914,17 +997,7 @@ async function prepareGeneration(
   };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
-  const savedThinkingLevel =
-    params.providerId === GOOGLE_PROVIDER_ID
-      ? settings.googleThinkingByModel?.[params.model]
-      : params.providerId === OPENAI_CODEX_PROVIDER_ID
-        ? settings.codexThinkingByModel?.[params.model]
-        : params.providerId === ANTHROPIC_PROVIDER_ID
-          ? settings.anthropicThinkingByModel?.[params.model]
-          : runtime.provider.isBuiltin || (runtime.provider.kind === "openai" &&
-              customModelThinkingLevels(runtime.provider.modelMetadata?.[params.model]?.overrides))
-            ? settings.providerThinkingByModel?.[params.providerId]?.[params.model]
-            : undefined;
+  const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
@@ -1800,6 +1873,8 @@ export const llmClient = {
     owner: ChatGenerationOwner,
     options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
+    const designRun = options.designRun;
+    const designWiring = designRun ? designGenerationWiring(designRun, appendPiMessages) : undefined;
     const turnId = options.turnId;
     const ownsTurn =
       typeof turnId === "string" &&
@@ -1885,6 +1960,7 @@ export const llmClient = {
     let authoritativeBot: BotDefinition | undefined;
     let botContext: BotGenerationAuthorityContext | undefined;
     let authoritativeMode: ChatStartParams["mode"];
+    let generationProfile: GenerationProfile = { kind: "default" };
     const initializationTerminalState = { attempted: false };
     const persistInitializationTerminal = async (
       status: "failed" | "cancelled",
@@ -1916,6 +1992,9 @@ export const llmClient = {
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
+      // A design-owned chat runs only with its own project's main-built binding.
+      // It throws before authoritativeChat is set, so no failure turn is written.
+      generationProfile = resolveGenerationProfile(chat, options);
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
       if (chat.botId && !hostPlatformCapabilities().bots) {
@@ -2208,7 +2287,13 @@ export const llmClient = {
             content,
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
-            pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
+            pi: lastAssistantMessage
+              ? storedPiAssistantMessage(
+                  designWiring
+                    ? designWiring.storedAssistantMessage(lastAssistantMessage)
+                    : lastAssistantMessage,
+                )
+              : undefined,
             providerFailure,
             timeline:
               finalTimeline.steps.length || finalTimeline.status === "cancelled"
@@ -2309,40 +2394,43 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      try {
-        const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
-          development: !isPackagedRuntime(),
-          behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
-        });
-        if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
-        if (!(await memoryEnabledForChat(configStore, generationChat))) {
-          throw new Error("Durable memory is disabled by the current memory policy.");
+      // Design runs never read or write durable memory.
+      if (generationProfile.kind === "default") {
+        try {
+          const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
+            development: !isPackagedRuntime(),
+            behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+          });
+          if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+          if (!(await memoryEnabledForChat(configStore, generationChat))) {
+            throw new Error("Durable memory is disabled by the current memory policy.");
+          }
+          const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
+            ? undefined
+            : await configStore.getWorkspace(generationChat.workspaceId);
+          const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
+          await memoryStore.replaceChatMetadata(
+            scope,
+            generationChat.id,
+            memoryMetadataForChat(generationChat),
+          );
+          const provenance = memoryProvenanceForGeneration(
+            generationChat,
+            options.turnId,
+            owner.id !== 0,
+          );
+          memoryExtension = await createMemoryExtension({
+            store: memoryStore,
+            enabled: () => memoryEnabledForChat(configStore, generationChat),
+            scope,
+            ...(provenance ? { provenance } : {}),
+          });
+          if (provenance) memoryApprovalContext = { scope, provenance };
+        } catch {
+          // Memory is an optional local context source. Corruption or an
+          // unsupported SQLite build must remove both read and write tools.
+          logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
         }
-        const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
-          ? undefined
-          : await configStore.getWorkspace(generationChat.workspaceId);
-        const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
-        await memoryStore.replaceChatMetadata(
-          scope,
-          generationChat.id,
-          memoryMetadataForChat(generationChat),
-        );
-        const provenance = memoryProvenanceForGeneration(
-          generationChat,
-          options.turnId,
-          owner.id !== 0,
-        );
-        memoryExtension = await createMemoryExtension({
-          store: memoryStore,
-          enabled: () => memoryEnabledForChat(configStore, generationChat),
-          scope,
-          ...(provenance ? { provenance } : {}),
-        });
-        if (provenance) memoryApprovalContext = { scope, provenance };
-      } catch {
-        // Memory is an optional local context source. Corruption or an
-        // unsupported SQLite build must remove both read and write tools.
-        logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
       }
       let todoRuntimeExtension: PiAgentRuntimeExtension | undefined;
       if (
@@ -2390,7 +2478,11 @@ export const llmClient = {
       // Arbitrary runtime extensions remain outside the exact Bot catalog.
       // Only the explicitly admitted task extension and existing memory/recall
       // contributions enter Bot prompts and schemas.
-      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
+      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
+        generationProfile.kind === "design"
+          ? // Exactly the binding's extension; an empty base fails the composition check.
+            [...(designWiring?.extensions ?? [])]
+          : preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             ...(memoryExtension ? [memoryExtension] : []),
@@ -2425,7 +2517,9 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
-      const advisorExtension = await advisorRuntime.extensionForGeneration({
+      // A design run composes exactly its own extension: no advisor, codemode or
+      // other base extension may join it (ADR-DS §4).
+      const advisorExtension = generationProfile.kind === "design" ? undefined : await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -2476,7 +2570,9 @@ export const llmClient = {
           : {}),
       });
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
-        workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
+        generationProfile.kind === "design"
+          ? undefined
+          : workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
         permission !== "none" && !options.excludeToolNames?.has("codemode")
           ? {
               id: "aiden.workspace-codemode",
@@ -2492,11 +2588,10 @@ export const llmClient = {
               }).toolSearch] : [])],
             }
           : undefined;
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
-        ...baseRuntimeExtensions,
-        ...(advisorExtension ? [advisorExtension] : []),
-        ...(codemodeExtension ? [codemodeExtension] : []),
-      ];
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = selectRuntimeExtensions(
+        generationProfile,
+        { base: baseRuntimeExtensions, advisor: advisorExtension, codemode: codemodeExtension },
+      );
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -2521,7 +2616,9 @@ export const llmClient = {
             };
       const telegramInteractive = options.interactionSurface === "telegram";
       const baseSystemPrompt =
-        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
+        generationProfile.kind === "design"
+          ? (designWiring?.baseSystemPrompt ?? "")
+          : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: devicesEnabled()
                 ? SETTINGS_SECTIONS
@@ -2785,7 +2882,7 @@ export const llmClient = {
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
       const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
-      candidate = new PiAgentRuntimeHarness({
+      candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
         models: runtime.models,
@@ -2852,6 +2949,8 @@ export const llmClient = {
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
+          // Design HTML lives in the project store, never in the Pi journal (ADR-DS §10).
+          ...(designWiring ? { appendMessages: designWiring.journalAppend } : {}),
           beforeQueuedUser: async (message, signal) => {
             if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
               throw new Error("Queued guidance must contain text.");
@@ -3810,6 +3909,7 @@ export const llmClient = {
       rendererDetached: initialization.rendererDetached,
       computerUse,
       formFill,
+      inputClosed: designWiring?.inputClosed ?? false,
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -3924,6 +4024,8 @@ export const llmClient = {
             }),
           )
         : undefined;
+    // A throw before the outcome is known is Aiden's failure, not the provider's.
+    let designOutcome: DesignRunOutcome = "host_failed";
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -3993,8 +4095,10 @@ export const llmClient = {
             );
           }
         }
+        const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
+        let replyNotSaved = false;
         const finalError =
-          generationEmergencyUserError(runtimeOutcome.emergencyProjection) ??
+          emergencyError ??
           (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
@@ -4031,7 +4135,8 @@ export const llmClient = {
           !generationHasVisibleOutput(
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
-              displayedHtmlArtifacts.length,
+              displayedHtmlArtifacts.length +
+              (designRun?.acceptedCount() ?? 0),
           ) &&
           !wasCancelled
         ) {
@@ -4058,6 +4163,7 @@ export const llmClient = {
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
+          replyNotSaved = Boolean(persisted.error);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
@@ -4076,6 +4182,14 @@ export const llmClient = {
             }));
           }
         }
+        // Only after persistence: a reply that throws while saving stays host_failed.
+        designOutcome = designRunOutcome({
+          runtimeKind: runtimeOutcome.kind,
+          emergency: Boolean(emergencyError),
+          cancelled: wasCancelled,
+          cancellationOrigin: activeGeneration.cancellationOrigin,
+          persistenceFailed: replyNotSaved,
+        });
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
@@ -4115,6 +4229,8 @@ export const llmClient = {
             activeGeneration.workspaceId,
             params.workspaceId,
           );
+          // Exactly once per started run; pre-run failures reach DesignRunService through start().
+          designRun?.onSettled(designOutcome);
         }
       }
     })();

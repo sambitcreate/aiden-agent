@@ -45,7 +45,7 @@ test("conversation surface matrix converges every authorized turn on the managed
     source("./subagents/child-agent-runtime.ts"),
   ]);
 
-  assert.match(desktop, /new PiAgentRuntimeHarness\(/u);
+  assert.match(desktop, /createGenerationHarness\(/u);
   assert.match(desktop, /createGenerationContextTransform/u);
   assert.match(telegram, /beginChatTurn\(chatId, streamId, background\.owner\.documentId\)/u);
   assert.match(telegram, /deps\.llmClient\.start\(/u);

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MAX_CHAT_TITLE_LENGTH,
+  assertRenameAllowedFromChat,
   buildChatRenamePrompt,
   buildChatTitlePrompt,
   canReplaceGeneratedChatTitle,
@@ -107,4 +108,15 @@ test("builds a bounded rename prompt from the original request and recent conver
   assert.match(prompt, /Keep manual renames safe when generation finishes/);
   assert.doesNotMatch(prompt, /Hidden system instructions/);
   assert.ok(Buffer.byteLength(prompt, "utf8") <= 16_384);
+});
+
+test("renderer renames refuse a design-owned chat only when asked to", () => {
+  const designChat = { owner: { kind: "design-project", projectId: "project-1" } } as const;
+  assert.throws(
+    () => assertRenameAllowedFromChat(designChat, { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  // The owning feature renames through the shared service without the option.
+  assert.doesNotThrow(() => assertRenameAllowedFromChat(designChat, {}));
+  assert.doesNotThrow(() => assertRenameAllowedFromChat({}, { rejectFeatureOwned: true }));
 });

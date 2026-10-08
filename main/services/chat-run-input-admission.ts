@@ -23,6 +23,8 @@ export interface ChatRunInputGenerationRef {
   chatId: string;
   owner: { documentId: string };
   cancelRequested: boolean;
+  /** Runs that take no mid-flight input (Design Studio). */
+  inputClosed?: boolean;
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
     queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
@@ -88,6 +90,9 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       (input.ownerDocumentId !== undefined &&
         generation.owner.documentId !== input.ownerDocumentId)
     ) {
+      return { admitted: false, reason: "run_not_active", committed: false };
+    }
+    if (generation.inputClosed) {
       return { admitted: false, reason: "run_not_active", committed: false };
     }
     if (generation.cancelRequested || deps.isChatDeleting(generation.chatId)) {
