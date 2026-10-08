@@ -71,6 +71,7 @@ import { ariaKeyShortcut } from "../shared/keybindings";
 import type { ToolApprovalScope } from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
+import { APPEARANCE_CHANGE_EVENT, readCachedAppearance } from "../lib/appearance-runtime";
 import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
@@ -364,6 +365,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Composer context meter: the runtime's next-request projection, refreshed
   // on the ambient triggers (open, model change, settle, draft typing) and
   // pushed live during a generation via chat:context-pressure.
+  const showComposerContextUsage = React.useSyncExternalStore(
+    React.useCallback((listener: () => void) => { window.addEventListener(APPEARANCE_CHANGE_EVENT, listener); return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, listener); }, []),
+    () => readCachedAppearance()?.showComposerContextUsage ?? true,
+    () => true,
+  );
   const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
   const [contextCompactPending, setContextCompactPending] = React.useState(false);
   const [contextCompactedFlash, setContextCompactedFlash] = React.useState(false);
@@ -2873,7 +2879,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : undefined
                 }
                 contextMeter={
-                  draft ? undefined : (
+                  draft || !showComposerContextUsage ? undefined : (
                     <ContextMeter
                       pressure={contextPressure}
                       compacting={
