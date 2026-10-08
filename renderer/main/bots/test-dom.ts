@@ -36,6 +36,9 @@ const GLOBAL_KEYS = [
   "matchMedia",
   "localStorage",
   "sessionStorage",
+  "FileReader",
+  "Blob",
+  "File",
 ] as const;
 
 /**

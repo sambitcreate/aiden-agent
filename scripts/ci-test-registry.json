@@ -704,6 +704,7 @@
         "renderer/main/bots/bot-delete-dialog.test.tsx",
         "renderer/main/bots/bot-list.test.tsx",
         "renderer/main/bots/bot-profile.test.tsx",
+        "renderer/main/bots/bot-profile-photo.test.tsx",
         "renderer/main/bots/bots-home.test.tsx",
         "renderer/main/bots/bot-chat-pane.test.tsx",
         "renderer/main/bots/bot-routines.test.tsx",
