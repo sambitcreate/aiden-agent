@@ -29,3 +29,11 @@ Independent review found that Android and iOS background reconciliation could ma
 PR #280's Linux x64 run flagged two chat queue specs after relaunch and rapid sidebar navigation. The tests now wait for a usable composer, confirm `aria-current` selection, and verify the persisted transcript or restored Stop action before proceeding. This keeps startup/index and New Agent navigation from racing the assertion without sleeps, repeated clicks, timeout increases, or production changes.
 
 Validation: both focused specs passed five times each on macOS (10/10) and three times each under Xvfb in an isolated OrbStack Linux x64 container (6/6, retries disabled). E2E typecheck, build, and diff checks pass.
+
+## Mobile needs-attention ordering (Hermex deep dive P1 #5, matrix #23)
+
+Branch `feature/mobile-needs-attention-sort`, client-only (no contract revision).
+- Pure ordering: Android `aidenNeedsAttentionFirst` + `AidenChatRowState.attentionRank()` in `AidenChatRowStatus.kt`; iOS `aidenNeedsAttentionFirst` + `AidenChatRowState.attentionRank` in `Models/AidenChat.swift`. Tiers follow desktop `SIDEBAR_ATTENTION_TIERS` minus Unread: needs approval > needs input > working > idle. Ranking uses `displayRowState`, so a stale server attention state on an idle chat never promotes it. Stable: ties keep recency order.
+- Applied once in each platform's Workspace sidebar projection (`projectAidenWorkspaceSidebar` / `AidenWorkspaceSidebarProjection.make`), so both the per-workspace sections (including the preview limit) and the Recent list sort attention-first. Workspace section order is unchanged; `newestActivityAt` now takes the max chat time because the first chat is no longer the newest.
+- No section headers: desktop only labels tiers in its separate Needs attention view, and the row pills/spinner already mark state. No pins exist on mobile or desktop chat rows. Bots home is a contact list (not chat rows, excluded from row states) and is being reworked in #377, so it is unchanged.
+- Tests: `AidenChatRowStatusTest.kt` (Android) and `AidenAppearanceTests` in `AidenChatTests.swift` (iOS).

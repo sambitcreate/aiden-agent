@@ -1414,6 +1414,31 @@ enum AidenChatRowState: String, Codable, Equatable, Sendable {
         case .idle: "Idle"
         }
     }
+
+    /// Triage rank used to order chat lists, most urgent first. Mirrors the
+    /// desktop Needs attention tiers: a chat blocked on the user outranks one
+    /// that is merely working, and everything else keeps its existing order.
+    var attentionRank: Int {
+        switch self {
+        case .needsApproval: 0
+        case .needsInput: 1
+        case .working: 2
+        case .idle: 3
+        }
+    }
+}
+
+/// Moves chats that need the user, then working chats, ahead of idle ones.
+/// Ties keep the incoming (recency) order, so rows do not jitter between
+/// refreshes.
+func aidenNeedsAttentionFirst(_ chats: [AidenChatSummary]) -> [AidenChatSummary] {
+    chats.enumerated()
+        .sorted { left, right in
+            let leftRank = left.element.displayRowState.attentionRank
+            let rightRank = right.element.displayRowState.attentionRank
+            return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
+        }
+        .map(\.element)
 }
 
 struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {

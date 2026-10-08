@@ -28,8 +28,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.models.AidenChatRowState
+import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+
+/**
+ * Triage rank used to order chat lists, most urgent first. Mirrors the
+ * desktop Needs attention tiers: a chat blocked on the user outranks one that
+ * is merely working, and everything else keeps its existing order.
+ */
+fun AidenChatRowState.attentionRank(): Int = when (this) {
+    AidenChatRowState.NEEDS_APPROVAL -> 0
+    AidenChatRowState.NEEDS_INPUT -> 1
+    AidenChatRowState.WORKING -> 2
+    AidenChatRowState.IDLE -> 3
+}
+
+/**
+ * Moves chats that need the user, then working chats, ahead of idle ones.
+ * The sort is stable, so rows within a tier keep the incoming (recency)
+ * order and do not jitter between refreshes.
+ */
+fun aidenNeedsAttentionFirst(chats: List<AidenChatSummary>): List<AidenChatSummary> =
+    chats.sortedBy { it.displayRowState.attentionRank() }
 
 /** Semantic tone for a row-status pill; resolved against the active palette. */
 enum class AidenChatRowStatusTone { WARNING, ACCENT }

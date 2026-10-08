@@ -8577,6 +8577,108 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(search.recents.map(\.id), ["alpha-chat"])
     }
 
+    private func attentionSummary(
+        _ id: String,
+        updated seconds: TimeInterval,
+        active: Bool = false,
+        rowState: AidenChatRowState? = nil,
+        workspaceId: String = "alpha"
+    ) -> AidenChatSummary {
+        let base = Date(timeIntervalSince1970: 1_000)
+        return AidenChatSummary(
+            id: id,
+            workspaceId: workspaceId,
+            title: id,
+            titlePending: false,
+            createdAt: base,
+            updatedAt: base.addingTimeInterval(seconds),
+            revision: "\(id)-r1",
+            activity: active ? .active : .idle,
+            rowState: rowState
+        )
+    }
+
+    func testNeedsAttentionChatsSortAboveNewerWorkingAndIdleChats() {
+        let newestFirst = [
+            attentionSummary("idle-newest", updated: 50),
+            attentionSummary("running", updated: 40, active: true, rowState: .working),
+            attentionSummary("idle-middle", updated: 30),
+            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
+            attentionSummary("approval", updated: 10, active: true, rowState: .needsApproval),
+        ]
+
+        XCTAssertEqual(
+            aidenNeedsAttentionFirst(newestFirst).map(\.id),
+            ["approval", "question", "running", "idle-newest", "idle-middle"]
+        )
+    }
+
+    func testNeedsAttentionOrderingKeepsIncomingOrderWithinATier() {
+        // Older Macs send no row state; an active chat still counts as working.
+        let newestFirst = [
+            attentionSummary("idle-c", updated: 30),
+            attentionSummary("run-b", updated: 25, active: true),
+            attentionSummary("idle-b", updated: 20),
+            attentionSummary("run-a", updated: 15, active: true, rowState: .working),
+            attentionSummary("idle-a", updated: 10),
+        ]
+
+        XCTAssertEqual(
+            aidenNeedsAttentionFirst(newestFirst).map(\.id),
+            ["run-b", "run-a", "idle-c", "idle-b", "idle-a"]
+        )
+    }
+
+    func testStaleAttentionStateOnIdleChatDoesNotJumpTheQueue() {
+        let newestFirst = [
+            attentionSummary("newer", updated: 20),
+            attentionSummary("stale-approval", updated: 10, active: false, rowState: .needsApproval),
+        ]
+
+        XCTAssertEqual(aidenNeedsAttentionFirst(newestFirst).map(\.id), ["newer", "stale-approval"])
+    }
+
+    func testWorkspaceSidebarSurfacesAttentionFirstWithoutReorderingWorkspaces() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        let workspaces = ["alpha", "beta"].map { id in
+            AidenWorkspace(
+                id: id,
+                name: id.capitalized,
+                permission: .ask,
+                hasFolder: false,
+                isManagedWorktree: false,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base,
+                revision: "\(id)-r1"
+            )
+        }
+        let chats = [
+            attentionSummary("alpha-newest", updated: 100),
+            attentionSummary("alpha-approval", updated: 5, active: true, rowState: .needsApproval),
+            attentionSummary("beta-working", updated: 60, active: true, rowState: .working, workspaceId: "beta"),
+            attentionSummary("beta-idle", updated: 70, workspaceId: "beta"),
+        ]
+
+        let projection = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: chats,
+            searchText: ""
+        )
+
+        // Workspaces stay ordered by their newest activity, not by attention.
+        XCTAssertEqual(projection.sections.map(\.workspace.id), ["alpha", "beta"])
+        XCTAssertEqual(projection.sections[0].newestActivityAt, base.addingTimeInterval(100))
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-approval", "alpha-newest"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["beta-working", "beta-idle"])
+        XCTAssertEqual(
+            projection.recents.map(\.id),
+            ["alpha-approval", "beta-working", "alpha-newest", "beta-idle"]
+        )
+    }
+
     @MainActor
     func testUnifiedWorkspaceSidebarPreferencesPersistPerInstallation() throws {
         let suiteName = "AidenWorkspaceSidebarTests.\(UUID().uuidString)"

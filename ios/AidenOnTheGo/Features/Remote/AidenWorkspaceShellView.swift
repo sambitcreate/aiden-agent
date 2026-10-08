@@ -588,11 +588,13 @@ struct AidenWorkspaceSidebarProjection: Equatable {
     ) -> Self {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspaceByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
-        let regularChats = chats
-            .filter { workspaceByID[$0.workspaceId] != nil }
-            .sorted { left, right in
-                left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
-            }
+        let regularChats = aidenNeedsAttentionFirst(
+            chats
+                .filter { workspaceByID[$0.workspaceId] != nil }
+                .sorted { left, right in
+                    left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
+                }
+        )
         let chatsByWorkspace = Dictionary(grouping: regularChats, by: \AidenChatSummary.workspaceId)
         let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
             let allChats = chatsByWorkspace[workspace.id] ?? []
@@ -604,7 +606,7 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             return AidenWorkspaceSidebarSection(
                 workspace: workspace,
                 chats: visibleChats,
-                newestActivityAt: max(workspace.updatedAt, allChats.first?.updatedAt ?? .distantPast)
+                newestActivityAt: max(workspace.updatedAt, allChats.map(\.updatedAt).max() ?? .distantPast)
             )
         }
         .sorted { left, right in
