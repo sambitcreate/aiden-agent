@@ -195,7 +195,7 @@ class AidenSimulatorsViewModel(
         }
     }
 
-    /** ON_STOP: close the stream and socket; the last frame stays on screen. */
+    /** ON_STOP, or the viewer leaving the screen: close the stream and socket; the last frame stays. */
     fun pauseStreaming() {
         foreground = false
         stopSession()

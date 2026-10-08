@@ -8,6 +8,8 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -119,11 +121,17 @@ class AidenSimulatorViewerTest {
 
     // --- Viewer model ---
 
-    private class FakeRemote(var listing: AidenSimulatorListing, var access: Boolean = true) : AidenSimulatorRemote {
+    private class FakeRemote(
+        var listing: AidenSimulatorListing,
+        var access: Boolean = true,
+        /** Hand out real sessions aimed at a closed local port instead of none. */
+        private val liveSessions: Boolean = false
+    ) : AidenSimulatorRemote {
         val listingRequests = mutableListOf<String?>()
         val opened = mutableListOf<String>()
         val shutdowns = mutableListOf<String>()
         val sessions = mutableListOf<String>()
+        val created = mutableListOf<AidenSimulatorStreamSession<ImageBitmap>>()
 
         override val hasAccess: Boolean get() = access
         override suspend fun simulators(chatId: String?): AidenSimulatorListing {
@@ -140,7 +148,16 @@ class AidenSimulatorViewerTest {
         // No network in unit tests: the model reports the stream as unreachable.
         override fun session(deviceId: String, scope: CoroutineScope): AidenSimulatorStreamSession<ImageBitmap>? {
             sessions += deviceId
-            return null
+            if (!liveSessions) return null
+            val unreachable = Request.Builder().url("http://127.0.0.1:9/").build()
+            return AidenSimulatorStreamSession<ImageBitmap>(
+                httpClient = OkHttpClient(),
+                mjpegRequest = unreachable,
+                inputRequest = unreachable,
+                scope = scope,
+                decodeFrame = { null },
+                retryDelayMillis = 60_000
+            ).also { created += it }
         }
     }
 
@@ -232,6 +249,30 @@ class AidenSimulatorViewerTest {
         assertEquals(listOf(iphone), remote.shutdowns)
         assertFalse(model.viewer.value.open)
         assertEquals(2, remote.listingRequests.size)
+    }
+
+    @Test
+    fun leavingTheViewerReleasesTheStreamAndReturningReconnects() {
+        val remote = FakeRemote(fixtureListing, liveSessions = true)
+        val model = AidenSimulatorsViewModel("chat_1", remote)
+        model.refreshChatDevices()
+        model.openViewer()
+        assertEquals(1, remote.created.size)
+        assertTrue(model.session.value === remote.created.single())
+
+        // The viewer left the screen (or the app went to the background) while still open.
+        model.pauseStreaming()
+        assertNull(model.session.value)
+        assertTrue(model.viewer.value.open)
+        // A stopped session cannot send, so it holds no socket on the Mac.
+        assertFalse(remote.created.single().send(byteArrayOf(0)))
+
+        // Coming back (ON_START replays when the observer is re-added) opens a new stream.
+        model.resumeStreaming()
+        assertEquals(2, remote.created.size)
+        assertTrue(model.session.value === remote.created.last())
+        model.closeViewer()
+        assertNull(model.session.value)
     }
 
     @Test
