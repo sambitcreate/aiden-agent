@@ -5,6 +5,7 @@ import {
   expect,
   finishLmStudioOnboarding,
   test,
+  waitForToastsToClear,
 } from "./fixtures";
 
 test.use({ workspaceSeed: true });
@@ -294,6 +295,8 @@ test("browser pages share the tool tab strip and the launcher hides the native p
 test("browser creation and background selection preserve address focus while strip navigation moves it", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  // The onboarding toast sits over the floating panel's New browser tab button.
+  await waitForToastsToClear(page);
   await page.locator("[data-environment-toggle]").click();
   const panel = page.getByRole("complementary", { name: "Environment work surface" });
   await panel.getByRole("button", { name: "Browser", exact: true }).click();
@@ -328,6 +331,8 @@ test("browser creation and background selection preserve address focus while str
 test("the shared browser strip ignores a delayed command snapshot after a newer close event", async ({ aiden }) => {
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
+  // The onboarding toast sits over the floating panel's New browser tab button.
+  await waitForToastsToClear(page);
   await page.locator("[data-environment-toggle]").click();
   const panel = page.getByRole("complementary", { name: "Environment work surface" });
   await panel.getByRole("button", { name: "Browser", exact: true }).click();
