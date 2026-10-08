@@ -57,6 +57,8 @@ export type MutateWorkflowRequest =
 export interface MutateWorkflowResponse {
   ok: boolean;
   workflowId?: string;
+  /** Why a delete was refused: a run is in progress, or the workflow is already gone. */
+  reason?: "busy" | "not-found";
 }
 
 export interface ListModelsResponse {

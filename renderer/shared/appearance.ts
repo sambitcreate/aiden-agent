@@ -37,6 +37,7 @@ export interface AppearanceConfig {
   dark: ThemeVariantConfig;
   pointerCursors: boolean;
   autoHideComposerContext: boolean;
+  showComposerContextUsage: boolean;
   showWorkspacePaths: boolean;
   workspacePathFormat: "middle" | "end" | "start";
   dockIcon: DockIconPreference;
@@ -409,6 +410,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   dark: getPresetVariant("aiden", "dark"),
   pointerCursors: false,
   autoHideComposerContext: true,
+  showComposerContextUsage: true,
   showWorkspacePaths: false,
   workspacePathFormat: "middle",
   dockIcon: "aiden",
@@ -498,6 +500,7 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     autoHideComposerContext: typeof value.autoHideComposerContext === "boolean"
       ? value.autoHideComposerContext
       : fallback.autoHideComposerContext,
+    showComposerContextUsage: typeof value.showComposerContextUsage === "boolean" ? value.showComposerContextUsage : true,
     showWorkspacePaths: typeof value.showWorkspacePaths === "boolean"
       ? value.showWorkspacePaths
       : fallback.showWorkspacePaths,
@@ -557,6 +560,9 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   // Older V1 settings did not contain this preference. Keep them loadable.
   if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
     throw new Error("Composer context preference must be a boolean value.");
+  }
+  if (value.showComposerContextUsage !== undefined && typeof value.showComposerContextUsage !== "boolean") {
+    throw new Error("Composer context usage visibility must be a boolean value.");
   }
   // Older V1 settings and exports predate the chat width preference.
   if (value.chatWidth !== undefined && !isChatWidthPreference(value.chatWidth)) {

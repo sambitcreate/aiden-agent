@@ -2,6 +2,7 @@
 // from the runtime's own projectNextContextUsage projection, so the meter
 // trips exactly when Aiden would compact; estimated figures carry a ~ prefix.
 
+import * as React from "react";
 import { CircleGauge } from "lucide-react";
 import { Button, Popover, PopoverContent, PopoverTrigger, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
@@ -36,11 +37,15 @@ export function ContextMeter({
   pressure,
   compacting = false,
   recentlyCompacted = false,
+  onViewDetails,
 }: {
   pressure: ChatContextPressureV1 | null | undefined;
   compacting?: boolean;
   recentlyCompacted?: boolean;
+  onViewDetails?: () => void;
 }) {
+  const [open, setOpen] = React.useState(false);
+  const detailsRequested = React.useRef(false);
   if (!pressure) return null;
   const percent = contextPressurePercent(pressure);
   const phase = contextMeterPhase(pressure, compacting, recentlyCompacted);
@@ -57,7 +62,7 @@ export function ContextMeter({
             : "Context healthy — no compaction needed before the next request.";
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="transparent"
@@ -79,6 +84,7 @@ export function ContextMeter({
         align="end"
         side="top"
         aria-label="Context usage"
+        onCloseAutoFocus={(event) => { if (detailsRequested.current) { event.preventDefault(); detailsRequested.current = false; } }}
       >
         <ContextMeterDetails
           pressure={pressure}
@@ -86,6 +92,7 @@ export function ContextMeter({
           emphasized={emphasized}
           stateText={stateText}
         />
+        {onViewDetails ? <Button variant="transparent" size="small" className="mt-3 w-full" onClick={() => { detailsRequested.current = true; setOpen(false); onViewDetails(); }}>View context details</Button> : null}
       </PopoverContent>
     </Popover>
   );
@@ -132,9 +139,7 @@ export function ContextMeterDetails({
         </div>
       </dl>
       <Text variant="small" color="tertiary" className="mt-3 block">
-        {pressure.source === "provider-anchored"
-          ? "Provider-reported composition"
-          : "Estimated composition"}
+        Estimated breakdown
       </Text>
       <dl className="mt-1 space-y-1 text-small">
         <div className="flex items-baseline justify-between gap-3">

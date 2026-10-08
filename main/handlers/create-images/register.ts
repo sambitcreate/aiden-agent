@@ -101,7 +101,8 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
       return copy ? { ok: true, workflowId: copy.id } : { ok: false };
     }
     // Refused while a run is starting or running; the coordinator also clears the workflow's run history and image holds.
-    return { ok: (await coordinator.deleteWorkflow(request.workflowId)) === "deleted" };
+    const outcome = await coordinator.deleteWorkflow(request.workflowId);
+    return outcome === "deleted" ? { ok: true } : { ok: false, reason: outcome };
   });
 
   handle("imageWorkflows:list-models", async (event, input) => {

@@ -601,3 +601,13 @@ test("status primitives keep semantic fills and icons without decorative edges",
     }
   }
 });
+
+
+test("composer usage visibility defaults on for legacy settings and strictly validates explicit values", () => {
+  const legacy = { ...createDefaultAppearanceConfig() } as Record<string, unknown>;
+  delete legacy.showComposerContextUsage;
+  assert.equal(normalizeAppearanceConfig(legacy).showComposerContextUsage, true);
+  assert.equal(parseAppearanceConfig(legacy).showComposerContextUsage, true);
+  assert.equal(parseAppearanceConfig({ ...legacy, showComposerContextUsage: false }).showComposerContextUsage, false);
+  assert.throws(() => parseAppearanceConfig({ ...legacy, showComposerContextUsage: "false" }), /visibility/);
+});

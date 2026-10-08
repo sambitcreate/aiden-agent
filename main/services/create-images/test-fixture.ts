@@ -95,13 +95,30 @@ export function fakeImageModels(
             if (reply.kind === "error") {
               return { ...images(model, 0, 0), output: [], stopReason: "error", errorMessage: reply.message };
             }
+            const aborted = (): AssistantImages => ({
+              ...images(model, 0, 0),
+              output: [],
+              usage: undefined,
+              stopReason: "aborted",
+              errorMessage: "Request aborted.",
+            });
             return new Promise<AssistantImages>((resolve) => {
-              const release = () => resolve(images(model, 1, 0.039));
-              held.add(release);
-              requestOptions?.signal?.addEventListener("abort", () => {
+              const signal = requestOptions?.signal;
+              // An abort that already happened never fires a listener, so settle it here.
+              if (signal?.aborted) {
+                resolve(aborted());
+                return;
+              }
+              const release = () => {
+                signal?.removeEventListener("abort", onAbort);
+                resolve(images(model, 1, 0.039));
+              };
+              const onAbort = () => {
                 held.delete(release);
-                resolve({ ...images(model, 0, 0), output: [], usage: undefined, stopReason: "aborted", errorMessage: "Request aborted." });
-              });
+                resolve(aborted());
+              };
+              held.add(release);
+              signal?.addEventListener("abort", onAbort, { once: true });
             });
           },
         },

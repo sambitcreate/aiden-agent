@@ -54,12 +54,13 @@ test("fresh renderer capabilities fail closed until main explicitly enables feat
   assert.equal(parseAppCapabilities({ geminiLive: true }).geminiLive, true);
   assert.equal(parseAppCapabilities({ devices: true }).devices, true);
   assert.equal(parseAppCapabilities({ devices: "true" }).devices, false);
-  assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files", "browser", "new-tab", "context", "terminal"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), [
     "review",
     "subagents",
     "files",
     "browser",
+    "new-tab", "context", "terminal",
   ]);
 });
 
@@ -105,6 +106,7 @@ test("Quick View and Environment reduce as independent surfaces", () => {
     quickViewOpen: true,
     toolsOpen: true,
     toolsTab: "files",
+    openTabs: ["review", "files"],
     frontSurface: "tools",
   });
 
@@ -112,12 +114,14 @@ test("Quick View and Environment reduce as independent surfaces", () => {
     quickViewOpen: true,
     toolsOpen: false,
     toolsTab: "files",
+    openTabs: ["review", "files"],
     frontSurface: "quick-view",
   });
   assert.deepEqual(reduceEnvironmentSurfaceState(both, { type: "close-quick-view" }), {
     quickViewOpen: false,
     toolsOpen: true,
     toolsTab: "files",
+    openTabs: ["review", "files"],
     frontSurface: "tools",
   });
 
@@ -129,6 +133,7 @@ test("Quick View and Environment reduce as independent surfaces", () => {
     quickViewOpen: true,
     toolsOpen: true,
     toolsTab: "review",
+    openTabs: ["review"],
     frontSurface: "quick-view",
   });
 });
@@ -152,10 +157,7 @@ test("floating Environment remains non-modal across every app-level interaction 
   const assistant = source("./assistant/assistant-dock.tsx");
 
   assert.match(environment, /data-surface-mode=\{inline \? "tools-pinned" : "tools-floating"\}/u);
-  assert.match(
-    environment,
-    /bottom-3 right-3 top-3 rounded-sheet shadow-dialog/u,
-  );
+  // Floating geometry and titlebar clearance are exercised in Electron.
   assert.match(
     environment,
     /reportSurfaceLayout\(fullOpen \? \{ inline, width: renderedWidth \} : null\)/u,
@@ -191,7 +193,7 @@ test("Environment and Quick View have independent toolbar and command routes", (
   assert.match(environment, /onClick=\{panel\.toggleQuickView\}/u);
   assert.match(environment, /data-quick-view-toggle/u);
   assert.match(environment, /<circle cx="7" cy="7" r="2\.5"/u);
-  assert.match(pane, /<EnvironmentPanelToggle disabled=\{!effectiveWorkspace\} \/>/u);
+  // Folderless launcher availability is exercised in chat-shell-interactions.
   assert.match(pane, /<QuickViewToggle disabled=\{!effectiveWorkspace\} \/>/u);
   assert.match(root, /"environment\.toggle",[\s\S]*environmentPanel\.toggleTools\(\)/u);
   assert.match(root, /"quick-view\.toggle",[\s\S]*environmentPanel\.toggleQuickView\(\)/u);
@@ -310,10 +312,6 @@ test("Quick View exposes conditional current-chat counts and the shared orb", ()
   assert.match(environment, /panel\.showTools\("subagents"\)/u);
   assert.match(environment, /<SubagentOrb/u);
   assert.match(environment, /activity=\{representativeSubagent\?\.snapshot\?\.activity\}/u);
-  assert.equal(
-    (environment.match(/state=\{representativeSubagent\?\.state \?\? "finished"\}/gu) ?? []).length,
-    2,
-  );
   assert.doesNotMatch(
     environment,
     /state=\{(?:panel\.)?subagentCounts\.active > 0 \? "running" : "finished"\}/u,

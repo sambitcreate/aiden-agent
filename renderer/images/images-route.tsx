@@ -1,30 +1,9 @@
 import "../canvas/styles";
-import * as React from "react";
-import { StudioCanvas, StudioSurface, type CanvasTool } from "../canvas";
-import { EmptyState } from "../components/ui";
+import "./images.css";
+import { ImagesHome } from "./images-home";
+import { WorkflowEditor } from "./workflow-editor";
 
-/** Placeholder until the real Images module replaces this one; the export name and props are the route contract. */
-export function ImagesRoute(_props: { workflowId?: string }) {
-  const [tool, setTool] = React.useState<CanvasTool>("select");
-  const [minimap, setMinimap] = React.useState(false);
-  return (
-    <StudioSurface title="Images">
-      <StudioCanvas
-        label="Images canvas"
-        nodes={[]}
-        edges={[]}
-        tool={tool}
-        onToolChange={setTool}
-        minimap={minimap}
-        onMinimapChange={setMinimap}
-        emptyState={
-          <EmptyState
-            placement="inline"
-            title="No image workflows yet"
-            description="Image workflows will appear here."
-          />
-        }
-      />
-    </StudioSurface>
-  );
+/** The route contract is `ImagesRoute({ workflowId? })`: the library without an id, the editor with one. */
+export function ImagesRoute({ workflowId }: { workflowId?: string }) {
+  return workflowId ? <WorkflowEditor key={workflowId} workflowId={workflowId} /> : <ImagesHome />;
 }

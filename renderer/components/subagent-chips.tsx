@@ -1,6 +1,6 @@
 import * as React from "react";
 import { type OrbSize, type OrbState } from "thinking-orbs";
-import { subagentRunProgressLabel } from "../lib/subagent-panel-state";
+import { subagentModelDisplay, subagentRunProgressLabel } from "../lib/subagent-panel-state";
 import { cn } from "../lib/ui-utils";
 import type {
   SubagentRunViewRole,
@@ -11,7 +11,7 @@ import {
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import { AidenOrb } from "./aiden-orb";
-import { Button } from "./ui";
+import { Button, HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
 
 function fallbackOrbStateForRole(
   role: SubagentRunViewRole | undefined,
@@ -128,14 +128,17 @@ export function SubagentChips({
         const role = run?.role ?? referencedItem?.role;
         const state = run?.state ?? referencedItem?.state ?? "finished";
         const status = subagentStatusLabel(state, run?.activity);
-        return (
+        const model = run ? subagentModelDisplay(run) : undefined;
+        // Older snapshots never recorded a model choice; their label stays unchanged.
+        const recordedModel = run?.modelSelection !== undefined ? model : undefined;
+        const chip = (
           <Button
             key={runId}
             variant="muted"
             size="small"
             data-subagent-chip-run-id={runId}
             className="max-w-full gap-1.5 motion-reduce:transition-none"
-            aria-label={`Open ${label}. Status: ${status}.`}
+            aria-label={`Open ${label}. Status: ${status}.${recordedModel ? ` ${recordedModel.spoken}.` : ""}`}
             onClick={(event) => onOpen(runId, event.currentTarget)}
           >
             <SubagentOrb role={role} state={state} activity={run?.activity} />
@@ -152,6 +155,38 @@ export function SubagentChips({
               {status}
             </span>
           </Button>
+        );
+        if (!model) return chip;
+        return (
+          <HoverCard key={runId} openDelay={200} closeDelay={100}>
+            <HoverCardTrigger asChild>{chip}</HoverCardTrigger>
+            <HoverCardContent
+              side="top"
+              align="start"
+              className="w-[min(18rem,calc(100vw-2rem))]"
+              data-subagent-model-card={runId}
+            >
+              <p className="truncate text-small font-medium text-primary">{label}</p>
+              <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-mini">
+                <dt className="text-tertiary">Model</dt>
+                <dd className="break-words text-secondary [overflow-wrap:anywhere]">{model.model}</dd>
+                {model.effort ? (
+                  <>
+                    <dt className="text-tertiary">Effort</dt>
+                    <dd className="text-secondary">{model.effort}</dd>
+                  </>
+                ) : null}
+                {model.selection ? (
+                  <>
+                    <dt className="text-tertiary">Choice</dt>
+                    <dd className="text-secondary">{model.selection}</dd>
+                  </>
+                ) : null}
+                <dt className="text-tertiary">Status</dt>
+                <dd className="break-words text-secondary">{status}</dd>
+              </dl>
+            </HoverCardContent>
+          </HoverCard>
         );
       })}
     </div>

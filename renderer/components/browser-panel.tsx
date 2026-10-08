@@ -19,7 +19,7 @@ import { BrowserAnnotationPreviewQueue } from "../lib/browser-annotation-preview
 const ZOOM_STEPS = [.25, .33, .5, .67, .75, .8, .9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
 type RunCommand = (command: BrowserCommand) => Promise<BrowserCommandResult | null>;
 
-export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: string; active: boolean; onDock?: () => void }) {
+export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = false, onStateChange }: { workspaceId: string; active: boolean; onDock?: () => void; integratedTabs?: boolean; onStateChange?: (state: BrowserState | null) => void }) {
   const [state, setState] = React.useState<BrowserState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = React.useState(0);
@@ -56,6 +56,7 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
   const [addressFocused, setAddressFocused] = React.useState(false);
   ownerRef.current = workspaceId;
   const visibleState = state?.workspaceId === workspaceId ? state : null;
+  React.useEffect(() => { onStateChange?.(visibleState); }, [visibleState, onStateChange]);
   const tab = visibleState?.tabs.find((item) => item.id === visibleState.activeTabId) ?? null;
   const surfaceActive = active || Boolean(tab?.floating);
   activeRef.current = surfaceActive;
@@ -265,7 +266,7 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
 
   const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId}>
     <div className="browser-tab-strip">
-      <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
+      <div style={integratedTabs && !tab?.floating ? { display: "none" } : undefined} className="browser-tabs" role="tablist" aria-label="Browser tabs">
         {visibleState?.tabs.map((item, index) => <div key={item.id} className="browser-tab" data-selected={item.id === tab?.id}>
           <button type="button" className="browser-tab-select" role="tab" aria-label={item.title || "New tab"} aria-selected={item.id === tab?.id} tabIndex={item.id === tab?.id ? 0 : -1} onClick={() => void run({ action: "select", tabId: item.id })} onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -294,6 +295,7 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
         <Input ref={addressRef} aria-label="Search or enter URL" placeholder="Search or enter URL" spellCheck={false} autoComplete="off" value={addressFocused ? address : tab?.url === "about:blank" ? "" : tab?.url ?? ""} onChange={(event) => setAddress(event.target.value)} onFocus={() => { setAddress(tab?.url === "about:blank" ? "" : tab?.url ?? ""); setAddressFocused(true); queueMicrotask(() => addressRef.current?.select()); }} onBlur={() => setAddressFocused(false)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setAddressFocused(false); event.currentTarget.blur(); } }} />
       </form>
       <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>
+      {integratedTabs && tab && (tab.audible || tab.muted) ? <Button variant="transparent" size="small" iconOnly aria-label={tab.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}>{tab.muted ? <VolumeX /> : <Volume2 />}</Button> : null}
       <BrowserMoreMenu tab={tab} state={visibleState} open={menuOpen} onOpenChange={setMenuOpen} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
     </div>
     {tab?.viewport.mode === "responsive" ? <BrowserDeviceToolbar tab={tab} run={run} /> : null}
