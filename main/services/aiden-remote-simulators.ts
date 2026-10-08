@@ -15,7 +15,7 @@
  */
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
-import type { Duplex } from "node:stream";
+import { Transform, type Duplex, type TransformCallback } from "node:stream";
 import {
   DEVICE_ID_PATTERN,
   LOCAL_DEVICE_HOST_ID,
@@ -26,6 +26,7 @@ import {
   type DeviceSummary,
 } from "../../renderer/shared/devices.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { MOBILE_SIMULATOR_INPUT_TAGS } from "./aiden-remote-protocol.js";
 import {
   decideDeviceHubRoute,
   hubRequestHeaders,
@@ -53,6 +54,122 @@ const MOBILE_HUB_WS_PATH = /^\/vendor\/serve-sim\/helper\/ws$/u;
 
 export const MOBILE_SIMULATOR_REFUSAL =
   "Phones can watch, tap, and shut down shared simulators, but not change their settings.";
+
+/** RFC 6455 close code for a message that breaks the endpoint's policy. */
+export const MOBILE_INPUT_POLICY_CLOSE_CODE = 1008;
+/** How long a phone gets to finish the closing handshake before its socket is destroyed. */
+const MOBILE_INPUT_CLOSE_GRACE_MS = 1_000;
+const EMPTY = Buffer.alloc(0);
+
+type FrameVerdict = "more" | "deny" | { frameLength: number };
+
+/**
+ * Checks a phone's input socket (phone to hub) frame by frame. Phones send one
+ * masked binary `[tag][JSON]` message per input, and the tag must be in
+ * `MOBILE_SIMULATOR_INPUT_TAGS` (touch, button, orientation, hardware
+ * keyboard). Ping, pong and close frames pass, as do continuations of an
+ * accepted message. Anything else (another tag, a text or empty message, an
+ * unmasked frame, a reserved opcode, or RSV bits, since the relay negotiates
+ * no extension for phones) is a violation: the offending frame and every byte
+ * after it are dropped and `onViolation` runs once, which closes the socket
+ * with 1008. The native clients never send anything else, so closing is
+ * preferred over silently dropping a frame and keeping a misbehaving client.
+ */
+export class MobileSimulatorInputFilter extends Transform {
+  /** The start of a frame whose verdict needs more bytes. */
+  private pending: Buffer = EMPTY;
+  /** Bytes of an accepted frame still to forward unread. */
+  private passing = 0;
+  /** An accepted data message continues in continuation frames. */
+  private inMessage = false;
+  private violated = false;
+
+  constructor(private readonly onViolation: () => void) {
+    super();
+  }
+
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
+    if (this.violated) return callback();
+    const accepted: Buffer[] = [];
+    let data = chunk;
+    while (data.length > 0) {
+      if (this.passing > 0) {
+        const take = Math.min(this.passing, data.length);
+        accepted.push(data.subarray(0, take));
+        this.passing -= take;
+        data = data.subarray(take);
+        continue;
+      }
+      const frame = this.pending.length > 0 ? Buffer.concat([this.pending, data]) : data;
+      data = EMPTY;
+      const verdict = this.verdict(frame);
+      if (verdict === "more") {
+        this.pending = Buffer.from(frame);
+        break;
+      }
+      this.pending = EMPTY;
+      if (verdict === "deny") {
+        this.violated = true;
+        if (accepted.length > 0) this.push(Buffer.concat(accepted));
+        this.onViolation();
+        return callback();
+      }
+      const take = Math.min(verdict.frameLength, frame.length);
+      accepted.push(frame.subarray(0, take));
+      this.passing = verdict.frameLength - take;
+      data = frame.subarray(take);
+    }
+    if (accepted.length > 0) this.push(Buffer.concat(accepted));
+    callback();
+  }
+
+  private verdict(frame: Buffer): FrameVerdict {
+    if (frame.length < 2) return "more";
+    const first = frame[0]!;
+    const second = frame[1]!;
+    const fin = (first & 0x80) !== 0;
+    const opcode = first & 0x0f;
+    if ((first & 0x70) !== 0 || (second & 0x80) === 0) return "deny";
+    let payloadLength = second & 0x7f;
+    let offset = 2;
+    if (payloadLength === 126) {
+      if (frame.length < 4) return "more";
+      payloadLength = frame.readUInt16BE(2);
+      offset = 4;
+    } else if (payloadLength === 127) {
+      if (frame.length < 10) return "more";
+      const long = frame.readBigUInt64BE(2);
+      if (long > BigInt(Number.MAX_SAFE_INTEGER)) return "deny";
+      payloadLength = Number(long);
+      offset = 10;
+    }
+    const headerLength = offset + 4;
+    if (frame.length < headerLength) return "more";
+    const accept = { frameLength: headerLength + payloadLength };
+    if (opcode >= 0x8) return opcode <= 0xa && fin && payloadLength <= 125 ? accept : "deny";
+    if (opcode === 0x0) {
+      if (!this.inMessage) return "deny";
+      this.inMessage = !fin;
+      return accept;
+    }
+    if (opcode !== 0x2 || this.inMessage || payloadLength === 0) return "deny";
+    if (frame.length < headerLength + 1) return "more";
+    // The first payload byte, unmasked with the first mask byte.
+    const tag = frame[headerLength]! ^ frame[offset]!;
+    if (!MOBILE_SIMULATOR_INPUT_TAGS.has(tag)) return "deny";
+    this.inMessage = !fin;
+    return accept;
+  }
+}
+
+/** An unmasked server close frame carrying `code` and a short reason. */
+function websocketCloseFrame(code: number, reason: string): Buffer {
+  const text = Buffer.from(reason, "utf8");
+  const payload = Buffer.alloc(2 + text.length);
+  payload.writeUInt16BE(code, 0);
+  text.copy(payload, 2);
+  return Buffer.concat([Buffer.from([0x88, payload.length]), payload]);
+}
 
 export type AidenRemoteSimulator = Omit<DeviceSummary, "hostId">;
 
@@ -445,16 +562,27 @@ export class AidenRemoteSimulatorRelay {
     const hub = new URL(target.hubOrigin);
     const upstream = connect({ host: hub.hostname, port: Number(hub.port) });
     this.track(input.deviceId, audience, socket);
+    const headers = hubRequestHeaders(request.headers, target.hubOrigin, { forceOrigin: true });
+    const handshake = { ...request.headers };
+    let inbound: MobileSimulatorInputFilter | undefined;
+    if (audience === "mobile") {
+      // No extension (permessage-deflate) is negotiated, so every phone frame's first byte is its tag.
+      delete headers["sec-websocket-extensions"];
+      delete handshake["sec-websocket-extensions"];
+      inbound = new MobileSimulatorInputFilter(() => {
+        // The hub never sees the offending frame; the phone gets a policy close.
+        upstream.unpipe(socket);
+        socket.end(websocketCloseFrame(MOBILE_INPUT_POLICY_CLOSE_CODE, "Input not allowed"));
+        setTimeout(() => socket.destroy(), MOBILE_INPUT_CLOSE_GRACE_MS).unref();
+      });
+    }
     pipeUpgrade({
       client: socket,
       upstream,
       readyEvent: "connect",
-      requestHead: upgradeRequestHead(
-        target.upstreamPath,
-        hubRequestHeaders(request.headers, target.hubOrigin, { forceOrigin: true }),
-        request.headers,
-      ),
+      requestHead: upgradeRequestHead(target.upstreamPath, headers, handshake),
       head: input.head,
+      ...(inbound ? { inbound } : {}),
     });
   }
 }

@@ -5741,8 +5741,11 @@ function parseChatForkFixture(value: unknown): AidenRemoteChatForkFixture {
 
 const MOBILE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9-]{1,128}$/u;
 const MOBILE_SIMULATOR_HUB_ROUTE_PREFIX = "/simulators/hub/vendor/serve-sim/helper/";
-/** Tags a phone may send through the input socket: touch, button, orientation, hardware keyboard. */
-const MOBILE_SIMULATOR_INPUT_TAGS = new Set([0x03, 0x04, 0x07, 0x0d]);
+/**
+ * Tags a phone may send through the input socket: touch, button, orientation,
+ * hardware keyboard. The simulator relay enforces this on every phone frame.
+ */
+export const MOBILE_SIMULATOR_INPUT_TAGS: ReadonlySet<number> = new Set([0x03, 0x04, 0x07, 0x0d]);
 
 function parseMobileSimulatorListing(value: unknown, label: string): Record<string, unknown> {
   const listing = requiredFixtureRecord(
