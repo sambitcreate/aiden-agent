@@ -897,14 +897,14 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 26);
+  assert.equal(fixture.contractRevision, 25);
   assert.equal(fixture.botList.maxBots, 256);
   assert.equal(fixture.botSummary.health, "ready");
   assert.equal(fixture.botDetail.access.botId, fixture.botDetail.id);
   assert.equal(fixture.botPolicy.accessMode, "full");
   assert.equal(Object.prototype.hasOwnProperty.call(fixture.botPolicy, "custom"), false);
   assert.equal(fixture.botIdentity.request.openingGreeting, "");
-  // Omitted access is Full on revision 26.
+  // Omitted access is Full on revision 25.
   assert.equal(fixture.botCreate.request.access, undefined);
   assert.equal(fixture.botChatCreate.response.botId, fixture.botSummary.id);
   assert.equal(fixture.botConversation.activityState, "waiting_for_approval");
@@ -1251,11 +1251,11 @@ test("Bot capability catalogs allow the documented per-provider model bound", as
 test("Bot policy mutations bind catalog and Bot-policy revisions without hiding drift", async () => {
   const source = await readBotContractFixture();
 
-  // Omitted create access is Full on revision 26, so the fixture without it parses.
+  // Omitted create access is Full on revision 25, so the fixture without it parses.
   const omittedCreateAccess = structuredClone(source);
   delete fixtureRecord(fixtureRecord(omittedCreateAccess.botCreate, "botCreate").request, "botCreate.request").access;
   assert.doesNotThrow(() => parseAidenRemoteContractFixture(omittedCreateAccess));
-  // Create carries no access on revision 26 (omitted means Full), so only the policy update binds the catalog.
+  // Create carries no access on revision 25 (omitted means Full), so only the policy update binds the catalog.
   for (const operationName of ["botPolicyUpdate"] as const) {
     assertBotFixtureMutationFails(
       source,

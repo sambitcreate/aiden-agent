@@ -1008,7 +1008,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 3)
     }
 
-    /// Revision 26 durable sessions, routines, presets and connection requests
+    /// Revision 25 durable sessions, routines, presets and connection requests
     /// each send the exact route, precondition and idempotency key the host expects.
     func testDurableBotRoutesUseCanonicalRoutesPreconditionsAndKeys() async throws {
         let client = makeClient()

@@ -32,7 +32,7 @@ import java.io.InputStream
 import java.io.InputStreamReader
 import java.time.Instant
 
-// Contract revision 26 (`bot-durable-session-v1`): one durable conversation per Bot,
+// Contract revision 25 (`bot-durable-session-v1`): one durable conversation per Bot,
 // addressed by Bot id rather than chat id.
 
 /** Strict codec for the revision-26 Bot DTOs: exact keys, no unknown fields, nulls omitted. */
