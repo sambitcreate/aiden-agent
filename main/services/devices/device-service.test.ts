@@ -167,12 +167,21 @@ interface HubCall {
 }
 
 function fakeFetch(
-  options: { refuse?: string; refusal?: string; screenshotType?: string; bootGate?: Promise<void>; bootSerial?: string } = {},
+  options: {
+    refuse?: string;
+    refusal?: string;
+    screenshotType?: string;
+    bootGate?: Promise<void>;
+    bootSerial?: string;
+    /** A route whose request fails outright, as when the hub is too old or too slow. */
+    unreachable?: string;
+  } = {},
 ) {
   const calls: HubCall[] = [];
   let androidBooted: string | null = null;
   const fetch: DeviceServiceDeps["fetch"] = async (url, init) => {
     calls.push({ url, body: init.body === undefined ? undefined : JSON.parse(init.body) });
+    if (options.unreachable && url.endsWith(options.unreachable)) throw new Error("fetch failed");
     if (options.bootGate && url.endsWith("/boot")) await options.bootGate;
     const screenshot = /\/screenshot(\?|$)/u.test(url);
     const bootBody = url.endsWith("/boot") ? (JSON.parse(init.body ?? "{}") as { platform?: string; name?: string }) : null;
@@ -226,6 +235,7 @@ async function withService(
     screenshotType?: string;
     bootGate?: Promise<void>;
     bootSerial?: string;
+    unreachable?: string;
   } = {},
 ) {
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-service-"));
@@ -426,6 +436,21 @@ test("closing a simulator while it is still opening wins over the open", async (
   }
 });
 
+test("a hub that cannot recycle stream helpers still boots and attaches the simulator", async () => {
+  await withService(
+    async ({ service, hub }) => {
+      await service.refresh();
+      const session = await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+      assert.equal(session.deviceId, IPHONE_OLD);
+      assert.deepEqual(
+        hub.calls.map((call) => new URL(call.url).pathname),
+        ["/vendor/serve-sim/readyz", "/api/devices/boot", "/vendor/serve-sim/grid/api/start"],
+      );
+    },
+    { consent: { streaming: true }, unreachable: "/readyz" },
+  );
+});
+
 test("concurrent opens of one simulator in a chat share a single session", async () => {
   let release!: () => void;
   const bootGate = new Promise<void>((resolve) => {
@@ -456,6 +481,8 @@ test("open boots when needed, attaches the stream helper, and is idempotent per 
       const session = await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
       assert.deepEqual(session, { chatId: "chat-1", hostId: "local", deviceId: IPHONE_OLD, openedBy: "user" });
       assert.deepEqual(hub.calls, [
+        // A status read while the simulator is still off makes serve-sim drop a helper left from its last boot.
+        { url: "http://127.0.0.1:52000/vendor/serve-sim/readyz", body: undefined },
         { url: "http://127.0.0.1:52000/api/devices/boot", body: { platform: "ios", id: IPHONE_OLD, name: "iPhone 17" } },
         { url: "http://127.0.0.1:52000/vendor/serve-sim/grid/api/start", body: { udid: IPHONE_OLD } },
       ]);
@@ -463,6 +490,11 @@ test("open boots when needed, attaches the stream helper, and is idempotent per 
       assert.equal(hub.calls.filter((call) => call.url.endsWith("/boot")).length, 1);
       await service.open({ chatId: "chat-2", deviceId: IPHONE, openedBy: "agent" });
       assert.equal(hub.calls.filter((call) => call.url.endsWith("/boot")).length, 1, "a booted device is not booted again");
+      assert.equal(
+        hub.calls.filter((call) => call.url.endsWith("/readyz")).length,
+        1,
+        "a running simulator's helper is never recycled",
+      );
       assert.deepEqual(service.sessionsForChat("chat-1").map((entry) => entry.deviceId), [IPHONE_OLD]);
       assert.deepEqual(service.sessionsForChat("chat-2").map((entry) => [entry.deviceId, entry.openedBy]), [[IPHONE, "agent"]]);
       assert.equal(service.state().sessions.length, 2);

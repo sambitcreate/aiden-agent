@@ -321,6 +321,7 @@ test("SSH simulators open through the forwarded hub, and the proxy forgets a hos
       assert.deepEqual(session, { chatId: "chat-1", hostId: MINI.id, deviceId: REMOTE_PHONE, openedBy: "user" });
       // Refresh also reads this Mac's hub for Android emulators; the open itself goes only to the forwarded hub.
       assert.deepEqual(context.hubCalls.filter((url) => url.startsWith("http://127.0.0.1:41001/")), [
+        "http://127.0.0.1:41001/vendor/serve-sim/readyz",
         "http://127.0.0.1:41001/api/devices/boot",
         "http://127.0.0.1:41001/vendor/serve-sim/grid/api/start",
       ]);
