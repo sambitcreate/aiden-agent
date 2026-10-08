@@ -134,6 +134,8 @@ export interface DeviceStreamRuntime {
   createImageBitmap?: (blob: Blob) => Promise<ImageBitmap>;
   setTimeout(callback: () => void, ms: number): Timer;
   clearTimeout(timer: Timer): void;
+  /** Wall-clock milliseconds, compared with `grant.expiresAt`. Defaults to `Date.now`. */
+  now?(): number;
 }
 
 const SOCKET_OPEN = 1;
@@ -159,6 +161,8 @@ export function browserDeviceStreamRuntime(): DeviceStreamRuntime {
 }
 
 export const DEVICE_STREAM_RETRY_DELAY_MS = 1_000;
+/** A grant this close to `expiresAt` may already be refused by the proxy. */
+export const DEVICE_STREAM_GRANT_EXPIRY_MARGIN_MS = 5_000;
 export const DEVICE_STREAM_FIRST_FRAME_TIMEOUT_MS = 15_000;
 export const DEVICE_STREAM_MJPEG_CHECK_MS = 250;
 export const DEVICE_STREAM_PRIME_TIMEOUT_MS = 2_000;
@@ -508,6 +512,14 @@ export function createDeviceStreamClient(
   const device = encodeURIComponent(target.deviceId);
   // Connections opened later (a resumed video read) may carry a newer grant from `target.grants`.
   let grant = target.grant;
+  const grantExpiring = () => grant.expiresAt - (runtime.now?.() ?? Date.now()) <= DEVICE_STREAM_GRANT_EXPIRY_MARGIN_MS;
+  /**
+   * The proxy refuses an expired grant during the HTTP upgrade, which the browser
+   * reports only as 1006. A 1006 with a live grant is a dropped or refused
+   * device connection and takes the normal retry path.
+   */
+  const refusedGrant = (code: number) =>
+    code === 1008 || code === 4401 || (code === 1006 && grantExpiring());
   const httpUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "http");
   const wsUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "ws");
   const useWebCodecs =
@@ -948,11 +960,7 @@ export function createDeviceStreamClient(
         false,
         event.reason || (event.code === 1006 ? "input socket refused" : `closed ${event.code}`),
       );
-      // The proxy refuses an expired grant during the HTTP upgrade, which the
-      // browser reports as 1006, so any abnormal close renews the grant once.
-      if (event.code === 1008 || event.code === 4401 || event.code === 1006) {
-        return handleUnauthorized();
-      }
+      if (refusedGrant(event.code)) return handleUnauthorized();
       scheduleRetry("input", () => void connectInput());
     };
     ws.onerror = () => ws.close();
@@ -1011,8 +1019,7 @@ export function createDeviceStreamClient(
       closeDecoder();
       if (stopped) return;
       events.onInputConnected(false, event.reason || `closed ${event.code}`);
-      // An expired grant is refused during the upgrade, which the browser reports as 1006.
-      if (event.code === 1008 || event.code === 4401 || event.code === 1006) return handleUnauthorized();
+      if (refusedGrant(event.code)) return handleUnauthorized();
       configuring = false;
       connecting(event.reason || undefined);
       scheduleRetry("input", connectAndroid);
