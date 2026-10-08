@@ -255,6 +255,21 @@ test("a display feed that cannot be decoded or is not served hands the 3D view b
   h.client.stop();
 });
 
+test("display feeds attached before the first primary frame bring the stream live", async () => {
+  const h = harness();
+  h.client.start();
+  await settle();
+  h.config(3);
+  h.client.setDuoPanels(h.panels);
+  await settle();
+  h.feeds[2]!.push(description);
+  await settle();
+  assert.equal(h.statuses.includes("streaming"), false);
+  last(h.decoders)!.output(h.frame("inner"));
+  assert.equal(last(h.statuses), "streaming");
+  h.client.stop();
+});
+
 test("panels attach only to a hinged simulator, and raw touches skip the rotation remap", async () => {
   const h = harness();
   h.client.start();

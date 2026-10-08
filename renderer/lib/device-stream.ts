@@ -851,7 +851,14 @@ export function createDeviceStreamClient(
   const duoPanels = createDuoPanelFeeds({
     screen: () => screen,
     canAttach: () => !target.videoOnly && !stopped,
-    primary: sink,
+    // Display feeds paint the flat canvas too, and count as this stream's frames.
+    primary: {
+      present(source, width, height) {
+        const presented = sink.present(source, width, height);
+        if (presented) frameReceived();
+        return presented;
+      },
+    },
     pausePrimaryVideo: () => {
       videoGeneration++;
       controller?.abort();

@@ -1,7 +1,12 @@
 // Adapted from t3code apps/web/src/components/device/DeviceDuoViewport.tsx @ a6ec88f7 (MIT).
 import * as React from "react";
 import { devicesApi } from "../lib/ipc";
-import { createCanvasFrameSink, type DeviceScreenSize, type DeviceStreamClient } from "../lib/device-stream";
+import {
+  createCanvasFrameSink,
+  type DeviceScreenSize,
+  type DeviceStreamClient,
+  type DuoPanelSinks,
+} from "../lib/device-stream";
 import { createDuoPinch, type DuoPinch } from "../lib/device-duo-control";
 import { createPhoneInteraction, type PhoneInteraction, type Point } from "../lib/device-3d/interaction";
 import type { DuoViewer } from "../lib/device-3d/duo-viewer";
@@ -45,6 +50,7 @@ export function DeviceDuoViewport({
   const interactionRef = React.useRef<PhoneInteraction | null>(null);
   const pinchRef = React.useRef<DuoPinch | null>(null);
   const trackpadRef = React.useRef<PhoneTrackpad | null>(null);
+  const panelsRef = React.useRef<DuoPanelSinks | null>(null);
   const screenRef = React.useRef(screen);
   const previewRef = React.useRef(hingePreview);
 
@@ -52,7 +58,10 @@ export function DeviceDuoViewport({
     screenRef.current = screen;
     interactionRef.current?.end();
     viewerRef.current?.setScreen(screen);
-  }, [screen]);
+    // Panels attach once the device reports its hinge, and again to a stream client
+    // replaced by a reconnect. Attaching the same sinks twice is a no-op.
+    if (panelsRef.current) client.current?.setDuoPanels(panelsRef.current);
+  }, [screen, client]);
 
   // A refused command or a lost screen abandons any view the device did not confirm.
   React.useEffect(() => {
@@ -122,7 +131,7 @@ export function DeviceDuoViewport({
             },
           };
         };
-        client.current?.setDuoPanels({
+        panelsRef.current = {
           onScreen(next) {
             screenRef.current = next;
             interactionRef.current?.end();
@@ -130,7 +139,8 @@ export function DeviceDuoViewport({
           },
           cover: panelSink(1),
           inner: panelSink(3),
-        });
+        };
+        client.current?.setDuoPanels(panelsRef.current);
         const interaction = createPhoneInteraction({
           screenPoint: (point, captured) => viewer.screenPoint(point.x, point.y, captured),
           touch: (phase, point) => client.current?.sendRawTouch(phase, point.x, point.y),
@@ -178,6 +188,7 @@ export function DeviceDuoViewport({
       onResetReady(null);
       onCaptureReady?.(null);
       onFrameListener(null);
+      panelsRef.current = null;
       client.current?.setDuoPanels(null);
       observer.disconnect();
       window.removeEventListener("blur", blur);
