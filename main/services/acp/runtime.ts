@@ -802,6 +802,9 @@ export class AcpHarnessRuntime {
         return;
       case "tool_call":
       case "tool_call_update": {
+        // Late notifications cannot update a finished turn's activity and must
+        // not repopulate its released payload cache while the session is idle.
+        if (!binding.turn || !binding.host) return;
         const id = String(update.toolCallId);
         const previous = binding.tracker.getState(id);
         binding.tracker.merge(update);
