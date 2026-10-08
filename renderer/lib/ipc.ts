@@ -1252,6 +1252,12 @@ export const botsApi = {
     invoke<{ bot: BotDefinition; created: boolean }>("bots:createFromPreset", input),
   /** The one-time self-intro of a Bot made with the create flow. */
   introduce: (botId: string) => invoke<boolean>("bots:introduce", botId),
+  /** Read-only Files: the Bot's own folder. */
+  files: {
+    list: (botId: string) => invoke<import("./types").WorkspaceFileIndex>("bots:files:list", botId),
+    read: (botId: string, path: string) =>
+      invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
+  },
   /** Not now on a connect card: this Bot won't suggest that connection again. */
   dismissConnection: (botId: string, pluginId: string) =>
     invoke<void>("bots:connections:dismiss", botId, pluginId),

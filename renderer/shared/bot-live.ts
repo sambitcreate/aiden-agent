@@ -94,6 +94,28 @@ export type BotTranscriptEntry =
       at?: number;
     }
   /**
+   * A file the Bot wrote or edited in its folder (host-confirmed by the tool
+   * result, never inferred from text). Shown as a chip that opens Files.
+   */
+  | {
+      id: string;
+      type: "file";
+      /** Path inside the Bot's folder, `/`-separated. */
+      path: string;
+      operation: "written" | "edited";
+      at?: number;
+    }
+  /** An image the Bot shared (`share_image`), shown as an image chip. */
+  | {
+      id: string;
+      type: "shared_image";
+      name: string;
+      mimeType: string;
+      size: number;
+      /** Base64 bytes. */
+      data: string;
+    }
+  /**
    * A reply that failed after the retry policy gave up (spec §10). Shown as
    * "I couldn't finish that reply." with Retry, which sends `retryText` again
    * as a new message with a new request id. `retryText` is null when the turn

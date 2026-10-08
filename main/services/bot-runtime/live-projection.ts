@@ -35,6 +35,8 @@ import {
   type BotLiveSummary,
   type BotTranscriptEntry,
 } from "../../../renderer/shared/bot-live.js";
+import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
+import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
 import { BOT_NOTICE_ENTRY_KIND, type BotNotice, type BotSessionState } from "./bot-session-service.js";
 
 export const BOT_CONNECT_CARD_ENTRY_KIND = "aiden.connect-card";
@@ -75,6 +77,24 @@ function stopReasonOf(message: AssistantMessage): Extract<BotTranscriptEntry, { 
   }
 }
 
+/** File tools whose confirmed results become file chips. */
+const BOT_FILE_CHIP_TOOLS = new Set(["write_file", "edit_file"]);
+
+function sharedImageOf(data: unknown): Omit<Extract<BotTranscriptEntry, { type: "shared_image" }>, "id" | "type"> | null {
+  if (typeof data !== "object" || data === null) return null;
+  const record = data as Record<string, unknown>;
+  if (
+    typeof record.name !== "string" ||
+    typeof record.mimeType !== "string" ||
+    !record.mimeType.startsWith("image/") ||
+    typeof record.data !== "string" ||
+    typeof record.size !== "number"
+  ) {
+    return null;
+  }
+  return { name: record.name, mimeType: record.mimeType, size: record.size, data: record.data };
+}
+
 function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice } {
   return entry.kind === BOT_NOTICE_ENTRY_KIND && typeof entry.data === "object" && entry.data !== null;
 }
@@ -100,7 +120,8 @@ function connectCardOf(data: unknown): ConnectCardEntry | null {
  * - `pi.assistant` / `pi.tool-result` → assistant text and tool activity. A
  *   reply that ended in an error becomes a `failed_turn` (after any text it
  *   wrote), carrying the turn's typed message for Retry.
- * - `aiden.connect-card` → a connect card.
+ * - `aiden.connect-card` → a connect card; `aiden.bot-shared-image` → an image.
+ * - A confirmed `write_file` / `edit_file` result in the Bot's folder → a file.
  * - `aiden.bot-notice` → `interrupted` and `session_reset` notices; routine,
  *   silent and hidden markers only shape the entries around them.
  * - A `[SILENT]` answer hides its whole turn (input label included).
@@ -112,6 +133,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   const mapped: Array<{ entry: BotTranscriptEntry; turn: Turn | null }> = [];
   let pendingRoutine: string | undefined;
   let pendingHidden = false;
+  /** File tool calls aimed at the default location (the Bot's folder), by call id. */
+  const homeFileCalls = new Set<string>();
   let turn: Turn | null = null;
 
   for (const record of entries) {
@@ -128,6 +151,11 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     if (record.kind === BOT_CONNECT_CARD_ENTRY_KIND) {
       const card = connectCardOf(record.data);
       if (card) mapped.push({ entry: { id, type: "connect_card", card }, turn });
+      continue;
+    }
+    if (record.kind === BOT_SHARED_IMAGE_ENTRY_KIND) {
+      const image = sharedImageOf(record.data);
+      if (image) mapped.push({ entry: { id, type: "shared_image", ...image }, turn });
       continue;
     }
     const message = firstMessage(record);
@@ -153,9 +181,13 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === "pi.assistant" && message?.role === "assistant") {
-      const toolCalls = message.content
-        .filter((part): part is ToolCall => part.type === "toolCall")
-        .map((call) => ({ id: call.id, name: call.name }));
+      const calls = message.content.filter((part): part is ToolCall => part.type === "toolCall");
+      for (const call of calls) {
+        if (BOT_FILE_CHIP_TOOLS.has(call.name) && (call.arguments as { location?: unknown } | undefined)?.location === undefined) {
+          homeFileCalls.add(call.id);
+        }
+      }
+      const toolCalls = calls.map((call) => ({ id: call.id, name: call.name }));
       const stopReason = stopReasonOf(message);
       const text = textOf(message.content);
       if (stopReason === "error") {
@@ -209,6 +241,17 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         },
         turn,
       });
+      // A file the Bot wrote in its folder, as the tool result confirms it.
+      const produced =
+        !message.isError && homeFileCalls.has(message.toolCallId)
+          ? parseProducedFile((message.details as { producedFile?: unknown } | undefined)?.producedFile, message.toolName)
+          : undefined;
+      if (produced) {
+        mapped.push({
+          entry: { id: `${id}:file`, type: "file", path: produced.relativePath, operation: produced.operation, at: message.timestamp },
+          turn,
+        });
+      }
     }
   }
   return mapped

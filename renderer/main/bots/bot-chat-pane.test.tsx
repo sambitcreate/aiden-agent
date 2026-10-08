@@ -446,3 +446,139 @@ test("a renderer reload mid-reply shows the partial reply from the fresh snapsho
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
 });
+
+const FILE_HANDLERS = {
+  "bots:files:list": () => ({
+    entries: [
+      { path: "lists", name: "lists", parentPath: "", depth: 0, kind: "directory" },
+      { path: "lists/groceries.md", name: "groceries.md", parentPath: "lists", depth: 1, kind: "file" },
+    ],
+    truncated: false,
+    skippedDirectories: 0,
+  }),
+  "bots:files:read": (_botId: unknown, path: unknown) => ({
+    path,
+    content: "eggs\nmilk",
+    size: 9,
+    modifiedAt: 1,
+    version: "v1",
+  }),
+};
+
+function toolStep(id: string, text: string): BotTranscriptEntry {
+  return { id, type: "assistant", text, toolCalls: [{ id: `${id}-call`, name: "web_search" }], stopReason: "toolUse" };
+}
+
+test("Files in the ••• menu lists the Bot's folder and opens a file", async () => {
+  const calls = await mountChat({ "bots:live:subscribe": () => snapshot(), ...FILE_HANDLERS });
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
+  fireEvent.click(await screen.findByRole("button", { name: "groceries.md" }));
+  const contents = await screen.findByLabelText("Contents of lists/groceries.md");
+  assert.equal(contents.textContent, "eggs\nmilk");
+  assert.deepEqual(calls.find((call) => call.channel === "bots:files:read")?.args, ["bot-1", "lists/groceries.md"]);
+});
+
+test("a file the Bot wrote shows as a chip that opens that file", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          userEntry("u1", "Write my grocery list"),
+          { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },
+          assistantEntry("a1", "Done."),
+        ],
+      }),
+    ...FILE_HANDLERS,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Open groceries.md" }));
+  assert.equal((await screen.findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
+});
+
+test("all tool rounds before an answer fold into one Updates line", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          userEntry("u1", "Find flights"),
+          toolStep("a1", "Searching airlines."),
+          toolStep("a2", "Comparing prices."),
+          assistantEntry("a3", "TAP on Friday is cheapest."),
+        ],
+      }),
+  });
+  assert.ok(await screen.findByText("TAP on Friday is cheapest."));
+  assert.equal(screen.getAllByRole("button", { name: "Updates" }).length, 1);
+  fireEvent.click(screen.getByRole("button", { name: "Updates" }));
+  assert.ok(await screen.findByText(/Searching airlines\.\s+Comparing prices\./u));
+});
+
+test("Reply quotes a message at the start of the composer", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "Plan Lisbon"), assistantEntry("a1", "Day one: Alfama.")] }),
+  });
+  await screen.findByText("Day one: Alfama.");
+  fireEvent.keyDown(screen.getByRole("button", { name: "Message actions for Planner’s message" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Reply" }));
+  const composer = screen.getByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
+  await waitFor(() => assert.equal(composer.value, "> Day one: Alfama.\n\n"));
+});
+
+test("Copy puts a message on the clipboard", async () => {
+  const copied: string[] = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text: string) => void copied.push(text) },
+  });
+  await mountChat({ "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "Plan Lisbon")] }) });
+  await screen.findByText("Plan Lisbon");
+  fireEvent.keyDown(screen.getByRole("button", { name: "Message actions for You’s message" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy" }));
+  await waitFor(() => assert.deepEqual(copied, ["Plan Lisbon"]));
+});
+
+test("a failed reply says so, and Retry resends the message as a new submission", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ entries: [userEntry("u1", "Plan dinner"), { id: "a1:failed", type: "failed_turn", retryText: "Plan dinner" }] }),
+    "bots:send": () => ({ submissionId: "s2", deduped: false }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner couldn’t finish a reply" });
+  assert.ok(within(card).getByText("I couldn't finish that reply."));
+  fireEvent.click(within(card).getByRole("button", { name: "Retry" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+  const input = calls.find((call) => call.channel === "bots:send")!.args[0] as { botId: string; text: string; requestId: string };
+  assert.equal(input.botId, "bot-1");
+  assert.equal(input.text, "Plan dinner");
+  assert.match(input.requestId, UUID);
+});
+
+test("an older failed reply offers no Retry once the chat moved on", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          userEntry("u1", "Plan dinner"),
+          { id: "a1:failed", type: "failed_turn", retryText: "Plan dinner" },
+          userEntry("u2", "Never mind"),
+          assistantEntry("a2", "Okay."),
+        ],
+      }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner couldn’t finish a reply" });
+  assert.equal(within(card).queryByRole("button", { name: "Retry" }), null);
+});
+
+test("Stop stays available while a question card replaces the composer", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        state: { kind: "running", submissionId: "s1" },
+        question: { botId: "bot-1", waitId: "wait-1", toolCallId: "tool-1", questions: [COLOUR_QUESTION] },
+      }),
+    "bots:stop": () => ({ kind: "idle" }),
+  });
+  assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
+});
