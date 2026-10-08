@@ -1,6 +1,12 @@
 /** Wires the Simulator tab IPC in `services/devices/device-ipc.ts` to Electron and the local host. */
+import { spawn as nodeSpawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { app, ipcMain } from "../platform.js";
+import { BrowserWindow, app, clipboard, dialog, ipcMain, shell } from "../platform.js";
+import { createDeviceFeatures, type DeviceFeatures } from "../services/devices/device-features.js";
+import { registerDeviceFeatureHandlersWith } from "../services/devices/device-feature-ipc.js";
+import { createDeviceRecorder } from "../services/devices/device-recording.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { startDeviceHubProxy } from "../services/devices/device-hub-proxy.js";
 import { registerDeviceHandlersWith } from "../services/devices/device-ipc.js";
@@ -23,6 +29,7 @@ import {
 } from "../services/devices/local-device-host.js";
 
 let deviceService: DeviceService | null = null;
+let deviceFeatures: DeviceFeatures | null = null;
 
 function proxyAllowedOrigins(): string[] {
   const origins = ["file://"];
@@ -73,13 +80,63 @@ export async function deviceServiceForAgents(): Promise<DeviceService | null> {
   return service;
 }
 
-/** A removed chat's simulator sessions end with it. Simulators keep running. */
-export function closeDeviceSessionsForChat(chatId: string): void {
-  if (devicesEnabled()) deviceService?.closeChat(chatId);
+function defaultDeviceFeatures(): DeviceFeatures {
+  if (deviceFeatures) return deviceFeatures;
+  const baseDir = path.join(app.getPath("userData"), "devices");
+  deviceFeatures = createDeviceFeatures({
+    service: defaultDeviceService(),
+    recorder: createDeviceRecorder({
+      spawn: (command, args) => {
+        const child = nodeSpawn(command, [...args], { stdio: "ignore", detached: false });
+        // A spawn failure may never emit "exit"; the recorder settles on exit, so report one.
+        child.once("error", () => {
+          if (child.exitCode === null && child.signalCode === null) child.emit("exit", 127, null);
+        });
+        return child;
+      },
+      tempDir: async () => {
+        const directory = path.join(baseDir, "recordings");
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        return directory;
+      },
+      fileSize: async (file) => (await stat(file).catch(() => null))?.size ?? null,
+      removeFile: (file) => rm(file, { force: true }),
+      newId: () => randomBytes(12).toString("base64url"),
+      now: () => Date.now(),
+      setTimeout: (callback, ms) => setTimeout(callback, ms),
+      clearTimeout: (timer) => clearTimeout(timer),
+    }),
+    clipboard: {
+      readText: () => clipboard.readText(),
+      availableFormats: () => clipboard.availableFormats(),
+      writeText: (text) => clipboard.writeText(text),
+    },
+    moveFile: async (from, to) => {
+      await copyFile(from, to);
+      await rm(from, { force: true });
+    },
+    removeFile: (file) => rm(file, { force: true }),
+    writeFile: (file, bytes) => writeFile(file, bytes),
+    now: () => new Date(),
+  });
+  return deviceFeatures;
 }
 
-/** Stops helpers the Simulator tab started. Simulators keep running. */
+/** Where `device_screenshot` may save besides the chat's workspace. */
+export function deviceDownloadsDir(): string {
+  return app.getPath("downloads");
+}
+
+/** A removed chat's simulator sessions and screen recordings end with it. Simulators keep running. */
+export function closeDeviceSessionsForChat(chatId: string): void {
+  if (!devicesEnabled()) return;
+  deviceService?.closeChat(chatId);
+  void deviceFeatures?.discardForChat(chatId).catch(() => undefined);
+}
+
+/** Stops helpers and recordings the Simulator tab started. Simulators keep running. */
 export async function shutdownDevices(): Promise<void> {
+  await deviceFeatures?.stop().catch(() => undefined);
   await deviceService?.stop();
 }
 
@@ -96,5 +153,31 @@ export function registerDeviceHandlers(): void {
         () => new Error("Simulator access requires the active application document."),
       ),
     service: defaultDeviceService,
+  });
+  registerDeviceFeatureHandlersWith({
+    handle: (channel, listener) =>
+      ipcMain.handle(channel, (event, ...args) => listener(event, ...args)),
+    enabled: () => devicesEnabled(),
+    owner: (event) =>
+      rendererDocumentOwner(
+        event as Electron.IpcMainInvokeEvent,
+        () => new Error("Simulator access requires the active application document."),
+      ),
+    features: defaultDeviceFeatures,
+    chooseSavePath: async (event, { defaultName, kind }) => {
+      const parent = BrowserWindow.fromWebContents((event as Electron.IpcMainInvokeEvent).sender);
+      if (!parent || parent.isDestroyed()) throw new Error("The window is unavailable.");
+      const result = await dialog.showSaveDialog(parent, {
+        title: kind === "mp4" ? "Save screen recording" : "Save screenshot",
+        defaultPath: path.join(app.getPath("downloads"), defaultName),
+        filters:
+          kind === "mp4"
+            ? [{ name: "MPEG-4 video", extensions: ["mp4"] }]
+            : [{ name: "PNG image", extensions: ["png"] }],
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+      });
+      return result.canceled || !result.filePath ? null : result.filePath;
+    },
+    revealInFinder: (file) => shell.showItemInFolder(file),
   });
 }

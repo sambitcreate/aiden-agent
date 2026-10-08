@@ -101,6 +101,15 @@ export interface DeviceService {
   action(input: DeviceActionInput): Promise<DeviceSettings>;
   settings(input: { hostId: string; deviceId: string }): Promise<DeviceSettings>;
   screenshot(input: { hostId: string; deviceId: string }): Promise<Buffer>;
+  /**
+   * The running host and one simulator this Mac listed, for device features
+   * that run `simctl` directly (erase, clipboard, recording). Paired Macs are
+   * refused; `booted` also refuses a simulator that is shut down.
+   */
+  localTarget(input: { hostId: string; deviceId: string; booted?: boolean }): Promise<{
+    ready: DeviceHostReady;
+    device: DeviceSummary;
+  }>;
   streamGrant(): Promise<DeviceStreamGrant>;
   /** The pinned helpers and what is installed on disk. Reads files only; never starts or installs. */
   toolchain(): Promise<DeviceToolchainState>;
@@ -938,6 +947,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         throw new Error("The simulator screenshot failed.");
       }
       return Buffer.from(await response.arrayBuffer());
+    },
+    async localTarget(input) {
+      await load();
+      if (input.hostId !== host.id) throw new Error("This works only with simulators on this Mac.");
+      const ready = requireReady(input.hostId);
+      const device = devices.find((candidate) => candidate.hostId === input.hostId && candidate.id === input.deviceId);
+      if (!device) throw new Error("That simulator is no longer available.");
+      if (input.booted && !device.booted) throw new Error("Open the simulator first.");
+      return { ready, device: { ...device } };
     },
     async streamGrant() {
       await load();
