@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createImagesIpc } from "../lib/create-images-ipc";
-import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
+import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { pickDefaultImageModel, type ImageModelOption } from "../shared/images/port";
 import type { OutputRef } from "../shared/images/run-types";
 import type { ImageNodeType, WorkflowDocV1, WorkflowViewport } from "../shared/images/schema";
@@ -41,6 +41,22 @@ export function useWorkflowController(workflowId: string) {
   const [loadKey, setLoadKey] = React.useState(0);
   const autosave = React.useRef<Autosave | null>(null);
   const loadedSession = React.useRef<EditorSession | null>(null);
+  const latestSession = React.useRef<EditorSession | null>(null);
+  latestSession.current = session;
+
+  const startAutosave = React.useCallback(
+    (baseRevision: number) =>
+      createAutosave({
+        delayMs: 800,
+        baseRevision,
+        save: (document, base) => createImagesIpc.save({ workflowId, baseRevision: base, document }),
+        onState: (state) => {
+          setSaveState(saveStateOf(state));
+          setRendererLifecycleGuard({ dirty: state.dirty, saving: state.saving });
+        },
+      }),
+    [workflowId],
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -50,15 +66,7 @@ export function useWorkflowController(workflowId: string) {
         if (cancelled) return;
         const initial = createSession(loaded.workflow);
         loadedSession.current = initial;
-        autosave.current = createAutosave({
-          delayMs: 800,
-          baseRevision: loaded.workflow.revision,
-          save: (document, baseRevision) => createImagesIpc.save({ workflowId, baseRevision, document }),
-          onState: (state) => {
-            setSaveState(saveStateOf(state));
-            setRendererLifecycleGuard({ dirty: state.dirty, saving: state.saving });
-          },
-        });
+        autosave.current = startAutosave(loaded.workflow.revision);
         setSession(initial);
         setModels(listed.models);
         setAssetUrls(loaded.assetUrls);
@@ -77,15 +85,29 @@ export function useWorkflowController(workflowId: string) {
       cancelled = true;
       const pending = autosave.current;
       autosave.current = null;
-      // Leaving the route flushes the last edit before the close guard is released.
-      if (pending) {
-        void pending.flush().finally(() => {
-          pending.dispose();
-          setRendererLifecycleGuard({ dirty: false, saving: false });
-        });
-      }
+      if (!pending) return;
+      // Leaving flushes the last edit. The close guard is released only once it is saved: an edit
+      // that could not be saved keeps quit asking. The route blocker offers the choice before this.
+      const settle = (saved: boolean) => {
+        pending.dispose();
+        if (saved) setRendererLifecycleGuard({ dirty: false, saving: false });
+      };
+      pending.flush().then(
+        (result) => settle(result.ok),
+        () => settle(false),
+      );
     };
-  }, [workflowId, loadKey]);
+  }, [workflowId, loadKey, startAutosave]);
+
+  // Quit and window close read the close guard; an edit still inside the autosave debounce is
+  // saved first, so a quick quit after typing neither loses it nor stops on the unsaved prompt.
+  React.useEffect(
+    () =>
+      registerLifecycleFlush(async () => {
+        await autosave.current?.flush();
+      }),
+    [],
+  );
 
   // Every document or viewport change after load is scheduled, including an undo
   // back to the loaded state; only the freshly loaded session itself is skipped.
@@ -150,6 +172,40 @@ export function useWorkflowController(workflowId: string) {
     return result?.ok ? result.revision : null;
   }, []);
 
+  /** Before leaving: true when every edit is saved (or there is nothing to save). */
+  const settle = React.useCallback(async (): Promise<boolean> => {
+    const pending = autosave.current;
+    if (!pending) return true;
+    try {
+      return (await pending.flush()).ok;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  /** The user chose to drop the unsaved edits: stop saving and release the close guard. */
+  const discard = React.useCallback(() => {
+    autosave.current?.dispose();
+    autosave.current = null;
+    setRendererLifecycleGuard({ dirty: false, saving: false });
+  }, []);
+
+  /** After a conflict, the user chose their version: save it over the newer revision. */
+  const keepMine = React.useCallback(async () => {
+    const current = latestSession.current;
+    if (!current) return;
+    try {
+      const loaded = await createImagesIpc.get(workflowId);
+      autosave.current?.dispose();
+      const next = startAutosave(loaded.workflow.revision);
+      autosave.current = next;
+      next.schedule(documentToSave(current));
+      await next.flush();
+    } catch (failure) {
+      setSession((state) => (state ? { ...state, message: message(failure) } : state));
+    }
+  }, [startAutosave, workflowId]);
+
   return {
     status,
     error,
@@ -172,7 +228,14 @@ export function useWorkflowController(workflowId: string) {
     addAssetUrls,
     refreshOutputs,
     flush,
-    reload: () => setLoadKey((key) => key + 1),
+    settle,
+    keepMine: () => void keepMine(),
+    /** Drops the unsaved edits and opens the saved version. */
+    discardAndReload: () => {
+      discard();
+      setLoadKey((key) => key + 1);
+    },
+    discard,
   };
 }
 

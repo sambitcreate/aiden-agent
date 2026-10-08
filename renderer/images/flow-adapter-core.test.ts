@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkflowDocV1 } from "../shared/images/schema";
-import { interpretEdgeChanges, interpretNodeChanges, toFlowEdges, toFlowNodes } from "./flow-adapter-core";
+import { deletionOp, interpretEdgeChanges, interpretNodeChanges, toFlowEdges, toFlowNodes } from "./flow-adapter-core";
+import { createSession, sessionReducer, type EditorOp } from "./workflow-session-core";
 
 const doc: WorkflowDocV1 = {
   schemaVersion: 1, id: "wf", title: "T", revision: 1, createdAt: 0, updatedAt: 0, settings: { concurrency: 2 },
@@ -34,16 +35,43 @@ test("a drag moves only the overlay and commits one move when it ends", () => {
   assert.equal(dropped.dragging.size, 0);
 });
 
-test("removals become one remove op and selection follows select changes", () => {
-  const nodes = interpretNodeChanges(
-    [{ type: "select", id: "p", selected: true }, { type: "remove", id: "i" }],
-    { dragging: new Map(), selected: new Set(["i"]) },
-  );
-  assert.deepEqual(nodes.ops, [{ type: "remove", nodeIds: ["i"], edgeIds: [] }]);
-  assert.deepEqual([...nodes.selected], ["p"]);
-  const edges = interpretEdgeChanges([{ type: "remove", id: "e" }, { type: "select", id: "x", selected: true }], new Set());
-  assert.deepEqual(edges.ops, [{ type: "remove", nodeIds: [], edgeIds: ["e"] }]);
-  assert.deepEqual([...edges.selected], ["x"]);
+test("deleting a node is one undo step that brings back the node and its connections", () => {
+  const starter: WorkflowDocV1 = {
+    ...doc,
+    nodes: [
+      { id: "p", type: "prompt", position: { x: 0, y: 0 }, data: { text: "x" } },
+      { id: "g", type: "generate-image", position: { x: 1, y: 0 }, data: { count: 1 } },
+      { id: "o", type: "output", position: { x: 2, y: 0 }, data: {} },
+    ],
+    edges: [
+      { id: "e1", source: "p", sourcePort: "text", target: "g", targetPort: "prompt" },
+      { id: "e2", source: "g", sourcePort: "images", target: "o", targetPort: "images" },
+    ],
+  };
+  // React Flow's deleteElements order: edge changes, then node changes, then onDelete with both.
+  const ops: EditorOp[] = [];
+  const selected = interpretEdgeChanges([{ type: "remove", id: "e1" }, { type: "remove", id: "e2" }], new Set(["g"]));
+  const nodes = interpretNodeChanges([{ type: "remove", id: "g" }], { dragging: new Map(), selected });
+  ops.push(...nodes.ops);
+  const deletion = deletionOp({ nodes: [{ id: "g" }], edges: [{ id: "e1" }, { id: "e2" }] });
+  if (deletion) ops.push(deletion);
+
+  let session = createSession(starter);
+  for (const op of ops) session = sessionReducer(session, { type: "op", op });
+  assert.deepEqual(session.history.present.nodes.map((node) => node.id), ["p", "o"]);
+  assert.deepEqual(session.history.present.edges, []);
+  assert.equal(session.history.past.length, 1);
+  session = sessionReducer(session, { type: "undo" });
+  assert.deepEqual(session.history.present, starter);
+  assert.equal(nodes.selected.size, 0);
+  assert.equal(deletionOp({ nodes: [], edges: [] }), null);
+});
+
+test("selection follows select changes on nodes and edges", () => {
+  const nodes = interpretNodeChanges([{ type: "select", id: "p", selected: true }], { dragging: new Map(), selected: new Set(["i"]) });
+  assert.deepEqual([...nodes.selected], ["i", "p"]);
+  const edges = interpretEdgeChanges([{ type: "select", id: "x", selected: true }, { type: "select", id: "i", selected: false }], nodes.selected);
+  assert.deepEqual([...edges], ["p", "x"]);
 });
 
 test("rendered sizes reported by React Flow are handed back so nodes stay visible", () => {

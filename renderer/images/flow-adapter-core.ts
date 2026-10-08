@@ -33,7 +33,11 @@ export function toFlowEdges(doc: WorkflowDocV1, selected: ReadonlySet<string>): 
   }));
 }
 
-/** Drags stay a transient overlay; only the drop becomes an undoable move. */
+/**
+ * Drags stay a transient overlay; only the drop becomes an undoable move. Removals only clear
+ * transient state here: React Flow reports a deletion as separate edge and node changes, so the
+ * document edit comes once from `deletionOp` (its `onDelete`) and stays one undo step.
+ */
 export function interpretNodeChanges(
   changes: readonly NodeChange<WorkflowFlowNode>[],
   state: {
@@ -51,7 +55,6 @@ export function interpretNodeChanges(
   const selected = new Set(state.selected);
   const measured = new Map(state.measured ?? []);
   const moves: { id: string; position: WorkflowPosition }[] = [];
-  const removed: string[] = [];
   for (const change of changes) {
     if (change.type === "position") {
       if (change.dragging && change.position) {
@@ -64,33 +67,36 @@ export function interpretNodeChanges(
     } else if (change.type === "dimensions") {
       if (change.dimensions) measured.set(change.id, { width: change.dimensions.width, height: change.dimensions.height });
     } else if (change.type === "remove") {
-      removed.push(change.id);
       selected.delete(change.id);
+      dragging.delete(change.id);
+      measured.delete(change.id);
     } else if (change.type === "select") {
       if (change.selected) selected.add(change.id);
       else selected.delete(change.id);
     }
   }
-  const ops: EditorOp[] = [];
-  if (moves.length > 0) ops.push({ type: "move-nodes", positions: moves });
-  if (removed.length > 0) ops.push({ type: "remove", nodeIds: removed, edgeIds: [] });
+  const ops: EditorOp[] = moves.length > 0 ? [{ type: "move-nodes", positions: moves }] : [];
   return { ops, dragging, selected, measured };
 }
 
 export function interpretEdgeChanges(
   changes: readonly EdgeChange[],
   selected: ReadonlySet<string>,
-): { ops: EditorOp[]; selected: Set<string> } {
+): Set<string> {
   const next = new Set(selected);
-  const removed: string[] = [];
   for (const change of changes) {
     if (change.type === "remove") {
-      removed.push(change.id);
       next.delete(change.id);
     } else if (change.type === "select") {
       if (change.selected) next.add(change.id);
       else next.delete(change.id);
     }
   }
-  return { ops: removed.length > 0 ? [{ type: "remove", nodeIds: [], edgeIds: removed }] : [], selected: next };
+  return next;
+}
+
+/** One deletion (Backspace on a node, its edges, or a selection) is one undoable edit. */
+export function deletionOp(deleted: { nodes: readonly { id: string }[]; edges: readonly { id: string }[] }): EditorOp | null {
+  if (deleted.nodes.length === 0 && deleted.edges.length === 0) return null;
+  return { type: "remove", nodeIds: deleted.nodes.map((node) => node.id), edgeIds: deleted.edges.map((edge) => edge.id) };
 }

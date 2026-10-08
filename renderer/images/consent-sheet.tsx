@@ -40,11 +40,14 @@ export function ConsentSheet({
   busy,
   onCancel,
   onConfirm,
+  returnFocus,
 }: {
   plan: ImageRunConsentPlan | null;
   busy: boolean;
   onCancel(): void;
   onConfirm(): void;
+  /** Where focus lands when the sheet closes; the opener may have been replaced by then. */
+  returnFocus?: () => HTMLElement | null;
 }) {
   return (
     <Dialog
@@ -59,6 +62,7 @@ export function ConsentSheet({
       busy={busy}
       onCancel={onCancel}
       onConfirm={onConfirm}
+      returnFocus={returnFocus}
     >
       {plan ? <ConsentSummary plan={plan} /> : null}
     </Dialog>
