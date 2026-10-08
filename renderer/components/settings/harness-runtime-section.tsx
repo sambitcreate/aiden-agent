@@ -125,17 +125,20 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
   const busyReasonId = React.useId();
   const runtimeStatus = status?.runtime.status;
 
-  React.useEffect(() => {
+  // A layout effect runs in the same task as the DOM commit, before the dialog's
+  // focus scope reacts (Radix moves focus from a removed control to the dialog
+  // container in a MutationObserver callback, which would otherwise win).
+  React.useLayoutEffect(() => {
     const section = sectionRef.current;
     if (!status || !section) return;
     const active = section.ownerDocument.activeElement;
     const openedConfirm = confirmRemove && !wasConfirmingRef.current;
     wasConfirmingRef.current = confirmRemove;
     // Opening the confirmation moves to Keep. Otherwise recover only focus that
-    // was in this section and fell to the page (or was parked on the section)
-    // when its control unmounted or was disabled.
-    const lost =
-      focusedInsideRef.current && (!active || active === section.ownerDocument.body || active === section);
+    // was in this section and fell to the page, the section itself, or a
+    // container around it (such as the dialog) when its control unmounted or
+    // was disabled.
+    const lost = focusedInsideRef.current && (!active || active === section || active.contains(section));
     if (!openedConfirm && !lost) return;
     const target = runtimeFocusTarget(status.runtime, confirmRemove);
     const element = {
