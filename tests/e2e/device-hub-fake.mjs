@@ -156,7 +156,10 @@ const server = createServer((request, response) => {
     ];
     response.write(`: connected\n\ndata: ${JSON.stringify({ events })}\n\n`);
     const timer = setInterval(() => response.write(": keep-alive\n\n"), 1_000);
-    response.once("close", () => clearInterval(timer));
+    response.once("close", () => {
+      clearInterval(timer);
+      log({ kind: "sse-close", path: entry.path });
+    });
     return;
   }
   if (entry.path.endsWith("/stream.avcc")) {

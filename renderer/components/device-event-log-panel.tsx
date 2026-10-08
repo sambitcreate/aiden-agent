@@ -23,10 +23,13 @@ export function DeviceEventLogSection(props: {
   hostId: string;
   deviceId: string;
   grants: DeviceGrantSource;
+  /** False while the viewer is hidden or inactive: the feed closes and reopens when it returns. */
+  active?: boolean;
   /** Starts expanded (and subscribed); tests and restored drawers use it. */
   defaultOpen?: boolean;
 }) {
   const { hostId, deviceId, grants } = props;
+  const active = props.active ?? true;
   const listId = React.useId();
   const [open, setOpen] = React.useState(props.defaultOpen ?? false);
   const [entries, setEntries] = React.useState<DeviceEventLogEntry[]>([]);
@@ -38,7 +41,7 @@ export function DeviceEventLogSection(props: {
   const stickRef = React.useRef(true);
 
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || !active) return;
     let stop: (() => void) | null = null;
     let cancelled = false;
     setError(null);
@@ -61,7 +64,7 @@ export function DeviceEventLogSection(props: {
       cancelled = true;
       stop?.();
     };
-  }, [open, hostId, deviceId, grants]);
+  }, [open, active, hostId, deviceId, grants]);
 
   // A different device starts from an empty log.
   React.useEffect(() => {

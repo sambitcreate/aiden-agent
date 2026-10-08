@@ -775,6 +775,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
                 target={featureTarget}
                 deviceName={device.name}
                 grants={featureGrants}
+                active={active}
                 axOverlay={axOverlay}
                 axStatus={axStatus}
                 onAxOverlayChange={(enabled) => {

@@ -64,7 +64,7 @@ writeFileSync(
 chmodSync(path.join(fakeBin, "xcrun"), 0o755);
 
 type HubLogEntry = {
-  kind: "http" | "ws-open" | "ws-message";
+  kind: "http" | "ws-open" | "ws-message" | "sse-close";
   method?: string;
   path?: string;
   tag?: number;
@@ -193,6 +193,25 @@ test.describe("Simulator power features", () => {
     await expect(log).toContainText("Touch begin 0.50,0.50");
     await panel.getByRole("textbox", { name: "Filter events" }).fill("home");
     await expect(log.getByRole("listitem")).toHaveCount(1);
+
+    // A hidden window closes the open event log's feed; showing it again resubscribes.
+    const eventLogOpens = async () =>
+      (await readHubLog()).filter((entry) => entry.kind === "http" && entry.path === eventLogPath).length;
+    const eventLogCloses = async () =>
+      (await readHubLog()).filter((entry) => entry.kind === "sse-close" && entry.path === eventLogPath).length;
+    const setHidden = (hidden: boolean) =>
+      page.evaluate((value) => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (value ? "hidden" : "visible") });
+        document.dispatchEvent(new Event("visibilitychange"));
+      }, hidden);
+    expect(await eventLogOpens()).toBe(1);
+    expect(await eventLogCloses()).toBe(0);
+    await setHidden(true);
+    await expect.poll(eventLogCloses).toBe(1);
+    await setHidden(false);
+    await expect.poll(eventLogOpens).toBe(2);
+    await expect(log).toContainText("Button home");
+    await expect(status).toHaveText("Live");
 
     // Erase asks first, naming the simulator; cancelling runs nothing.
     await panel.getByRole("button", { name: "Erase all content and settings…" }).click();

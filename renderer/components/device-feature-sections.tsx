@@ -28,6 +28,8 @@ export function DeviceFeatureSections(props: {
   target: DeviceFeatureTarget;
   deviceName: string;
   grants: DeviceGrantSource;
+  /** The viewer is shown and streaming; live feeds (the event log) close while it is not. */
+  active?: boolean;
   axOverlay: boolean;
   axStatus: DeviceAxStatus | null;
   /** Element frames draw over the flat screen only; the 3D frame is off while they show. */
@@ -67,7 +69,12 @@ export function DeviceFeatureSections(props: {
         )}
       </ToolsSection>
       {local ? <DeviceClipboardSection target={props.target} sendKey={props.sendKey} disabled={props.disabled} /> : null}
-      <DeviceEventLogSection hostId={props.target.hostId} deviceId={props.target.deviceId} grants={props.grants} />
+      <DeviceEventLogSection
+        hostId={props.target.hostId}
+        deviceId={props.target.deviceId}
+        grants={props.grants}
+        active={props.active}
+      />
       {local ? (
         <DeviceEraseSection
           chatId={props.chatId}
