@@ -110,54 +110,117 @@ function diffPaths(content: readonly ToolCallContent[] | null | undefined): stri
     .filter((value): value is string => typeof value === "string");
 }
 
-/**
- * Merges `tool_call` and `tool_call_update` notifications by id. Updates may
- * arrive before the call (agents race) and carry any subset of fields.
- */
-export class AcpToolCallTracker {
-  private readonly calls = new Map<string, AcpToolActivity>();
+/** Raw merged state stays cheap to update even when activity reporting is skipped. */
+export type AcpToolCallState = ToolCallUpdate & {
+  mcp: boolean;
+  subagent: boolean;
+  created: boolean;
+  detail?: unknown;
+};
 
-  apply(update: ToolCall | ToolCallUpdate): AcpToolActivity {
+interface TrackedCall {
+  state: AcpToolCallState;
+  activity?: AcpToolActivity;
+  /** Text-only content updates do not erase the last streamed diff. */
+  diffs?: readonly ToolCallContent[];
+  parsedDiffs?: readonly ToolCallContent[];
+}
+
+function sameDiffs(left: readonly ToolCallContent[] | undefined, right: readonly ToolCallContent[]): boolean {
+  if (!left || left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index];
+    return item.type === "diff" && other?.type === "diff" &&
+      item.path === other.path && item.oldText === other.oldText && item.newText === other.newText;
+  });
+}
+
+/** Updates may arrive before the initial call and carry any subset of fields. */
+export class AcpToolCallTracker {
+  private readonly calls = new Map<string, TrackedCall>();
+
+  /** Merge every chunk without normalizing the activity or parsing its diff. */
+  merge(update: ToolCall | ToolCallUpdate): AcpToolCallState {
     const id = String(update.toolCallId);
-    const previous = this.calls.get(id);
-    const locations = [
-      ...(previous?.locations ?? []),
-      ...(update.locations ?? []).map((location) => location?.path),
-      ...diffPaths(update.content),
-    ].filter((value, index, all): value is string =>
-      typeof value === "string" && value.length > 0 && all.indexOf(value) === index,
-    );
-    const lineChanges = diffLineChanges(update.content) ?? previous?.lineChanges;
-    const meta = update._meta ?? undefined;
-    const next: AcpToolActivity = {
-      id,
-      kind: update.kind ?? previous?.kind ?? "other",
-      title: cleanText(update.title ?? undefined, MAX_TITLE) || previous?.title || "",
-      status: activityStatus(update.status) ?? previous?.status ?? "pending",
-      locations: locations.slice(0, MAX_LOCATIONS),
-      mcp: previous?.mcp === true || (meta as Record<string, unknown> | undefined)?.is_mcp_tool_call === true,
+    const entry = this.calls.get(id);
+    const previous = entry?.state;
+    const paths = new Set((previous?.locations ?? []).map((location) => location.path));
+    for (const location of update.locations ?? []) {
+      if (paths.size < MAX_LOCATIONS && location?.path) paths.add(location.path);
+    }
+    for (const file of diffPaths(update.content)) {
+      if (paths.size < MAX_LOCATIONS && file) paths.add(file);
+    }
+    const next: AcpToolCallState = {
+      ...previous,
+      ...update,
+      toolCallId: id,
+      title: update.title ?? previous?.title,
+      kind: update.kind ?? previous?.kind,
+      status: update.status ?? previous?.status,
+      content: update.content ?? previous?.content,
+      rawInput: update.rawInput === undefined ? previous?.rawInput : update.rawInput,
+      rawOutput: update.rawOutput === undefined ? previous?.rawOutput : update.rawOutput,
+      locations: [...paths].map((file) => ({ path: file })),
+      mcp: previous?.mcp === true || update._meta?.is_mcp_tool_call === true,
       subagent: previous?.subagent ?? false,
       created: previous?.created === true || diffCreatesFile(update.content),
+    };
+    const diffs = (update.content ?? []).filter((item) => item.type === "diff");
+    this.calls.delete(id);
+    this.calls.set(id, { ...entry, state: next, diffs: diffs.length ? diffs : entry?.diffs });
+    if (!entry && this.calls.size > MAX_TRACKED) {
+      const oldest = this.calls.keys().next().value;
+      if (oldest !== undefined) this.calls.delete(oldest);
+    }
+    return next;
+  }
+
+  /** Existing callers, including permission requests, always project immediately. */
+  apply(update: ToolCall | ToolCallUpdate): AcpToolActivity {
+    const state = this.merge(update);
+    return this.project(state.toolCallId);
+  }
+
+  project(id: string): AcpToolActivity {
+    const entry = this.calls.get(id);
+    if (!entry) throw new Error("Unknown ACP tool call.");
+    const { state, activity: previous } = entry;
+    const diffs = entry.diffs ?? [];
+    // A terminal update may omit content; merge retained the final streamed diff.
+    // Always recompute completion, even if it repeats an already parsed diff.
+    const parse = state.status === "completed" || !sameDiffs(entry.parsedDiffs, diffs);
+    const lineChanges = parse ? diffLineChanges(diffs) ?? previous?.lineChanges : previous?.lineChanges;
+    if (parse) entry.parsedDiffs = diffs;
+    const next: AcpToolActivity = {
+      id,
+      kind: state.kind ?? "other",
+      title: cleanText(state.title ?? undefined, MAX_TITLE) || previous?.title || "",
+      status: activityStatus(state.status) ?? "pending",
+      locations: (state.locations ?? []).map((location) => location.path),
+      mcp: state.mcp,
+      subagent: state.subagent,
+      created: state.created,
       ...(lineChanges ? { lineChanges } : {}),
     };
-    this.calls.delete(id);
-    this.calls.set(id, next);
-    while (this.calls.size > MAX_TRACKED) {
-      const oldest = this.calls.keys().next().value;
-      if (oldest === undefined) break;
-      this.calls.delete(oldest);
-    }
+    entry.activity = next;
     return next;
   }
 
   /** Harness quirk hook: reclassify a call after the fact. */
   mark(id: string, patch: Partial<Pick<AcpToolActivity, "subagent" | "mcp">>): void {
-    const current = this.calls.get(id);
-    if (current) this.calls.set(id, { ...current, ...patch });
+    const entry = this.calls.get(id);
+    if (!entry) return;
+    entry.state = { ...entry.state, ...patch };
+    if (entry.activity) entry.activity = { ...entry.activity, ...patch };
   }
 
   get(id: string): AcpToolActivity | undefined {
-    return this.calls.get(id);
+    return this.calls.get(id)?.activity;
+  }
+
+  getState(id: string): AcpToolCallState | undefined {
+    return this.calls.get(id)?.state;
   }
 
   clear(): void {

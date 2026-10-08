@@ -188,7 +188,7 @@ export class RecordingHost implements AcpTurnHost {
     return this.questionAnswer;
   }
 
-  activity = {
+  activity: AcpTurnHost["activity"] = {
     started: (id: string, toolName: string, args: Record<string, unknown>) =>
       this.activities.push({ event: "started", id, toolName, args }),
     running: (id: string) => this.activities.push({ event: "running", id }),

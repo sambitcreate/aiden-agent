@@ -7,6 +7,8 @@
  *   echo:<text>         reply with <text>
  *   think:<text>        stream a thought, then reply
  *   edit:<abs path>     ask permission (unless in yolo), write through fs/write_text_file
+ *   stream-diff         resend a growing edit diff in 300 tool updates
+ *   tool-updates:<json> send scripted tool notifications and permission requests
  *   read:<abs path>     read through fs/read_text_file and reply with its text
  *   exec                ask permission for a command; reply allowed/denied
  *   question            ask a fixed-choice question via an interaction_ permission request
@@ -192,6 +194,28 @@ const connection = new AgentSideConnection(
       const [command, ...rest] = text.split(":");
       const argument = rest.join(":");
       switch (command) {
+        case "stream-diff": {
+          const file = path.join(session.cwd, "streamed.txt");
+          const content = (count) => [{ type: "diff", path: file, oldText: "old line\n", newText: Array.from({ length: argument === "unchanged" ? 300 : count }, (_, i) => `new ${i}\n`).join("") }];
+          await connection.sessionUpdate({ sessionId: session.id, update: { sessionUpdate: "tool_call", toolCallId: "stream-1", title: "Edit streamed.txt", kind: "edit", status: "in_progress", content: content(0) } });
+          for (let count = 1; count <= 300; count += 1) {
+            await connection.sessionUpdate({ sessionId: session.id, update: { sessionUpdate: "tool_call_update", toolCallId: "stream-1", title: "Edit streamed.txt", kind: "edit", status: "in_progress", content: content(count), rawInput: { text: `chunk ${count}` } } });
+          }
+          // Completion may carry no content. The last streamed diff must survive.
+          await connection.sessionUpdate({ sessionId: session.id, update: { sessionUpdate: "tool_call_update", toolCallId: "stream-1", status: "completed" } });
+          break;
+        }
+        case "tool-updates": {
+          for (const entry of JSON.parse(argument)) {
+            if (entry.permission) {
+              const decision = await connection.requestPermission({ sessionId: session.id, toolCall: entry.permission, options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] });
+              log({ method: "permissionResult", outcome: decision.outcome });
+            } else {
+              await connection.sessionUpdate({ sessionId: session.id, update: entry });
+            }
+          }
+          break;
+        }
         case "echo":
           await say(argument);
           break;

@@ -3,8 +3,59 @@ import test from "node:test";
 
 import { safeToolDescriptor } from "../generation-timeline.js";
 import { AcpToolCallTracker, relativeDisplayPath, timelineStepFor } from "./activity.js";
+import { shouldReportToolUpdate } from "./tool-updates.js";
 
 const root = "/work/project";
+
+test("argument-only chunks checkpoint on the tenth update; visible changes and terminals report immediately", () => {
+  const tracker = new AcpToolCallTracker();
+  const first = tracker.merge({ toolCallId: "stream", title: "Edit", kind: "edit", status: "in_progress" });
+  assert.equal(shouldReportToolUpdate(undefined, first, "in_progress", 0), true);
+  let previous = first;
+  for (let chunk = 1; chunk <= 10; chunk += 1) {
+    const next = tracker.merge({ toolCallId: "stream", rawInput: { chunk }, content: [{ type: "diff", path: `${root}/a.ts`, oldText: "", newText: "x".repeat(chunk) }] });
+    assert.equal(shouldReportToolUpdate(previous, next, undefined, chunk - 1), chunk === 10);
+    previous = next;
+  }
+  const changes = [
+    { title: "Writing another file" },
+    { status: "pending" as const },
+    { status: "in_progress" as const },
+    { content: [{ type: "content" as const, content: { type: "text" as const, text: "output" } }] },
+    { rawOutput: { result: "first output" } },
+    { rawOutput: { result: "second output" } },
+    { detail: "Progress" },
+  ];
+  for (const change of changes) {
+    const next = tracker.merge({ toolCallId: "stream", ...change });
+    assert.equal(shouldReportToolUpdate(previous, next, undefined, 0), true);
+    previous = next;
+    const repeat = tracker.merge({ toolCallId: "stream", ...change });
+    assert.equal(shouldReportToolUpdate(previous, repeat, undefined, 0), false);
+    previous = repeat;
+  }
+  for (const status of ["completed", "failed"] as const) {
+    const next = tracker.merge({ toolCallId: "stream", status });
+    assert.equal(shouldReportToolUpdate(previous, next, status, 1), true);
+    // Repeated agent-reported terminal statuses must also bypass the gate.
+    assert.equal(shouldReportToolUpdate(next, next, status, 1), true);
+    previous = next;
+  }
+});
+
+test("an unprojected diff survives completion without content and replaces cached line counts", () => {
+  const tracker = new AcpToolCallTracker();
+  const diff = { type: "diff" as const, path: `${root}/a.ts`, oldText: "keep\nold\n", newText: "keep\nnew\n" };
+  const first = tracker.apply({ toolCallId: "stream", title: "Edit", kind: "edit", status: "in_progress", content: [diff] });
+  assert.deepEqual(first.lineChanges, { additions: 1, deletions: 1 });
+  const unchanged = tracker.apply({ toolCallId: "stream", content: [{ ...diff }, { type: "content", content: { type: "text", text: "working" } }] });
+  assert.deepEqual(unchanged.lineChanges, { additions: 1, deletions: 1 });
+  tracker.merge({ toolCallId: "stream", content: [{ ...diff, newText: "keep\nnew\nextra\n" }] });
+  tracker.apply({ toolCallId: "stream", content: [{ type: "content", content: { type: "text", text: "done writing" } }] });
+  const completed = tracker.apply({ toolCallId: "stream", status: "completed" });
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(completed.lineChanges, { additions: 2, deletions: 1 });
+});
 
 test("updates merge into one activity, keeping fields an update leaves out", () => {
   const tracker = new AcpToolCallTracker();
