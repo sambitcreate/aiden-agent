@@ -22,4 +22,9 @@ export class DesignProjectGate {
   pending(): number {
     return this.tails.size;
   }
+
+  /** Resolves once no key has an operation in flight, including ones queued while waiting. */
+  async drain(): Promise<void> {
+    while (this.tails.size > 0) await Promise.all([...this.tails.values()]);
+  }
 }

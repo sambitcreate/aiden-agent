@@ -797,3 +797,32 @@ test("the project gate runs one key's operations in order, independent keys toge
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(gate.pending(), 0);
 });
+
+test("drain waits for a store write in flight and returns once the store is idle", async (t) => {
+  let holdManifest: Promise<void> | undefined;
+  const f = await fixture(t, {
+    io: {
+      writeManifest: async (target, value, options) => {
+        if (holdManifest) await holdManifest;
+        await writeJsonAtomic(target, value, options);
+      },
+    },
+  });
+  const project = await f.store.create();
+  let release!: () => void;
+  holdManifest = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const mutation = f.store.mutate(project.id, project.revision, { op: "rename", title: "Held" });
+  let drained = false;
+  const drain = f.store.drain().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false, "shutdown waits while the manifest write is held");
+  release();
+  await drain;
+  assert.equal(drained, true);
+  assert.equal((await mutation).ok, true);
+  assert.equal(f.store.get(project.id)?.title, "Held");
+});

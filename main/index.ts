@@ -99,7 +99,7 @@ import { generativeUiArtifactStore } from "./services/generative-ui-artifact-sto
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
-import { designProjectStore } from "./services/design/main.js";
+import { designProjectStore, designRunService } from "./services/design/main.js";
 import { startDesignStudio } from "./services/design/startup-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
 import { startStudioAssets } from "./services/studio-assets/startup-core.js";
@@ -439,6 +439,20 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         .catch((error) =>
           logger.warn("studio", "Studio asset store did not close cleanly.", error),
         ),
+      // Run settlements record their end through the project store, so they drain
+      // first and in-flight store writes after them. Bounded so a wedged write
+      // cannot hold quit; with the flag off both have nothing to drain.
+      Promise.race([
+        designRunService
+          .drain()
+          .then(() => designProjectStore.drain())
+          .then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+      ])
+        .then((drained) => {
+          if (!drained) logger.warn("design", "Design work did not settle within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("design", "Design work did not settle cleanly.", error)),
       browserService.shutdown(),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss

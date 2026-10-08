@@ -344,6 +344,11 @@ export class DesignProjectStore {
     });
   }
 
+  /** Shutdown: resolves once every store operation that has started has settled. */
+  drain(): Promise<void> {
+    return this.gate.drain();
+  }
+
   /** Startup: finish every cascade a crash or failure interrupted. */
   async resumeDeletions(): Promise<void> {
     for (const manifest of this.manifests().filter((candidate) => candidate.state === "deleting")) {
