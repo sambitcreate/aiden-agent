@@ -185,9 +185,25 @@ test("browser pages share the tool tab strip and the launcher hides the native p
     const panel = page.getByRole("complementary", {
       name: "Environment work surface",
     });
+    await aiden.app.evaluate(({ ipcMain }) => {
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+      const original = handlers.get("browser:command")!;
+      let failNextCreate = true;
+      ipcMain.removeHandler("browser:command");
+      ipcMain.handle("browser:command", (event, ...args) => {
+        if (failNextCreate && (args[1] as { action: string }).action === "create") {
+          failNextCreate = false;
+          throw new Error("Browser creation unavailable");
+        }
+        return original(event, ...args);
+      });
+    });
     await panel
       .getByRole("textbox", { name: "Open a URL" })
       .fill(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    await panel.getByRole("textbox", { name: "Open a URL" }).press("Enter");
+    await expect(panel.getByRole("alert")).toHaveText("Could not open this address. Try again.");
+    await expect(panel.getByRole("textbox", { name: "Open a URL" })).toHaveValue(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
     await panel.getByRole("textbox", { name: "Open a URL" }).press("Enter");
     await expect(
       panel.getByRole("tab", { name: "Panel fixture", exact: true }),
@@ -199,6 +215,8 @@ test("browser pages share the tool tab strip and the launcher hides the native p
     await expect(
       panel.getByRole("textbox", { name: "Open a URL" }),
     ).toBeVisible();
+    await expect(panel.getByRole("textbox", { name: "Open a URL" })).toHaveValue("");
+    await expect(panel.getByRole("alert")).toHaveCount(0);
     await expect(panel.locator("#environment-browser-panel")).toBeHidden();
     await expect
       .poll(() =>

@@ -67,6 +67,7 @@ export function WorkspaceToolLauncher({
           setPending(true);
           setError(null);
           void onUrl(url.trim())
+            .then(() => setUrl(""))
             .catch(() => setError("Could not open this address. Try again."))
             .finally(() => setPending(false));
         }}
