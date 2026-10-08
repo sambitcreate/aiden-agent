@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { writeFileAtomic, writeJsonAtomic } from "../durable-fs.js";
+import { syncDirectory, writeFileAtomic, writeJsonAtomic } from "../durable-fs.js";
 import { MAX_DESIGN_REVISION_BYTES, MAX_DESIGN_TOTAL_BYTES } from "../../../renderer/shared/design/limits.js";
 import type { DesignRunRequest } from "../../../renderer/shared/design/types.js";
 import { designResumeOffer } from "../../../renderer/shared/design/resume.js";
@@ -487,6 +487,42 @@ test("a copy is built beside the library and appears whole or not at all", async
   assert.deepEqual(await fs.readdir(f.root), [project.id], "no partial copy or staging directory is left");
   assert.equal(f.store.list().length, 1);
   assert.equal(f.chats.owners.size, 1);
+});
+
+test("a copy whose library entry cannot be flushed is not reported as saved, and is kept for the next start", async (t) => {
+  let failLibrarySync = false;
+  const errors: string[] = [];
+  const f = await fixture(t, {
+    onError: (message) => errors.push(message),
+    io: {
+      syncDirectory: async (directory) => {
+        if (failLibrarySync && directory === f.root) throw Object.assign(new Error("I/O error"), { code: "EIO" });
+        await syncDirectory(directory);
+      },
+    },
+  });
+  const project = await f.store.create();
+  await exploreWith(f.store, project.id, ["Calm"]);
+  await f.store.finishRun(project.id, "run-1", "completed");
+  failLibrarySync = true;
+  await assert.rejects(
+    f.store.duplicate(project.id),
+    (error: unknown) => error instanceof DesignStoreError && error.code === "unavailable" && /could not be confirmed/u.test(error.message),
+  );
+  // The rename already happened: the copy is not rolled back, and memory matches the disk.
+  const onDisk = (await fs.readdir(f.root)).sort();
+  assert.equal(onDisk.length, 2);
+  assert.ok(onDisk.every((name) => !name.endsWith(".tmp")), "no staging directory is left");
+  const listed = f.store.list().map((summary) => summary.id).sort();
+  assert.deepEqual(listed, onDisk);
+  const copyId = listed.find((id) => id !== project.id)!;
+  assert.equal(f.store.get(copyId)!.title, `${project.title} copy`);
+  assert.ok(errors.length > 0, "the underlying failure is reported");
+  // A restart reconciles whatever survived; here the copy did, and it opens normally.
+  failLibrarySync = false;
+  const { store } = await f.reopen();
+  assert.deepEqual(store.list().map((summary) => summary.id).sort(), onDisk);
+  assert.equal(store.get(copyId)!.screens[Object.keys(store.get(copyId)!.screens)[0]!]!.title, "Calm");
 });
 
 test("a copy whose revision file is damaged keeps the revision but marks it missing", async (t) => {

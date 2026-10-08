@@ -258,11 +258,25 @@ export class DesignProjectStore {
         } finally {
           release();
         }
-        await this.syncDirectoryFn(this.root()).catch((error: unknown) =>
-          this.options.onError?.("Could not flush the design library after duplicating a project.", error),
-        );
+        // The copy is already at its final name, so a failed flush is not rolled back: removing
+        // it could fail the same way, and the copy on disk is complete. It stays listed, as it is
+        // on disk, and the next start reconciles whichever entry survives. The caller is still told
+        // the copy is not durable rather than being handed a success.
+        let flushed = true;
+        try {
+          await this.syncDirectoryFn(this.root());
+        } catch (error) {
+          flushed = false;
+          this.options.onError?.("Could not flush the design library after duplicating a project.", error);
+        }
         this.options.onChanged?.(copy.id);
         await this.createChatOrDefer(copy);
+        if (!flushed) {
+          throw new DesignStoreError(
+            "unavailable",
+            "The copy was created, but saving it could not be confirmed. It may not survive a crash; check your library after restarting Aiden.",
+          );
+        }
         return structuredClone(copy);
       }),
     );
