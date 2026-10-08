@@ -16,7 +16,12 @@ export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }
     queryKey: botRoutinesKey(bot.id),
     queryFn: () => botsApi.routines.list(bot.id),
   });
-  const [editing, setEditing] = React.useState<BotRoutine | "new" | null>(null);
+  const [editing, setEditingState] = React.useState<BotRoutine | "new" | null>(null);
+  const [editorSession, setEditorSession] = React.useState(0);
+  const setEditing = (next: BotRoutine | "new" | null) => {
+    if (next !== null) setEditorSession((value) => value + 1);
+    setEditingState(next);
+  };
   const list = routines.data ?? [];
   const refresh = () => qc.invalidateQueries({ queryKey: botRoutinesKey(bot.id) });
 
@@ -34,6 +39,15 @@ export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }
         <Text as="p" variant="small" color="secondary" role="status">
           Loading routines…
         </Text>
+      ) : routines.isError ? (
+        <div role="alert" className="flex flex-wrap items-center gap-2">
+          <Text as="p" variant="small" color="secondary">
+            Aiden couldn’t load {bot.name}’s routines.
+          </Text>
+          <Button size="small" variant="transparent" onClick={() => void routines.refetch()}>
+            Try again
+          </Button>
+        </div>
       ) : list.length === 0 ? (
         <Text as="p" variant="small" color="secondary">
           No routines yet. A routine has {bot.name} check in on a schedule.
@@ -55,6 +69,8 @@ export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }
         </ul>
       )}
       <BotRoutineEditor
+        // Each opening starts a fresh form from the routine it edits (or a blank one).
+        key={editorSession}
         bot={bot}
         {...(editing && editing !== "new" ? { routine: editing } : {})}
         open={editing !== null}
