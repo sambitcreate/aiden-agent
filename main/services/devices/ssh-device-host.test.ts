@@ -43,7 +43,7 @@ class FakeTunnel implements SshTunnelProcess {
   }
 }
 
-type Respond = (mode: string, allowInstall: boolean) => SshCommandResult;
+type Respond = (mode: string, allowInstall: boolean) => SshCommandResult | Promise<SshCommandResult>;
 
 const started = (extra: Record<string, unknown> = {}): SshCommandResult => ({
   code: 0,
@@ -213,6 +213,34 @@ test("stopping during a reconnect wait ends it, closes tunnels, and stops the re
   assert.ok(h.tunnels.every((tunnel) => tunnel.exitCode !== null));
   assert.equal(h.scripts.filter((script) => script.mode === "start").length, 1, "no reconnect after stop");
   assert.equal(h.scripts.filter((script) => script.mode === "stop").length, 1);
+});
+
+test("removing a host while connects are queued leaves no tunnel open, and a later connect still works", async () => {
+  // Refresh's connect-all and the user's Connect (or an agent call) queue behind the same lock.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const h = harness(async (mode) => {
+    if (mode === "start" && h.scripts.filter((script) => script.mode === "start").length === 1) await gate;
+    return mode === "agent-start" ? started({ daemonPort: 5200, token: "t", entryPath: "/remote/agent-device.mjs" }) : started();
+  });
+  const refresh = h.host.ensureReady();
+  const connect = h.host.ensureReady();
+  const agent = h.host.ensureAgentReady(undefined, {});
+  await settle(() => h.scripts.length === 1);
+  const stopping = h.host.stop();
+  release();
+  await assert.rejects(refresh, /disconnected/u);
+  await assert.rejects(connect, /disconnected/u);
+  await assert.rejects(agent, /disconnected/u);
+  await stopping;
+  assert.ok(h.tunnels.length > 0, "the in-flight connect did open a forward");
+  assert.ok(h.tunnels.every((tunnel) => tunnel.exitCode !== null), "no tunnel outlives stop");
+  assert.deepEqual(h.scripts.map((script) => script.mode), ["start", "stop"], "the queued connects never reached the host");
+  assert.equal(h.host.current(), null);
+  // The service reuses the object after a disconnect, so the next explicit Connect works.
+  const again = await h.host.ensureReady();
+  assert.equal(h.host.current(), again);
+  assert.equal(h.tunnels.filter((tunnel) => tunnel.exitCode === null).length, 1);
 });
 
 test("a forward whose local port was taken retries on a fresh port", async () => {
