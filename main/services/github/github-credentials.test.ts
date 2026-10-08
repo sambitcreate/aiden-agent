@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   GitHubCredentialSource,
+  defaultGhHostsPath,
   environmentGitHubToken,
   githubCliEnvironment,
   isAuthorizedGitHubHost,
@@ -69,6 +73,74 @@ test("an unknown remote host is not authorized by a global enterprise token", as
   const refused = await configured.credentials.resolve("attacker.example");
   assert.equal(refused.ok, false);
   assert.deepEqual(configured.asked, []);
+});
+
+test("gh hosts.yml is discovered with GH_CONFIG_DIR, then XDG, then ~/.config/gh", () => {
+  const home = "/Users/ada";
+  assert.equal(defaultGhHostsPath({}, home), join(home, ".config", "gh", "hosts.yml"));
+  assert.doesNotMatch(defaultGhHostsPath({}, home), /Application Support/u);
+  assert.equal(
+    defaultGhHostsPath({ XDG_CONFIG_HOME: join(home, "xdg") }, home),
+    join(home, "xdg", "gh", "hosts.yml"),
+  );
+  assert.equal(
+    defaultGhHostsPath(
+      { GH_CONFIG_DIR: "/tmp/gh-config", XDG_CONFIG_HOME: join(home, "xdg") },
+      home,
+    ),
+    join("/tmp/gh-config", "hosts.yml"),
+  );
+});
+
+test("default host discovery authorizes an enterprise login from gh's config directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-gh-hosts-"));
+  const asked: string[] = [];
+  const writeHosts = async (directory: string, host: string) => {
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "hosts.yml"),
+      `${host}:\n    oauth_token: ghe_must-not-be-read\n`,
+      "utf8",
+    );
+  };
+  try {
+    const configDir = join(root, "override");
+    await writeHosts(configDir, "git.corp.example");
+    const fromOverride = new GitHubCredentialSource({
+      env: () => ({ GH_CONFIG_DIR: configDir }),
+      ghAuthToken: async (host) => {
+        asked.push(host);
+        return `token-for-${host}`;
+      },
+    });
+    assert.equal(await fromOverride.authorizesHost("git.corp.example"), true);
+    assert.equal(await fromOverride.authorizesHost("attacker.example"), false);
+    const accepted = await fromOverride.resolve("git.corp.example");
+    assert.ok(accepted.ok);
+    assert.equal(accepted.credential.token, "token-for-git.corp.example");
+    assert.equal(accepted.credential.source, "gh");
+    const refused = await fromOverride.resolve("attacker.example");
+    assert.equal(refused.ok, false);
+    assert.deepEqual(asked, ["git.corp.example"]);
+
+    const xdgHome = join(root, "xdg");
+    await writeHosts(join(xdgHome, "gh"), "github.acme.test");
+    const fromXdg = new GitHubCredentialSource({
+      env: () => ({ XDG_CONFIG_HOME: xdgHome }),
+      ghAuthToken: async () => "xdg-token",
+    });
+    assert.equal(await fromXdg.authorizesHost("github.acme.test"), true);
+    const xdgResult = await fromXdg.resolve("github.acme.test");
+    assert.ok(xdgResult.ok);
+    assert.equal(xdgResult.credential.token, "xdg-token");
+    const missingFile = new GitHubCredentialSource({
+      env: () => ({ GH_CONFIG_DIR: join(root, "empty") }),
+      ghAuthToken: async () => "unused",
+    });
+    assert.equal(await missingFile.authorizesHost("git.corp.example"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("gh hosts.yml records known enterprise hosts without exposing tokens", () => {

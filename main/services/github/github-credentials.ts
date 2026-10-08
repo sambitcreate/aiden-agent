@@ -126,17 +126,25 @@ export function parseGhHostsFile(contents: string): string[] {
   return hosts;
 }
 
-export function defaultGhHostsPath(): string {
-  if (process.platform === "darwin") {
-    return join(homedir(), "Library", "Application Support", "GitHub CLI", "hosts.yml");
-  }
-  const base = process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
-  return join(base, "gh", "hosts.yml");
+/**
+ * `hosts.yml` location from GitHub CLI's ConfigDir(): GH_CONFIG_DIR, then
+ * `$XDG_CONFIG_HOME/gh`, then `~/.config/gh` on macOS and Linux.
+ * https://cli.github.com/manual/gh_help_environment
+ */
+export function defaultGhHostsPath(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string {
+  const override = env.GH_CONFIG_DIR?.trim();
+  if (override) return join(override, "hosts.yml");
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(xdg, "gh", "hosts.yml");
+  return join(home, ".config", "gh", "hosts.yml");
 }
 
-async function defaultKnownHosts(): Promise<string[]> {
+async function defaultKnownHosts(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   try {
-    return parseGhHostsFile(await readFile(defaultGhHostsPath(), "utf8"));
+    return parseGhHostsFile(await readFile(defaultGhHostsPath(env), "utf8"));
   } catch {
     return [];
   }
@@ -208,7 +216,7 @@ export class GitHubCredentialSource {
     this.env = options.env ?? (() => process.env);
     this.ghAuthToken = options.ghAuthToken ?? defaultGhAuthToken;
     this.now = options.now ?? Date.now;
-    this.knownHosts = options.knownHosts ?? defaultKnownHosts;
+    this.knownHosts = options.knownHosts ?? (() => defaultKnownHosts(this.env()));
   }
 
   /** True when `host` is github.com, GHE.com, GH_HOST, or recorded by `gh`. */
