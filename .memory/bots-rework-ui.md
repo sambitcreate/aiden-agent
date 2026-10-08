@@ -41,7 +41,14 @@ Status: implemented on PR #377 (`feature/bot-ui-durable-sessions-2f4474`). Physi
 - `POST /bots/from-preset` uses the process-wide `botStarter()` (shared with desktop Start Chat; the creating call alone sends the self-intro), with the device as the access audience. Routine `lastError` is redacted of local paths and key-shaped strings for phones.
 - A revision-24 phone cannot read a revision-25 Bot list (its parsers require `favorites` and avatar `eyes`/`detail`); accepted pre-1.0. New clients show a plain "update Aiden" error against a revision-24 Mac.
 
+## Android after merging main (PR #374)
+- Bot screens follow main's localization and shape conventions: composable copy is in `strings.xml` (`bots_*`, `bot_menu_*`, `bot_profile_*`, `bot_editor_*`, `bot_character_*`, `bot_color_*`, `bot_shape_*`, `bot_routine*`, `bot_advanced_*`, `bot_session_*`, `bot_files_*`, `bot_presets_*`), radii come from `MaterialTheme.shapes`, and enums carry `@StringRes` (`AidenBotAccessChoice`, `AidenBotRoutineFrequency`, colour/shape labels). Still English by convention: JVM-tested helpers (`AidenBotHomeRow.preview`, `aidenBotChatPlaceholder`, `aidenBotDeleteCopy`, `aidenBotRoutineWriteFailure`, `AidenBotSessionCopy.PAUSED_ROW/NEEDS_MODEL`).
+- Profile, Instructions editor, Files sheet and the legacy Bot chat route fence reads with `coordinator.holdsReadAuthority`; Profile, Advanced, Files and the session use skeletons, not spinners; Bots home revalidates on `ON_START`; screens use `aidenReadableWidth()`.
+- Main's Custom Access, Image Studio, Bot chat tools and prototype snapshot test stay deleted, with their strings.
+- Desktop launch starts Bots through `startBotApplication` (`main/services/bot-startup-core.ts`), which never throws.
+
 ## Known follow-ups
+- Android Advanced still lists models as radio rows; main's shared `AidenModelPickerField` is not used there yet.
 - **iOS simulator flake:** on Xcode-beta iOS 27, `AidenRemoteClientTests` failed to launch the host in parallel mode and passed serially. Record the run link on the PR.
 - Monthly routines are limited to days 1–28.
 - The Updates fold shows narration only (one line per reply on desktop).
