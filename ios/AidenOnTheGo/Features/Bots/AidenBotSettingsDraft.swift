@@ -394,10 +394,6 @@ func aidenBotEditorCreateFailureIsAmbiguous(_ error: Error) -> Bool {
     }
 }
 
-func aidenBotEditorCanSubmitSettings(hasAvatarCandidate: Bool) -> Bool {
-    !hasAvatarCandidate
-}
-
 func aidenBotEditorResolvedDraft(
     mode: AidenBotEditorMode,
     catalog: AidenBotCapabilityCatalog,
