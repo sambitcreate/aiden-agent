@@ -31,9 +31,11 @@ export function botStarter(): BotStarter {
       await creationKeys.set(creationKey, bot.id);
       return bot;
     },
+    rememberCreation: (creationKey, botId) => creationKeys.set(creationKey, botId),
     session: {
       send: async (botId, input) => (await botSessionRuntime()).send(botId, input),
       state: async (botId) => (await botSessionRuntime()).state(botId),
+      conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
     },
     onIntroError: (botId, error) => logger.warn("bots", `Bot ${botId} could not introduce itself.`, error),
   });

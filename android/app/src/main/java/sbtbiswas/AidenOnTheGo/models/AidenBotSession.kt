@@ -38,7 +38,7 @@ import java.time.Instant
 // Contract revision 25 (`bot-durable-session-v1`): one durable conversation per Bot,
 // addressed by Bot id rather than chat id.
 
-/** Strict codec for the revision-26 Bot DTOs: exact keys, no unknown fields, nulls omitted. */
+/** Strict codec for the revision-25 Bot DTOs: exact keys, no unknown fields, nulls omitted. */
 object AidenBotWireJson {
     val json: Json = Json {
         ignoreUnknownKeys = false
@@ -48,13 +48,76 @@ object AidenBotWireJson {
     }
 }
 
+/** Bounds and grammars shared with the host parsers in `aiden-remote-protocol.ts`. */
+/**
+ * kotlinx accepts `"12"` for a number and `"true"` for a boolean; the host's parsers do not.
+ * These read the raw JSON token and refuse quoted values.
+ */
+private fun JsonDecoder.unquotedPrimitive(field: String): JsonPrimitive {
+    val element = decodeJsonElement()
+    if (element !is JsonPrimitive || element.isString || element is kotlinx.serialization.json.JsonNull) {
+        throw AidenBotContractException.InvalidField(field)
+    }
+    return element
+}
+
+object AidenStrictLongSerializer : KSerializer<Long> {
+    override val descriptor: SerialDescriptor =
+        kotlinx.serialization.descriptors.PrimitiveSerialDescriptor("AidenStrictLong", kotlinx.serialization.descriptors.PrimitiveKind.LONG)
+    override fun serialize(encoder: Encoder, value: Long) = encoder.encodeLong(value)
+    override fun deserialize(decoder: Decoder): Long {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeLong()
+        return json.unquotedPrimitive("integer").longOrNull ?: throw AidenBotContractException.InvalidField("integer")
+    }
+}
+
+object AidenStrictIntSerializer : KSerializer<Int> {
+    override val descriptor: SerialDescriptor =
+        kotlinx.serialization.descriptors.PrimitiveSerialDescriptor("AidenStrictInt", kotlinx.serialization.descriptors.PrimitiveKind.INT)
+    override fun serialize(encoder: Encoder, value: Int) = encoder.encodeInt(value)
+    override fun deserialize(decoder: Decoder): Int {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeInt()
+        return json.unquotedPrimitive("integer").intOrNull ?: throw AidenBotContractException.InvalidField("integer")
+    }
+}
+
+object AidenStrictBooleanSerializer : KSerializer<Boolean> {
+    override val descriptor: SerialDescriptor =
+        kotlinx.serialization.descriptors.PrimitiveSerialDescriptor("AidenStrictBoolean", kotlinx.serialization.descriptors.PrimitiveKind.BOOLEAN)
+    override fun serialize(encoder: Encoder, value: Boolean) = encoder.encodeBoolean(value)
+    override fun deserialize(decoder: Decoder): Boolean {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeBoolean()
+        return when (json.unquotedPrimitive("boolean").content) {
+            "true" -> true
+            "false" -> false
+            else -> throw AidenBotContractException.InvalidField("boolean")
+        }
+    }
+}
+
 object AidenBotSessionWire {
     const val MAX_ENTRIES = 200
     const val MAX_TEXT_LENGTH = 100_000
     const val MAX_MESSAGE_LENGTH = 32_000
-    const val MAX_LABEL_LENGTH = 200
+    const val MAX_LABEL_LENGTH = 120
     const val MAX_NAME_LENGTH = 120
-    const val MAX_REASON_LENGTH = 2_000
+    const val MAX_REASON_LENGTH = 280
+    const val MAX_EPOCH_LENGTH = 64
+    const val MAX_SUBMISSION_ID_LENGTH = 64
+    const val MAX_PLUGIN_ID_LENGTH = 80
+    private val PLUGIN_ID = Regex("^[a-z0-9][a-z0-9._-]*$")
+    private val EPOCH = Regex("^[A-Za-z0-9_-]+$")
+
+    /** Connection, icon and preset ids: lowercase, `^[a-z0-9][a-z0-9._-]*$`, at most 80 characters. */
+    fun validatePluginId(value: String, field: String) {
+        AidenBotWire.validateString(value, field, MAX_PLUGIN_ID_LENGTH)
+        if (!PLUGIN_ID.matches(value)) throw AidenBotContractException.InvalidField(field)
+    }
+
+    fun validateEpoch(value: String) {
+        AidenBotWire.validateString(value, "epoch", MAX_EPOCH_LENGTH)
+        if (!EPOCH.matches(value)) throw AidenBotContractException.InvalidField("epoch")
+    }
 }
 
 @Serializable
@@ -102,12 +165,16 @@ sealed class AidenBotSessionEntry {
         /** Routine name shown above a routine's user turn. */
         val label: String? = null,
         /** An assistant answer that was cut off. */
-        val interrupted: Boolean? = null
+        @Serializable(with = AidenStrictBooleanSerializer::class) val interrupted: Boolean? = null
     ) : AidenBotSessionEntry() {
         init {
-            AidenBotWire.validateString(id, "entry.id", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+            AidenBotWire.validateIdentifier(id, "entry.id")
             AidenBotWire.validateString(text, "entry.text", AidenBotSessionWire.MAX_TEXT_LENGTH, allowEmpty = true)
             label?.let { AidenBotWire.validateString(it, "entry.label", AidenBotSessionWire.MAX_LABEL_LENGTH) }
+            // The host only ever marks an assistant answer, and only as `true`.
+            if (interrupted != null && (!interrupted || role != AidenBotMessageRole.ASSISTANT)) {
+                throw AidenBotContractException.InvalidField("entry.interrupted")
+            }
         }
     }
 
@@ -122,11 +189,11 @@ sealed class AidenBotSessionEntry {
         val status: AidenBotConnectCardStatus
     ) : AidenBotSessionEntry() {
         init {
-            AidenBotWire.validateString(id, "entry.id", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-            AidenBotWire.validateIdentifier(pluginId, "entry.pluginId")
+            AidenBotWire.validateIdentifier(id, "entry.id")
+            AidenBotSessionWire.validatePluginId(pluginId, "entry.pluginId")
             AidenBotWire.validateString(name, "entry.name", AidenBotSessionWire.MAX_NAME_LENGTH)
-            AidenBotWire.validateIdentifier(iconId, "entry.iconId")
-            AidenBotWire.validateString(reason, "entry.reason", AidenBotSessionWire.MAX_REASON_LENGTH, allowEmpty = true)
+            AidenBotSessionWire.validatePluginId(iconId, "entry.iconId")
+            AidenBotWire.validateString(reason, "entry.reason", AidenBotSessionWire.MAX_REASON_LENGTH)
         }
     }
 
@@ -137,7 +204,7 @@ sealed class AidenBotSessionEntry {
         val notice: AidenBotSessionNoticeKind
     ) : AidenBotSessionEntry() {
         init {
-            AidenBotWire.validateString(id, "entry.id", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+            AidenBotWire.validateIdentifier(id, "entry.id")
         }
     }
 }
@@ -233,7 +300,7 @@ data class AidenBotSession(
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-        AidenBotWire.validateString(epoch, "epoch", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        AidenBotSessionWire.validateEpoch(epoch)
         if (seq < 0 || seq > AidenRemoteProtocol.MAX_SAFE_INTEGER) throw AidenBotContractException.InvalidField("seq")
         validateState(state, interrupted, blocked)
         partial?.let { AidenBotWire.validateString(it, "partial", AidenBotSessionWire.MAX_TEXT_LENGTH, allowEmpty = true) }
@@ -248,13 +315,13 @@ data class AidenBotSession(
 private data class AidenBotSessionFields(
     val botId: String,
     val epoch: String,
-    val seq: Long,
+    @Serializable(with = AidenStrictLongSerializer::class) val seq: Long,
     val state: AidenBotSessionState,
-    val interrupted: Boolean,
+    @Serializable(with = AidenStrictBooleanSerializer::class) val interrupted: Boolean,
     val blocked: AidenBotSessionBlock? = null,
     val partial: String? = null,
     val entries: List<AidenBotSessionEntry>,
-    val hasOlder: Boolean
+    @Serializable(with = AidenStrictBooleanSerializer::class) val hasOlder: Boolean
 )
 
 /** Writes `question` explicitly (`null` when nothing waits) and requires it on read. */
@@ -295,7 +362,7 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
 @Serializable
 data class AidenBotSessionStateView(
     val state: AidenBotSessionState,
-    val interrupted: Boolean,
+    @Serializable(with = AidenStrictBooleanSerializer::class) val interrupted: Boolean,
     val blocked: AidenBotSessionBlock? = null
 ) {
     init {
@@ -307,19 +374,20 @@ data class AidenBotSessionStateView(
 data class AidenBotSessionSendRequest(val text: String) {
     init {
         AidenBotWire.validateString(text, "text", AidenBotSessionWire.MAX_MESSAGE_LENGTH)
+        if (text.isBlank()) throw AidenBotContractException.InvalidField("text")
     }
 }
 
 @Serializable
 data class AidenBotSessionSendResponse(
     val submissionId: String,
-    val deduped: Boolean,
+    @Serializable(with = AidenStrictBooleanSerializer::class) val deduped: Boolean,
     val state: AidenBotSessionState,
-    val interrupted: Boolean,
+    @Serializable(with = AidenStrictBooleanSerializer::class) val interrupted: Boolean,
     val blocked: AidenBotSessionBlock? = null
 ) {
     init {
-        AidenBotWire.validateString(submissionId, "submissionId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        AidenBotWire.validateString(submissionId, "submissionId", AidenBotSessionWire.MAX_SUBMISSION_ID_LENGTH)
         validateState(state, interrupted, blocked)
     }
 
@@ -336,7 +404,7 @@ class AidenBotEmptyRequest {
 @Serializable
 data class AidenBotConnectionRequest(val pluginId: String) {
     init {
-        AidenBotWire.validateIdentifier(pluginId, "pluginId")
+        AidenBotSessionWire.validatePluginId(pluginId, "pluginId")
     }
 }
 
@@ -352,7 +420,7 @@ data class AidenBotConnectionRequestReceipt(
     val status: AidenBotConnectionRequestStatus
 ) {
     init {
-        AidenBotWire.validateIdentifier(pluginId, "pluginId")
+        AidenBotSessionWire.validatePluginId(pluginId, "pluginId")
         AidenBotWire.validateString(name, "name", AidenBotSessionWire.MAX_NAME_LENGTH)
     }
 }
@@ -388,7 +456,7 @@ data class AidenBotSessionEvent(
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-        AidenBotWire.validateString(epoch, "epoch", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        AidenBotSessionWire.validateEpoch(epoch)
         if (seq < 0 || seq > AidenRemoteProtocol.MAX_SAFE_INTEGER) throw AidenBotContractException.InvalidField("seq")
         if (payload is AidenBotSessionEventPayload.Snapshot &&
             (payload.session.botId != botId || payload.session.epoch != epoch || payload.session.seq != seq)

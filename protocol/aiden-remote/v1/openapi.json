@@ -1748,7 +1748,8 @@
         "operationId": "getBotSession",
         "x-aiden-capability": "bot:read",
         "x-aiden-capabilities": [
-          "bot:read"
+          "bot:read",
+          "chat:read"
         ],
         "parameters": [],
         "responses": {
@@ -1781,7 +1782,8 @@
         "operationId": "streamBotSessionEvents",
         "x-aiden-capability": "bot:read",
         "x-aiden-capabilities": [
-          "bot:read"
+          "bot:read",
+          "chat:read"
         ],
         "parameters": [],
         "responses": {

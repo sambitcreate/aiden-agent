@@ -126,3 +126,61 @@ test("the list summary comes from the projection", async () => {
     state: { kind: "idle" },
   });
 });
+
+/** A projection whose subscribes finish only when the test releases them, in any order. */
+function gatedProjection() {
+  const fake = fakeProjection();
+  const gates: Array<() => void> = [];
+  const projection: BotLiveProjection = {
+    ...fake.projection,
+    async subscribe(botId, sink) {
+      await new Promise<void>((resolve) => gates.push(resolve));
+      return fake.projection.subscribe(botId, sink);
+    },
+  };
+  return { ...fake, projection, release: (index: number) => gates[index]!() };
+}
+
+test("leaving a Bot chat while its subscribe is still opening leaves no live subscription", async () => {
+  const gated = gatedProjection();
+  const invoke = register(gated.projection);
+  const mac = new FakeDocument("window-1");
+  const opening = invoke("bots:live:subscribe", mac, "bot:a") as Promise<BotLiveSnapshot>;
+  await invoke("bots:live:unsubscribe", mac, "bot:a");
+  gated.release(0);
+  await opening;
+  assert.equal(gated.live(), 0, "the late subscription released itself");
+  gated.push("bot:a", 4);
+  assert.equal(mac.received.length, 0);
+});
+
+test("when an older subscribe finishes after a newer one, the newer subscription is kept", async () => {
+  const gated = gatedProjection();
+  const invoke = register(gated.projection);
+  const mac = new FakeDocument("window-1");
+  const older = invoke("bots:live:subscribe", mac, "bot:a") as Promise<BotLiveSnapshot>;
+  const newer = invoke("bots:live:subscribe", mac, "bot:a") as Promise<BotLiveSnapshot>;
+  gated.release(1);
+  await newer;
+  gated.release(0);
+  await older;
+  assert.equal(gated.live(), 1);
+  gated.push("bot:a", 6);
+  assert.equal(mac.received.length, 1, "events arrive once, through the newer subscription");
+  await invoke("bots:live:unsubscribe", mac, "bot:a");
+  assert.equal(gated.live(), 0);
+});
+
+test("two windows on one Bot each get the events, and one leaving keeps the other", async () => {
+  const fake = fakeProjection();
+  const invoke = register(fake.projection);
+  const first = new FakeDocument("window-1");
+  const second = new FakeDocument("window-2");
+  await invoke("bots:live:subscribe", first, "bot:a");
+  await invoke("bots:live:subscribe", second, "bot:a");
+  fake.push("bot:a", 2);
+  await invoke("bots:live:unsubscribe", first, "bot:a");
+  fake.push("bot:a", 3);
+  assert.deepEqual(first.received.map(({ event }) => event.seq), [2]);
+  assert.deepEqual(second.received.map(({ event }) => event.seq), [2, 3]);
+});

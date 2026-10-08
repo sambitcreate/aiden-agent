@@ -1549,7 +1549,12 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// The Bot's live session stream. The first frame is always a snapshot;
     /// every frame must name this Bot.
     func botSessionEvents(botId: String) -> AsyncThrowingStream<AidenBotSessionEvent, Error> {
-        sseStream(
+        do {
+            try validateBotIdentifier(botId)
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+        return sseStream(
             path: ["bots", botId, "session", "events"],
             after: 0,
             parser: AidenBotSessionSSEParser()

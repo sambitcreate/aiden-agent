@@ -110,7 +110,6 @@ import { usageStore } from "./usage-store.js";
 import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
-import { createBotPresetCreatorFor } from "./bot-preset-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
@@ -440,6 +439,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeProgress: AidenRemoteChatProgressService | undefined;
   let activeHostRuns: AidenRemoteHostRunService | undefined;
   let activeHostFeed: AidenRemoteHostFeedService | undefined;
+  let activeBotSessions: AidenRemoteBotSessionService | undefined;
   let detachHostFeed: (() => void) | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
   const notifyPairingRequestsChanged = createAidenPairingRequestNotifier({
@@ -848,12 +848,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 chats: chatStore,
               })
             : undefined;
-          const botPresetCreator = createBotPresetCreatorFor({
-            root: () => userData,
-            getBot: (botId) => botStore.get(botId),
-            createBot: (input) =>
-              botApplicationService.createBot({ audienceId: instanceId, bot: input }),
-          });
+          // A rebuilt API must not leave the previous one's watches and streams open.
+          void activeBotSessions?.close();
           const botSessions = bots
             ? new AidenRemoteBotSessionService({
                 bots,
@@ -865,10 +861,20 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 questions: botQuestions,
                 presets: {
                   list: () => BOT_PRESETS,
-                  create: async (presetId) => {
-                    const result = await botPresetCreator(presetId);
+                  // The one process-wide starter the desktop uses: a Mac tap and a
+                  // phone tap converge on one Bot, and only the creator sends the self-intro.
+                  create: async (presetId, { audienceId }) => {
+                    const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
+                    const result = await botStarter().startFromPreset(presetId, {
+                      // Created for the phone's audience; the key is remembered by the shared starter.
+                      createBot: (bot) => botApplicationService.createBot({ audienceId, bot }),
+                    });
                     return { botId: result.bot.id, created: result.created };
                   },
+                },
+                connectCardStatus: async (botId, card) => {
+                  const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
+                  return connectCardStatus(botId, card);
                 },
                 connectionRequested: async ({ pluginId }) => {
                   if (!openConnectionSetup(pluginId)) {
@@ -879,6 +885,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
               })
             : undefined;
+          activeBotSessions = botSessions;
           const git = new AidenRemoteGitService({
             application: workspaceEnvironmentApplicationService,
             owners: workspaceOwners,
@@ -1044,6 +1051,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       // Revocation drains host-wide subscriptions; it never cancels a run.
       activeHostFeed?.revokeDevice(deviceId);
       activeHostRuns?.revokeDevice(deviceId);
+      activeBotSessions?.revokeDevice(deviceId);
       const revoked = await revokeAidenRemoteRuntimeDevice({
         state,
         streams: activeStreams,
@@ -1054,6 +1062,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       simulatorShareRelay.revokeDevice(deviceId);
       activeHostFeed?.revokeDevice(deviceId);
       activeHostRuns?.revokeDevice(deviceId);
+      activeBotSessions?.revokeDevice(deviceId);
       // Cleanup is intentionally idempotent: a retry after a crash between the
       // device tombstone and notice removal must still remove the acceptance.
       if (hostPlatformCapabilities().bots) {

@@ -1,4 +1,6 @@
-import { installBotTestIpc } from "./test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
+import { MCP_PRESETS } from "../../../main/services/mcp-presets";
+import { BotConnectionSetupHost } from "./bot-connection-setup-host";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -96,4 +98,29 @@ test("Create My Own from the first run opens the create flow", async () => {
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   fireEvent.click(await screen.findByRole("button", { name: "Create My Own" }));
   assert.ok(await screen.findByRole("dialog", { name: "New Bot" }));
+});
+
+test("a phone's Finish on your Mac opens the connection setup even with the Bots list closed", async () => {
+  const presets = MCP_PRESETS.map((preset) => ({
+    preset,
+    serverId: `preset-${preset.id}`,
+    configured: false,
+    enabled: false,
+    ready: false,
+  }));
+  let loaded = false;
+  installBotTestIpc({
+    "mcp:list": () => [],
+    "mcp:presets": () => {
+      loaded = true;
+      return presets;
+    },
+  });
+  // Mounted where the app mounts it, with the person on another page.
+  await mountWithBotRouter(<BotConnectionSetupHost />, { initialPath: "/settings" });
+  await waitFor(() => assert.ok(loaded));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  emitBotTestNotification("bots:connections:setup", { pluginId: "gmail" });
+  const dialog = await screen.findByRole("dialog");
+  assert.ok(within(dialog).getAllByText(/Gmail/u).length > 0);
 });

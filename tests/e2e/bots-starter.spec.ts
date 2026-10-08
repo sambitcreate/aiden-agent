@@ -5,8 +5,9 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 // open (bots:list fails with "Bot bootstrap marker could not be updated"). Only
 // the Bot IPC is substituted, as in guided-setup.spec.ts; the onboarding,
 // navigation, carousel, chat route and composer are the shipped renderer.
-// The Bot's reply is a live-view `question` event pushed from main, the way the
-// durable runtime publishes a waiting ask_user_question card.
+// The turn streams back as live events from main, then the Bot asks a
+// quick-reply question the way the durable runtime publishes a waiting
+// ask_user_question card.
 test("an empty Bots list opens a starter Bot chat, sends to it, and answers its quick-reply card", async ({ aiden }) => {
   const { page } = aiden;
   const bot = botFixture({ id: "bot-chief", name: "Chief of Staff", description: "Keeps your week on track" });
@@ -36,8 +37,23 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     ipcMain.handle("bots:live:summary", () => idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
-    ipcMain.handle("bots:send", (_event, input: unknown) => {
+    ipcMain.handle("bots:send", (event, input: unknown) => {
       state.sends.push(input);
+      // The live projection streams the turn back: the question, then the reply.
+      const text = (input as { text: string }).text;
+      const push = (seq: number, body: Record<string, unknown>) =>
+        event.sender.send("bots:live:event", { botId: fixture.id, epoch: "e1", seq, ...body });
+      setTimeout(() => {
+        push(1, { type: "entry", entry: { id: "u1", type: "user", text, imageCount: 0 } });
+        push(2, { type: "state", state: { kind: "running", submissionId: "s-1" } });
+        push(3, { type: "partial", text: "Start with" });
+        push(4, {
+          type: "entry",
+          entry: { id: "a1", type: "assistant", text: "Start with your 10am review.", toolCalls: [], stopReason: "stop" },
+        });
+        push(5, { type: "partial", text: null });
+        push(6, { type: "state", state: { kind: "idle" } });
+      }, 50);
       return { submissionId: "s-1", deduped: false };
     });
     ipcMain.handle("bots:answerQuestion", (_event, input: unknown) => {
@@ -67,6 +83,9 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     () => (globalThis as unknown as { botStarterE2e: { sends: unknown[] } }).botStarterE2e.sends,
   );
   expect(sends).toMatchObject([{ botId: "bot-chief", text: question }]);
+  // The streamed turn renders from the live events: the question and the Bot's reply.
+  await expect(page.getByText("Start with your 10am review.")).toBeVisible();
+  await expect(page.getByText(question, { exact: true })).toBeVisible();
 
   // The Bot asks an A–E question: the card takes the composer's place.
   await aiden.app.evaluate(({ BrowserWindow }, botId) => {
@@ -83,7 +102,7 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
       window.webContents.send("bots:live:event", {
         botId,
         epoch: "e1",
-        seq: 1,
+        seq: 7,
         type: "question",
         question: { botId, waitId: "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c", toolCallId: "call-1", questions: [question] },
       });

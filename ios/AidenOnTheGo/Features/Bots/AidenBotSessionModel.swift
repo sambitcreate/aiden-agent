@@ -75,10 +75,16 @@ enum AidenBotSessionCopy {
     static let interrupted = "I got interrupted while working on this."
     static let resume = "Resume"
     static let dismiss = "Dismiss"
-    static let accessChanged = "This Bot's access changed. Review it on your Mac."
+    static let accessChanged = "This Bot's access changed. Review it in Advanced."
+    static let openAdvanced = "Advanced"
     static let pausedSubtitle = "Paused — tap to resume"
     static let needsModel = "Needs an AI model"
     static let needsModelHint = "Set up on your Mac"
+    static let setUp = "Set up"
+
+    static func needsModelDetail(botName: String) -> String {
+        "Set up an AI model so \(botName) can reply."
+    }
     static let sessionReset = "This chat was restarted."
     static let finishOnMac = "Finish on your Mac"
     static let finishOnMacReadOnly = "Finish this on your Mac."
@@ -138,13 +144,20 @@ final class AidenBotSessionModel {
     // MARK: Loading and the event stream
 
     func load() async {
+        _ = await fetchSnapshot()
+    }
+
+    /// `GET /session`. Returns false when no snapshot was loaded.
+    private func fetchSnapshot() async -> Bool {
         do {
             apply(snapshot: try await transport.botSession(botId: botID))
             errorMessage = nil
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
             errorMessage = hasLoaded ? "Couldn’t refresh this chat." : error.localizedDescription
+            return false
         }
     }
 
@@ -174,23 +187,26 @@ final class AidenBotSessionModel {
     }
 
     /// Applies one frame under the `(epoch, seq)` rule: a snapshot replaces
-    /// everything; a frame from another epoch or after a gap discards local
-    /// state and refetches the session; a stale or repeated frame is ignored.
+    /// everything; a frame from another epoch or after a gap refetches the
+    /// session; a stale or repeated frame is ignored. `closed` ends this
+    /// connection, and so does a refetch that fails, because the next
+    /// connection starts with a fresh snapshot anyway.
     @discardableResult
     func apply(_ event: AidenBotSessionEvent) async -> EventOutcome {
         guard event.botId == botID else { return .ignored }
+        if case .closed = event.kind { return .closed }
         if case let .snapshot(session) = event.kind {
-            apply(snapshot: session)
+            // First frame of a connection, or mid-stream after the host
+            // rewrote history: either way it replaces everything.
+            apply(snapshot: session, authoritative: true)
             return .applied
         }
         guard let epoch, event.epoch == epoch else {
-            await refetch()
-            return .refetched
+            return await refetch()
         }
         if event.seq <= seq { return .ignored }
         guard event.seq == seq + 1 else {
-            await refetch()
-            return .refetched
+            return await refetch()
         }
         seq = event.seq
         switch event.kind {
@@ -199,6 +215,8 @@ final class AidenBotSessionModel {
         case let .partial(text):
             partial = text.isEmpty ? nil : text
         case let .entry(entry):
+            // Upsert by id: the host re-sends an entry when it changes (an
+            // answer marked interrupted, a connect card that got connected).
             if let index = entries.firstIndex(where: { $0.id == entry.id }) {
                 entries[index] = entry
             } else {
@@ -206,8 +224,10 @@ final class AidenBotSessionModel {
                 if entries.count > AidenBotSessionWire.maxEntries {
                     entries.removeFirst(entries.count - AidenBotSessionWire.maxEntries)
                 }
+                // A new assistant answer replaces the streamed partial. Other
+                // entries leave it alone; the host clears it with `partial ""`.
+                if case let .message(message) = entry, message.role == .assistant { partial = nil }
             }
-            partial = nil
         case let .state(view):
             stateView = view
         case let .question(next):
@@ -218,16 +238,20 @@ final class AidenBotSessionModel {
         return .applied
     }
 
-    private func refetch() async {
+    /// The visible transcript stays until the new snapshot replaces it, so a
+    /// failed refetch never blanks the chat.
+    private func refetch() async -> EventOutcome {
         epoch = nil
         seq = 0
-        entries = []
-        partial = nil
-        await load()
+        return await fetchSnapshot() ? .refetched : .closed
     }
 
-    private func apply(snapshot session: AidenBotSession) {
+    /// A stream snapshot is authoritative. A `GET /session` response is not:
+    /// one that arrives after newer frames of the same epoch is dropped so it
+    /// cannot roll the transcript back.
+    private func apply(snapshot session: AidenBotSession, authoritative: Bool = false) {
         guard session.botId == botID else { return }
+        if !authoritative, session.epoch == epoch, session.seq < seq { return }
         epoch = session.epoch
         seq = session.seq
         entries = session.entries
@@ -356,10 +380,17 @@ final class AidenBotSessionModel {
         do {
             _ = try await transport.requestBotConnection(botId: botID, request: request, idempotencyKey: key)
             connectionKeys[pluginId] = nil
+        } catch is CancellationError {
+            sentConnectionRequests.remove(pluginId)
         } catch {
             sentConnectionRequests.remove(pluginId)
             if !aidenBotSessionFailureIsAmbiguous(error) { connectionKeys[pluginId] = nil }
-            errorMessage = "Your Mac didn’t get that request. Please try again."
+            if case let AidenRemoteClientError.server(404, body) = error {
+                // The Mac can't set up this app; say so instead of "try again".
+                errorMessage = body.message
+            } else {
+                errorMessage = "Your Mac didn’t get that request. Please try again."
+            }
         }
     }
 }

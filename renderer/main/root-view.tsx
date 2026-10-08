@@ -19,6 +19,7 @@ import {
 import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
 import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
+import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
@@ -423,6 +424,7 @@ function RootContent() {
       <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
       <PairingRequestSheet />
+      {capabilities.bots ? <BotConnectionSetupHost /> : null}
     </div>
   );
 }

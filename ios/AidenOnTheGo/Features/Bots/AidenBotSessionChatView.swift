@@ -14,6 +14,7 @@ struct AidenBotSessionChatView: View {
     @State private var summary: AidenBotSummary?
     @State private var draft = ""
     @State private var isShowingProfile = false
+    @State private var isShowingAdvanced = false
     @FocusState private var composerFocused: Bool
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
@@ -50,6 +51,14 @@ struct AidenBotSessionChatView: View {
                         dismiss()
                     }
                 )
+            }
+        }
+        .navigationDestination(isPresented: $isShowingAdvanced) {
+            // "Set up" and "Advanced" land here; a saved model or access
+            // change refreshes the session state.
+            AidenBotAdvancedView(coordinator: coordinator, botID: botID) { updated in
+                summary = AidenBotSummary(detail: updated)
+                Task { await model?.load() }
             }
         }
         .alert(
@@ -201,14 +210,19 @@ struct AidenBotSessionChatView: View {
                 .id(question.waitId)
             }
             if model.needsModel {
-                AidenBotNeedsModelCard()
+                AidenBotNeedsModelCard(
+                    botName: bot?.name ?? "this Bot",
+                    canSetUp: canWrite,
+                    onSetUp: { isShowingAdvanced = true }
+                )
             } else if model.isInterrupted {
                 AidenBotInterruptedCard(
                     isAccessBlocked: model.isAccessBlocked,
                     isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss),
                     canAct: canWrite,
                     onResume: { Task { await model.resume() } },
-                    onDismiss: { Task { await model.dismiss() } }
+                    onDismiss: { Task { await model.dismiss() } },
+                    onOpenAdvanced: { isShowingAdvanced = true }
                 )
             }
             if !model.needsModel {
@@ -295,6 +309,7 @@ struct AidenBotInterruptedCard: View {
     let canAct: Bool
     let onResume: () -> Void
     let onDismiss: () -> Void
+    var onOpenAdvanced: () -> Void = {}
 
     @Environment(\.aidenPalette) private var palette
 
@@ -308,7 +323,13 @@ struct AidenBotInterruptedCard: View {
                     .foregroundStyle(palette.secondary)
             }
             HStack(spacing: 10) {
-                if !isAccessBlocked {
+                if isAccessBlocked {
+                    Button(AidenBotSessionCopy.openAdvanced, action: onOpenAdvanced)
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(palette.accent)
+                        .foregroundStyle(palette.onAccent)
+                } else {
                     Button(AidenBotSessionCopy.resume, action: onResume)
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
@@ -329,22 +350,39 @@ struct AidenBotInterruptedCard: View {
 }
 
 /// Shown instead of the composer when the Bot has no AI model.
+/// "Set up" opens Advanced, where the AI model is chosen; a phone that may
+/// not change Bots is pointed to the Mac instead.
 struct AidenBotNeedsModelCard: View {
+    let botName: String
+    let canSetUp: Bool
+    let onSetUp: () -> Void
+
     @Environment(\.aidenPalette) private var palette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Label(AidenBotSessionCopy.needsModel, systemImage: "cpu")
                 .font(.headline)
                 .foregroundStyle(palette.foreground)
-            Text("\(AidenBotSessionCopy.needsModelHint): open Aiden Agent and choose a model for this Bot.")
+            Text(AidenBotSessionCopy.needsModelDetail(botName: botName))
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
+            if canSetUp {
+                Button(AidenBotSessionCopy.setUp, action: onSetUp)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(palette.accent)
+                    .foregroundStyle(palette.onAccent)
+            } else {
+                Text(AidenBotSessionCopy.needsModelHint)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
 

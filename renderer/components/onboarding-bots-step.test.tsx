@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
@@ -37,9 +37,11 @@ const readyProvider = {
 function mountOnboarding({
   bots,
   botsCapability = true,
+  overrides = {},
 }: {
   bots: ReturnType<typeof botFixture>[];
   botsCapability?: boolean;
+  overrides?: Record<string, (...args: unknown[]) => unknown>;
 }) {
   let created = false;
   const calls: BotTestIpcCall[] = installBotTestIpc({
@@ -51,10 +53,13 @@ function mountOnboarding({
     "profile:get": () => ({ name: "Sam" }),
     "providers:list": () => [readyProvider],
     "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief of Staff" })] : bots),
-    "bots:createFromPreset": () => {
+    "bots:createFromPreset": async () => {
+      // Creating takes a moment, so a second click lands while it runs.
+      await new Promise((resolve) => setTimeout(resolve, 20));
       created = true;
       return { bot: botFixture({ id: "bot-chief", name: "Chief of Staff" }), created: true };
     },
+    ...overrides,
   });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
@@ -110,8 +115,45 @@ test("the step is skipped when Bots already exist", async () => {
   assert.equal(screen.queryByRole("heading", { name: "Meet Your First Bot" }), null);
 });
 
-test("the step is not offered without the Bots capability", async () => {
-  mountOnboarding({ bots: [], botsCapability: false });
+test("the step is not offered without the Bots capability, and the Bot store is not read", async () => {
+  const calls = mountOnboarding({ bots: [], botsCapability: false });
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
   assert.equal(screen.queryByRole("heading", { name: "Meet Your First Bot" }), null);
+  assert.equal(calls.some((call) => call.channel === "bots:list"), false);
+  const stepper = screen.getByRole("list", { name: "Setup progress" });
+  assert.equal(within(stepper).queryByText("Your first Bot"), null);
+});
+
+test("the step is not offered when the Bot store can't be read", async () => {
+  mountOnboarding({
+    bots: [],
+    overrides: { "bots:list": () => Promise.reject(new Error("Bots are open in another Aiden window.")) },
+  });
+  assert.ok(await screen.findByRole("heading", { name: tourHeading }));
+  assert.equal(screen.queryByRole("heading", { name: "Meet Your First Bot" }), null);
+});
+
+test("Start Chat clicked twice while the Bot is being made sends one create", async () => {
+  const calls = mountOnboarding({ bots: [] });
+  const starters = await screen.findByRole("list", { name: "Starter Bots" });
+  const start = within(starters).getAllByRole("button", { name: "Start Chat" })[0]!;
+  fireEvent.click(start);
+  fireEvent.click(start);
+  assert.ok(await screen.findByRole("heading", { name: tourHeading }));
+  assert.equal(calls.filter((call) => call.channel === "bots:createFromPreset").length, 1);
+});
+
+test("a Start Chat that fails stays on the step so the person can try again or skip", async () => {
+  const calls = mountOnboarding({
+    bots: [],
+    overrides: { "bots:createFromPreset": () => Promise.reject(new Error("Bots are open in another Aiden window.")) },
+  });
+  const starters = await screen.findByRole("list", { name: "Starter Bots" });
+  fireEvent.click(within(starters).getAllByRole("button", { name: "Start Chat" })[0]!);
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:createFromPreset").length, 1));
+  await waitFor(() =>
+    assert.equal(within(starters).getAllByRole("button", { name: "Start Chat" })[0]!.hasAttribute("disabled"), false),
+  );
+  assert.ok(screen.getByRole("heading", { name: "Meet Your First Bot" }));
+  assert.equal(calls.some((call) => call.channel === "app:setOnboardingProgress" && call.args[0] === "bots"), false);
 });

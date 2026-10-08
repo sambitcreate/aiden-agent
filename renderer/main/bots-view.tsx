@@ -1,8 +1,8 @@
 import * as React from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { EmptyState, Text, toast } from "../components/ui";
-import { botsApi, onNotification } from "../lib/ipc";
+import { useQueries } from "@tanstack/react-query";
+import { EmptyState, Text } from "../components/ui";
+import { botsApi } from "../lib/ipc";
 import { useBot, useBots } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
 import { BotAdvanced } from "./bots/bot-advanced";
@@ -12,7 +12,6 @@ import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
 import { BotList, type BotListRow } from "./bots/bot-list";
 import { BotProfile } from "./bots/bot-profile";
 import { BotStarterCarousel } from "./bots/bot-starter-carousel";
-import { useConnectionSetup } from "./bots/use-connection-setup";
 import { RemoteBots } from "./remote-bots";
 
 /** The Bot's one conversation, addressed by Bot id only. */
@@ -22,7 +21,6 @@ export function botChatPath(botId: string): { to: "/bots/$botId/chat"; params: {
 
 function BotsHome() {
   const navigate = useNavigate();
-  const qc = useQueryClient();
   const bots = useBots();
   const active = bots.data ?? [];
   // Preview, time and state come from the same live projection the chat reads.
@@ -47,21 +45,6 @@ function BotsHome() {
   const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<BotDefinition | null>(null);
   const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
-  const connectionSetup = useConnectionSetup(() => {
-    void qc.invalidateQueries({ queryKey: ["bot-live-summary"] });
-  });
-  const openSetup = connectionSetup.open;
-
-  // A Bot connection requested elsewhere (a paired phone, a connect card) opens its setup here.
-  React.useEffect(
-    () =>
-      onNotification("bots:connections:setup", (payload: { pluginId: string }) => {
-        if (!openSetup(payload.pluginId)) {
-          toast.error("This connection can't be set up from here.");
-        }
-      }),
-    [openSetup],
-  );
 
   return (
     <>
@@ -94,7 +77,6 @@ function BotsHome() {
           }}
         />
       ) : null}
-      {connectionSetup.dialog}
     </>
   );
 }

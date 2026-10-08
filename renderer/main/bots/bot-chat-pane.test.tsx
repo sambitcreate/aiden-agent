@@ -330,3 +330,119 @@ test("a tool call that needs approval asks in the chat and answers by wait id", 
   ]);
   await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner needs approval" }), null));
 });
+
+test("Resume clicked twice, or Resume then Dismiss, sends one request until the first answers", async () => {
+  let answer: (state: unknown) => void = () => undefined;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1" } }),
+    "bots:resume": () => new Promise((resolve) => (answer = resolve)),
+    "bots:dismiss": () => ({ kind: "idle" }),
+  });
+  const card = await screen.findByRole("group", { name: "Planner was interrupted" });
+  const resume = within(card).getByRole("button", { name: "Resume" });
+  const dismiss = within(card).getByRole("button", { name: "Dismiss" });
+  fireEvent.click(resume);
+  fireEvent.click(resume);
+  fireEvent.click(dismiss);
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
+  assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 0);
+  answer({ kind: "running", submissionId: "s1" });
+  // Once answered, the card works again (the live state decides whether it stays).
+  await waitFor(() => assert.equal(within(card).getByRole("button", { name: "Dismiss" }).hasAttribute("disabled"), false));
+  fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:dismiss").length, 1));
+});
+
+test("an approval whose answer fails to send comes back so it can be answered again", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:pendingApprovals": () => [],
+    "bots:approve": () => Promise.reject(new Error("The approval could not be sent.")),
+  });
+  emitBotTestNotification("bots:approval", {
+    botId: "bot-1",
+    waitId: "wait-8",
+    toolCallId: "call-8",
+    toolName: "share_image",
+    summary: "Share the chart.",
+  });
+  const card = await screen.findByRole("group", { name: "Planner needs approval" });
+  assert.ok(within(card).getByText("Planner wants to use share image."));
+  fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
+  const back = await screen.findByRole("group", { name: "Planner needs approval" });
+  assert.ok(within(back).getByRole("button", { name: "Allow" }));
+});
+
+test("a Bot open in another Aiden window says so in plain words", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "unavailable", reason: "held_by_live_process" } }),
+  });
+  assert.ok(await screen.findByPlaceholderText("Bots are open in another Aiden window."));
+  assert.equal(screen.queryByText(/held_by_live_process/u), null);
+  assert.equal(screen.queryByPlaceholderText(/held_by_live_process/u), null);
+});
+
+test("a just-sent message shows the Bot working before any reply text arrives", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ entries: [userEntry("u1", "Plan Lisbon")], state: { kind: "running", submissionId: "s1" } }),
+  });
+  assert.ok(await screen.findByText("Plan Lisbon"));
+  assert.ok(await screen.findByRole("button", { name: /Working/u }));
+});
+
+test("a deleted Bot's chat says it was not found instead of loading forever", async () => {
+  installBotTestIpc({
+    "bots:get": () => null,
+    "bots:live:subscribe": () => Promise.reject(new Error("This Bot no longer exists.")),
+    "bots:pendingApprovals": () => [],
+  });
+  await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  assert.ok(await screen.findByText("Bot not found"));
+});
+
+test("a chat that fails to open says so, and Try again opens it", async () => {
+  let attempts = 0;
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error("Bots are starting."))
+        : snapshot({ entries: [assistantEntry("a1", "Welcome back.")] });
+    },
+  });
+  await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  const alert = await screen.findByRole("alert");
+  assert.ok(within(alert).getByText("This chat didn’t open"));
+  fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+  assert.ok(await screen.findByText("Welcome back."));
+});
+
+test("a renderer reload mid-reply shows the partial reply from the fresh snapshot", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        seq: 4,
+        entries: [userEntry("u1", "Tell me a story")],
+        partial: "Once upon a time",
+        state: { kind: "running", submissionId: "s1" },
+      }),
+  });
+  cleanup();
+  // The reloaded document mounts the chat again and subscribes once more.
+  await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  await screen.findByRole("button", { name: "Planner profile" });
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 5,
+    type: "partial",
+    text: "Once upon a time there was a fox.",
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /Working/u }));
+  assert.ok(await screen.findByText("Once upon a time there was a fox."));
+  assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
+  assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
+});

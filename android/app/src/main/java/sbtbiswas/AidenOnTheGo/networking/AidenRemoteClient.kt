@@ -1330,21 +1330,32 @@ class AidenRemoteClient(
         streamEvents(streamId, lastEventId ?: 0)
 
     // --- Bots ---
-    /** Strict revision-26 codec for Bot DTOs: removed fields such as `favorites` are rejected. */
+    /** Strict revision-25 codec for Bot DTOs: removed fields such as `favorites` are rejected. */
     private val botJson = AidenBotWireJson.json
+
+    /**
+     * Decodes one Bot response strictly. A shape this build can't read (for example a
+     * revision-24 Mac's `favorites` or `archived` Bots) becomes the plain "update Aiden"
+     * contract error instead of a raw serializer message.
+     */
+    private fun <T> decodeBotWire(serializer: kotlinx.serialization.KSerializer<T>, text: String): T = try {
+        botJson.decodeFromString(serializer, text)
+    } catch (_: kotlinx.serialization.SerializationException) {
+        throw AidenBotContractException.InvalidField("bot response")
+    }
 
     suspend fun bots(): AidenBotList = executeRequest(
         "/bots",
         botScope = AidenBotPrivateResponseScope.Root("botList")
     ) { bytes ->
-        botJson.decodeFromString(AidenBotList.serializer(), String(bytes, Charsets.UTF_8))
+        decodeBotWire(AidenBotList.serializer(), String(bytes, Charsets.UTF_8))
     }
 
     suspend fun bot(id: String): AidenBotDetail = executeRequest(
         "/bots/$id",
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->
-        val detail = botJson.decodeFromString(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
+        val detail = decodeBotWire(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
         if (detail.id != id) throw AidenRemoteClientException.InvalidResponse()
         detail
     }
@@ -1360,7 +1371,7 @@ class AidenRemoteClient(
         acceptedStatus = setOf(201),
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->
-        botJson.decodeFromString(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
+        decodeBotWire(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
     }
 
     suspend fun updateBotIdentity(
@@ -1374,7 +1385,7 @@ class AidenRemoteClient(
         bodyJson = botJson.encodeToString(AidenBotIdentityPatch.serializer(), patch),
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->
-        val detail = botJson.decodeFromString(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
+        val detail = decodeBotWire(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
         if (detail.id != id) throw AidenRemoteClientException.InvalidResponse()
         detail
     }
@@ -1402,7 +1413,7 @@ class AidenRemoteClient(
             "/bots/$botId/session",
             botScope = AidenBotPrivateResponseScope.Root("botSession")
         ) { bytes ->
-            val session = botJson.decodeFromString(AidenBotSession.serializer(), String(bytes, Charsets.UTF_8))
+            val session = decodeBotWire(AidenBotSession.serializer(), String(bytes, Charsets.UTF_8))
             if (session.botId != botId) throw AidenRemoteClientException.InvalidResponse()
             session
         }
@@ -1429,7 +1440,7 @@ class AidenRemoteClient(
             acceptedStatus = setOf(200, 201, 202),
             botScope = AidenBotPrivateResponseScope.Root("botSessionSend")
         ) { bytes ->
-            botJson.decodeFromString(AidenBotSessionSendResponse.serializer(), String(bytes, Charsets.UTF_8))
+            decodeBotWire(AidenBotSessionSendResponse.serializer(), String(bytes, Charsets.UTF_8))
         }
     }
 
@@ -1480,7 +1491,7 @@ class AidenRemoteClient(
             acceptedStatus = setOf(200, 202),
             botScope = AidenBotPrivateResponseScope.Root("botSessionResume")
         ) { bytes ->
-            botJson.decodeFromString(AidenBotSessionStateView.serializer(), String(bytes, Charsets.UTF_8))
+            decodeBotWire(AidenBotSessionStateView.serializer(), String(bytes, Charsets.UTF_8))
         }
     }
 
@@ -1492,7 +1503,7 @@ class AidenRemoteClient(
             "/bots/$botId/routines",
             botScope = AidenBotPrivateResponseScope.Root("botRoutines")
         ) { bytes ->
-            val list = botJson.decodeFromString(AidenBotRoutineList.serializer(), String(bytes, Charsets.UTF_8))
+            val list = decodeBotWire(AidenBotRoutineList.serializer(), String(bytes, Charsets.UTF_8))
             if (list.routines.any { it.botId != botId }) throw AidenRemoteClientException.InvalidResponse()
             list
         }
@@ -1513,7 +1524,7 @@ class AidenRemoteClient(
             acceptedStatus = setOf(200, 201),
             botScope = AidenBotPrivateResponseScope.Root("botRoutineCreate")
         ) { bytes ->
-            val routine = botJson.decodeFromString(AidenBotRoutine.serializer(), String(bytes, Charsets.UTF_8))
+            val routine = decodeBotWire(AidenBotRoutine.serializer(), String(bytes, Charsets.UTF_8))
             if (routine.botId != botId) throw AidenRemoteClientException.InvalidResponse()
             routine
         }
@@ -1534,7 +1545,7 @@ class AidenRemoteClient(
             bodyJson = botJson.encodeToString(AidenBotRoutineUpdateRequest.serializer(), update),
             botScope = AidenBotPrivateResponseScope.Root("botRoutineUpdate")
         ) { bytes ->
-            val routine = botJson.decodeFromString(AidenBotRoutine.serializer(), String(bytes, Charsets.UTF_8))
+            val routine = decodeBotWire(AidenBotRoutine.serializer(), String(bytes, Charsets.UTF_8))
             if (routine.id != routineId || routine.botId != botId) throw AidenRemoteClientException.InvalidResponse()
             routine
         }
@@ -1569,7 +1580,7 @@ class AidenRemoteClient(
             acceptedStatus = setOf(200, 202),
             botScope = AidenBotPrivateResponseScope.Root("botConnectionRequest")
         ) { bytes ->
-            val receipt = botJson.decodeFromString(AidenBotConnectionRequestReceipt.serializer(), String(bytes, Charsets.UTF_8))
+            val receipt = decodeBotWire(AidenBotConnectionRequestReceipt.serializer(), String(bytes, Charsets.UTF_8))
             if (receipt.pluginId != pluginId) throw AidenRemoteClientException.InvalidResponse()
             receipt
         }
@@ -1581,7 +1592,7 @@ class AidenRemoteClient(
         "/bot-presets",
         botScope = AidenBotPrivateResponseScope.Root("botPresets")
     ) { bytes ->
-        botJson.decodeFromString(AidenBotPresetList.serializer(), String(bytes, Charsets.UTF_8))
+        decodeBotWire(AidenBotPresetList.serializer(), String(bytes, Charsets.UTF_8))
     }
 
     /** Idempotent per preset on the host; `200` whether or not this call made the Bot. */
@@ -1594,7 +1605,7 @@ class AidenRemoteClient(
         acceptedStatus = setOf(200, 201),
         botScope = AidenBotPrivateResponseScope.Root("botPresetCreate")
     ) { bytes ->
-        botJson.decodeFromString(AidenBotPresetCreateResult.serializer(), String(bytes, Charsets.UTF_8))
+        decodeBotWire(AidenBotPresetCreateResult.serializer(), String(bytes, Charsets.UTF_8))
     }
 
     suspend fun botConversations(
@@ -1652,7 +1663,7 @@ class AidenRemoteClient(
             "/bot-capabilities$query",
             botScope = AidenBotPrivateResponseScope.Root("botCapabilityCatalog")
         ) { bytes ->
-            botJson.decodeFromString(AidenBotCapabilityCatalog.serializer(), String(bytes, Charsets.UTF_8))
+            decodeBotWire(AidenBotCapabilityCatalog.serializer(), String(bytes, Charsets.UTF_8))
         }
     }
 
