@@ -1763,7 +1763,7 @@ test("Bot session routes pass their request keys through to the durable session 
     },
   } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
   const app = await fixture({
-    capabilities: ["bot:read", "bot:write", "chat:write"],
+    capabilities: ["bot:read", "bot:write", "chat:read", "chat:write"],
     acceptsBotCapabilities: true,
     botSessions: session,
   });
@@ -1807,6 +1807,144 @@ test("Bot session routes pass their request keys through to the durable session 
     ]);
   } finally {
     await app.close();
+  }
+});
+
+/** A durable-session service whose every route records that it ran. */
+function recordingBotSessions(seen: string[], supports: { routines: boolean; presets: boolean; connections: boolean }) {
+  const state = { state: "idle" as const, interrupted: false };
+  const record = (name: string) => async () => {
+    seen.push(name);
+    return name === "session"
+      ? { botId: "bot-1", epoch: "epoch_1", seq: 0, ...state, entries: [], hasOlder: false }
+      : name === "send"
+        ? { submissionId: "sub_1", deduped: false, ...state }
+        : state;
+  };
+  return {
+    supportsRoutines: supports.routines,
+    supportsPresets: supports.presets,
+    supportsConnectionRequests: supports.connections,
+    session: record("session"),
+    openEvents: async () => { seen.push("events"); },
+    send: record("send"),
+    resume: record("resume"),
+    dismiss: record("dismiss"),
+    stop: record("stop"),
+    listRoutines: async () => { seen.push("routines"); return { routines: [] }; },
+    createRoutine: record("routine-create"),
+    updateRoutine: record("routine-update"),
+    deleteRoutine: async () => { seen.push("routine-delete"); },
+    requestConnection: record("connection"),
+    presets: () => { seen.push("presets"); return { presets: [] }; },
+    createFromPreset: record("preset"),
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+}
+
+test("revision 25 Bot feature tokens are announced exactly when their routes are wired", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const botTokens = (features: string[]) => features.filter((feature) => feature.startsWith("bot-")).sort();
+
+  const wired = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:read", "chat:write"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions([], { routines: true, presets: true, connections: true }),
+  });
+  try {
+    const server = await (await fetch(`${wired.base}/server`, { headers })).json();
+    assert.deepEqual(botTokens(server.features), [
+      "bot-connection-requests-v1",
+      "bot-delete-v1",
+      "bot-durable-session-v1",
+      "bot-presets-v1",
+      "bot-routines-v1",
+    ]);
+  } finally {
+    await wired.close();
+  }
+
+  // A host whose routine/preset/connection services are absent only offers the session.
+  const partial = await fixture({
+    capabilities: ["server:read", "bot:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions([], { routines: false, presets: false, connections: false }),
+  });
+  try {
+    const server = await (await fetch(`${partial.base}/server`, { headers })).json();
+    assert.deepEqual(botTokens(server.features), ["bot-delete-v1", "bot-durable-session-v1"]);
+  } finally {
+    await partial.close();
+  }
+
+  // No durable sessions: none of the session tokens, and the routes are not found.
+  const unwired = await fixture({ capabilities: ["server:read", "bot:read", "chat:read"], acceptsBotCapabilities: true });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.deepEqual(botTokens(server.features), ["bot-delete-v1"]);
+    const session = await fetch(`${unwired.base}/bots/bot-1/session`, { headers });
+    assert.equal(session.status, 404);
+    assert.equal((await session.json()).error.code, "not_found");
+  } finally {
+    await unwired.close();
+  }
+});
+
+test("Bot session routes refuse devices without the grants for transcripts and changes", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const post = (key: string, body = "{}") => ({
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", "idempotency-key": key },
+    body,
+  });
+
+  // Bot metadata only: the transcript and its stream are chat reads.
+  const metadataOnly: string[] = [];
+  const reader = await fixture({
+    capabilities: ["bot:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions(metadataOnly, { routines: true, presets: true, connections: true }),
+  });
+  try {
+    for (const path of ["/bots/bot-1/session", "/bots/bot-1/session/events"]) {
+      const response = await fetch(`${reader.base}${path}`, { headers });
+      assert.equal(response.status, 403, path);
+      assert.equal((await response.json()).error.code, "capability_denied", path);
+    }
+    for (const [path, body] of [
+      ["/bots/bot-1/resume", "{}"],
+      ["/bots/bot-1/dismiss", "{}"],
+      ["/bots/bot-1/stop", "{}"],
+      ["/bots/bot-1/messages", JSON.stringify({ text: "hi" })],
+      ["/bots/bot-1/routines", JSON.stringify({ name: "x", message: "y", schedule: { kind: "daily", time: "08:00" } })],
+      ["/bots/bot-1/connection-requests", JSON.stringify({ pluginId: "gmail" })],
+      ["/bots/from-preset", JSON.stringify({ presetId: "meal-planner" })],
+    ] as const) {
+      const response = await fetch(`${reader.base}${path}`, post("grant-request-00001", body));
+      assert.equal(response.status, 403, path);
+    }
+    // Reading routines and presets is Bot metadata.
+    assert.equal((await fetch(`${reader.base}/bots/bot-1/routines`, { headers })).status, 200);
+    assert.equal((await fetch(`${reader.base}/bot-presets`, { headers })).status, 200);
+    assert.deepEqual(metadataOnly, ["routines", "presets"]);
+  } finally {
+    await reader.close();
+  }
+
+  // Bot changes without chat writes may control the session but not speak in it.
+  const controls: string[] = [];
+  const writer = await fixture({
+    capabilities: ["bot:read", "bot:write", "chat:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingBotSessions(controls, { routines: true, presets: true, connections: true }),
+  });
+  try {
+    assert.equal((await fetch(`${writer.base}/bots/bot-1/session`, { headers })).status, 200);
+    assert.equal((await fetch(`${writer.base}/bots/bot-1/resume`, post("grant-request-00002"))).status, 200);
+    const message = await fetch(`${writer.base}/bots/bot-1/messages`, post("grant-request-00003", JSON.stringify({ text: "hi" })));
+    assert.equal(message.status, 403);
+    assert.deepEqual(controls, ["session", "resume"]);
+  } finally {
+    await writer.close();
   }
 });
 

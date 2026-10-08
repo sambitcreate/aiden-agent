@@ -22,9 +22,9 @@ export function botStarter(): BotStarter {
       await creationKeys.forget(key);
       return null;
     },
-    async createBot(input, access, creationKey) {
+    async createBot(input, access, creationKey, audienceId) {
       const bot = await botApplicationService.createBot({
-        audienceId: BOT_DESKTOP_AUDIENCE_ID,
+        audienceId: audienceId ?? BOT_DESKTOP_AUDIENCE_ID,
         bot: input,
         ...(access === undefined ? {} : { access }),
       });

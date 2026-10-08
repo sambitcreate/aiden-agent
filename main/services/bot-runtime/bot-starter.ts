@@ -18,8 +18,16 @@ import type { BotSessionService } from "./bot-session-service.js";
 
 export interface BotStarterDeps {
   findBotByCreationKey(key: string): Promise<BotDefinition | null>;
-  /** Create the Bot and remember `creationKey` for it. */
-  createBot(input: BotCreateInput, access: BotAccessUpdate | undefined, creationKey: string): Promise<BotDefinition>;
+  /**
+   * Create the Bot and remember `creationKey` for it. `audienceId` is the
+   * requester's audience (a paired device for Remote); absent means the Mac.
+   */
+  createBot(
+    input: BotCreateInput,
+    access: BotAccessUpdate | undefined,
+    creationKey: string,
+    audienceId?: string,
+  ): Promise<BotDefinition>;
   session: Pick<BotSessionService, "send" | "state">;
   onIntroError?(botId: string, error: unknown): void;
 }
@@ -30,16 +38,20 @@ export interface BotStartResult extends BotPresetCreateResult {
 }
 
 export interface BotStarter {
-  startFromPreset(presetId: string, access?: BotAccessUpdate): Promise<BotStartResult>;
+  startFromPreset(presetId: string, access?: BotAccessUpdate, options?: { audienceId?: string }): Promise<BotStartResult>;
   /** The self-intro for a Bot created some other way (the create flow). */
   introduce(botId: string): Promise<boolean>;
 }
 
 export function createBotStarter(deps: BotStarterDeps): BotStarter {
-  const accessByKey = new Map<string, BotAccessUpdate | undefined>();
+  // The first caller of a key owns how the Bot is created; joiners get its Bot.
+  const ownerByKey = new Map<string, { access: BotAccessUpdate | undefined; audienceId: string | undefined }>();
   const create = createBotPresetCreator({
     findBotByCreationKey: deps.findBotByCreationKey,
-    createBot: (input, key) => deps.createBot(input, accessByKey.get(key), key),
+    createBot: (input, key) => {
+      const owner = ownerByKey.get(key);
+      return deps.createBot(input, owner?.access, key, owner?.audienceId);
+    },
   });
 
   const introduce = async (botId: string): Promise<boolean> => {
@@ -53,16 +65,16 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
   };
 
   return {
-    async startFromPreset(presetId, access) {
+    async startFromPreset(presetId, access, options) {
       const key = botPresetIdempotencyKey(presetId);
-      const owner = !accessByKey.has(key);
-      if (owner) accessByKey.set(key, access);
+      const owner = !ownerByKey.has(key);
+      if (owner) ownerByKey.set(key, { access, audienceId: options?.audienceId });
       try {
         const result = await create(presetId);
         const introduced = result.created ? await introduce(result.bot.id) : false;
         return { ...result, introduced };
       } finally {
-        if (owner) accessByKey.delete(key);
+        if (owner) ownerByKey.delete(key);
       }
     },
     introduce,

@@ -219,8 +219,8 @@ function broadcastState(botId: string, state: BotSessionState): void {
   ipcMain.broadcast("bots:changed", { botId, session: state });
 }
 
-/** Connect cards show what is true now: connected, or answered with Not now. */
-async function connectCardStatus(botId: string, card: ConnectCardEntry) {
+/** Connect cards show what is true now: connected, or answered with Not now. Shared with Remote. */
+export async function connectCardStatus(botId: string, card: ConnectCardEntry) {
   if (await isConnected(card.pluginId)) return "connected" as const;
   if (await dismissals.isDismissed(botId, card.pluginId)) return "dismissed" as const;
   return card.status;

@@ -23,6 +23,11 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_READ_STATE_FEATURE,
+  AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE,
+  AIDEN_REMOTE_BOT_DELETE_FEATURE,
+  AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
+  AIDEN_REMOTE_BOT_PRESETS_FEATURE,
+  AIDEN_REMOTE_BOT_ROUTINES_FEATURE,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -1724,6 +1729,15 @@ export function createAidenRemoteRequestHandler(
             ...(!isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
               ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE]
               : []),
+            // Bots rework (contract revision 25): each token is announced only
+            // while the route it gates is wired.
+            ...(dependencies.bots?.delete ? [AIDEN_REMOTE_BOT_DELETE_FEATURE] : []),
+            ...(dependencies.botSessions ? [AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE] : []),
+            ...(dependencies.botSessions?.supportsRoutines === true ? [AIDEN_REMOTE_BOT_ROUTINES_FEATURE] : []),
+            ...(dependencies.botSessions?.supportsConnectionRequests === true
+              ? [AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE]
+              : []),
+            ...(dependencies.botSessions?.supportsPresets === true ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
         };
@@ -2044,6 +2058,8 @@ export function createAidenRemoteRequestHandler(
         route = "botSession";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
+        // The session is the Bot's transcript: reading it is a chat read.
+        requireDeviceCapabilities(device, ["chat:read"]);
         writeJson(response, 200, await botSessionsOrNotFound(dependencies).session(botSessionMatch[1]!));
         return;
       }
@@ -2053,10 +2069,13 @@ export function createAidenRemoteRequestHandler(
         route = "botSessionEvents";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["chat:read"]);
+        // Registration crosses the revocation fence; revokeDevice closes it later.
         await botSessionsOrNotFound(dependencies).openEvents(
           device.id,
           botSessionEventsMatch[1]!,
           response,
+          admitDevice(device.id),
         );
         return;
       }
