@@ -18,12 +18,20 @@ import {
   type DeviceSession,
   type DeviceSummary,
 } from "../../../renderer/shared/devices.js";
+import { deviceCaptureFileName } from "../../../renderer/shared/device-features.js";
+import { resolveDeviceSavePath, writeDeviceSaveFile, type DeviceSaveRoots } from "./device-save-path.js";
 
 export const DEVICE_TOOL_NAMES = ["device_list", "device_open", "device_screenshot", "device_close"] as const;
 /** Booting a simulator and powering one off change the user's machine; both need approval under "ask". */
 export const DEVICE_APPROVAL_TOOL_NAMES: ReadonlySet<string> = new Set(["device_open", "device_close"]);
 const deviceToolNames: ReadonlySet<string> = new Set(DEVICE_TOOL_NAMES);
 export const isDeviceToolName = (name: string): boolean => deviceToolNames.has(name);
+/** Under "ask", a screenshot that also writes a file needs approval too. */
+export function deviceToolRequiresApproval(name: string, args: unknown): boolean {
+  if (DEVICE_APPROVAL_TOOL_NAMES.has(name)) return true;
+  const saveTo = typeof args === "object" && args !== null ? (args as Record<string, unknown>).saveTo : undefined;
+  return name === "device_screenshot" && saveTo !== undefined;
+}
 
 /** The always-on prompt block. Driving guidance lives in the `device_open` result. */
 export const DEVICE_AGENT_GUIDANCE = [
@@ -65,6 +73,9 @@ export function deviceToolApprovalSummary(name: string, args: Record<string, unk
     return args.shutdown === true
       ? `Close simulator${target} and shut it down.`
       : `Close simulator${target} in the Simulator tab. It keeps running.`;
+  }
+  if (name === "device_screenshot" && typeof args.saveTo === "string") {
+    return `Save a screenshot of simulator${target || " (the one open in this chat)"} to ${args.saveTo}.`;
   }
   return `Use simulator tool ${name}.`;
 }
@@ -154,6 +165,8 @@ export interface DeviceToolContext {
   revalidate?(): Promise<void>;
   /** Where a screenshot lands when the model cannot take images. */
   screenshotDir?(): Promise<string>;
+  /** The folders `device_screenshot`'s `saveTo` may write into. Without it, `saveTo` is refused. */
+  saveRoots?(): Promise<DeviceSaveRoots> | DeviceSaveRoots;
 }
 
 type Args = Record<string, unknown>;
@@ -196,8 +209,22 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
     [
       "device_screenshot",
       "Screenshot device",
-      "Capture the current screen of an open simulator as a PNG. Use it to see what the user sees; for taps and text use the agent-device CLI.",
-      Type.Object({ hostId, deviceId }, { additionalProperties: false }),
+      "Capture the current screen of an open simulator as a PNG. Use it to see what the user sees; for taps and text use the agent-device CLI. Pass saveTo only when the user wants the screenshot kept as a file.",
+      Type.Object(
+        {
+          hostId,
+          deviceId,
+          saveTo: Type.Optional(
+            Type.String({
+              minLength: 1,
+              maxLength: 1024,
+              description:
+                "Also save the PNG to this path: inside this chat's workspace (a relative path is relative to it) or the user's Downloads folder. A folder gets a dated file name.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
     ],
     [
       "device_close",
@@ -288,11 +315,23 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
     const target = { hostId: session.hostId, deviceId: session.deviceId };
 
     if (name === "device_screenshot") {
+      const device = state.devices.find((candidate) => candidate.hostId === target.hostId && candidate.id === target.deviceId);
+      // The path is checked before the capture, so a refused path never costs a screenshot.
+      let save: { file: string; roots: DeviceSaveRoots } | null = null;
+      if (args.saveTo !== undefined) {
+        const roots = (await context.saveRoots?.()) ?? {};
+        const defaultName = deviceCaptureFileName(device?.name ?? "Simulator", new Date(), "png");
+        save = { file: resolveDeviceSavePath(args.saveTo, roots, defaultName), roots };
+      }
       const png = await port.screenshot(target);
       live();
       const dimensions = pngDimensions(png);
-      const device = state.devices.find((candidate) => candidate.hostId === target.hostId && candidate.id === target.deviceId);
-      const summary = { device: { ...target, name: device?.name ?? target.deviceId }, ...dimensions };
+      const savedTo = save ? await writeDeviceSaveFile(save.file, save.roots, png) : undefined;
+      const summary = {
+        device: { ...target, name: device?.name ?? target.deviceId },
+        ...dimensions,
+        ...(savedTo ? { savedTo } : {}),
+      };
       if (context.supportsImages) {
         return {
           content: [
