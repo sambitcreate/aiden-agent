@@ -3883,7 +3883,7 @@
       "get": {
         "operationId": "listSimulators",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Lists the serving Mac's iOS Simulators. While the owner has not turned on Share with paired Macs, sharing is false and devices is empty.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Lists the serving Mac's iOS Simulators and Android Emulators. While the owner has not turned on Share with paired Macs, sharing is false and devices is empty.",
         "responses": {
           "200": {
             "description": "Simulator listing",
@@ -4058,7 +4058,7 @@
           "name": "hubPath",
           "in": "path",
           "required": true,
-          "description": "An allowlisted hub path. It spans several segments, for example vendor/serve-sim/helper/{udid}/stream.avcc.",
+          "description": "An allowlisted hub path. It spans several segments, for example vendor/serve-sim/helper/{udid}/stream.avcc or vendor/serve-emu/api/fold. serve-emu paths other than its device list and health must name exactly one listed device as ?device=.",
           "schema": {
             "type": "string",
             "minLength": 1,
@@ -4069,13 +4069,13 @@
       "get": {
         "operationId": "relaySimulatorHub",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Relays an allowlisted path of the serving Mac's loopback simulator hub: the stream page assets and frame stream (GET or HEAD), and the per-device helper, serve-emu video and gesture, and device list WebSockets (GET with Upgrade). Location headers are never relayed. A device may hold at most 8 open relays; more are refused with handle_capacity. Device-scoped paths must name a simulator in the current listing. WebSocket upgrades authenticate the same bearer credential and reject any Origin header. The hub's exec route is never relayed. Relayed streams close when the owner turns sharing off or revokes the device.",
         "responses": {
           "200": {
             "description": "Relayed hub content"
           },
           "101": {
-            "description": "WebSocket upgrade for a listed simulator's helper stream"
+            "description": "WebSocket upgrade for a listed simulator's helper stream or a listed emulator's stream"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -4085,37 +4085,61 @@
       "post": {
         "operationId": "captureSimulatorScreenshot",
         "x-aiden-capability": "simulators:control",
-        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Only hubPath vendor/serve-sim/api/screenshot accepts POST. The body names one listed simulator; the relay forwards only that field and bounds the request to 1 KiB.",
+        "description": "Desktop-only. Requires the negotiated simulators:control grant on a paired mac or linux device; other devices are refused with capability_denied. Returns not_found when the serving Mac has no simulator feature. Only hubPath vendor/serve-sim/api/screenshot, vendor/serve-emu/api/screenshot, and vendor/serve-emu/api/fold accept POST. The iOS screenshot body names one listed simulator; the Android screenshot names its emulator in ?device= and takes no body; the fold body names a posture. The relay rebuilds each body from those fields alone and bounds the request to 1 KiB. serve-emu stream tuning (PUT and PATCH) is never relayed.",
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "udid"
-                ],
-                "properties": {
-                  "udid": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128,
-                    "pattern": "^[A-Za-z0-9-]+$"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "udid"
+                    ],
+                    "properties": {
+                      "udid": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "posture"
+                    ],
+                    "properties": {
+                      "posture": {
+                        "enum": [
+                          "closed",
+                          "opened"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
                   }
-                },
-                "additionalProperties": false
+                ]
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "PNG screenshot",
+            "description": "PNG screenshot, or the emulator's fold state",
             "content": {
               "image/png": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "object"
                 }
               }
             }
@@ -5810,6 +5834,7 @@
         "required": [
           "id",
           "name",
+          "platform",
           "version",
           "booted",
           "kind"
@@ -5819,12 +5844,19 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[A-Za-z0-9-]+$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
           },
           "name": {
             "type": "string",
             "minLength": 1,
             "maxLength": 120
+          },
+          "platform": {
+            "enum": [
+              "ios",
+              "android"
+            ],
+            "description": "An Android emulator's id is its adb serial while it runs and its AVD name while it is off."
           },
           "version": {
             "type": "string",
@@ -5891,7 +5923,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[A-Za-z0-9-]+$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
           }
         },
         "additionalProperties": false
@@ -5907,7 +5939,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[A-Za-z0-9-]+$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
           },
           "type": {
             "type": "string",

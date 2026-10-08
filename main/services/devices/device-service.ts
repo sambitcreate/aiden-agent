@@ -11,9 +11,12 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
+  DEVICE_ID_PATTERN,
   LOCAL_DEVICE_HOST_ID,
+  deviceActionSupported,
   type DeviceConsent,
   type DeviceActionInput,
+  type DevicePlatformAvailability,
   type DeviceConsentKind,
   type DeviceHostInfo,
   type DeviceHostState,
@@ -32,6 +35,7 @@ import {
   type DeviceHostReady,
 } from "./device-host.js";
 import { readDeviceSettings, runDeviceAction } from "./device-actions.js";
+import { readAndroidDeviceSettings, runAndroidDeviceAction } from "./android-device-actions.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
 import type { AidenRemoteSimulatorHost } from "../aiden-remote-simulators.js";
 import type { DevicePeerPort } from "./peer-devices.js";
@@ -70,6 +74,10 @@ export const DEVICE_BOOT_TIMEOUT_MS = 3 * 60_000;
 const HUB_REQUEST_TIMEOUT_MS = 30_000;
 const SIMCTL_LIST_TIMEOUT_MS = 30_000;
 const SIMCTL_SHUTDOWN_TIMEOUT_MS = 60_000;
+/** The hub lists AVDs with `avdmanager`, a JVM tool that is slow to start. */
+const ANDROID_LIST_TIMEOUT_MS = 45_000;
+/** Shutting an emulator down saves its snapshot first. */
+const ANDROID_SHUTDOWN_TIMEOUT_MS = 90_000;
 
 /** The device an agent opened, so the renderer can float or select exactly that one. */
 export interface DeviceRevealTarget {
@@ -89,7 +97,7 @@ export interface DeviceServiceDeps {
   ): Promise<DeviceHubProxy>;
   fetch(
     url: string,
-    init: { method: "POST"; headers: Record<string, string>; body: string; signal: AbortSignal },
+    init: { method: "GET" | "POST"; headers?: Record<string, string>; body?: string; signal: AbortSignal },
   ): Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; arrayBuffer(): Promise<ArrayBuffer> }>;
   /** SSH device hosts. Absent in tests that only cover this Mac and paired Macs. */
   ssh?: DeviceSshPort;
@@ -274,6 +282,83 @@ export function parseSimctlDevices(stdout: string, hostId: string = LOCAL_DEVICE
   return devices.map(({ sortVersion: _sortVersion, ...device }) => device);
 }
 
+interface HubDeviceList {
+  emulators?: unknown;
+  errors?: unknown;
+}
+
+/**
+ * Adapted from t3code DeviceService `fetchDevices` @ a6ec88f7 (MIT). Android
+ * emulators from the hub's `/api/devices`, plus AVDs it leaves out (it skips
+ * ones that never booted), from `emulator -list-avds`. A running emulator's id
+ * is its adb serial; a stopped one's is its AVD name. Physical phones are left
+ * out. Booted first, then by name.
+ */
+export function parseAndroidDevices(
+  hubList: unknown,
+  listAvds: string,
+  hostId: string = LOCAL_DEVICE_HOST_ID,
+): DeviceSummary[] {
+  const emulators = (hubList as HubDeviceList | null)?.emulators;
+  const devices: DeviceSummary[] = [];
+  for (const entry of Array.isArray(emulators) ? (emulators as Record<string, unknown>[]) : []) {
+    if (typeof entry !== "object" || entry === null || entry.platform !== "android" || entry.physical === true) continue;
+    const { id, name, version, booted } = entry;
+    if (typeof id !== "string" || !DEVICE_ID_PATTERN.test(id) || typeof name !== "string" || !name) continue;
+    if (devices.some((device) => device.id === id)) continue;
+    devices.push({
+      hostId,
+      id,
+      name,
+      platform: "android",
+      version: typeof version === "string" && version ? version : "Android",
+      booted: booted === true,
+      kind: "other",
+    });
+  }
+  for (const line of listAvds.split(/\r?\n/u)) {
+    const name = line.trim();
+    if (!DEVICE_ID_PATTERN.test(name) || devices.some((device) => device.name === name)) continue;
+    devices.push({ hostId, id: name, name, platform: "android", version: "Android", booted: false, kind: "other" });
+  }
+  return devices.sort((left, right) =>
+    left.booted !== right.booted ? (left.booted ? -1 : 1) : left.name.localeCompare(right.name),
+  );
+}
+
+export type DeviceBootFailure = "disk_space" | "timeout" | "launch_failed";
+
+/** Adapted from t3code DeviceService `boot` @ a6ec88f7 (MIT): what the hub's boot error means. */
+export function classifyBootFailure(error: string): DeviceBootFailure {
+  if (/insufficient.*(?:disk|space)|not enough.*(?:disk|space)|no space left/iu.test(error)) return "disk_space";
+  if (/timed? out|timeout/iu.test(error)) return "timeout";
+  return "launch_failed";
+}
+
+const BOOT_FAILURE_MESSAGES: Record<DeviceBootFailure, string> = {
+  disk_space: "There is not enough free disk space on this Mac.",
+  timeout: "The device did not become ready in time.",
+  launch_failed: "The simulator or emulator could not start. Check its configuration in Xcode or Android Studio.",
+};
+
+interface HubResult {
+  ok?: unknown;
+  id?: unknown;
+  serial?: unknown;
+  error?: unknown;
+}
+
+/** The hub answered a lifecycle request with `ok: false` or a failing status. */
+class HubRefusedError extends Error {
+  constructor(
+    readonly route: string,
+    readonly detail: string,
+  ) {
+    super(`The device hub refused ${route}${detail ? `: ${detail}` : ""}.`);
+    this.name = "HubRefusedError";
+  }
+}
+
 const NO_CONSENT: DeviceConsent = { streaming: false, agentAccess: false, peerSharing: false };
 
 function parseConsent(text: string): DeviceConsent {
@@ -329,6 +414,8 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   let consent: DeviceConsent = { ...NO_CONSENT };
   let hostState: DeviceHostState = { status: "needs-consent" };
   let unavailableReason: string | undefined;
+  /** Which platforms this Mac can run, from the latest listing. */
+  let platforms: DevicePlatformAvailability[] | undefined;
   /** This Mac's simulators. Paired Macs' simulators live in `peers`. */
   let devices: DeviceSummary[] = [];
   const peers = new Map<string, PeerEntry>();
@@ -390,6 +477,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       ...hostState,
       ...(localTools ? { tools: localTools } : {}),
       ...(localToolsError ? { toolInspectionError: localToolsError } : {}),
+      ...(platforms ? { platforms: platforms.map((entry) => ({ ...entry })) } : {}),
     },
     ...[...peers].map(([id, entry]): DeviceHostInfo => ({ id, kind: "peer", name: entry.name, ...entry.state })),
     ...[...ssh.values()].map(sshInfo),
@@ -547,14 +635,48 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     return starting;
   }
 
-  async function listDevices(ready: DeviceHostReady): Promise<void> {
-    const result = await ready.run("xcrun", ["simctl", "list", "devices", "--json"], {
-      timeoutMs: SIMCTL_LIST_TIMEOUT_MS,
+  async function listAndroid(ready: DeviceHostReady): Promise<DeviceSummary[]> {
+    const response = await deps.fetch(`${ready.hub.origin}/api/devices`, {
+      method: "GET",
+      signal: AbortSignal.timeout(ANDROID_LIST_TIMEOUT_MS),
     });
-    if (result.code !== 0) {
-      throw new Error("Could not list simulators. Open Xcode once to finish its setup, then try again.");
+    let list: unknown = null;
+    try {
+      list = JSON.parse(Buffer.from(await response.arrayBuffer()).toString("utf8"));
+    } catch {
+      // Treated as a failure below.
     }
-    devices = parseSimctlDevices(result.stdout, host.id);
+    if (!response.ok || typeof list !== "object" || list === null) {
+      throw new Error("The device hub did not list emulators.");
+    }
+    const avds = await ready.run("emulator", ["-list-avds"], { timeoutMs: SIMCTL_LIST_TIMEOUT_MS });
+    if (avds.code !== 0) throw new Error("The Android emulator did not list its virtual devices.");
+    return parseAndroidDevices(list, avds.stdout, host.id);
+  }
+
+  async function listDevices(ready: DeviceHostReady): Promise<void> {
+    const [ios, android] = await Promise.all([host.platformAvailability("ios"), host.platformAvailability("android")]);
+    const next: DeviceSummary[] = [];
+    let androidState = android;
+    if (ios.available) {
+      const result = await ready.run("xcrun", ["simctl", "list", "devices", "--json"], {
+        timeoutMs: SIMCTL_LIST_TIMEOUT_MS,
+      });
+      if (result.code !== 0) {
+        throw new Error("Could not list simulators. Open Xcode once to finish its setup, then try again.");
+      }
+      next.push(...parseSimctlDevices(result.stdout, host.id));
+    }
+    if (android.available) {
+      try {
+        next.push(...(await listAndroid(ready)));
+      } catch (error) {
+        // iOS keeps working when Android discovery fails; the tab says why emulators are missing.
+        androidState = { platform: "android", available: false, reason: `Could not list Android emulators. ${errorMessage(error)}` };
+      }
+    }
+    platforms = [ios, androidState];
+    devices = next;
     const known = new Set(devices.map((device) => device.id));
     sessions = sessions.filter((session) => session.hostId !== host.id || known.has(session.deviceId));
     emit();
@@ -658,7 +780,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
               setPeerDevices(
                 peer.id,
                 entry,
-                listing.devices.map((device) => ({ ...device, hostId: peer.id, platform: "ios" as const })),
+                listing.devices.map((device) => ({ ...device, hostId: peer.id })),
               );
             } catch {
               if (!current()) return;
@@ -680,29 +802,82 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     return run;
   }
 
-  /** Boots the simulator if needed and attaches the stream helper. */
+  /**
+   * Boots the device through the hub if needed and attaches the iOS stream
+   * helper. An Android AVD changes id when it boots (AVD name to emulator
+   * serial), so the returned device's id is authoritative.
+   */
   async function attach(ready: DeviceHostReady, device: DeviceSummary): Promise<DeviceSummary> {
     let attached = device;
     if (!device.booted) {
-      await postHubJson(
-        ready,
-        "/api/devices/boot",
-        { platform: "ios", id: device.id, name: device.name },
-        DEVICE_BOOT_TIMEOUT_MS,
+      let result: HubResult;
+      try {
+        result = await postHubJson(
+          ready,
+          "/api/devices/boot",
+          { platform: device.platform, id: device.id, name: device.name },
+          DEVICE_BOOT_TIMEOUT_MS,
+        );
+      } catch (error) {
+        const detail = error instanceof HubRefusedError ? error.detail : errorMessage(error);
+        const failure = error instanceof HubRefusedError ? classifyBootFailure(detail) : "launch_failed";
+        throw new Error(`${device.name} failed to boot. ${BOOT_FAILURE_MESSAGES[failure]}${detail ? ` (${detail})` : ""}`);
+      }
+      const bootedId = [result.serial, result.id].find(
+        (candidate): candidate is string => typeof candidate === "string" && DEVICE_ID_PATTERN.test(candidate),
       );
-      attached = { ...device, booted: true };
-      devices = devices.map((candidate) => (candidate.id === device.id ? attached : candidate));
+      attached = { ...device, id: device.platform === "android" ? (bootedId ?? device.id) : device.id, booted: true };
+      if (device.platform === "android") {
+        await listDevices(ready).catch(() => undefined);
+        attached = devices.find((candidate) => candidate.id === attached.id) ?? attached;
+      }
+      const replaced = attached;
+      devices = devices.some((candidate) => candidate.id === replaced.id)
+        ? devices.map((candidate) => (candidate.id === replaced.id ? replaced : candidate))
+        : devices.map((candidate) => (candidate.id === device.id ? replaced : candidate));
     }
-    // The stream helper must be attached even when the simulator was already booted.
-    await postHubJson(ready, "/vendor/serve-sim/grid/api/start", { udid: device.id }, HUB_REQUEST_TIMEOUT_MS);
+    // The iOS stream helper must be attached even when the simulator was already booted.
+    // serve-emu attaches to a running emulator lazily, when the viewer's socket connects.
+    if (attached.platform === "ios") {
+      await postHubJson(ready, "/vendor/serve-sim/grid/api/start", { udid: attached.id }, HUB_REQUEST_TIMEOUT_MS);
+    }
     return attached;
   }
 
   async function shutdownLocal(ready: DeviceHostReady, deviceId: string): Promise<void> {
+    const device = devices.find((candidate) => candidate.id === deviceId);
+    if (device?.platform === "android") {
+      await postHubJson(
+        ready,
+        "/api/devices/shutdown",
+        { platform: "android", id: device.id, name: device.name },
+        ANDROID_SHUTDOWN_TIMEOUT_MS,
+      );
+      devices = devices.map((candidate) => (candidate.id === deviceId ? { ...candidate, booted: false } : candidate));
+      // The serial goes back to the AVD name; a failed re-list must not fail an accepted shutdown.
+      await listDevices(ready).catch(() => undefined);
+      return;
+    }
     const result = await ready.run("xcrun", ["simctl", "shutdown", deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
     if (result.code !== 0) throw new Error("The simulator did not shut down.");
     devices = devices.map((device) => (device.id === deviceId ? { ...device, booted: false } : device));
   }
+
+  async function localAction(ready: DeviceHostReady, device: DeviceSummary, input: DeviceActionInput) {
+    if (!deviceActionSupported(device.platform, input)) {
+      throw new Error(
+        device.platform === "android"
+          ? "Android Emulators do not support this setting."
+          : "iOS Simulators do not support this setting.",
+      );
+    }
+    if (device.platform === "android") await runAndroidDeviceAction(ready, input);
+    else await runDeviceAction(ready, input);
+    return localSettings(ready, device);
+  }
+
+  const localSettings = (ready: DeviceHostReady, device: DeviceSummary) =>
+    device.platform === "android" ? readAndroidDeviceSettings(ready, device.id) : readDeviceSettings(ready, device.id);
 
   function requireSharing(): DeviceHostReady {
     if (!sharing()) throw new Error("Simulator sharing is off.");
@@ -742,15 +917,12 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     },
     async settings(deviceId) {
       const ready = requireSharing();
-      requireKnownDevice(host.id, deviceId);
-      return readDeviceSettings(ready, deviceId);
+      return localSettings(ready, requireKnownDevice(host.id, deviceId));
     },
     async action(input) {
       const ready = requireSharing();
       const local = { ...input, hostId: host.id };
-      requireKnownDevice(host.id, local.deviceId);
-      await runDeviceAction(ready, local);
-      return readDeviceSettings(ready, local.deviceId);
+      return localAction(ready, requireKnownDevice(host.id, local.deviceId), local);
     },
     hubOrigin: () => (sharing() ? (host.current()?.hub.origin ?? null) : null),
     isKnownDevice: (deviceId) => sharing() && devices.some((device) => device.id === deviceId),
@@ -792,18 +964,23 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     });
   }
 
-  async function postHubJson(ready: DeviceHostReady, route: string, body: unknown, timeoutMs: number) {
+  async function postHubJson(
+    ready: DeviceHostReady,
+    route: string,
+    body: unknown,
+    timeoutMs: number,
+  ): Promise<HubResult> {
     const response = await postHub(ready, route, body, timeoutMs);
-    let payload: { ok?: unknown; error?: unknown } = {};
+    let payload: HubResult = {};
     try {
-      payload = JSON.parse(Buffer.from(await response.arrayBuffer()).toString("utf8")) as typeof payload;
+      payload = JSON.parse(Buffer.from(await response.arrayBuffer()).toString("utf8")) as HubResult;
     } catch {
       // Treated as a failure below.
     }
     if (!response.ok || payload.ok !== true) {
-      const detail = typeof payload.error === "string" && payload.error ? `: ${payload.error}` : "";
-      throw new Error(`The device hub refused ${route}${detail}.`);
+      throw new HubRefusedError(route, typeof payload.error === "string" ? payload.error : "");
     }
+    return payload;
   }
 
   /** Starts agent-device and writes the shim. Callers publish `shimDir` only after rechecking consent. */
@@ -1294,9 +1471,10 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         if (closeCount(input.chatId, hostId, input.deviceId) !== closed) {
           throw new Error("The simulator was closed while it was opening.");
         }
-        entry.devices = entry.devices.map((device) =>
-          device.id === opened.id ? { ...opened, hostId, platform: "ios" } : device,
-        );
+        // An Android AVD comes back under its emulator serial.
+        entry.devices = entry.devices.some((device) => device.id === opened.id)
+          ? entry.devices.map((device) => (device.id === opened.id ? { ...opened, hostId } : device))
+          : entry.devices.map((device) => (device.id === input.deviceId ? { ...opened, hostId } : device));
         const existing = sessions.find(
           (session) => session.chatId === input.chatId && session.hostId === hostId && session.deviceId === opened.id,
         );
@@ -1318,7 +1496,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         device = devices.find((candidate) => candidate.hostId === hostId && candidate.id === input.deviceId);
       }
       if (!device) throw new Error("That simulator is no longer available.");
-      await attach(ready, device);
+      const attached = await attach(ready, device);
       // A revoke while the simulator booted wins; never register a session after it.
       if (epoch !== streamingEpoch || !consent.streaming) {
         throw new Error("Simulator streaming was turned off while opening.");
@@ -1329,13 +1507,13 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       // Looked up after the boot, so concurrent opens share one session and a close meanwhile sticks.
       const existing = sessions.find(
         (session) =>
-          session.chatId === input.chatId && session.hostId === hostId && session.deviceId === input.deviceId,
+          session.chatId === input.chatId && session.hostId === hostId && session.deviceId === attached.id,
       );
       if (existing) {
         emit();
         return { ...existing };
       }
-      const session: DeviceSession = { chatId: input.chatId, hostId, deviceId: device.id, openedBy: input.openedBy };
+      const session: DeviceSession = { chatId: input.chatId, hostId, deviceId: attached.id, openedBy: input.openedBy };
       sessions = [...sessions, session];
       emit();
       return { ...session };
@@ -1364,10 +1542,15 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         );
       } else if (input.shutdown) {
         const ready = requireReady(input.hostId);
-        await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
-        devices = devices.map((device) =>
-          device.hostId === input.hostId && device.id === input.deviceId ? { ...device, booted: false } : device,
-        );
+        const device = devices.find((candidate) => candidate.hostId === input.hostId && candidate.id === input.deviceId);
+        if (device?.platform === "android") {
+          await shutdownLocal(ready, input.deviceId);
+        } else {
+          await ready.run("xcrun", ["simctl", "shutdown", input.deviceId], { timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS });
+          devices = devices.map((candidate) =>
+            candidate.hostId === input.hostId && candidate.id === input.deviceId ? { ...candidate, booted: false } : candidate,
+          );
+        }
       }
       emit();
     },
@@ -1388,9 +1571,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         return peerPort().action(input.hostId, input);
       }
       const ready = requireReady(input.hostId);
-      requireKnownDevice(input.hostId, input.deviceId);
-      await runDeviceAction(ready, input);
-      return readDeviceSettings(ready, input.deviceId);
+      return localAction(ready, requireKnownDevice(input.hostId, input.deviceId), input);
     },
     async settings(input) {
       await load();
@@ -1399,26 +1580,27 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
         return peerPort().settings(input.hostId, input.deviceId);
       }
       const ready = requireReady(input.hostId);
-      requireKnownDevice(input.hostId, input.deviceId);
-      return readDeviceSettings(ready, input.deviceId);
+      return localSettings(ready, requireKnownDevice(input.hostId, input.deviceId));
     },
     sessionsForChat: (chatId) =>
       sessions.filter((session) => session.chatId === chatId).map((session) => ({ ...session })),
     async screenshot(input) {
       await load();
       if (input.hostId !== host.id && !ssh.has(input.hostId)) {
-        requirePeer(input.hostId);
-        return peerPort().screenshot(input.hostId, input.deviceId);
+        const platform = requirePeer(input.hostId).devices.find((device) => device.id === input.deviceId)?.platform;
+        return peerPort().screenshot(input.hostId, input.deviceId, platform ?? "ios");
       }
       const ready = requireReady(input.hostId);
-      const response = await postHub(
-        ready,
-        "/vendor/serve-sim/api/screenshot",
-        { udid: input.deviceId },
-        HUB_REQUEST_TIMEOUT_MS,
-      );
+      const android =
+        devices.find((device) => device.hostId === input.hostId && device.id === input.deviceId)?.platform === "android";
+      const response = android
+        ? await deps.fetch(
+            `${ready.hub.origin}/vendor/serve-emu/api/screenshot?${new URLSearchParams({ device: input.deviceId })}`,
+            { method: "GET", signal: AbortSignal.timeout(HUB_REQUEST_TIMEOUT_MS) },
+          )
+        : await postHub(ready, "/vendor/serve-sim/api/screenshot", { udid: input.deviceId }, HUB_REQUEST_TIMEOUT_MS);
       if (!response.ok || !(response.headers.get("content-type") ?? "").startsWith("image/png")) {
-        throw new Error("The simulator screenshot failed.");
+        throw new Error(android ? "The emulator screenshot failed." : "The simulator screenshot failed.");
       }
       return Buffer.from(await response.arrayBuffer());
     },

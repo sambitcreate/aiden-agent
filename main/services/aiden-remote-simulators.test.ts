@@ -365,3 +365,69 @@ test("WebSocket upgrades relay only allowlisted sockets for listed devices", asy
   assert.equal(await upgrade("/simulators/open"), "HTTP/1.1 404 Not Found");
   assert.equal(upgrades.length, 1);
 });
+
+test("a paired Mac watches and folds a listed Android emulator, and stream tuning stays local", async (t) => {
+  const seen: { method: string; url: string; body: string }[] = [];
+  const hub = createServer((req, res) => {
+    void readBody(req).then((body) => {
+      seen.push({ method: req.method ?? "", url: req.url ?? "", body: body.toString("utf8") });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  const hubOrigin = await listen(hub);
+  t.after(() => hub.close());
+  const SERIAL = "emulator-5554";
+  const fake = fakeHost({ hub: hubOrigin, isKnownDevice: (deviceId) => deviceId === SERIAL });
+  const { server, origin } = await front(new AidenRemoteSimulatorRelay(() => fake.host));
+  t.after(() => server.close());
+  const emu = "/simulators/hub/vendor/serve-emu/api";
+
+  assert.equal((await call(origin, "GET", `${emu}/fold?device=${SERIAL}`)).status, 200);
+  assert.equal((await call(origin, "GET", `${emu}/screenshot?device=${SERIAL}`)).status, 200);
+  // The fold body is rebuilt from its posture alone.
+  assert.equal((await call(origin, "POST", `${emu}/fold?device=${SERIAL}`, { posture: "closed", extra: 1 })).status, 200);
+  assert.equal((await call(origin, "POST", `${emu}/fold?device=${SERIAL}`, { posture: "tent" })).status, 400);
+  // Every device-scoped route must name a listed emulator.
+  assert.equal((await call(origin, "GET", `${emu}/fold?device=emulator-5556`)).status, 404);
+  assert.equal((await call(origin, "GET", `${emu}/fold`)).status, 404);
+  assert.equal((await call(origin, "PUT", `${emu}/stream-mode?device=${SERIAL}`, { mode: "scrcpy" })).status, 405);
+  assert.equal((await call(origin, "PATCH", `${emu}/stream-settings?device=${SERIAL}`, {})).status, 405);
+  assert.equal((await call(origin, "POST", `${emu}/tap?device=${SERIAL}`, { x: 1, y: 1 })).status, 404);
+  assert.deepEqual(
+    seen.map((record) => [record.method, record.url, record.body]),
+    [
+      ["GET", `/vendor/serve-emu/api/fold?device=${SERIAL}`, ""],
+      ["GET", `/vendor/serve-emu/api/screenshot?device=${SERIAL}`, ""],
+      ["POST", `/vendor/serve-emu/api/fold?device=${SERIAL}`, JSON.stringify({ posture: "closed" })],
+    ],
+  );
+});
+
+test("Android listings and opens use AVD names and serials as device ids", async (t) => {
+  const AVD = "Pixel_9_API_35";
+  const fake = fakeHost({
+    isKnownDevice: (deviceId) => deviceId === AVD,
+    open: async () => ({
+      id: "emulator-5554",
+      name: AVD,
+      platform: "android",
+      version: "Android 15.0",
+      booted: true,
+      kind: "other",
+    }),
+  });
+  const { server, origin } = await front(new AidenRemoteSimulatorRelay(() => fake.host));
+  t.after(() => server.close());
+  const opened = await call(origin, "POST", "/simulators/open", { deviceId: AVD });
+  assert.equal(opened.status, 200);
+  assert.deepEqual(opened.json.device, {
+    id: "emulator-5554",
+    name: AVD,
+    platform: "android",
+    version: "Android 15.0",
+    booted: true,
+    kind: "other",
+  });
+  assert.equal((await call(origin, "POST", "/simulators/open", { deviceId: "-s" })).status, 400);
+});

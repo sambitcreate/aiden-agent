@@ -79,7 +79,7 @@ test("consent explains npm and the node-datachannel prebuilt download before set
 
 test("compact panels keep explanations for assistive technology", () => {
   const html = view({ state: state("needs-consent"), compact: true });
-  assert.match(html, /class="sr-only"[^>]*>Watch and control Xcode simulators/u);
+  assert.match(html, /class="sr-only"[^>]*>Watch and control iOS Simulators from Xcode and Android Emulators/u);
 });
 
 test("installing, starting, stopped, unavailable, and error each render their own state", () => {
@@ -278,3 +278,122 @@ test("viewer status labels", () => {
 
 // Simulator discovery and capability loss are exercised in
 // tests/e2e/environment-devices-tab.spec.ts against the rendered launcher/panel.
+
+const PIXEL: DeviceSummary = {
+  hostId: "local",
+  id: "emulator-5554",
+  name: "Pixel 9",
+  platform: "android",
+  version: "Android 15.0",
+  booted: true,
+  kind: "other",
+};
+const FOLD_AVD: DeviceSummary = { ...PIXEL, id: "Pixel_Fold_API_35", name: "Pixel Fold", booted: false };
+
+test("this Mac lists iOS Simulators and Android Emulators in their own sections", () => {
+  const html = view({
+    state: state("ready", {
+      devices: [IPHONE, PIXEL, FOLD_AVD],
+      hosts: [
+        {
+          id: "local",
+          kind: "local",
+          name: "This Mac",
+          status: "ready",
+          platforms: [
+            { platform: "ios", available: true },
+            { platform: "android", available: true },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.match(html, /aria-labelledby="devices-local-ios"/u);
+  assert.match(html, /id="devices-local-android"[^>]*>Android Emulators</u);
+  assert.ok(html.indexOf(">iOS Simulators<") < html.indexOf(">Android Emulators<"), "iOS is listed first");
+  assert.match(html, /Android 15\.0 · Booted/u);
+  assert.match(html, /aria-label="Open Pixel 9"/u);
+  assert.match(html, /aria-label="Boot and open Pixel Fold"/u);
+  // The Android section holds only Android devices.
+  const android = html.slice(html.indexOf(">Android Emulators<"));
+  assert.doesNotMatch(android, /iPhone 17 Pro/u);
+});
+
+test("a platform this Mac cannot run says why instead of listing nothing", () => {
+  const reason = "Android SDK not found. Install it with Android Studio, or set ANDROID_HOME to your SDK folder.";
+  const html = view({
+    state: state("ready", {
+      devices: [IPHONE],
+      hosts: [
+        {
+          id: "local",
+          kind: "local",
+          name: "This Mac",
+          status: "ready",
+          platforms: [
+            { platform: "ios", available: true },
+            { platform: "android", available: false, reason },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.match(html, />Android Emulators</u);
+  assert.match(html, /Android SDK not found\. Install it with Android Studio, or set ANDROID_HOME/u);
+  assert.match(html, /aria-label="Open iPhone 17 Pro"/u);
+  const empty = view({
+    state: state("ready", {
+      hosts: [
+        {
+          id: "local",
+          kind: "local",
+          name: "This Mac",
+          status: "ready",
+          platforms: [
+            { platform: "ios", available: false, reason: "Xcode was not found." },
+            { platform: "android", available: true },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.match(empty, /Xcode was not found\./u);
+  assert.match(empty, /No Android emulators found\. Create one in Android Studio/u);
+  assert.doesNotMatch(empty, /border-(red|green|blue|accent)/u);
+});
+
+test("a paired Mac's Android emulators get their own section under that Mac", () => {
+  const html = view({
+    state: state("ready", {
+      devices: [IPHONE, { ...PIXEL, hostId: "peer:studio" }],
+      hosts: [
+        { id: "local", kind: "local", name: "This Mac", status: "ready" },
+        { id: "peer:studio", kind: "peer", name: "Studio", status: "ready" },
+      ],
+    }),
+  });
+  assert.match(html, /aria-labelledby="devices-peer-studio-android"/u);
+  assert.doesNotMatch(html, /devices-peer-studio-ios/u);
+});
+
+test("an Android viewer swaps the iOS rail for Back, Home, Recents, and Power", () => {
+  const html = renderToStaticMarkup(
+    <DeviceViewer
+      chatId="chat-1"
+      session={{ chatId: "chat-1", hostId: "local", deviceId: "emulator-5554", openedBy: "user" }}
+      device={PIXEL}
+      active={false}
+      compact={false}
+      onClose={noop}
+    />,
+  );
+  for (const name of ["Back", "Home", "Recents", "Power", "Rotate", "Shut down emulator", "Close emulator"]) {
+    assert.match(html, new RegExp(`aria-label="${name}"`, "u"), name);
+  }
+  assert.doesNotMatch(html, /aria-label="Lock"/u);
+  assert.match(html, /role="toolbar" aria-label="Emulator controls"/u);
+  assert.match(html, /aria-roledescription="emulator screen"/u);
+  assert.match(html, /aspect-ratio:0\.45/u);
+  // Fold controls appear only once the emulator reports a hinge.
+  assert.doesNotMatch(html, /Fold device/u);
+});

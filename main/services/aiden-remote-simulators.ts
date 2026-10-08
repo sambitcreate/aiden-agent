@@ -2,8 +2,8 @@
  * Serving side of simulator sharing between paired Macs (Simulator devices
  * Phase 5). A paired `mac`/`linux` device holding the negotiated
  * `simulators:control` capability may list, open, shut down and configure
- * this Mac's iOS Simulators, and reach its device hub through a relay that
- * applies the Simulator tab proxy's allowlist.
+ * this Mac's iOS Simulators and Android Emulators, and reach its device hub
+ * through a relay that applies the Simulator tab proxy's allowlist.
  *
  * The owner's "Share with paired Macs" consent gates every call. Turning it
  * off, revoking the device, or stopping the hub closes live relays.
@@ -12,6 +12,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 import {
+  DEVICE_ID_PATTERN,
   LOCAL_DEVICE_HOST_ID,
   parseDeviceActionInput,
   type DeviceActionInput,
@@ -33,7 +34,6 @@ export const AIDEN_REMOTE_SIMULATOR_HUB_PREFIX = "/simulators/hub";
 const MAX_SCREENSHOT_BODY_BYTES = 1_024;
 /** Open relays per paired device: a few simulators' frame and input streams, with headroom. */
 export const MAX_RELAYS_PER_DEVICE = 8;
-const UDID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 
 export type AidenRemoteSimulator = Omit<DeviceSummary, "hostId">;
 
@@ -85,7 +85,7 @@ function requireDeviceId(body: unknown): string {
       : undefined;
   if (
     typeof deviceId !== "string" ||
-    !UDID_PATTERN.test(deviceId) ||
+    !DEVICE_ID_PATTERN.test(deviceId) ||
     Object.keys(body as Record<string, unknown>).length !== 1
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The simulator request is invalid.", 400);
@@ -233,11 +233,12 @@ export class AidenRemoteSimulatorRelay {
     path: string,
     query: string,
     upgrade: boolean,
-  ): { hubOrigin: string; upstreamPath: string; mutable: boolean } {
+  ): { hubOrigin: string; upstreamPath: string; mutable: boolean; hubPath: string } {
     const host = this.requireSharing();
+    const hubPath = path.slice(AIDEN_REMOTE_SIMULATOR_HUB_PREFIX.length);
     const route = decideDeviceHubRoute({
       method,
-      rawPath: path.slice(AIDEN_REMOTE_SIMULATOR_HUB_PREFIX.length),
+      rawPath: hubPath,
       search: new URLSearchParams(query),
       upgrade,
     });
@@ -253,7 +254,38 @@ export class AidenRemoteSimulatorRelay {
     if (!hubOrigin) {
       throw new AidenRemoteServiceError("not_found", "The simulator hub is not running on this Mac.", 404, true);
     }
-    return { hubOrigin, upstreamPath: route.upstreamPath, mutable: route.mutable };
+    return { hubOrigin, upstreamPath: route.upstreamPath, mutable: route.mutable, hubPath };
+  }
+
+  /**
+   * The only bodies the relay forwards, rebuilt from validated fields: an iOS
+   * screenshot names a listed simulator, and an Android fold names a posture.
+   * serve-emu's screenshot carries its device in the query. Stream tuning
+   * (PUT and PATCH) stays local to the Simulator tab.
+   */
+  private async relayBody(context: AidenRemoteSimulatorRouteContext, method: string, hubPath: string) {
+    const invalid = () => new AidenRemoteServiceError("invalid_request", "The simulator request is invalid.", 400);
+    if (method !== "POST") {
+      throw new AidenRemoteServiceError("invalid_request", "This method is not allowed on this route.", 405);
+    }
+    if (hubPath === "/vendor/serve-emu/api/screenshot") return undefined;
+    const parsed = await context.readJson(MAX_SCREENSHOT_BODY_BYTES);
+    const record =
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    if (hubPath === "/vendor/serve-emu/api/fold") {
+      const posture = record?.posture;
+      if (posture !== "closed" && posture !== "opened") throw invalid();
+      return Buffer.from(JSON.stringify({ posture }));
+    }
+    // The iOS screenshot capture must name a listed simulator.
+    const udid = record?.udid;
+    if (typeof udid !== "string" || !DEVICE_ID_PATTERN.test(udid)) {
+      throw new AidenRemoteServiceError("invalid_request", "The screenshot request is invalid.", 400);
+    }
+    if (!this.requireSharing().isKnownDevice(udid)) throw unknownSimulator();
+    return Buffer.from(JSON.stringify({ udid }));
   }
 
   private async relayRequest(context: AidenRemoteSimulatorRouteContext): Promise<void> {
@@ -264,20 +296,7 @@ export class AidenRemoteSimulatorRelay {
     }
     const target = this.hubTarget(method, context.path, context.query, false);
     this.requireRelayCapacity(context.deviceId);
-    let body: Buffer | undefined;
-    if (method === "POST") {
-      // The screenshot capture is the only body; it must name a listed simulator.
-      const parsed = await context.readJson(MAX_SCREENSHOT_BODY_BYTES);
-      const udid =
-        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-          ? (parsed as Record<string, unknown>).udid
-          : undefined;
-      if (typeof udid !== "string" || !UDID_PATTERN.test(udid)) {
-        throw new AidenRemoteServiceError("invalid_request", "The screenshot request is invalid.", 400);
-      }
-      if (!this.requireSharing().isKnownDevice(udid)) throw unknownSimulator();
-      body = Buffer.from(JSON.stringify({ udid }));
-    }
+    const body = method === "GET" || method === "HEAD" ? undefined : await this.relayBody(context, method, target.hubPath);
     const headers = hubRequestHeaders(request.headers, target.hubOrigin, { forceOrigin: true });
     delete headers["content-type"];
     if (body) {

@@ -7,10 +7,10 @@
  * the device service asks for explicit consent before calling `ensureReady`.
  */
 import { spawn as nodeSpawn } from "node:child_process";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { LOCAL_DEVICE_HOST_ID } from "../../../renderer/shared/devices.js";
+import { LOCAL_DEVICE_HOST_ID, type DevicePlatform } from "../../../renderer/shared/devices.js";
 import {
   DeviceHostError,
   DeviceHostUnavailableError,
@@ -80,6 +80,9 @@ export interface LocalDeviceHostDeps {
   kill(pid: number, signal: NodeJS.Signals): void;
   /** Resolves the user's npm only when an install is needed; null means npm was not found. */
   resolveNpmRunner(): Promise<NpmRunner | null>;
+  /** Filesystem probes for Android SDK discovery. Default to the real filesystem. */
+  pathExists?(file: string): Promise<boolean>;
+  realPath?(file: string): Promise<string | null>;
 }
 
 interface HubProcess {
@@ -139,6 +142,75 @@ function parseDaemonFile(text: string): { httpPort: number; token: string } | nu
   }
 }
 
+/** Where the Android SDK is and which of its tools are installed. Adapted from t3code LocalDeviceHost @ a6ec88f7 (MIT). */
+export interface AndroidSdk {
+  root: string | null;
+  adb: boolean;
+  emulator: boolean;
+  avdmanager: boolean;
+  legacyAvdmanager: boolean;
+}
+
+/**
+ * Finds the Android SDK: `ANDROID_HOME` or `ANDROID_SDK_ROOT` when set, else
+ * the Android Studio default, else the SDK that owns an `adb` on PATH. Only
+ * existence checks; nothing is run.
+ */
+export async function findAndroidSdk(input: {
+  env: NodeJS.ProcessEnv;
+  pathExists(file: string): Promise<boolean>;
+  realPath(file: string): Promise<string | null>;
+}): Promise<AndroidSdk> {
+  const { env } = input;
+  const home = env.HOME ?? "";
+  const explicit = env.ANDROID_HOME?.trim() || env.ANDROID_SDK_ROOT?.trim();
+  const candidates = explicit ? [explicit] : [path.join(home, "Library", "Android", "sdk"), path.join(home, "Android", "Sdk")];
+  if (!explicit) {
+    for (const directory of (env.PATH ?? "").split(":")) {
+      if (!directory) continue;
+      const resolved = await input.realPath(path.join(directory, "adb"));
+      if (resolved) candidates.push(path.dirname(path.dirname(resolved)));
+    }
+  }
+  for (const root of candidates) {
+    const adb = await input.pathExists(path.join(root, "platform-tools", "adb"));
+    const emulator = await input.pathExists(path.join(root, "emulator", "emulator"));
+    if (explicit || adb || emulator) {
+      const avdmanager = await input.pathExists(path.join(root, "cmdline-tools", "latest", "bin", "avdmanager"));
+      const legacyAvdmanager = !avdmanager && (await input.pathExists(path.join(root, "tools", "bin", "avdmanager")));
+      return { root, adb, emulator, avdmanager, legacyAvdmanager };
+    }
+  }
+  return { root: null, adb: false, emulator: false, avdmanager: false, legacyAvdmanager: false };
+}
+
+/** Why Android Emulators cannot run, or null when the SDK has everything the hub needs. */
+export function androidUnavailableReason(sdk: AndroidSdk): string | null {
+  if (!sdk.root) {
+    return "Android SDK not found. Install it with Android Studio, or set ANDROID_HOME to your SDK folder.";
+  }
+  if (!sdk.adb) {
+    return `Android SDK Platform-Tools are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
+  }
+  if (!sdk.emulator) return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
+  if (!sdk.avdmanager) {
+    return sdk.legacyAvdmanager
+      ? `The Android SDK command-line tools in ${sdk.root} are too old. Install Android SDK Command-line Tools (latest) in Android Studio's SDK Manager.`
+      : `Android SDK Command-line Tools (latest) are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
+  }
+  return null;
+}
+
+/** The hub and every host command see the SDK: `ANDROID_HOME` set and its tools first on PATH. */
+export function androidSdkEnv(env: NodeJS.ProcessEnv, root: string | null): NodeJS.ProcessEnv {
+  if (!root) return env;
+  return {
+    ...env,
+    ANDROID_HOME: root,
+    PATH: [path.join(root, "platform-tools"), path.join(root, "emulator"), env.PATH ?? ""].join(":"),
+  };
+}
+
 /** The next supervised restart delay: immediate after stable uptime, else 1s doubling to 30s. */
 export function nextHubRestartDelay(previousDelayMs: number, uptimeMs: number): number {
   if (uptimeMs >= HUB_RESTART_STABLE_UPTIME_MS) return 0;
@@ -162,8 +234,19 @@ export function xcodeUnavailableReason(result: DeviceCommandResult): string | nu
 export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   const hubStatePath = path.join(deps.baseDir, "hub.json");
   const agentStateDir = path.join(deps.baseDir, "agent-state");
+  const pathExists =
+    deps.pathExists ??
+    ((file: string) =>
+      access(file).then(
+        () => true,
+        () => false,
+      ));
+  const realPath = deps.realPath ?? ((file: string) => realpath(file).catch(() => null));
+  // Rediscovered on every check, so installing the SDK or Xcode needs no relaunch.
+  let sdkEnv: NodeJS.ProcessEnv = deps.env;
+  let iosAvailable = false;
   const nodeEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
-    ...deps.env,
+    ...sdkEnv,
     ELECTRON_RUN_AS_NODE: "1",
     FORCE_COLOR: "0",
     NO_COLOR: "1",
@@ -197,7 +280,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     deps.runCommand(command, args, {
       timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
       ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
-      env: options.env ? { ...deps.env, ...options.env } : deps.env,
+      env: options.env ? { ...sdkEnv, ...options.env } : sdkEnv,
     });
 
   const ready = (): DeviceHostReady | null =>
@@ -341,8 +424,13 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     return withStartLock(async () => {
       const existing = ready();
       if (existing) return existing;
-      const availability = await platformAvailability();
-      if (!availability.available) throw new DeviceHostUnavailableError(availability.reason ?? "");
+      // The hub serves both platforms, so it starts when either one can run.
+      const [ios, android] = await Promise.all([platformAvailability("ios"), platformAvailability("android")]);
+      if (!ios.available && !android.available) {
+        throw new DeviceHostUnavailableError(
+          deps.platform === "darwin" ? [ios.reason, android.reason].filter(Boolean).join(" ") : (ios.reason ?? ""),
+        );
+      }
       const entryPath = await install(DEVICE_HUB, onPhase, options.allowInstall === true);
       onPhase?.("starting");
       stopped = false;
@@ -352,12 +440,24 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     });
   }
 
-  async function platformAvailability(): Promise<DevicePlatformAvailability> {
+  async function platformAvailability(platform: DevicePlatform): Promise<DevicePlatformAvailability> {
+    // Simulator devices are a macOS feature; the hub is never started elsewhere.
     if (deps.platform !== "darwin") {
-      return { platform: "ios", available: false, reason: "iOS Simulators need macOS with Xcode." };
+      return platform === "ios"
+        ? { platform, available: false, reason: "iOS Simulators need macOS with Xcode." }
+        : { platform, available: false, reason: "Android Emulators in Aiden need macOS." };
     }
+    if (platform === "android") {
+      const sdk = await findAndroidSdk({ env: deps.env, pathExists, realPath });
+      sdkEnv = androidSdkEnv(deps.env, sdk.root);
+      const reason = androidUnavailableReason(sdk);
+      return reason ? { platform, available: false, reason } : { platform, available: true };
+    }
+    // Once Xcode answers it stays installed for this run; only a missing Xcode is checked again.
+    if (iosAvailable) return { platform, available: true };
     const reason = xcodeUnavailableReason(await run("xcrun", ["simctl", "help"], { timeoutMs: 15_000 }));
-    return reason ? { platform: "ios", available: false, reason } : { platform: "ios", available: true };
+    iosAvailable = reason === null;
+    return reason ? { platform, available: false, reason } : { platform, available: true };
   }
 
   /**

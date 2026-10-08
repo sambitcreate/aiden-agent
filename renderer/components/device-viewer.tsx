@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   ALargeSmall,
+  ArrowLeft,
   Box,
   House,
   Lock,
@@ -10,6 +11,7 @@ import {
   Rotate3d,
   RotateCw,
   SlidersHorizontal,
+  Square,
   Sun,
   X,
 } from "lucide-react";
@@ -44,8 +46,10 @@ import {
 } from "../lib/device-3d/frame-mode";
 import { resolveDeviceShape } from "../lib/device-3d/shape-profile";
 import { DeviceDuoControls } from "./device-duo-controls";
+import { DeviceAndroidFoldControls } from "./device-android-fold-controls";
+import { useAndroidFold } from "../lib/device-fold";
 import { DevicePhoneViewport } from "./device-phone-viewport";
-import { DEVICE_TEXT_SIZE_OPTIONS, DeviceToolsPanel } from "./device-tools-panel";
+import { DEVICE_ORIENTATION_OPTIONS, DEVICE_TEXT_SIZE_OPTIONS, DeviceToolsPanel } from "./device-tools-panel";
 import { DeviceAxOverlay, type DeviceAxStatus } from "./device-ax-overlay";
 import { pasteToDeviceWithFeedback } from "./device-clipboard-controls";
 import { DeviceFeatureSections } from "./device-feature-sections";
@@ -59,6 +63,8 @@ import { LOCAL_DEVICE_HOST_ID, type DeviceSession, type DeviceStreamGrant, type 
 
 /** A burst of rejected grants means the proxy is refusing us, not that one grant expired. */
 const MAX_GRANT_RENEWALS_PER_MINUTE = 3;
+/** How long an Android encoder restart may keep the last frame before the viewer says it is waiting. */
+export const ANDROID_RESTART_NOTICE_MS = 2_000;
 
 export interface DeviceViewerProps {
   chatId: string;
@@ -81,6 +87,7 @@ export function deviceStatusLabel(status: ViewerStatus, inputConnected: boolean)
 }
 
 function defaultAspect(device: DeviceSummary): number {
+  if (device.platform === "android") return 1080 / 2400;
   return device.kind === "ipad" ? 820 / 1180 : 390 / 844;
 }
 
@@ -133,6 +140,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     [device.platform, session.hostId, session.deviceId],
   );
   const localDevice = session.hostId === LOCAL_DEVICE_HOST_ID;
+  // The power features (overlay, multi-touch, clipboard, recording, event log, erase) have iOS variants only so far.
+  const iosFeatures = device.platform === "ios";
   const multiTouchSink = React.useMemo<MultiTouchSink>(
     () => ({ sendMultiTouch: (phase, first, second) => clientRef.current?.sendMultiTouch(phase, first, second) }),
     [],
@@ -146,13 +155,35 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     requested: null,
     error: null,
   });
+  const android = device.platform === "android";
+  const noun = android ? "emulator" : "simulator";
   // The frontmost-app feed runs only while the drawer is open.
   const controls = useDeviceControls({
     hostId: session.hostId,
     deviceId: session.deviceId,
+    platform: device.platform,
     grant: toolsOpen ? grant : null,
     visible: active,
   });
+  // Android foldables: followed while the stream is live, so the flat controls and the 3D frame share it.
+  const fold = useAndroidFold({
+    hostId: session.hostId,
+    deviceId: session.deviceId,
+    enabled: android && active && status === "streaming" && inputConnected,
+    screenKey: screen ? `${screen.width}x${screen.height}` : null,
+    mintGrant: devicesApi.streamGrant,
+  });
+  // serve-emu restarts its encoder when a fold or rotation changes the screen size; the last frame stays up.
+  const restarting = android && status === "connecting" && inputConnected && screen !== null;
+  const [restartNotice, setRestartNotice] = React.useState(false);
+  React.useEffect(() => {
+    if (!restarting) {
+      setRestartNotice(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setRestartNotice(true), ANDROID_RESTART_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [restarting]);
   const appearance = controls.settings?.appearance;
 
   const fail = React.useCallback((message: string) => {
@@ -172,13 +203,13 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         if (current) setGrant(next);
       })
       .catch((error: unknown) => {
-        if (current) fail(error instanceof Error ? error.message : "Could not reach the simulator.");
+        if (current) fail(error instanceof Error ? error.message : `Could not reach the ${noun}.`);
       });
     return () => {
       current = false;
       setGrant(null);
     };
-  }, [active, attempt, fail]);
+  }, [active, attempt, fail, noun]);
 
   React.useEffect(() => {
     if (!active || !grant) return;
@@ -187,7 +218,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     // Frames always land in the flat canvas; a mounted 3D frame samples it as a texture.
     const canvasSink = createCanvasFrameSink(canvas);
     const client = createDeviceStreamClient(
-      { hostId: session.hostId, deviceId: session.deviceId, grant },
+      { hostId: session.hostId, deviceId: session.deviceId, platform: device.platform, grant },
       {
         present(source, width, height) {
           const presented = canvasSink.present(source, width, height);
@@ -211,7 +242,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           const now = Date.now();
           renewalsRef.current = renewalsRef.current.filter((at) => now - at < 60_000);
           if (renewalsRef.current.length >= MAX_GRANT_RENEWALS_PER_MINUTE) {
-            fail("The simulator stream refused access. Reconnect to try again.");
+            fail(`The ${noun} stream refused access. Reconnect to try again.`);
             return;
           }
           renewalsRef.current.push(now);
@@ -232,7 +263,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
       setInputConnected(false);
       setMjpegUrl(null);
     };
-  }, [active, grant, session.hostId, session.deviceId, fail]);
+  }, [active, grant, session.hostId, session.deviceId, device.platform, noun, fail]);
 
   // The fallback `<img>` mounts only after the running client asked for it,
   // and unmounts when that client stops, so the current client owns it.
@@ -289,7 +320,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     if (phase === "down" && event.repeat) return;
     if (phase === "down") pressedKeysRef.current.add(event.code);
     else pressedKeysRef.current.delete(event.code);
-    clientRef.current?.sendKey(event.code, phase);
+    clientRef.current?.sendKey(event.code, phase, { key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
   };
   const releaseKeys = React.useCallback(() => {
     for (const code of pressedKeysRef.current) clientRef.current?.sendKey(code, "up");
@@ -340,7 +371,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     status === "error" ? (
       <div className="device-viewer-overlay">
         <Text variant="small" color="secondary">
-          {detail ?? "The simulator stream stopped."}
+          {detail ?? `The ${noun} stream stopped.`}
         </Text>
         <Button
           size="small"
@@ -433,9 +464,11 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         {frame3d ? (
           <div
             className="device-viewer-3d"
+            // Keys typed here belong to the device, never the chat composer.
+            data-typing-surface="device"
             tabIndex={0}
             role="application"
-            aria-roledescription="simulator"
+            aria-roledescription={noun}
             aria-label={`${device.name} in a 3D frame. Drag the screen to touch, or drag around the device to turn it; type to send keys while focused.`}
             onKeyDown={key("down")}
             onKeyUp={key("up")}
@@ -455,11 +488,12 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         <div
           ref={screenRef}
           className="device-viewer-screen"
+          data-typing-surface="device"
           hidden={frame3d}
           style={{ aspectRatio: String(aspect) }}
           tabIndex={0}
           role="application"
-          aria-roledescription="simulator screen"
+          aria-roledescription={`${noun} screen`}
           aria-label={`${device.name} screen. Click or drag to touch; type to send keys while focused.`}
           onPointerDown={pointer("begin")}
           onPointerMove={pointer("move")}
@@ -471,7 +505,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         >
           <canvas ref={canvasRef} hidden={Boolean(mjpegUrl)} aria-hidden />
           {mjpegUrl ? <img ref={attachImage} alt="" draggable={false} /> : null}
-          {axOverlay && active && !frame3d ? (
+          {iosFeatures && axOverlay && active && !frame3d ? (
             <DeviceAxOverlay
               hostId={session.hostId}
               deviceId={session.deviceId}
@@ -486,11 +520,19 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           <DeviceMultiTouchLayer
             screenRef={screenRef}
             sink={multiTouchSink}
-            enabled={active && !frame3d && streaming && inputConnected}
-            onPaste={localDevice ? pasteShortcut : undefined}
+            enabled={iosFeatures && active && !frame3d && streaming && inputConnected}
+            onPaste={iosFeatures && localDevice ? pasteShortcut : undefined}
           />
           {frame3d ? null : errorOverlay}
+          {restartNotice && !frame3d ? (
+            <span className="device-viewer-notice" role="status">
+              Waiting for device video…
+            </span>
+          ) : null}
         </div>
+        {android && !frame3d ? (
+          <DeviceAndroidFoldControls fold={fold} enabled={streaming && inputConnected} />
+        ) : null}
         {screen?.supportsHingeAngle ? (
           <DeviceDuoControls
             screen={screen}
@@ -500,10 +542,50 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           />
         ) : null}
       </div>
-      <div className="device-viewer-rail" role="toolbar" aria-label="Simulator controls">
-        {railButton("Home", <House aria-hidden />, () => clientRef.current?.pressButton("home"), !streaming)}
-        {railButton("Lock", <Lock aria-hidden />, () => clientRef.current?.pressButton("lock"), !streaming)}
-        {railButton("Rotate", <RotateCw aria-hidden />, () => clientRef.current?.rotate(), !streaming)}
+      <div className="device-viewer-rail" role="toolbar" aria-label={android ? "Emulator controls" : "Simulator controls"}>
+        {android ? (
+          <>
+            {railButton("Back", <ArrowLeft aria-hidden />, () => clientRef.current?.pressButton("back"), !streaming)}
+            {railButton("Home", <House aria-hidden />, () => clientRef.current?.pressButton("home"), !streaming)}
+            {railButton("Recents", <Square aria-hidden />, () => clientRef.current?.pressButton("recents"), !streaming)}
+            {railButton("Power", <Lock aria-hidden />, () => clientRef.current?.pressButton("power"), !streaming)}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  aria-label="Rotate"
+                  title="Rotate"
+                  disabled={!streaming || controls.disabled}
+                >
+                  <RotateCw aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="top">
+                <DropdownMenuLabel>Orientation</DropdownMenuLabel>
+                {DEVICE_ORIENTATION_OPTIONS.map((option) => (
+                  <DropdownMenuCheckboxItem
+                    key={option.value}
+                    checked={
+                      screen !== null &&
+                      (option.value === "portrait") === (screen.width <= screen.height)
+                    }
+                    onSelect={() => void controls.act({ type: "setOrientation", value: option.value })}
+                  >
+                    {option.label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        ) : (
+          <>
+            {railButton("Home", <House aria-hidden />, () => clientRef.current?.pressButton("home"), !streaming)}
+            {railButton("Lock", <Lock aria-hidden />, () => clientRef.current?.pressButton("lock"), !streaming)}
+            {railButton("Rotate", <RotateCw aria-hidden />, () => clientRef.current?.rotate(), !streaming)}
+          </>
+        )}
         {railButton(
           appearance === "dark" ? "Switch to light appearance" : "Switch to dark appearance",
           appearance === "dark" ? <Sun aria-hidden /> : <Moon aria-hidden />,
@@ -549,7 +631,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             )
           }
         />
-        {localDevice ? <DeviceRecordControl chatId={chatId} target={featureTarget} disabled={!streaming} /> : null}
+        {iosFeatures && localDevice ? <DeviceRecordControl chatId={chatId} target={featureTarget} disabled={!streaming} /> : null}
         <Button
           variant={framePreference === "3d" && blocker === null ? "muted" : "transparent"}
           size="small"
@@ -587,8 +669,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         </Button>
         <span className="flex-1" />
         {onFloat ? railButton("Float over chat", <PictureInPicture2 aria-hidden />, onFloat) : null}
-        {railButton("Shut down simulator", <Power aria-hidden />, () => setShutdownOpen(true))}
-        {railButton("Close simulator", <X aria-hidden />, () => onClose(false))}
+        {railButton(`Shut down ${noun}`, <Power aria-hidden />, () => setShutdownOpen(true))}
+        {railButton(`Close ${noun}`, <X aria-hidden />, () => onClose(false))}
       </div>
       {toolsOpen ? (
         <div
@@ -604,24 +686,26 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             closeTools();
           }}
         >
-          <DeviceToolsPanel controls={controls} onClose={closeTools}>
-            <DeviceFeatureSections
-              chatId={chatId}
-              target={featureTarget}
-              deviceName={device.name}
-              grants={featureGrants}
-              axOverlay={axOverlay}
-              axStatus={axStatus}
-              onAxOverlayChange={(enabled) => {
-                setAxOverlay(enabled);
-                if (!enabled) setAxStatus(null);
-              }}
-              onAxRefresh={() => setAxRefresh((value) => value + 1)}
-              sendKey={streaming && inputConnected ? sendDeviceKey : null}
-              disabled={!streaming}
-              onReconnect={reconnect}
-              onCloseSession={() => onClose(false)}
-            />
+          <DeviceToolsPanel controls={controls} onClose={closeTools} platform={device.platform}>
+            {iosFeatures ? (
+              <DeviceFeatureSections
+                chatId={chatId}
+                target={featureTarget}
+                deviceName={device.name}
+                grants={featureGrants}
+                axOverlay={axOverlay}
+                axStatus={axStatus}
+                onAxOverlayChange={(enabled) => {
+                  setAxOverlay(enabled);
+                  if (!enabled) setAxStatus(null);
+                }}
+                onAxRefresh={() => setAxRefresh((value) => value + 1)}
+                sendKey={streaming && inputConnected ? sendDeviceKey : null}
+                disabled={!streaming}
+                onReconnect={reconnect}
+                onCloseSession={() => onClose(false)}
+              />
+            ) : null}
           </DeviceToolsPanel>
         </div>
       ) : null}
@@ -629,7 +713,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         open={shutdownOpen}
         onOpenChange={setShutdownOpen}
         title={`Shut down ${device.name}?`}
-        description="The simulator and any apps running on it stop. Close simulator instead keeps it running in the background."
+        description={`The ${noun} and any apps running on it stop. Close ${noun} instead keeps it running in the background.`}
         confirmLabel="Shut down"
         confirmVariant="destructive"
         onConfirm={() => onClose(true)}

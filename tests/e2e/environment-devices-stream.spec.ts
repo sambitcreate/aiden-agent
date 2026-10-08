@@ -97,6 +97,8 @@ test.describe("Simulator stream", () => {
     appEnvironment: {
       AIDEN_EXPERIMENTAL_DEVICES: "1",
       AIDEN_E2E_FAKE_HUB_LOG: hubLog,
+      // An empty SDK folder: this spec covers iOS only, whatever Android SDK the machine has.
+      ANDROID_HOME: path.join(fakeRoot, "no-android-sdk"),
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? "/usr/bin:/bin"}`,
     },
   });
