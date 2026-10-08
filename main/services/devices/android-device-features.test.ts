@@ -32,13 +32,18 @@ const REC_ID = "rec_ABCDEFGH12";
 /** What the device's own `sh` would see as argv after `adb shell` joins the words with spaces. */
 function deviceArgv(words: readonly string[]): string[] {
   const script = 'for a in "$@"; do printf "%s\\0" "$a"; done';
-  const result = spawnSync("/bin/sh", ["-c", `eval "set -- ${words.join(" ").replace(/["\\$`]/gu, "\\$&")}"; ${script}`], {
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    "/bin/sh",
+    ["-c", `eval "set -- ${words.join(" ").replace(/["\\$`]/gu, "\\$&")}"; ${script}`],
+    {
+      encoding: "utf8",
+    },
+  );
   return result.stdout.split("\0").slice(0, -1);
 }
 
-const shellWords = (command: { args: string[] }) => command.args.slice(command.args.indexOf("shell") + 1);
+const shellWords = (command: { args: string[] }) =>
+  command.args.slice(command.args.indexOf("shell") + 1);
 
 test("recording argv: screenrecord, a targeted stop, pull, and remove, all scoped to one serial and one file", () => {
   const remote = androidRecordingRemotePath(REC_ID);
@@ -50,14 +55,23 @@ test("recording argv: screenrecord, a targeted stop, pull, and remove, all scope
   assert.deepEqual(record.args.slice(0, 3), ["-s", SERIAL, "shell"]);
   assert.deepEqual(deviceArgv(shellWords(record)), ["screenrecord", "--time-limit", "180", remote]);
   // Older images refuse anything past 180 s, so a longer request is clamped.
-  assert.deepEqual(deviceArgv(shellWords(androidScreenrecordCommand(SERIAL, remote, 600))).slice(1, 3), [
-    "--time-limit",
-    "180",
-  ]);
+  assert.deepEqual(
+    deviceArgv(shellWords(androidScreenrecordCommand(SERIAL, remote, 600))).slice(1, 3),
+    ["--time-limit", "180"],
+  );
 
   // The stop signals only the recorder writing this file, and the device shell reads the pattern as one word.
-  assert.deepEqual(deviceArgv(shellWords(androidStopScreenrecordCommand(SERIAL, remote))), ["pkill", "-INT", "-f", remote]);
-  assert.deepEqual(deviceArgv(shellWords(androidRemoveRemoteFileCommand(SERIAL, remote))), ["rm", "-f", remote]);
+  assert.deepEqual(deviceArgv(shellWords(androidStopScreenrecordCommand(SERIAL, remote))), [
+    "pkill",
+    "-INT",
+    "-f",
+    remote,
+  ]);
+  assert.deepEqual(deviceArgv(shellWords(androidRemoveRemoteFileCommand(SERIAL, remote))), [
+    "rm",
+    "-f",
+    remote,
+  ]);
 
   // `adb pull` never reaches a device shell, so a local path with spaces stays one argv entry.
   const local = "/Users/me/Library/Application Support/Aiden/devices/recordings/a b.mp4";
@@ -70,14 +84,28 @@ test("recording argv: screenrecord, a targeted stop, pull, and remove, all scope
 test("erase boots the AVD once with -wipe-data on a port no emulator uses", () => {
   assert.deepEqual(androidWipeBootCommand(AVD, 5558), {
     command: "emulator",
-    args: ["-avd", AVD, "-wipe-data", "-no-snapshot-load", "-no-window", "-no-audio", "-no-boot-anim", "-port", "5558"],
+    args: [
+      "-avd",
+      AVD,
+      "-wipe-data",
+      "-no-snapshot-load",
+      "-no-window",
+      "-no-audio",
+      "-no-boot-anim",
+      "-port",
+      "5558",
+    ],
   });
   assert.throws(() => androidWipeBootCommand("-wipe-data", 5554), /valid Android Virtual Device/u);
   assert.throws(() => androidWipeBootCommand("a b", 5554), /valid Android Virtual Device/u);
 
-  const listed = ["List of devices attached", "emulator-5554\tdevice", "emulator-5556\toffline", "54241FDCQ00033\tdevice", ""].join(
-    "\n",
-  );
+  const listed = [
+    "List of devices attached",
+    "emulator-5554\tdevice",
+    "emulator-5556\toffline",
+    "54241FDCQ00033\tdevice",
+    "",
+  ].join("\n");
   assert.equal(freeEmulatorPort(listed), 5558);
   assert.equal(freeEmulatorPort("List of devices attached\n"), 5554);
   assert.equal(freeEmulatorPort("emulator-5554\tdevice\n", [5554]), null);
@@ -119,10 +147,16 @@ function eraseHarness(script: EraseScript = {}) {
   let wipeRuns = 0;
   let polls = 0;
   let exitRunning: ((result: DeviceCommandResult) => void) | null = null;
-  const run = (command: string, args: readonly string[], _options?: DeviceCommandOptions): Promise<DeviceCommandResult> => {
+  const run = (
+    command: string,
+    args: readonly string[],
+    _options?: DeviceCommandOptions,
+  ): Promise<DeviceCommandResult> => {
     log.push([command, ...args].join(" "));
-    const ok = (stdout = ""): Promise<DeviceCommandResult> => Promise.resolve({ stdout, stderr: "", code: 0 });
-    if (command === "adb" && args[0] === "devices") return ok("List of devices attached\nemulator-5554\tdevice\n");
+    const ok = (stdout = ""): Promise<DeviceCommandResult> =>
+      Promise.resolve({ stdout, stderr: "", code: 0 });
+    if (command === "adb" && args[0] === "devices")
+      return ok("List of devices attached\nemulator-5554\tdevice\n");
     if (command === "emulator") {
       const scripted = script.wipeExits?.[wipeRuns++];
       if (scripted) return Promise.resolve({ stdout: "", ...scripted });
@@ -133,7 +167,9 @@ function eraseHarness(script: EraseScript = {}) {
     if (args.includes("getprop")) {
       polls += 1;
       // Only a wipe boot that is still running can report a finished boot.
-      return ok(exitRunning && !script.neverBoots && polls > (script.bootPolls ?? 0) ? "1\n" : "\n");
+      return ok(
+        exitRunning && !script.neverBoots && polls > (script.bootPolls ?? 0) ? "1\n" : "\n",
+      );
     }
     if (args.includes("emu") && args.includes("kill")) {
       // The console answers, then the emulator process exits.
@@ -146,7 +182,8 @@ function eraseHarness(script: EraseScript = {}) {
     run,
     shutdown: async () => {
       log.push("hub shutdown");
-      if (script.shutdownFails) throw new Error("emulator-5554 did not exit within 30s of the shutdown");
+      if (script.shutdownFails)
+        throw new Error("emulator-5554 did not exit within 30s of the shutdown");
     },
     sleep: async (ms: number) => {
       clock += ms;
@@ -161,12 +198,24 @@ test("erasing a running emulator shuts it down through the hub, wipe-boots it, a
   await eraseAndroidEmulator(h.deps, { avdName: AVD, booted: true }, h.onPhase);
   assert.deepEqual(h.phases, ["shutting-down", "erasing", "erased"]);
   const wipe = h.log.findIndex((line) => line.startsWith("emulator "));
-  assert.ok(h.log.indexOf("hub shutdown") < wipe, "the wipe never starts before the shutdown finished");
+  assert.ok(
+    h.log.indexOf("hub shutdown") < wipe,
+    "the wipe never starts before the shutdown finished",
+  );
   // The original emulator still holds 5554, so the wipe boot takes the next console port.
-  assert.equal(h.log[wipe], `emulator -avd ${AVD} -wipe-data -no-snapshot-load -no-window -no-audio -no-boot-anim -port 5556`);
-  const polls = h.log.filter((line) => line === "adb -s emulator-5556 shell getprop sys.boot_completed");
+  assert.equal(
+    h.log[wipe],
+    `emulator -avd ${AVD} -wipe-data -no-snapshot-load -no-window -no-audio -no-boot-anim -port 5556`,
+  );
+  const polls = h.log.filter(
+    (line) => line === "adb -s emulator-5556 shell getprop sys.boot_completed",
+  );
   assert.equal(polls.length, 3);
-  assert.equal(h.log[h.log.length - 1], "adb -s emulator-5556 emu kill", "it exits only after Android finished booting");
+  assert.equal(
+    h.log[h.log.length - 1],
+    "adb -s emulator-5556 emu kill",
+    "it exits only after Android finished booting",
+  );
 });
 
 test("a stopped AVD is wiped without a shutdown, and a failed shutdown never wipes", async () => {
@@ -180,7 +229,10 @@ test("a stopped AVD is wiped without a shutdown, and a failed shutdown never wip
     eraseAndroidEmulator(stuck.deps, { avdName: AVD, booted: true }, stuck.onPhase),
     /did not shut down, so it was not erased: emulator-5554 did not exit/u,
   );
-  assert.equal(stuck.log.some((line) => line.startsWith("emulator ")), false);
+  assert.equal(
+    stuck.log.some((line) => line.startsWith("emulator ")),
+    false,
+  );
 });
 
 test("a wipe boot waits while the old emulator still holds the AVD, and reports any other failure", async () => {
@@ -188,7 +240,8 @@ test("a wipe boot waits while the old emulator still holds the AVD, and reports 
     wipeExits: [
       {
         code: 1,
-        stderr: "FATAL        | Running multiple emulators with the same AVD is an experimental feature.Please use -read-only flag to enable this feature.",
+        stderr:
+          "FATAL        | Running multiple emulators with the same AVD is an experimental feature.Please use -read-only flag to enable this feature.",
       },
     ],
   });
@@ -196,7 +249,9 @@ test("a wipe boot waits while the old emulator still holds the AVD, and reports 
   assert.equal(locked.log.filter((line) => line.startsWith("emulator ")).length, 2);
   assert.deepEqual(locked.phases, ["erasing", "erased"]);
 
-  const broken = eraseHarness({ wipeExits: [{ code: 1, stderr: "FATAL        | Unknown AVD name [Pixel_9_API_36]" }] });
+  const broken = eraseHarness({
+    wipeExits: [{ code: 1, stderr: "FATAL        | Unknown AVD name [Pixel_9_API_36]" }],
+  });
   await assert.rejects(
     eraseAndroidEmulator(broken.deps, { avdName: AVD, booted: false }, broken.onPhase),
     /could not be erased: Unknown AVD name \[Pixel_9_API_36\]/u,
@@ -207,9 +262,14 @@ test("a wipe boot waits while the old emulator still holds the AVD, and reports 
 
 test("a wipe boot that never finishes is stopped at the deadline", async () => {
   const h = eraseHarness({ neverBoots: true });
-  await assert.rejects(eraseAndroidEmulator(h.deps, { avdName: AVD, booted: false }, h.onPhase), /did not finish erasing in time/u);
+  await assert.rejects(
+    eraseAndroidEmulator(h.deps, { avdName: AVD, booted: false }, h.onPhase),
+    /did not finish erasing in time/u,
+  );
   assert.equal(h.log[h.log.length - 1], "adb -s emulator-5556 emu kill");
-  assert.ok(h.log.filter((line) => line.includes("getprop")).length <= ANDROID_ERASE_TIMEOUT_MS / 2_000 + 1);
+  assert.ok(
+    h.log.filter((line) => line.includes("getprop")).length <= ANDROID_ERASE_TIMEOUT_MS / 2_000 + 1,
+  );
 });
 
 // ── Features on an Android emulator ─────────────────────────────────────────
@@ -240,7 +300,9 @@ class AdbChild implements RecorderChild {
   }
 }
 
-function androidHarness(options: { booted?: boolean; hostText?: string; ignoreStop?: boolean; pullFails?: boolean } = {}) {
+function androidHarness(
+  options: { booted?: boolean; hostText?: string; ignoreStop?: boolean; pullFails?: boolean } = {},
+) {
   const device: DeviceSummary = {
     hostId: "local",
     id: options.booted === false ? AVD : SERIAL,
@@ -291,7 +353,10 @@ function androidHarness(options: { booted?: boolean; hostText?: string; ignoreSt
     const words = shell >= 0 ? deviceArgv(args.slice(shell + 1)) : [];
     if (words[0] === "pkill") {
       const path = words[3]!;
-      const child = children.find((candidate) => candidate.args[candidate.args.length - 1] === path && candidate.exitCode === null);
+      const child = children.find(
+        (candidate) =>
+          candidate.args[candidate.args.length - 1] === path && candidate.exitCode === null,
+      );
       if (child && !options.ignoreStop) {
         // screenrecord writes the MP4 index, then the local `adb shell` exits cleanly.
         remoteFiles.set(path, "mp4");
@@ -306,7 +371,11 @@ function androidHarness(options: { booted?: boolean; hostText?: string; ignoreSt
     if (args[2] === "pull") {
       const [remote, local] = [args[3]!, args[4]!];
       if (options.pullFails || !remoteFiles.has(remote)) {
-        return { stdout: "", stderr: `adb: error: failed to stat remote object '${remote}'`, code: 1 };
+        return {
+          stdout: "",
+          stderr: `adb: error: failed to stat remote object '${remote}'`,
+          code: 1,
+        };
       }
       files.set(local, remoteFiles.get(remote)!);
       return { stdout: "1 file pulled", stderr: "", code: 0 };
@@ -405,7 +474,20 @@ function androidHarness(options: { booted?: boolean; hostText?: string; ignoreSt
     },
     sleep: async () => undefined,
   });
-  return { features, target, device, commands, events, children, files, remoteFiles, posts, host, advance, setState };
+  return {
+    features,
+    target,
+    device,
+    commands,
+    events,
+    children,
+    files,
+    remoteFiles,
+    posts,
+    host,
+    advance,
+    setState,
+  };
 }
 
 const flush = async () => {
@@ -415,22 +497,36 @@ const flush = async () => {
 test("an emulator recording stops on the device, is pulled into the temp file, and its device copy is deleted", async () => {
   const h = androidHarness();
   const started = await h.features.startRecording("chat-1", h.target);
-  assert.equal(started.endsBy - started.startedAt, ANDROID_RECORDING_MAX_MS, "Android recordings stop at three minutes");
+  assert.equal(
+    started.endsBy - started.startedAt,
+    ANDROID_RECORDING_MAX_MS,
+    "Android recordings stop at three minutes",
+  );
   const child = h.children[0]!;
   const remote = androidRecordingRemotePath(started.id);
-  assert.deepEqual([...child.args], ["-s", SERIAL, "shell", "screenrecord", "--time-limit", "180", remote]);
+  assert.deepEqual(
+    [...child.args],
+    ["-s", SERIAL, "shell", "screenrecord", "--time-limit", "180", remote],
+  );
   assert.equal(child.env?.PATH, "/sdk/platform-tools:/usr/bin", "adb runs with the SDK on PATH");
 
   const stopped = await h.features.stopRecording(started.id);
   assert.equal(stopped.status, "ready");
-  assert.deepEqual(child.signals, [], "the local adb is never signalled; the device's recorder finalizes");
+  assert.deepEqual(
+    child.signals,
+    [],
+    "the local adb is never signalled; the device's recorder finalizes",
+  );
   const local = `/private/recordings/${started.id}.mp4`;
   assert.equal(h.files.get(local), "mp4");
   assert.equal(h.remoteFiles.size, 0, "the emulator's copy is deleted");
   const stop = h.commands.indexOf(`adb -s ${SERIAL} shell pkill -INT -f ${remote}`);
   const pull = h.commands.indexOf(`adb -s ${SERIAL} pull ${remote} ${local}`);
   const remove = h.commands.indexOf(`adb -s ${SERIAL} shell rm -f ${remote}`);
-  assert.ok(stop >= 0 && stop < pull && pull < remove, "stop, then pull, then delete the device copy");
+  assert.ok(
+    stop >= 0 && stop < pull && pull < remove,
+    "stop, then pull, then delete the device copy",
+  );
 
   const saved = await h.features.saveRecording(started.id, async (name) => {
     assert.match(name, /^Pixel_9_API_36-\d{4}-\d{2}-\d{2}-\d{6}\.mp4$/u);
@@ -458,7 +554,11 @@ test("an emulator recording fails cleanly when its file cannot be pulled or its 
   const failed = await unpulled.features.stopRecording(first.id);
   assert.equal(failed.status, "failed");
   assert.match(failed.error ?? "", /could not be copied from the emulator/u);
-  assert.equal(unpulled.remoteFiles.size, 0, "the device copy is removed even when the pull failed");
+  assert.equal(
+    unpulled.remoteFiles.size,
+    0,
+    "the device copy is removed even when the pull failed",
+  );
 
   const hung = androidHarness({ ignoreStop: true });
   const second = await hung.features.startRecording("chat-1", hung.target);
@@ -468,7 +568,9 @@ test("an emulator recording fails cleanly when its file cannot be pulled or its 
   const timedOut = await stopping;
   assert.equal(timedOut.status, "failed");
   assert.deepEqual(hung.children[0]!.signals, ["SIGKILL"]);
-  const rm = hung.commands.filter((line) => line.endsWith(`rm -f ${androidRecordingRemotePath(second.id)}`));
+  const rm = hung.commands.filter((line) =>
+    line.endsWith(`rm -f ${androidRecordingRemotePath(second.id)}`),
+  );
   assert.equal(rm.length, 1, "a killed recording still deletes its device copy");
 });
 
@@ -496,9 +598,12 @@ test("a deleted chat, a shut-down emulator, and app quit each stop and delete em
 test("paste types the host clipboard into the emulator through serve-emu, in pieces, capped at 64 KB", async () => {
   const text = `${"x".repeat(299)}é${"y".repeat(400)}`;
   const h = androidHarness({ hostText: text });
-  assert.deepEqual(await h.features.pasteFromHost(h.target), { bytes: new TextEncoder().encode(text).byteLength });
+  assert.deepEqual(await h.features.pasteFromHost(h.target), {
+    bytes: new TextEncoder().encode(text).byteLength,
+  });
   assert.ok(h.posts.length >= 3);
-  for (const post of h.posts) assert.equal(post.url, `http://127.0.0.1:4100/vendor/serve-emu/api/text?device=${SERIAL}`);
+  for (const post of h.posts)
+    assert.equal(post.url, `http://127.0.0.1:4100/vendor/serve-emu/api/text?device=${SERIAL}`);
   assert.equal(h.posts.map((post) => (post.body as { text: string }).text).join(""), text);
 
   const huge = androidHarness({ hostText: "z".repeat(DEVICE_CLIPBOARD_MAX_BYTES + 1) });
@@ -518,9 +623,18 @@ test("copying from an emulator is refused with the reason, and nothing reaches t
 
 test("a target naming the wrong platform is refused before anything runs", async () => {
   const h = androidHarness();
-  await assert.rejects(h.features.pasteFromHost({ ...h.target, platform: "ios" }), /no longer available/u);
-  await assert.rejects(h.features.copyToHost({ ...h.target, platform: "ios" }), /no longer available/u);
-  await assert.rejects(h.features.startRecording("chat-1", { ...h.target, platform: "ios" }), /no longer available/u);
+  await assert.rejects(
+    h.features.pasteFromHost({ ...h.target, platform: "ios" }),
+    /no longer available/u,
+  );
+  await assert.rejects(
+    h.features.copyToHost({ ...h.target, platform: "ios" }),
+    /no longer available/u,
+  );
+  await assert.rejects(
+    h.features.startRecording("chat-1", { ...h.target, platform: "ios" }),
+    /no longer available/u,
+  );
   assert.equal(h.posts.length + h.children.length, 0);
   assert.deepEqual(h.commands, [], "no simctl or adb ran for a mislabelled emulator");
 });
@@ -530,9 +644,15 @@ test("an erase mislabelled as iOS never runs simctl on an emulator and leaves it
   const recording = await h.features.startRecording("chat-1", h.target);
   await assert.rejects(h.features.erase({ ...h.target, platform: "ios" }), /no longer available/u);
   // The listing says Android, so the renderer's claim is refused before any side effect.
-  assert.equal(h.features.recordings().find((info) => info.id === recording.id)?.status, "recording");
+  assert.equal(
+    h.features.recordings().find((info) => info.id === recording.id)?.status,
+    "recording",
+  );
   assert.deepEqual(h.children[0]!.signals, []);
-  assert.equal(h.commands.some((line) => line.startsWith("xcrun") || line.includes("pkill")), false);
+  assert.equal(
+    h.commands.some((line) => line.startsWith("xcrun") || line.includes("pkill")),
+    false,
+  );
   assert.deepEqual(h.events, [], "no shutdown and no refresh");
 });
 
@@ -546,8 +666,12 @@ test("erasing an emulator ends its recordings, shuts it down through the hub, an
   assert.deepEqual(phases, ["shutting-down", "erasing", "erased"]);
   assert.deepEqual(h.features.recordings(), [], "recordings end before anything is erased");
   assert.deepEqual(h.events, [`shutdown:${SERIAL}`, "refresh"]);
-  const wipe = h.commands.findIndex((line) => line.startsWith(`emulator -avd ${AVD} -wipe-data -no-snapshot-load`));
-  const removed = h.commands.findIndex((line) => line.endsWith(`rm -f ${androidRecordingRemotePath("rec_00000001")}`));
+  const wipe = h.commands.findIndex((line) =>
+    line.startsWith(`emulator -avd ${AVD} -wipe-data -no-snapshot-load`),
+  );
+  const removed = h.commands.findIndex((line) =>
+    line.endsWith(`rm -f ${androidRecordingRemotePath("rec_00000001")}`),
+  );
   assert.ok(removed >= 0 && removed < wipe, "the recording's device copy is gone before the wipe");
 
   // A stopped AVD is erased by its name, without a shutdown.
@@ -566,11 +690,17 @@ test("a second erase of the same emulator is refused while the first runs", asyn
 
 test("Save screenshot writes an emulator's PNG under its AVD name", async () => {
   const h = androidHarness();
-  const saved = await h.features.saveScreenshot({ hostId: "local", deviceId: SERIAL }, async (name) => {
-    assert.equal(name, "Pixel_9_API_36-2026-10-08-093000.png");
-    return "/Users/me/Downloads/emu.png";
-  });
+  const saved = await h.features.saveScreenshot(
+    { hostId: "local", deviceId: SERIAL },
+    async (name) => {
+      assert.equal(name, "Pixel_9_API_36-2026-10-08-093000.png");
+      return "/Users/me/Downloads/emu.png";
+    },
+  );
   assert.deepEqual(saved, { status: "saved", path: "/Users/me/Downloads/emu.png" });
   assert.deepEqual(h.events, [`screenshot:${SERIAL}`]);
-  assert.deepEqual([...(h.files.get("/Users/me/Downloads/emu.png") as Uint8Array)], [0x89, 0x50, 0x4e, 0x47]);
+  assert.deepEqual(
+    [...(h.files.get("/Users/me/Downloads/emu.png") as Uint8Array)],
+    [0x89, 0x50, 0x4e, 0x47],
+  );
 });

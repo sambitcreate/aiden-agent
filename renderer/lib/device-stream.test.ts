@@ -855,6 +855,21 @@ test("an Android stream is one serve-emu socket: video configures from the SPS a
   assert.equal(ws.closed, true);
 });
 
+test("an Android pinch is two serve-emu touches with separate pointers; the second lands last and lifts first", () => {
+  const h = harness({ webCodecs: true, android: true });
+  h.client.start();
+  const ws = h.sockets[0]!;
+  ws.open();
+  h.client.sendMultiTouch("begin", { x: 0.4, y: 0.5 }, { x: 0.6, y: 0.5 });
+  h.client.sendMultiTouch("move", { x: 0.3, y: 0.5 }, { x: 1.2, y: 0.5 });
+  h.client.sendMultiTouch("end", { x: 0.3, y: 0.5 }, { x: 0.9, y: 0.5 });
+  const touches = sentJson(ws)
+    .filter((message) => message.type === "touch")
+    .map((message) => `${String(message.action)}:${String(message.pointerId)}@${String(message.x)}`);
+  assert.deepEqual(touches, ["down:0@0.4", "down:1@0.6", "move:0@0.3", "move:1@1", "up:1@0.9", "up:0@0.3"]);
+  h.client.stop();
+});
+
 test("an encoder restart keeps the stream, rebuilds the decoder, and reports the new size", async () => {
   const h = harness({ webCodecs: true, android: true });
   h.client.start();

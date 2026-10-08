@@ -44,3 +44,22 @@ test("only a plain Cmd+V is the paste shortcut", () => {
   assert.equal(isDevicePasteShortcut({ ...base, metaKey: false, ctrlKey: true }), false);
   assert.equal(isDevicePasteShortcut({ ...base, code: "KeyC" }), false);
 });
+
+test("an emulator paste is typed by main, so no Cmd+V follows, but it still needs live input", async () => {
+  const android = { platform: "android" as const, hostId: "local", deviceId: "emulator-5554" };
+  const events: string[] = [];
+  const result = await pasteHostClipboardToDevice({
+    target: android,
+    copy: async (target) => {
+      events.push(`copy:${target.deviceId}`);
+      return { bytes: 700 };
+    },
+    sendKey: (code, phase) => events.push(`${code}:${phase}`),
+  });
+  assert.deepEqual(result, { bytes: 700 });
+  assert.deepEqual(events, ["copy:emulator-5554"]);
+  await assert.rejects(
+    pasteHostClipboardToDevice({ target: android, copy: async () => ({ bytes: 1 }), sendKey: null }),
+    /emulator is not accepting input/u,
+  );
+});

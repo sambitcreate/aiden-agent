@@ -1,8 +1,10 @@
 /**
  * Erase all content and settings, from the Device tools drawer. A destructive
  * confirmation names the simulator first. The simulator shuts down if it is
- * running, is erased, and the user is offered to boot it again here. Only the
- * user can erase: there is no agent tool for it.
+ * running, is erased, and the user is offered to boot it again here. An
+ * Android emulator is wiped by one headless cold boot with `-wipe-data`; its
+ * progress and Boot offer are a toast, since its session ends at shutdown.
+ * Only the user can erase: there is no agent tool for it.
  */
 import * as React from "react";
 import { Eraser } from "lucide-react";
@@ -12,7 +14,7 @@ import { devicesApi } from "../lib/ipc";
 import type { DeviceFeatureTarget } from "../shared/device-features";
 
 export interface DeviceEraseApi {
-  erase(target: DeviceFeatureTarget): Promise<{ wasBooted: boolean }>;
+  erase(target: DeviceFeatureTarget): Promise<{ wasBooted: boolean; deviceId: string }>;
   open(input: { chatId: string; hostId: string; deviceId: string }): Promise<unknown>;
 }
 
@@ -39,7 +41,42 @@ export function DeviceEraseSection(props: {
   const [bootOffer, setBootOffer] = React.useState(false);
   const [booting, setBooting] = React.useState(false);
 
+  const android = props.target.platform === "android";
+  const noun = android ? "emulator" : "simulator";
+
+  /**
+   * An emulator's id changes when it shuts down (serial to AVD name), which
+   * ends this viewer's session while the wipe boot still runs. So its progress
+   * and the Boot offer live in a toast that outlasts the viewer.
+   */
+  const eraseEmulator = async () => {
+    setConfirmOpen(false);
+    const { chatId, deviceName } = props;
+    const hostId = props.target.hostId;
+    const progress = toast.loading(`Erasing ${deviceName}… It boots once, out of view, to reset.`);
+    try {
+      const { deviceId } = await api.erase(props.target);
+      toast.success(`${deviceName} was erased. It is shut down.`, {
+        id: progress,
+        duration: 20_000,
+        action: {
+          label: "Boot",
+          onClick: () =>
+            void api.open({ chatId, hostId, deviceId }).catch((error: unknown) => {
+              toast.error(error instanceof Error ? error.message : "The emulator could not be booted.");
+            }),
+        },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The emulator could not be erased.", { id: progress });
+    }
+  };
+
   const erase = async () => {
+    if (android) {
+      await eraseEmulator();
+      return;
+    }
     setErasing(true);
     try {
       await api.erase(props.target);
@@ -75,7 +112,7 @@ export function DeviceEraseSection(props: {
         </Button>
       </div>
       <Text variant="small" color="secondary">
-        Returns the simulator to a fresh install. It shuts down first if it is running.
+        Returns the {noun} to a fresh install. It shuts down first if it is running.
       </Text>
       <AlertDialog
         open={confirmOpen}
@@ -84,7 +121,7 @@ export function DeviceEraseSection(props: {
         description={
           <>
             All content and settings on {props.deviceName} are erased, including installed apps and their data.
-            The simulator shuts down first if it is running. This cannot be undone.
+            The {noun} shuts down first if it is running. This cannot be undone.
           </>
         }
         confirmLabel={erasing ? "Erasing…" : "Erase"}

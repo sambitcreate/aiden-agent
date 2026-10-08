@@ -6,9 +6,11 @@
  * nested tree; it is read through main's token proxy like the stream. T3
  * normalizes frames to the root application frame; Aiden additionally maps
  * them into the displayed stream when the tree and the stream disagree about
- * rotation, so frames follow the device as it turns.
+ * rotation, so frames follow the device as it turns. Android emulators read
+ * serve-emu's `/api/accessibility` (a `uiautomator dump`), normalized to the
+ * same frames by `flattenAndroidAxSnapshot`.
  */
-import type { DeviceStreamGrant } from "../shared/devices";
+import type { DevicePlatform, DeviceStreamGrant } from "../shared/devices";
 import { deviceHubUrl, type DeviceOrientation } from "./device-stream";
 
 export interface DeviceAxRect {
@@ -78,6 +80,68 @@ export function flattenIosAxTree(roots: readonly unknown[]): Omit<DeviceAxTree, 
     seen.add(elements[index]!.id);
   }
   return { elements, root: rootFrame ? { width: screenWidth, height: screenHeight } : null };
+}
+
+/** The last dotted part of an Android class name: `android.widget.Button` reads as `Button`. */
+const shortClassName = (name: string) => name.slice(name.lastIndexOf(".") + 1);
+
+/**
+ * Normalizes serve-emu's `/api/accessibility` snapshot, a flattened
+ * `uiautomator dump`, to the same element frames the iOS tree gives. Bounds
+ * are pixels in the dump's own rotation; `screen` is that rotated size (when
+ * serve-emu could not read it, the furthest bound stands in). Nodes covering
+ * the whole screen are skipped as on iOS, and the label is the text, then the
+ * content description, then the resource id's name.
+ */
+export function flattenAndroidAxSnapshot(snapshot: unknown): Omit<DeviceAxTree, "errors"> {
+  const nodes = isRecord(snapshot) && Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+  const bounds = (node: unknown) => {
+    const box = isRecord(node) && isRecord(node.bounds) ? node.bounds : null;
+    if (!box) return null;
+    const left = numberOr(box.left, Number.NaN);
+    const top = numberOr(box.top, Number.NaN);
+    const right = numberOr(box.right, Number.NaN);
+    const bottom = numberOr(box.bottom, Number.NaN);
+    if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
+    return { left, top, right, bottom };
+  };
+  const screenRecord = isRecord(snapshot) && isRecord(snapshot.screen) ? snapshot.screen : null;
+  let width = numberOr(screenRecord?.width, 0);
+  let height = numberOr(screenRecord?.height, 0);
+  if (width <= 0 || height <= 0) {
+    for (const node of nodes) {
+      const box = bounds(node);
+      if (!box) continue;
+      width = Math.max(width, box.right);
+      height = Math.max(height, box.bottom);
+    }
+  }
+  if (width <= 0 || height <= 0) return { elements: [], root: null };
+  const elements: DeviceAxElement[] = [];
+  for (const [index, node] of nodes.entries()) {
+    if (elements.length >= DEVICE_AX_ELEMENT_LIMIT) break;
+    const box = bounds(node);
+    if (!box || !isRecord(node)) continue;
+    const coversScreen = box.left <= 0 && box.top <= 0 && box.right >= width && box.bottom >= height;
+    if (coversScreen) continue;
+    const resource = typeof node.resourceId === "string" ? node.resourceId.slice(node.resourceId.indexOf("/") + 1) : "";
+    const label =
+      (typeof node.text === "string" && node.text) ||
+      (typeof node.contentDescription === "string" && node.contentDescription) ||
+      resource;
+    const x = Math.max(0, box.left) / width;
+    const y = Math.max(0, box.top) / height;
+    elements.push({
+      id: typeof node.id === "string" && node.id ? `${node.id}` : String(index),
+      label: label.slice(0, 512),
+      role: typeof node.className === "string" ? shortClassName(node.className) : "",
+      x,
+      y,
+      width: Math.min(1, box.right / width) - x,
+      height: Math.min(1, box.bottom / height) - y,
+    });
+  }
+  return { elements, root: { width, height } };
 }
 
 type Mapping = (point: { x: number; y: number }) => { x: number; y: number };
@@ -151,18 +215,29 @@ export interface DeviceAxRuntime {
 
 /** Reads the tree once through the token proxy. A helper error is reported, not thrown. */
 export async function fetchDeviceAxTree(
-  target: { hostId: string; deviceId: string; grant: DeviceStreamGrant },
+  target: { hostId: string; deviceId: string; grant: DeviceStreamGrant; platform?: DevicePlatform },
   signal: AbortSignal,
   runtime: DeviceAxRuntime = { fetch: (url, init) => fetch(url, init) },
 ): Promise<DeviceAxTree> {
-  const url = deviceHubUrl(target, `/vendor/serve-sim/helper/${encodeURIComponent(target.deviceId)}/ax`, "http");
-  const response = await runtime.fetch(url, { signal, credentials: "omit", cache: "no-store" });
+  const android = target.platform === "android";
+  const path = android
+    ? `/vendor/serve-emu/api/accessibility?${new URLSearchParams({ device: target.deviceId }).toString()}`
+    : `/vendor/serve-sim/helper/${encodeURIComponent(target.deviceId)}/ax`;
+  const response = await runtime.fetch(deviceHubUrl(target, path, "http"), { signal, credentials: "omit", cache: "no-store" });
   if (response.status === 401) throw new DeviceAxUnauthorizedError();
   let payload: unknown;
   try {
     payload = await response.json();
   } catch {
     return { elements: [], root: null, errors: ["The accessibility tree could not be read."] };
+  }
+  if (android) {
+    // serve-emu answers `{ ok: false, error }` when `uiautomator dump` fails (an animation or a secure window).
+    if (!isRecord(payload) || payload.ok !== true) {
+      const error = isRecord(payload) && typeof payload.error === "string" ? payload.error : null;
+      return { elements: [], root: null, errors: [error ?? "The accessibility tree is unavailable."] };
+    }
+    return { ...flattenAndroidAxSnapshot(payload), errors: [] };
   }
   if (!Array.isArray(payload)) {
     const error = isRecord(payload) && typeof payload.message === "string" ? payload.message : null;

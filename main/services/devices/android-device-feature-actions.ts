@@ -51,16 +51,26 @@ export function androidScreenrecordCommand(
  * command line names this file, never another recorder on the device. The
  * local `adb shell` exits only after the remote process wrote the MP4 index.
  */
-export function androidStopScreenrecordCommand(serial: string, remotePath: string): DeviceActionCommand {
+export function androidStopScreenrecordCommand(
+  serial: string,
+  remotePath: string,
+): DeviceActionCommand {
   return adbShell(serial, "pkill", "-INT", "-f", remotePath);
 }
 
 /** Copies a finished recording to a private local file. `adb pull` takes paths, not a device shell line. */
-export function androidPullCommand(serial: string, remotePath: string, localPath: string): DeviceActionCommand {
+export function androidPullCommand(
+  serial: string,
+  remotePath: string,
+  localPath: string,
+): DeviceActionCommand {
   return adb(serial, "pull", remotePath, localPath);
 }
 
-export function androidRemoveRemoteFileCommand(serial: string, remotePath: string): DeviceActionCommand {
+export function androidRemoveRemoteFileCommand(
+  serial: string,
+  remotePath: string,
+): DeviceActionCommand {
   return adbShell(serial, "rm", "-f", remotePath);
 }
 
@@ -92,7 +102,10 @@ export function chunkDeviceText(text: string, maxBytes = ANDROID_TEXT_CHUNK_BYTE
 // ── Erase ──────────────────────────────────────────────────────────────────
 
 /** Emulator console ports: even numbers from 5554, each paired with the adb port above it. */
-export const ANDROID_EMULATOR_PORTS: readonly number[] = Array.from({ length: 64 }, (_, index) => 5554 + index * 2);
+export const ANDROID_EMULATOR_PORTS: readonly number[] = Array.from(
+  { length: 64 },
+  (_, index) => 5554 + index * 2,
+);
 
 /** The lowest console port that no emulator in `adb devices` output uses. */
 export function freeEmulatorPort(
@@ -101,7 +114,9 @@ export function freeEmulatorPort(
 ): number | null {
   const used = new Set<number>();
   for (const match of adbDevices.matchAll(/^emulator-(\d+)\s/gmu)) used.add(Number(match[1]));
-  return candidates.find((port) => !used.has(port) && !used.has(port - 1) && !used.has(port + 1)) ?? null;
+  return (
+    candidates.find((port) => !used.has(port) && !used.has(port - 1) && !used.has(port + 1)) ?? null
+  );
 }
 
 /**
@@ -110,7 +125,8 @@ export function freeEmulatorPort(
  * Boot snapshot from restoring the previous state. It runs headless.
  */
 export function androidWipeBootCommand(avdName: string, port: number): DeviceActionCommand {
-  if (!DEVICE_ID_PATTERN.test(avdName)) throw new Error("A valid Android Virtual Device is required.");
+  if (!DEVICE_ID_PATTERN.test(avdName))
+    throw new Error("A valid Android Virtual Device is required.");
   return {
     command: "emulator",
     args: [
@@ -177,14 +193,17 @@ export async function eraseAndroidEmulator(
   input: { avdName: string; booted: boolean },
   onPhase: (phase: AndroidErasePhase) => void = () => undefined,
 ): Promise<void> {
-  if (!DEVICE_ID_PATTERN.test(input.avdName)) throw new Error("A valid Android Virtual Device is required.");
+  if (!DEVICE_ID_PATTERN.test(input.avdName))
+    throw new Error("A valid Android Virtual Device is required.");
   if (input.booted) {
     onPhase("shutting-down");
     try {
       await deps.shutdown();
     } catch (error) {
       const detail = error instanceof Error ? error.message : "";
-      throw new Error(`The emulator did not shut down, so it was not erased${detail ? `: ${detail}` : "."}`);
+      throw new Error(
+        `The emulator did not shut down, so it was not erased${detail ? `: ${detail}` : "."}`,
+      );
     }
   }
   onPhase("erasing");
@@ -197,10 +216,12 @@ export async function eraseAndroidEmulator(
     const boot = androidWipeBootCommand(input.avdName, port);
     // Filled when the wipe boot exits. The run's own timeout ends it if nothing else does.
     const wipe: { ended: DeviceCommandResult | null } = { ended: null };
-    const exited = deps.run(boot.command, boot.args, { timeoutMs: Math.max(1, deadline - deps.now()) }).then((result) => {
-      wipe.ended = result;
-      return result;
-    });
+    const exited = deps
+      .run(boot.command, boot.args, { timeoutMs: Math.max(1, deadline - deps.now()) })
+      .then((result) => {
+        wipe.ended = result;
+        return result;
+      });
     let booted = false;
     while (wipe.ended === null && deps.now() < deadline) {
       const check = androidBootCompletedCommand(serial);
@@ -220,7 +241,11 @@ export async function eraseAndroidEmulator(
       onPhase("erased");
       return;
     }
-    if (AVD_IN_USE.test(`${result.stderr}\n${result.stdout}`) && attempt < ANDROID_ERASE_LOCK_RETRIES && deps.now() < deadline) {
+    if (
+      AVD_IN_USE.test(`${result.stderr}\n${result.stdout}`) &&
+      attempt < ANDROID_ERASE_LOCK_RETRIES &&
+      deps.now() < deadline
+    ) {
       await deps.sleep(ANDROID_ERASE_POLL_MS);
       continue;
     }

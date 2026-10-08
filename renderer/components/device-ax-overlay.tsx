@@ -1,11 +1,12 @@
 /**
  * Adapted from t3code apps/web/src/components/device/DeviceStreamView.tsx @ a6ec88f7 (MIT)
  *
- * Draws the simulator's accessibility element frames over the flat screen.
+ * Draws the device's accessibility element frames over the flat screen.
  * Frames follow the device's rotation (see `axRectToDisplay`). Hovering the
  * screen names the element under the pointer and its role. On this Mac the
- * tree is re-read every two seconds while the overlay is on; a paired Mac's
- * tree is read once per request, so nothing polls a remote host.
+ * tree is re-read two seconds (an emulator: three) after each read while the
+ * overlay is on; a paired Mac's tree is read once per request, so nothing
+ * polls a remote host.
  */
 import * as React from "react";
 import {
@@ -17,8 +18,11 @@ import {
 } from "../lib/device-ax";
 import type { DeviceGrantSource } from "../lib/device-grant";
 import type { DeviceScreenSize } from "../lib/device-stream";
+import type { DevicePlatform } from "../shared/devices";
 
 export const DEVICE_AX_POLL_MS = 2_000;
+/** `uiautomator dump` takes two to three seconds on an emulator, so its reads are spaced further apart. */
+export const ANDROID_AX_POLL_MS = 3_000;
 
 export interface DeviceAxStatus {
   loading: boolean;
@@ -29,6 +33,8 @@ export interface DeviceAxStatus {
 export function DeviceAxOverlay(props: {
   hostId: string;
   deviceId: string;
+  /** iOS reads serve-sim's tree; Android reads serve-emu's `uiautomator` dump. */
+  platform?: DevicePlatform;
   grants: DeviceGrantSource;
   screen: DeviceScreenSize | null;
   /** The flat screen element; hover is read from its pointer events. */
@@ -39,6 +45,7 @@ export function DeviceAxOverlay(props: {
   onStatus(status: DeviceAxStatus): void;
 }) {
   const { hostId, deviceId, grants, poll, refreshKey, onStatus } = props;
+  const platform = props.platform ?? "ios";
   const [tree, setTree] = React.useState<{ elements: DeviceAxElement[]; root: { width: number; height: number } | null }>({
     elements: [],
     root: null,
@@ -55,7 +62,7 @@ export function DeviceAxOverlay(props: {
       try {
         const grant = await grants.get();
         if (stopped) return;
-        const next = await fetchDeviceAxTree({ hostId, deviceId, grant }, controller.signal);
+        const next = await fetchDeviceAxTree({ hostId, deviceId, grant, platform }, controller.signal);
         if (stopped) return;
         setTree({ elements: next.elements, root: next.root });
         onStatus({ loading: false, count: next.elements.length, error: next.errors[0] ?? null });
@@ -65,7 +72,10 @@ export function DeviceAxOverlay(props: {
         // The last good tree stays; the next read retries.
         onStatus({ loading: false, count: -1, error: "The accessibility tree could not be read." });
       }
-      if (!stopped && poll) timer = setTimeout(() => void read(), DEVICE_AX_POLL_MS);
+      // The next read starts only after this one finished, so slow dumps never pile up.
+      if (!stopped && poll) {
+        timer = setTimeout(() => void read(), platform === "android" ? ANDROID_AX_POLL_MS : DEVICE_AX_POLL_MS);
+      }
     };
     void read();
     return () => {
@@ -73,7 +83,7 @@ export function DeviceAxOverlay(props: {
       controller?.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [hostId, deviceId, grants, poll, refreshKey, onStatus]);
+  }, [hostId, deviceId, platform, grants, poll, refreshKey, onStatus]);
 
   React.useEffect(
     () => () => {
