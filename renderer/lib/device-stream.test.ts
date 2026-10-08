@@ -12,14 +12,18 @@ import {
   IOS_MSG_DUO_CONTROL,
   IOS_MSG_HARDWARE_KEYBOARD,
   IOS_MSG_KEY,
+  IOS_MSG_MULTI_TOUCH,
   IOS_MSG_ORIENTATION,
   IOS_MSG_TOUCH,
   IOS_TAG_CONTROL_REPLY,
   IOS_TAG_SCREEN_CONFIG,
+  androidKeyMessage,
   avcCodecString,
   createDeviceStreamClient,
   deviceHubUrl,
   hidUsageForCode,
+  parseSemuPacket,
+  scanAccessUnit,
   type DeviceFrameSink,
   type DeviceStreamEvents,
   type DeviceStreamRuntime,
@@ -62,6 +66,7 @@ function fakeClock() {
       now = end;
     },
     pending: () => timers.size,
+    now: () => now,
   };
 }
 
@@ -72,10 +77,10 @@ class FakeSocket {
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onclose: ((event: { code: number; reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
-  sent: Uint8Array[] = [];
+  sent: Array<Uint8Array | string> = [];
   closed = false;
   constructor(readonly url: string) {}
-  send(data: Uint8Array) {
+  send(data: Uint8Array | string) {
     this.sent.push(data);
   }
   close() {
@@ -109,7 +114,9 @@ function streamBody() {
 
 type FetchHandler = (url: string, signal: AbortSignal) => Promise<Response>;
 
-function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean } = {}) {
+function harness(
+  options: { webCodecs?: boolean; preferMjpeg?: boolean; android?: boolean; expiresAt?: number } = {},
+) {
   const clock = fakeClock();
   const sockets: FakeSocket[] = [];
   const fetches: string[] = [];
@@ -128,14 +135,16 @@ function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean } = {}) {
     static isConfigSupported = async () => ({ supported });
     state = "unconfigured";
     decodeQueueSize = 0;
-    decoded: Array<{ type: string }> = [];
+    decoded: Array<{ type: string; timestamp?: number }> = [];
+    configs: VideoDecoderConfig[] = [];
     constructor(readonly init: { output: (frame: VideoFrame) => void; error: (e: unknown) => void }) {
       decoders.push(this);
     }
-    configure() {
+    configure(config: VideoDecoderConfig) {
+      this.configs.push(config);
       this.state = "configured";
     }
-    decode(chunk: { type: string }) {
+    decode(chunk: { type: string; timestamp?: number }) {
       this.decoded.push(chunk);
     }
     close() {
@@ -144,8 +153,10 @@ function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean } = {}) {
   }
   class FakeChunk {
     type: string;
-    constructor(init: { type: string }) {
+    timestamp: number;
+    constructor(init: { type: string; timestamp: number }) {
       this.type = init.type;
+      this.timestamp = init.timestamp;
     }
   }
 
@@ -171,6 +182,7 @@ function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean } = {}) {
       : {}),
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
+    now: clock.now,
   };
   const sink: DeviceFrameSink = {
     present(_source, width, height) {
@@ -187,7 +199,13 @@ function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean } = {}) {
     onDuoControl: (state) => log.push(`duo:${state.pending}:${state.error ?? ""}`),
   };
   const client = createDeviceStreamClient(
-    { ...target, preferMjpeg: options.preferMjpeg },
+    {
+      ...target,
+      // A fresh one-minute grant on the fake clock.
+      grant: { ...target.grant, expiresAt: options.expiresAt ?? 60_000 },
+      preferMjpeg: options.preferMjpeg,
+      ...(options.android ? { platform: "android" as const, deviceId: "emulator-5554" } : {}),
+    },
     sink,
     events,
     runtime,
@@ -222,7 +240,8 @@ function envelope(tag: number, payload: number[]): Uint8Array {
   return out;
 }
 
-function decodePacket(bytes: Uint8Array) {
+function decodePacket(raw: Uint8Array | string) {
+  const bytes = raw as Uint8Array;
   return { tag: bytes[0], body: JSON.parse(new TextDecoder().decode(bytes.subarray(1))) };
 }
 
@@ -408,6 +427,30 @@ test("a policy close reports unauthorized once and stops", async () => {
   h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS * 3);
   await settle();
   assert.equal(h.sockets.length, 1);
+});
+
+test("an iOS input socket closed with 1006 retries while the grant is live and renews it once expired", async () => {
+  const h = harness();
+  h.client.start();
+  await settle();
+  // The device is down: every reconnect is dropped abnormally, but the grant is still good.
+  for (let index = 0; index < 5; index++) {
+    h.sockets[index]!.drop(1006);
+    h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS);
+    await settle();
+  }
+  assert.equal(h.sockets.length, 6);
+  assert.ok(!h.log.includes("unauthorized"));
+  h.client.stop();
+  // Near expiry the same close means the proxy refused the grant.
+  const expiring = harness({ expiresAt: 3_000 });
+  expiring.client.start();
+  await settle();
+  expiring.sockets[0]!.drop(1006);
+  assert.equal(expiring.log.filter((entry) => entry === "unauthorized").length, 1);
+  expiring.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS * 3);
+  await settle();
+  assert.equal(expiring.sockets.length, 1);
 });
 
 test("a hung prime request is aborted after its timeout and the socket still connects", async () => {
@@ -706,4 +749,251 @@ test("an unanswered Duo command times out and reports that its position is unkno
   h.clock.advance(5_000);
   assert.match(h.log[h.log.length - 1]!, /^duo:false:Device control timed out/u);
   h.client.stop();
+});
+
+test("two-finger input is one multi-touch packet, remapped like single touches on a rotated device", async () => {
+  const h = harness();
+  h.client.start();
+  await settle();
+  const socket = h.sockets[0]!;
+  socket.open();
+  h.client.sendMultiTouch("begin", { x: 0.25, y: 0.5 }, { x: 0.75, y: 0.5 });
+  assert.deepEqual(decodePacket(socket.sent[socket.sent.length - 1]!), {
+    tag: IOS_MSG_MULTI_TOUCH,
+    body: { type: "begin", x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 },
+  });
+
+  const config = new TextEncoder().encode(JSON.stringify({ width: 390, height: 844, orientation: "landscape_right" }));
+  const message = new Uint8Array(config.length + 1);
+  message[0] = IOS_TAG_SCREEN_CONFIG;
+  message.set(config, 1);
+  socket.onmessage?.({ data: message.buffer });
+  // Each contact lands where a single touch at the same displayed point would.
+  h.client.sendMultiTouch("move", { x: 0.2, y: 0.3 }, { x: 0.8, y: 0.7 });
+  h.client.sendTouch("move", 0.2, 0.3);
+  h.client.sendTouch("move", 0.8, 0.7);
+  const [multi, first, second] = socket.sent.slice(-3).map(decodePacket);
+  assert.equal(multi!.tag, IOS_MSG_MULTI_TOUCH);
+  assert.ok(Math.abs(multi!.body.x1 - first!.body.x) < 1e-9 && Math.abs(multi!.body.y1 - first!.body.y) < 1e-9);
+  assert.ok(Math.abs(multi!.body.x2 - second!.body.x) < 1e-9 && Math.abs(multi!.body.y2 - second!.body.y) < 1e-9);
+  assert.ok(Math.abs(multi!.body.x1 - 0.7) < 1e-9 && Math.abs(multi!.body.y1 - 0.2) < 1e-9);
+  h.client.stop();
+});
+
+// ---- Android (serve-emu) ----------------------------------------------------
+
+/** A SEMU-framed access unit: magic, version 1, flags, 2 reserved bytes, u64 pts, then Annex-B. */
+function semu(annexB: number[], options: { key: boolean; pts: number }): ArrayBuffer {
+  const out = new Uint8Array(16 + annexB.length);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 0x53454d55, false);
+  out[4] = 1;
+  out[5] = options.key ? 1 : 0;
+  view.setBigUint64(8, BigInt(options.pts), false);
+  out.set(annexB, 16);
+  return out.buffer;
+}
+
+/** SPS (High 4.0) + PPS + IDR slice, with 4- and 3-byte start codes. */
+const KEY_UNIT = [0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88];
+const DELTA_UNIT = [0, 0, 0, 1, 0x41, 0x9a];
+
+const sentJson = (socket: FakeSocket) =>
+  socket.sent.filter((item): item is string => typeof item === "string").map((item) => JSON.parse(item) as Record<string, unknown>);
+
+test("SEMU packets split into metadata and Annex-B, and unframed payloads pass through", () => {
+  const framed = parseSemuPacket(semu(DELTA_UNIT, { key: false, pts: 33_333 }));
+  assert.deepEqual([...framed.data], DELTA_UNIT);
+  assert.equal(framed.isKey, false);
+  assert.equal(framed.timestamp, 33_333);
+  const key = parseSemuPacket(semu(KEY_UNIT, { key: true, pts: 0 }));
+  assert.equal(key.isKey, true);
+  // A wrong version or a short message is treated as raw Annex-B.
+  const versionTwo = new Uint8Array(semu(DELTA_UNIT, { key: true, pts: 1 }));
+  versionTwo[4] = 2;
+  assert.deepEqual(parseSemuPacket(versionTwo.buffer), { data: versionTwo, isKey: null, timestamp: null });
+  const raw = new Uint8Array(KEY_UNIT);
+  assert.deepEqual(parseSemuPacket(raw.buffer).isKey, null);
+});
+
+test("an access unit scan finds the IDR flag and the SPS that names the codec", () => {
+  const scanned = scanAccessUnit(new Uint8Array(KEY_UNIT));
+  assert.equal(scanned.isKey, true);
+  assert.equal(avcCodecString(scanned.sps!), "avc1.640028");
+  assert.deepEqual(scanAccessUnit(new Uint8Array(DELTA_UNIT)), { isKey: false, sps: null });
+});
+
+test("Android keys: printable characters are text, editing keys are keycodes, Escape is Back", () => {
+  const cases: Array<[Parameters<typeof androidKeyMessage>[0], unknown]> = [
+    [{ key: "a" }, { type: "text", text: "a" }],
+    [{ key: "Ä" }, { type: "text", text: "Ä" }],
+    [{ key: " " }, { type: "text", text: " " }],
+    [{ key: "Enter" }, { type: "key", keycode: 66 }],
+    [{ key: "Backspace" }, { type: "key", keycode: 67 }],
+    [{ key: "Delete" }, { type: "key", keycode: 112 }],
+    [{ key: "ArrowLeft" }, { type: "key", keycode: 21 }],
+    [{ key: "Tab" }, { type: "key", keycode: 61 }],
+    [{ key: "Home" }, { type: "key", keycode: 122 }],
+    [{ key: "PageDown" }, { type: "key", keycode: 93 }],
+    [{ key: "Escape" }, { type: "back" }],
+  ];
+  for (const [detail, expected] of cases) {
+    assert.deepEqual(JSON.parse(androidKeyMessage(detail, "down")!), expected, detail.key);
+  }
+  // Shortcuts, bare modifiers, and releases send nothing.
+  assert.equal(androidKeyMessage({ key: "c", metaKey: true }, "down"), null);
+  assert.equal(androidKeyMessage({ key: "c", ctrlKey: true }, "down"), null);
+  assert.equal(androidKeyMessage({ key: "Shift" }, "down"), null);
+  assert.equal(androidKeyMessage({ key: "a" }, "up"), null);
+});
+
+test("an Android stream is one serve-emu socket: video configures from the SPS and decodes with its pts", async () => {
+  const h = harness({ webCodecs: true, android: true });
+  h.client.start();
+  assert.deepEqual(h.fetches, [], "Android never fetches an AVCC or MJPEG stream");
+  assert.equal(h.sockets.length, 1);
+  assert.equal(
+    h.sockets[0]!.url,
+    "ws://127.0.0.1:4100/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1&t=tok&host=local",
+  );
+  const ws = h.sockets[0]!;
+  ws.open();
+  assert.ok(h.log.includes("input:true"));
+
+  // A delta before any keyframe asks for one.
+  ws.onmessage?.({ data: semu(DELTA_UNIT, { key: false, pts: 1 }) });
+  assert.deepEqual(sentJson(ws), [{ type: "reset-video", ack: false }]);
+
+  ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 0 }) });
+  await settle();
+  const decoder = h.decoders[0]!;
+  assert.equal(decoder.configs[0]?.codec, "avc1.640028");
+  assert.equal(sentJson(ws).length, 2, "a configured decoder asks for a fresh keyframe");
+
+  ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 100 }) });
+  ws.onmessage?.({ data: semu(DELTA_UNIT, { key: false, pts: 16_767 }) });
+  assert.deepEqual(decoder.decoded.map((chunk) => ({ type: chunk.type, timestamp: chunk.timestamp })), [
+    { type: "key", timestamp: 100 },
+    { type: "delta", timestamp: 16_767 },
+  ]);
+
+  // The decoded frame's size is the screen; serve-emu sends no screen config.
+  decoder.init.output({ displayWidth: 1080, displayHeight: 2424, close() {} } as unknown as VideoFrame);
+  assert.ok(h.log.includes("screen:1080x2424:portrait"));
+  assert.ok(h.log.includes("status:streaming"));
+  h.client.stop();
+  assert.equal(ws.closed, true);
+});
+
+test("an Android pinch is two serve-emu touches with separate pointers; the second lands last and lifts first", () => {
+  const h = harness({ webCodecs: true, android: true });
+  h.client.start();
+  const ws = h.sockets[0]!;
+  ws.open();
+  h.client.sendMultiTouch("begin", { x: 0.4, y: 0.5 }, { x: 0.6, y: 0.5 });
+  h.client.sendMultiTouch("move", { x: 0.3, y: 0.5 }, { x: 1.2, y: 0.5 });
+  h.client.sendMultiTouch("end", { x: 0.3, y: 0.5 }, { x: 0.9, y: 0.5 });
+  const touches = sentJson(ws)
+    .filter((message) => message.type === "touch")
+    .map((message) => `${String(message.action)}:${String(message.pointerId)}@${String(message.x)}`);
+  assert.deepEqual(touches, ["down:0@0.4", "down:1@0.6", "move:0@0.3", "move:1@1", "up:1@0.9", "up:0@0.3"]);
+  h.client.stop();
+});
+
+test("an encoder restart keeps the stream, rebuilds the decoder, and reports the new size", async () => {
+  const h = harness({ webCodecs: true, android: true });
+  h.client.start();
+  const ws = h.sockets[0]!;
+  ws.open();
+  ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 0 }) });
+  await settle();
+  h.decoders[0]!.init.output({ displayWidth: 1080, displayHeight: 2424, close() {} } as unknown as VideoFrame);
+  h.log.length = 0;
+
+  // Folding restarts serve-emu's encoder at the outer display's size.
+  ws.onmessage?.({ data: JSON.stringify({ type: "video-session", width: 2208, height: 1840 }) });
+  assert.equal(h.decoders[0]!.state, "closed");
+  assert.deepEqual(h.log, ["status:connecting"]);
+  const requests = sentJson(ws);
+  assert.deepEqual(requests[requests.length - 1], { type: "reset-video", ack: false });
+  assert.equal(ws.closed, false, "the socket, and with it input, stays up");
+
+  ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 5 }) });
+  await settle();
+  ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 6 }) });
+  const rebuilt = h.decoders[1]!;
+  rebuilt.init.output({ displayWidth: 2208, displayHeight: 1840, close() {} } as unknown as VideoFrame);
+  assert.ok(h.log.includes("screen:2208x1840:landscape_left"));
+  assert.ok(h.log.includes("status:streaming"));
+  h.client.stop();
+});
+
+test("Android touches, keys, and hardware buttons are JSON gestures on the same socket", () => {
+  const h = harness({ webCodecs: true, android: true });
+  h.client.start();
+  const ws = h.sockets[0]!;
+  ws.open();
+  h.client.sendTouch("begin", 0.25, 0.5);
+  h.client.sendTouch("move", 0.3, 0.5);
+  h.client.sendTouch("end", 0.3, 0.6);
+  h.client.sendKey("KeyA", "down", { key: "a" });
+  h.client.sendKey("KeyA", "up", { key: "a" });
+  h.client.sendKey("Escape", "down", { key: "Escape" });
+  h.client.sendKey("KeyB", "down");
+  for (const button of ["home", "back", "recents", "power", "lock", "appSwitcher"] as const) h.client.pressButton(button);
+  h.client.rotate();
+  h.client.setOrientation("landscape_left");
+  assert.deepEqual(sentJson(ws), [
+    { type: "touch", action: "down", x: 0.25, y: 0.5 },
+    { type: "touch", action: "move", x: 0.3, y: 0.5 },
+    { type: "touch", action: "up", x: 0.3, y: 0.6 },
+    { type: "text", text: "a" },
+    { type: "back" },
+    { type: "home" },
+    { type: "back" },
+    { type: "recents" },
+    { type: "power" },
+    { type: "power" },
+    { type: "recents" },
+  ]);
+  assert.equal(ws.sent.filter((item) => typeof item !== "string").length, 0, "no serve-sim binary packets");
+  h.client.stop();
+});
+
+test("an Android socket retries after a drop, renews an expired grant, and fails without WebCodecs", () => {
+  const h = harness({ webCodecs: true, android: true });
+  h.client.start();
+  h.sockets[0]!.open();
+  h.sockets[0]!.drop(1011, "device restarting");
+  assert.ok(h.log.includes("status:connecting:device restarting"));
+  h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS);
+  assert.equal(h.sockets.length, 2);
+  // A 1006 while the grant is live is a dropped emulator, not a refused grant.
+  h.sockets[1]!.drop(1006);
+  assert.ok(!h.log.includes("unauthorized"));
+  h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS);
+  assert.equal(h.sockets.length, 3);
+  h.client.stop();
+  // Once the grant is about to expire, the proxy's refusal (also 1006) renews it.
+  const expiring = harness({ webCodecs: true, android: true, expiresAt: 3_000 });
+  expiring.client.start();
+  expiring.sockets[0]!.drop(1006);
+  assert.ok(expiring.log.includes("unauthorized"));
+  assert.equal(expiring.clock.pending(), 0);
+
+  const without = harness({ android: true });
+  without.client.start();
+  assert.equal(without.sockets.length, 0);
+  assert.ok(without.log.some((line) => line.startsWith("status:error:This Mac cannot decode the emulator stream")));
+});
+
+test("an undecodable Android profile stops with a reason instead of falling back to MJPEG", async () => {
+  const h = harness({ webCodecs: true, android: true });
+  h.setSupported(false);
+  h.client.start();
+  h.sockets[0]!.open();
+  h.sockets[0]!.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 0 }) });
+  await settle();
+  assert.ok(h.log.includes("status:error:This Mac cannot decode the emulator's avc1.640028 video."));
+  assert.ok(!h.log.some((line) => line.startsWith("mjpeg:")));
 });

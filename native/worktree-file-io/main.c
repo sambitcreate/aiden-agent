@@ -545,7 +545,93 @@ static int create_file(int argc, char **argv) {
   return 0;
 }
 
+#define MAX_SAVE_BYTES (64U * 1024U * 1024U)
+
+/* save <root> <root-dev> <root-ino> <relative> <bytes>
+ * Create or replace a regular file beneath descriptors opened one component
+ * at a time from the identified root (creating missing directories with
+ * mkdirat), never following a symlink. Exactly <bytes> from stdin go to a
+ * fresh O_EXCL temporary in the held parent, which then replaces the leaf
+ * with renameat on that same descriptor. A renamed or replaced ancestor
+ * cannot redirect the write, and an existing leaf is replaced as a directory
+ * entry, never truncated, so a hard link to a file elsewhere keeps its
+ * contents. An existing leaf that is not a regular file is refused. Prints
+ * "c <dev> <ino>". */
+static int save_file(int argc, char **argv) {
+  uint64_t device, inode, bytes;
+  if (argc != 7 || !decimal(argv[3], &device) || !decimal(argv[4], &inode) ||
+      !valid_relative(argv[5]) || !decimal(argv[6], &bytes) ||
+      bytes > MAX_SAVE_BYTES) {
+    return fail("invalid_input");
+  }
+  int root = open_root(argv[2], device, inode);
+  if (root < 0) return fail("unsafe_destination");
+  char leaf[MAX_RELATIVE_PATH + 1];
+  int parent = parent_at(root, argv[5], 1, leaf);
+  close(root);
+  if (parent < 0) return fail("unsafe_destination");
+  if (test_checkpoint('P') != 0) { close(parent); return fail("io_failed"); }
+  struct stat existing;
+  if (fstatat(parent, leaf, &existing, AT_SYMLINK_NOFOLLOW) == 0) {
+    if (!S_ISREG(existing.st_mode)) { close(parent); return fail("unsafe_destination"); }
+  } else if (errno != ENOENT) {
+    close(parent);
+    return fail("unsafe_destination");
+  }
+  unsigned char nonce[16];
+  arc4random_buf(nonce, sizeof(nonce));
+  char suffix[sizeof(nonce) * 2 + 1];
+  for (size_t i = 0; i < sizeof(nonce); i++) snprintf(suffix + i * 2, 3, "%02x", nonce[i]);
+  char temporary[64];
+  snprintf(temporary, sizeof(temporary), ".aiden-save-%s.tmp", suffix);
+  int descriptor = openat(parent, temporary,
+                          O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                          0644);
+  if (descriptor < 0) { close(parent); return fail("io_failed"); }
+  char buffer[BUFFER_BYTES];
+  uint64_t copied = 0;
+  while (copied < bytes) {
+    size_t want = (size_t)((bytes - copied) < BUFFER_BYTES ? (bytes - copied) : BUFFER_BYTES);
+    ssize_t got = read(STDIN_FILENO, buffer, want);
+    if (got < 0 && errno == EINTR) continue;
+    if (got <= 0) break;
+    size_t offset = 0;
+    while (offset < (size_t)got) {
+      ssize_t put = write(descriptor, buffer + offset, (size_t)got - offset);
+      if (put < 0 && errno == EINTR) continue;
+      if (put <= 0) break;
+      offset += (size_t)put;
+    }
+    if (offset != (size_t)got) break;
+    copied += (uint64_t)got;
+  }
+  struct stat metadata;
+  int ok = copied == bytes && fsync(descriptor) == 0 && fstat(descriptor, &metadata) == 0 &&
+           S_ISREG(metadata.st_mode);
+  close(descriptor);
+  if (ok && test_checkpoint('W') != 0) ok = 0;
+  if (!ok) {
+    (void)unlinkat(parent, temporary, 0);
+    close(parent);
+    return fail("io_failed");
+  }
+  /* A directory or link that appeared at the leaf meanwhile is refused. One
+   * that appears after this check is harmless: renameat replaces a link
+   * itself without following it, and cannot replace a directory. */
+  if ((fstatat(parent, leaf, &existing, AT_SYMLINK_NOFOLLOW) == 0 && !S_ISREG(existing.st_mode)) ||
+      renameat(parent, temporary, parent, leaf) != 0) {
+    (void)unlinkat(parent, temporary, 0);
+    close(parent);
+    return fail("unsafe_destination");
+  }
+  (void)fsync(parent);
+  close(parent);
+  printf("c %" PRIu64 " %" PRIu64 "\n", (uint64_t)metadata.st_dev, (uint64_t)metadata.st_ino);
+  return ferror(stdout) ? fail("io_failed") : 0;
+}
+
 int main(int argc, char **argv) {
+  if (argc >= 2 && strcmp(argv[1], "save") == 0) return save_file(argc, argv);
   if (argc >= 2 && strcmp(argv[1], "list") == 0) return list_directory(argc, argv);
   if (argc >= 2 && strcmp(argv[1], "read") == 0) return editor_file(argc, argv, 0);
   if (argc >= 2 && strcmp(argv[1], "edit") == 0) return editor_file(argc, argv, 1);

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 25,
+  "contractRevision": 26,
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
@@ -1472,7 +1472,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 25,
+    "contractRevision": 26,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -1852,6 +1852,67 @@
       { "state": "failed", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "error": "The summary could not be generated." }
     ],
     "summaryCancel": { "cancelled": true }
+  },
+  "mobileSimulators": {
+    "feature": "mobile-simulators-v1",
+    "capability": "simulators:mobile",
+    "listing": {
+      "sharing": true,
+      "status": "ready",
+      "devices": [
+        { "id": "5A0C1F3E-0000-4000-8000-000000000001", "name": "iPhone 17 Pro", "platform": "ios", "version": "26.0", "booted": true, "kind": "iphone" },
+        { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": false, "kind": "ipad" },
+        { "id": "emulator-5554", "name": "Pixel 9", "platform": "android", "version": "16", "booted": true, "kind": "other" },
+        { "id": "Pixel_9_API_35", "name": "Pixel 9 API 35", "platform": "android", "version": "15", "booted": false, "kind": "other" }
+      ],
+      "chatDeviceIds": ["5A0C1F3E-0000-4000-8000-000000000001", "emulator-5554"],
+      "toolVersions": { "hub": "0.12.0", "agent": "0.21.12" }
+    },
+    "sharingOff": { "sharing": false, "status": "ready", "devices": [] },
+    "openResponse": { "device": { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": true, "kind": "ipad" } },
+    "shutdownResponse": { "ok": true },
+    "hubRoutes": {
+      "mjpeg": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/stream.mjpeg",
+      "config": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/config",
+      "input": "/simulators/hub/vendor/serve-sim/helper/ws?device={deviceId}"
+    },
+    "inputMessages": [
+      { "command": { "kind": "hardwareKeyboard", "enabled": false }, "tag": 13, "payload": { "enabled": false } },
+      { "command": { "kind": "touch", "phase": "begin", "x": 0.25, "y": 0.75 }, "tag": 3, "payload": { "type": "begin", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "move", "x": 0.75, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_right" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.25 } },
+      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait_upside_down" }, "tag": 3, "payload": { "type": "end", "x": 0.75, "y": 0.25 } },
+      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "end", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "button", "button": "home" }, "tag": 4, "payload": { "button": "home" } },
+      { "command": { "kind": "button", "button": "lock" }, "tag": 4, "payload": { "button": "lock" } },
+      { "command": { "kind": "button", "button": "appSwitcher" }, "tag": 4, "payload": { "button": "app_switcher" } },
+      { "command": { "kind": "rotate" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 7, "payload": { "orientation": "landscape_left" } },
+      { "command": { "kind": "rotate" }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_right" }, "tag": 7, "payload": { "orientation": "portrait" } },
+      { "command": { "kind": "rotate" }, "tag": 7, "payload": { "orientation": "landscape_left" } }
+    ],
+    "screenConfigs": [
+      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "portrait" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" } },
+      { "tag": 130, "payload": { "width": 2622, "height": 1206, "orientation": "landscape_left", "screenId": 1, "futureField": true }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" } },
+      { "tag": 130, "payload": { "width": 0, "height": 2622, "orientation": "portrait" }, "screen": null },
+      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "sideways" }, "screen": null },
+      { "tag": 144, "payload": { "requestId": 1, "ok": true }, "screen": null }
+    ],
+    "mjpeg": {
+      "contentType": "multipart/x-mixed-replace; boundary=frame",
+      "streamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQpDb250ZW50LUxlbmd0aDogMTQNCg0K/9j/4AAQSkZJRgAB/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KQ29udGVudC1MZW5ndGg6IDE1DQoNCv/Y/9sNCi0tZnJhbWX/2Q0K",
+      "framesBase64": ["/9j/4AAQSkZJRgAB/9k=", "/9j/2w0KLS1mcmFtZf/Z"],
+      "unlengthedStreamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQoNCv/YAQID/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KDQr/2AQF/9kNCi0tZnJhbWUNCg==",
+      "unlengthedFramesBase64": ["/9gBAgP/2Q==", "/9gEBf/Z"]
+    },
+    "refusal": {
+      "error": {
+        "code": "capability_denied",
+        "message": "Phones can watch, tap, and shut down shared simulators, but not change their settings.",
+        "requestId": "request_fixture_sim_01",
+        "retryable": false
+      }
+    }
   },
   "botAvatarPalette": {"face":"#292735","colors":{"lilac":"#C6A9FF","sky":"#83D8FF","mint":"#88E8B1","sun":"#FFDA7B","periwinkle":"#B2BCFF","coral":"#FF9F9B","peach":"#FFC294","aqua":"#78E8DF","rose":"#FFA3C7","lime":"#C6EC7E","plum":"#DDA8F2","graphite":"#C5C5CE"}},
   "botSessionFailedTurns": [{"type":"failed_turn","id":"entry_14:failed","createdAt":"2026-08-19T16:00:05.000Z","retryText":"Plan my week, please."},{"type":"failed_turn","id":"entry_16:failed"}]

@@ -897,7 +897,7 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 25);
+  assert.equal(fixture.contractRevision, 26);
   assert.equal(fixture.botList.maxBots, 256);
   assert.equal(fixture.botSummary.health, "ready");
   assert.equal(fixture.botDetail.access.botId, fixture.botDetail.id);

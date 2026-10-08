@@ -12,6 +12,7 @@ import {
   AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
@@ -102,9 +103,12 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
   ["[2001:db8:0:0:0:0:0]", false],
 ];
 
-// Simulator control is a desktop-to-desktop grant that pairing never issues.
+// Simulator control is a desktop-to-desktop grant that pairing never issues,
+// and the phone simulator viewer grant is negotiated only after pairing.
 const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
-  (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+  (capability) =>
+    !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
+    !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
 );
 // Host-wide grants are issued to desktops only, so phones are never told they
 // exist either and the shared mobile fixture omits both families.
@@ -114,7 +118,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 25);
+  assert.equal(fixture.contractRevision, 26);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -392,6 +396,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   // parses without the section and is refused with it.
   const revision19 = structuredClone(raw);
   delete revision19.phoneRunEvents;
+  delete revision19.mobileSimulators;
   revision19.contractRevision = 19;
   record(revision19.hostHealth, "hostHealth").contractRevision = 19;
   // The messages window's metadata is revision 23, so the older fixture omits it.
@@ -2107,6 +2112,91 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
   assert.deepEqual(parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom, rowLineage);
   assert.equal(parseAidenRemoteChatSummaryProjection(row).forkedFrom, undefined);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: lineage() }));
+});
+
+test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG shapes from revision 26", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const section = parseAidenRemoteContractFixture(raw).mobileSimulators;
+  assert.ok(section);
+  assert.equal(section.capability, "simulators:mobile");
+  // The listing carries a running Android emulator and a stopped AVD (listed by
+  // its AVD name), both shown on a phone as "Open on your Mac to view".
+  assert.deepEqual(
+    (section.listing.devices as Array<{ id: string; platform: string }>).map(({ id, platform }) => [id, platform]),
+    [
+      ["5A0C1F3E-0000-4000-8000-000000000001", "ios"],
+      ["5A0C1F3E-0000-4000-8000-000000000002", "ios"],
+      ["emulator-5554", "android"],
+      ["Pixel_9_API_35", "android"],
+    ],
+  );
+  // The second sample frame contains the boundary bytes, so only Content-Length frames it.
+  const second = Buffer.from(section.mjpeg.framesBase64[1]!, "base64");
+  assert.ok(second.includes(Buffer.from("\r\n--frame")));
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => () => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return parseAidenRemoteContractFixture(copy);
+  };
+  const mobile = (copy: Record<string, unknown>) => record(copy.mobileSimulators, "mobileSimulators");
+  assert.throws(
+    mutate((copy) => {
+      delete (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[2]!.platform;
+    }),
+    /missing platform/u,
+  );
+  // The fixture admits exactly the ids the desktop lists: a leading dot or a path separator never parses.
+  for (const id of [".hidden", "../hub/admin", "a b", "x".repeat(129)]) {
+    assert.throws(
+      mutate((copy) => {
+        (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[3]!.id = id;
+      }),
+      /device 3 id is invalid/u,
+      id,
+    );
+  }
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).listing, "listing").chatDeviceIds = ["NOT-LISTED"];
+    }),
+    /chatDeviceIds must name listed devices/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).sharingOff, "sharingOff").devices = [
+        { id: "A", name: "iPhone", platform: "ios", version: "26.0", booted: true, kind: "iphone" },
+      ];
+    }),
+    /no devices while sharing is off/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      // A phone never sends the Duo hinge command or keyboard keys through this contract.
+      (mobile(copy).inputMessages as Array<Record<string, unknown>>)[0]!.tag = 0x10;
+    }),
+    /tag phones never send/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).refusal, "refusal").error = {
+        code: "not_found",
+        message: "x",
+        requestId: "request_fixture_sim_01",
+        retryable: false,
+      };
+    }),
+    /must be capability_denied/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      delete copy.phoneRunEvents;
+      delete copy.chatFork;
+      copy.contractRevision = 25;
+      record(copy.hostHealth, "hostHealth").contractRevision = 25;
+    }),
+    /require contract revision 26/u,
+  );
 });
 
 test("failed-turn entries parse strictly, with and without a message to retry", async () => {

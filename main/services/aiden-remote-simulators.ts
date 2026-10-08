@@ -2,16 +2,22 @@
  * Serving side of simulator sharing between paired Macs (Simulator devices
  * Phase 5). A paired `mac`/`linux` device holding the negotiated
  * `simulators:control` capability may list, open, shut down and configure
- * this Mac's iOS Simulators, and reach its device hub through a relay that
- * applies the Simulator tab proxy's allowlist.
+ * this Mac's iOS Simulators and Android Emulators, and reach its device hub
+ * through a relay that applies the Simulator tab proxy's allowlist.
  *
- * The owner's "Share with paired Macs" consent gates every call. Turning it
- * off, revoking the device, or stopping the hub closes live relays.
+ * Phones and tablets holding `simulators:mobile` (contract revision 26) are
+ * the `mobile` audience: they may list, open and shut down simulators, watch
+ * the MJPEG stream and drive the input socket, and nothing else.
+ *
+ * Each audience has its own owner consent: "Share with paired Macs" for
+ * desktops and "Share with Aiden On The Go" for phones. Turning one off,
+ * revoking the device, or stopping the hub closes that audience's relays.
  */
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
-import type { Duplex } from "node:stream";
+import { Transform, type Duplex, type TransformCallback } from "node:stream";
 import {
+  DEVICE_ID_PATTERN,
   LOCAL_DEVICE_HOST_ID,
   parseDeviceActionInput,
   type DeviceActionInput,
@@ -20,6 +26,7 @@ import {
   type DeviceSummary,
 } from "../../renderer/shared/devices.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { MOBILE_SIMULATOR_INPUT_TAGS } from "./aiden-remote-protocol.js";
 import {
   decideDeviceHubRoute,
   hubRequestHeaders,
@@ -33,7 +40,136 @@ export const AIDEN_REMOTE_SIMULATOR_HUB_PREFIX = "/simulators/hub";
 const MAX_SCREENSHOT_BODY_BYTES = 1_024;
 /** Open relays per paired device: a few simulators' frame and input streams, with headroom. */
 export const MAX_RELAYS_PER_DEVICE = 8;
-const UDID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
+
+/** Who a relay call serves: a paired desktop (`simulators:control`) or a phone (`simulators:mobile`). */
+export type AidenRemoteSimulatorAudience = "desktop" | "mobile";
+
+/**
+ * Hub routes a phone may reach: the MJPEG stream, the screen config and
+ * health reads, and the input socket. Screenshots, the accessibility tree,
+ * the event log, H.264 and the device list socket stay desktop-only.
+ */
+const MOBILE_HUB_HTTP_PATH = /^\/vendor\/serve-sim\/helper\/[A-Za-z0-9-]+\/(stream\.mjpeg|config|health)$/u;
+const MOBILE_HUB_WS_PATH = /^\/vendor\/serve-sim\/helper\/ws$/u;
+
+export const MOBILE_SIMULATOR_REFUSAL =
+  "Phones can watch, tap, and shut down shared simulators, but not change their settings.";
+
+/** RFC 6455 close code for a message that breaks the endpoint's policy. */
+export const MOBILE_INPUT_POLICY_CLOSE_CODE = 1008;
+/** How long a phone gets to finish the closing handshake before its socket is destroyed. */
+const MOBILE_INPUT_CLOSE_GRACE_MS = 1_000;
+const EMPTY = Buffer.alloc(0);
+
+type FrameVerdict = "more" | "deny" | { frameLength: number };
+
+/**
+ * Checks a phone's input socket (phone to hub) frame by frame. Phones send one
+ * masked binary `[tag][JSON]` message per input, and the tag must be in
+ * `MOBILE_SIMULATOR_INPUT_TAGS` (touch, button, orientation, hardware
+ * keyboard). Ping, pong and close frames pass, as do continuations of an
+ * accepted message. Anything else (another tag, a text or empty message, an
+ * unmasked frame, a reserved opcode, or RSV bits, since the relay negotiates
+ * no extension for phones) is a violation: the offending frame and every byte
+ * after it are dropped and `onViolation` runs once, which closes the socket
+ * with 1008. The native clients never send anything else, so closing is
+ * preferred over silently dropping a frame and keeping a misbehaving client.
+ */
+export class MobileSimulatorInputFilter extends Transform {
+  /** The start of a frame whose verdict needs more bytes. */
+  private pending: Buffer = EMPTY;
+  /** Bytes of an accepted frame still to forward unread. */
+  private passing = 0;
+  /** An accepted data message continues in continuation frames. */
+  private inMessage = false;
+  private violated = false;
+
+  constructor(private readonly onViolation: () => void) {
+    super();
+  }
+
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
+    if (this.violated) return callback();
+    const accepted: Buffer[] = [];
+    let data = chunk;
+    while (data.length > 0) {
+      if (this.passing > 0) {
+        const take = Math.min(this.passing, data.length);
+        accepted.push(data.subarray(0, take));
+        this.passing -= take;
+        data = data.subarray(take);
+        continue;
+      }
+      const frame = this.pending.length > 0 ? Buffer.concat([this.pending, data]) : data;
+      data = EMPTY;
+      const verdict = this.verdict(frame);
+      if (verdict === "more") {
+        this.pending = Buffer.from(frame);
+        break;
+      }
+      this.pending = EMPTY;
+      if (verdict === "deny") {
+        this.violated = true;
+        if (accepted.length > 0) this.push(Buffer.concat(accepted));
+        this.onViolation();
+        return callback();
+      }
+      const take = Math.min(verdict.frameLength, frame.length);
+      accepted.push(frame.subarray(0, take));
+      this.passing = verdict.frameLength - take;
+      data = frame.subarray(take);
+    }
+    if (accepted.length > 0) this.push(Buffer.concat(accepted));
+    callback();
+  }
+
+  private verdict(frame: Buffer): FrameVerdict {
+    if (frame.length < 2) return "more";
+    const first = frame[0]!;
+    const second = frame[1]!;
+    const fin = (first & 0x80) !== 0;
+    const opcode = first & 0x0f;
+    if ((first & 0x70) !== 0 || (second & 0x80) === 0) return "deny";
+    let payloadLength = second & 0x7f;
+    let offset = 2;
+    if (payloadLength === 126) {
+      if (frame.length < 4) return "more";
+      payloadLength = frame.readUInt16BE(2);
+      offset = 4;
+    } else if (payloadLength === 127) {
+      if (frame.length < 10) return "more";
+      const long = frame.readBigUInt64BE(2);
+      if (long > BigInt(Number.MAX_SAFE_INTEGER)) return "deny";
+      payloadLength = Number(long);
+      offset = 10;
+    }
+    const headerLength = offset + 4;
+    if (frame.length < headerLength) return "more";
+    const accept = { frameLength: headerLength + payloadLength };
+    if (opcode >= 0x8) return opcode <= 0xa && fin && payloadLength <= 125 ? accept : "deny";
+    if (opcode === 0x0) {
+      if (!this.inMessage) return "deny";
+      this.inMessage = !fin;
+      return accept;
+    }
+    if (opcode !== 0x2 || this.inMessage || payloadLength === 0) return "deny";
+    if (frame.length < headerLength + 1) return "more";
+    // The first payload byte, unmasked with the first mask byte.
+    const tag = frame[headerLength]! ^ frame[offset]!;
+    if (!MOBILE_SIMULATOR_INPUT_TAGS.has(tag)) return "deny";
+    this.inMessage = !fin;
+    return accept;
+  }
+}
+
+/** An unmasked server close frame carrying `code` and a short reason. */
+function websocketCloseFrame(code: number, reason: string): Buffer {
+  const text = Buffer.from(reason, "utf8");
+  const payload = Buffer.alloc(2 + text.length);
+  payload.writeUInt16BE(code, 0);
+  text.copy(payload, 2);
+  return Buffer.concat([Buffer.from([0x88, payload.length]), payload]);
+}
 
 export type AidenRemoteSimulator = Omit<DeviceSummary, "hostId">;
 
@@ -42,13 +178,25 @@ export interface AidenRemoteSimulatorListing {
   status: DeviceHostStatus;
   detail?: string;
   devices: AidenRemoteSimulator[];
+  /** With a `chatId`: the listed simulators the desktop attached to that chat. */
+  chatDeviceIds?: string[];
+  /** Phones only: the pinned helper versions, shown in the viewer's options. */
+  toolVersions?: { hub: string; agent: string };
 }
 
-/** What the device service offers paired Macs. Every method refuses while sharing is off. */
+export interface AidenRemoteSimulatorListOptions {
+  /**
+   * Also report the simulators attached to this chat. The caller has already
+   * checked the device may read it. A chat-scoped listing never starts the hub.
+   */
+  chatId?: string;
+}
+
+/** What the device service offers one audience. Every method refuses while that audience's sharing is off. */
 export interface AidenRemoteSimulatorHost {
   sharing(): boolean;
   /** Lists simulators, starting an already-installed hub but never installing. */
-  list(): Promise<AidenRemoteSimulatorListing>;
+  list(options?: AidenRemoteSimulatorListOptions): Promise<AidenRemoteSimulatorListing>;
   open(deviceId: string): Promise<AidenRemoteSimulator>;
   shutdown(deviceId: string): Promise<void>;
   settings(deviceId: string): Promise<DeviceSettings>;
@@ -68,6 +216,10 @@ function sharingOff(): AidenRemoteServiceError {
   return new AidenRemoteServiceError("not_found", "Simulator sharing is off on this Mac.", 404);
 }
 
+function mobileRefused(): AidenRemoteServiceError {
+  return new AidenRemoteServiceError("capability_denied", MOBILE_SIMULATOR_REFUSAL, 403);
+}
+
 function unknownSimulator(): AidenRemoteServiceError {
   return new AidenRemoteServiceError("not_found", "That simulator is no longer available.", 404);
 }
@@ -85,7 +237,7 @@ function requireDeviceId(body: unknown): string {
       : undefined;
   if (
     typeof deviceId !== "string" ||
-    !UDID_PATTERN.test(deviceId) ||
+    !DEVICE_ID_PATTERN.test(deviceId) ||
     Object.keys(body as Record<string, unknown>).length !== 1
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The simulator request is invalid.", 400);
@@ -100,6 +252,10 @@ export interface AidenRemoteSimulatorRouteContext {
   path: string;
   query: string;
   deviceId: string;
+  /** Defaults to `desktop`. */
+  audience?: AidenRemoteSimulatorAudience;
+  /** A chat the router already authorized for `GET /simulators?chatId=`. */
+  chatId?: string;
   readJson(maximumBytes: number): Promise<unknown>;
   writeJson(status: number, value: unknown): void;
 }
@@ -110,18 +266,27 @@ export interface AidenRemoteSimulatorRouteContext {
  */
 export class AidenRemoteSimulatorRelay {
   private readonly live = new Map<string, Set<{ destroy(): void }>>();
-  private subscribed: AidenRemoteSimulatorHost | null = null;
-  private unsubscribe: (() => void) | null = null;
+  /** The audience each paired device's live relays serve. */
+  private readonly liveAudience = new Map<string, AidenRemoteSimulatorAudience>();
+  private readonly subscriptions = new Map<
+    AidenRemoteSimulatorAudience,
+    { host: AidenRemoteSimulatorHost; unsubscribe: () => void }
+  >();
 
-  constructor(private readonly resolve: () => AidenRemoteSimulatorHost | null) {}
+  constructor(
+    private readonly resolve: (audience: AidenRemoteSimulatorAudience) => AidenRemoteSimulatorHost | null,
+  ) {}
 
-  host(): AidenRemoteSimulatorHost | null {
-    const host = this.resolve();
-    if (host && host !== this.subscribed) {
-      this.unsubscribe?.();
-      this.subscribed = host;
-      this.unsubscribe = host.onSharingChanged((sharing) => {
-        if (!sharing) this.closeAll();
+  host(audience: AidenRemoteSimulatorAudience = "desktop"): AidenRemoteSimulatorHost | null {
+    const host = this.resolve(audience);
+    const current = this.subscriptions.get(audience);
+    if (host && host !== current?.host) {
+      current?.unsubscribe();
+      this.subscriptions.set(audience, {
+        host,
+        unsubscribe: host.onSharingChanged((sharing) => {
+          if (!sharing) this.closeAudience(audience);
+        }),
       });
     }
     return host;
@@ -131,11 +296,19 @@ export class AidenRemoteSimulatorRelay {
   revokeDevice(deviceId: string): void {
     const connections = this.live.get(deviceId);
     this.live.delete(deviceId);
+    this.liveAudience.delete(deviceId);
     for (const connection of connections ?? []) connection.destroy();
   }
 
   closeAll(): void {
     for (const deviceId of [...this.live.keys()]) this.revokeDevice(deviceId);
+  }
+
+  /** Closes the relays one audience holds, e.g. when its sharing consent turns off. */
+  closeAudience(audience: AidenRemoteSimulatorAudience): void {
+    for (const [deviceId, owner] of [...this.liveAudience]) {
+      if (owner === audience) this.revokeDevice(deviceId);
+    }
   }
 
   private requireRelayCapacity(deviceId: string): void {
@@ -144,18 +317,26 @@ export class AidenRemoteSimulatorRelay {
     }
   }
 
-  private track(deviceId: string, connection: { destroy(): void; once(event: "close", listener: () => void): unknown }) {
+  private track(
+    deviceId: string,
+    audience: AidenRemoteSimulatorAudience,
+    connection: { destroy(): void; once(event: "close", listener: () => void): unknown },
+  ) {
     const set = this.live.get(deviceId) ?? new Set();
     set.add(connection);
     this.live.set(deviceId, set);
+    this.liveAudience.set(deviceId, audience);
     connection.once("close", () => {
       set.delete(connection);
-      if (set.size === 0 && this.live.get(deviceId) === set) this.live.delete(deviceId);
+      if (set.size === 0 && this.live.get(deviceId) === set) {
+        this.live.delete(deviceId);
+        this.liveAudience.delete(deviceId);
+      }
     });
   }
 
-  private requireSharing(): AidenRemoteSimulatorHost {
-    const host = this.host();
+  private requireSharing(audience: AidenRemoteSimulatorAudience): AidenRemoteSimulatorHost {
+    const host = this.host(audience);
     if (!host) throw simulatorsUnavailable();
     if (!host.sharing()) throw sharingOff();
     return host;
@@ -164,30 +345,38 @@ export class AidenRemoteSimulatorRelay {
   /** Handles an authenticated `/simulators…` request. Resolves when the response is done. */
   async handle(context: AidenRemoteSimulatorRouteContext): Promise<void> {
     const { request, path, query } = context;
+    const audience = context.audience ?? "desktop";
     if (path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
-      await this.relayRequest(context);
+      await this.relayRequest(context, audience);
       return;
     }
     if (query) {
       throw new AidenRemoteServiceError("invalid_request", "This endpoint does not accept query parameters.", 400);
     }
-    const host = this.host();
+    const host = this.host(audience);
     if (!host) throw simulatorsUnavailable();
     if (request.method === "GET" && path === "/simulators") {
       let listing: AidenRemoteSimulatorListing;
       try {
-        listing = await host.list();
+        listing = await host.list(context.chatId === undefined ? undefined : { chatId: context.chatId });
       } catch (error) {
         throw simulatorFailure(error);
       }
       context.writeJson(200, listing.sharing ? listing : { sharing: false, status: listing.status, devices: [] });
       return;
     }
+    if (context.chatId !== undefined) {
+      throw new AidenRemoteServiceError("invalid_request", "This endpoint does not accept query parameters.", 400);
+    }
     if (request.method !== "POST") {
       throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
     }
+    // Settings and device actions stay desktop-only; refuse before reading the body.
+    if (audience === "mobile" && (path === "/simulators/settings" || path === "/simulators/action")) {
+      throw mobileRefused();
+    }
     const body = await context.readJson(4_096);
-    const shared = this.requireSharing();
+    const shared = this.requireSharing(audience);
     try {
       switch (path) {
         case "/simulators/open": {
@@ -233,11 +422,13 @@ export class AidenRemoteSimulatorRelay {
     path: string,
     query: string,
     upgrade: boolean,
-  ): { hubOrigin: string; upstreamPath: string; mutable: boolean } {
-    const host = this.requireSharing();
+    audience: AidenRemoteSimulatorAudience,
+  ): { hubOrigin: string; upstreamPath: string; mutable: boolean; hubPath: string } {
+    const host = this.requireSharing(audience);
+    const hubPath = path.slice(AIDEN_REMOTE_SIMULATOR_HUB_PREFIX.length);
     const route = decideDeviceHubRoute({
       method,
-      rawPath: path.slice(AIDEN_REMOTE_SIMULATOR_HUB_PREFIX.length),
+      rawPath: hubPath,
       search: new URLSearchParams(query),
       upgrade,
     });
@@ -248,36 +439,73 @@ export class AidenRemoteSimulatorRelay {
         route.status,
       );
     }
+    // Phones get the stream and input only, never a mutation such as a screenshot.
+    if (
+      audience === "mobile" &&
+      (route.mutable || !(upgrade ? MOBILE_HUB_WS_PATH : MOBILE_HUB_HTTP_PATH).test(hubPath))
+    ) {
+      throw mobileRefused();
+    }
     if (route.deviceIds.some((deviceId) => !host.isKnownDevice(deviceId))) throw unknownSimulator();
     const hubOrigin = host.hubOrigin();
     if (!hubOrigin) {
       throw new AidenRemoteServiceError("not_found", "The simulator hub is not running on this Mac.", 404, true);
     }
-    return { hubOrigin, upstreamPath: route.upstreamPath, mutable: route.mutable };
+    return { hubOrigin, upstreamPath: route.upstreamPath, mutable: route.mutable, hubPath };
   }
 
-  private async relayRequest(context: AidenRemoteSimulatorRouteContext): Promise<void> {
+  /**
+   * The only bodies the relay forwards, rebuilt from validated fields: an iOS
+   * screenshot names a listed simulator, and an Android fold names a posture.
+   * serve-emu's screenshot carries its device in the query. Stream tuning
+   * (PUT and PATCH) stays local to the Simulator tab.
+   */
+  private async relayBody(
+    context: AidenRemoteSimulatorRouteContext,
+    method: string,
+    hubPath: string,
+    audience: AidenRemoteSimulatorAudience,
+  ) {
+    const invalid = () => new AidenRemoteServiceError("invalid_request", "The simulator request is invalid.", 400);
+    if (method !== "POST") {
+      throw new AidenRemoteServiceError("invalid_request", "This method is not allowed on this route.", 405);
+    }
+    if (hubPath === "/vendor/serve-emu/api/screenshot") return undefined;
+    const parsed = await context.readJson(MAX_SCREENSHOT_BODY_BYTES);
+    const record =
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    if (hubPath === "/vendor/serve-emu/api/fold") {
+      const posture = record?.posture;
+      if (posture !== "closed" && posture !== "opened") throw invalid();
+      return Buffer.from(JSON.stringify({ posture }));
+    }
+    // The iOS screenshot capture must name a listed simulator.
+    const udid = record?.udid;
+    if (typeof udid !== "string" || !DEVICE_ID_PATTERN.test(udid)) {
+      throw new AidenRemoteServiceError("invalid_request", "The screenshot request is invalid.", 400);
+    }
+    if (!this.requireSharing(audience).isKnownDevice(udid)) throw unknownSimulator();
+    return Buffer.from(JSON.stringify({ udid }));
+  }
+
+  private async relayRequest(
+    context: AidenRemoteSimulatorRouteContext,
+    audience: AidenRemoteSimulatorAudience,
+  ): Promise<void> {
     const { request, response } = context;
     const method = request.method ?? "GET";
     if (method === "OPTIONS") {
       throw new AidenRemoteServiceError("invalid_request", "This method is not allowed on this route.", 405);
     }
-    const target = this.hubTarget(method, context.path, context.query, false);
-    this.requireRelayCapacity(context.deviceId);
-    let body: Buffer | undefined;
-    if (method === "POST") {
-      // The screenshot capture is the only body; it must name a listed simulator.
-      const parsed = await context.readJson(MAX_SCREENSHOT_BODY_BYTES);
-      const udid =
-        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-          ? (parsed as Record<string, unknown>).udid
-          : undefined;
-      if (typeof udid !== "string" || !UDID_PATTERN.test(udid)) {
-        throw new AidenRemoteServiceError("invalid_request", "The screenshot request is invalid.", 400);
-      }
-      if (!this.requireSharing().isKnownDevice(udid)) throw unknownSimulator();
-      body = Buffer.from(JSON.stringify({ udid }));
+    if (context.chatId !== undefined) {
+      throw new AidenRemoteServiceError("invalid_request", "This endpoint does not accept a chat.", 400);
     }
+    const target = this.hubTarget(method, context.path, context.query, false, audience);
+    this.requireRelayCapacity(context.deviceId);
+    const body =
+      method === "GET" || method === "HEAD" ? undefined : await this.relayBody(context, method, target.hubPath, audience);
     const headers = hubRequestHeaders(request.headers, target.hubOrigin, { forceOrigin: true });
     delete headers["content-type"];
     if (body) {
@@ -304,7 +532,7 @@ export class AidenRemoteSimulatorRelay {
         upstream.destroy();
         resolve();
       });
-      this.track(context.deviceId, response);
+      this.track(context.deviceId, audience, response);
       upstream.end(body);
     });
   }
@@ -321,26 +549,40 @@ export class AidenRemoteSimulatorRelay {
     path: string;
     query: string;
     deviceId: string;
+    /** Defaults to `desktop`. */
+    audience?: AidenRemoteSimulatorAudience;
   }): void {
     const { request, socket } = input;
+    const audience = input.audience ?? "desktop";
     if (!input.path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
       throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
     }
-    const target = this.hubTarget(request.method ?? "GET", input.path, input.query, true);
+    const target = this.hubTarget(request.method ?? "GET", input.path, input.query, true, audience);
     this.requireRelayCapacity(input.deviceId);
     const hub = new URL(target.hubOrigin);
     const upstream = connect({ host: hub.hostname, port: Number(hub.port) });
-    this.track(input.deviceId, socket);
+    this.track(input.deviceId, audience, socket);
+    const headers = hubRequestHeaders(request.headers, target.hubOrigin, { forceOrigin: true });
+    const handshake = { ...request.headers };
+    let inbound: MobileSimulatorInputFilter | undefined;
+    if (audience === "mobile") {
+      // No extension (permessage-deflate) is negotiated, so every phone frame's first byte is its tag.
+      delete headers["sec-websocket-extensions"];
+      delete handshake["sec-websocket-extensions"];
+      inbound = new MobileSimulatorInputFilter(() => {
+        // The hub never sees the offending frame; the phone gets a policy close.
+        upstream.unpipe(socket);
+        socket.end(websocketCloseFrame(MOBILE_INPUT_POLICY_CLOSE_CODE, "Input not allowed"));
+        setTimeout(() => socket.destroy(), MOBILE_INPUT_CLOSE_GRACE_MS).unref();
+      });
+    }
     pipeUpgrade({
       client: socket,
       upstream,
       readyEvent: "connect",
-      requestHead: upgradeRequestHead(
-        target.upstreamPath,
-        hubRequestHeaders(request.headers, target.hubOrigin, { forceOrigin: true }),
-        request.headers,
-      ),
+      requestHead: upgradeRequestHead(target.upstreamPath, headers, handshake),
       head: input.head,
+      ...(inbound ? { inbound } : {}),
     });
   }
 }

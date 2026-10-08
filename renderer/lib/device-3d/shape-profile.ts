@@ -1,8 +1,10 @@
-// Adapted from t3code packages/client-runtime/src/device/shapeProfile.ts @ 1c127066 (MIT).
-// iOS families only; Aiden never bundles vendor device models.
+// Adapted from t3code packages/client-runtime/src/device/shapeProfile.ts @ a6ec88f7 (MIT).
+// Family silhouettes for devices without a hardware model. No three.js import.
+
+export type DeviceShapePlatform = "ios" | "android";
 
 export interface DeviceShapeProfile {
-  readonly id: "ios-phone" | "ios-tablet";
+  readonly id: "ios-phone" | "ios-tablet" | "android-phone" | "android-tablet";
   readonly bezel: number;
   readonly bodyRadius: number;
   readonly screenRadius: number;
@@ -74,9 +76,52 @@ export const IOS_TABLET_SHAPE: DeviceShapeProfile = {
   },
 };
 
-/** The simulator's kind wins; unknown devices use the screen's portrait aspect. */
-export function resolveDeviceShape(kind: "iphone" | "ipad" | "other", portraitAspect: number): DeviceShapeProfile {
-  if (kind === "ipad") return IOS_TABLET_SHAPE;
-  if (kind === "iphone") return IOS_PHONE_SHAPE;
-  return Number.isFinite(portraitAspect) && portraitAspect >= 0.6 ? IOS_TABLET_SHAPE : IOS_PHONE_SHAPE;
+export const ANDROID_PHONE_SHAPE: DeviceShapeProfile = {
+  id: "android-phone",
+  bezel: 0.035,
+  bodyRadius: 0.115,
+  screenRadius: 0.08,
+  depth: 0.085,
+  backColor: 0x344449,
+  buttons: [
+    { edge: "right", offset: 0.2, length: 0.24 },
+    { edge: "right", offset: 0.65, length: 0.32 },
+  ],
+  camera: {
+    width: 0.24,
+    height: 0.47,
+    insetX: 0.18,
+    insetY: 0.29,
+    lensRadius: 0.056,
+    lenses: [
+      [0, 0.11],
+      [0, -0.11],
+    ],
+    flash: [0.1, 0],
+  },
+};
+
+export const ANDROID_TABLET_SHAPE: DeviceShapeProfile = {
+  ...IOS_TABLET_SHAPE,
+  id: "android-tablet",
+  backColor: 0x697b80,
+};
+
+/**
+ * The simulator's kind or name identifies a family; renamed and unknown devices
+ * use the screen's portrait aspect. Display rotation never changes the family.
+ */
+export function resolveDeviceShape(options: {
+  readonly platform: DeviceShapePlatform;
+  readonly kind?: "iphone" | "ipad" | "other";
+  readonly name?: string;
+  readonly portraitAspect: number;
+}): DeviceShapeProfile {
+  const name = options.name ?? "";
+  const namedTablet = options.kind === "ipad" || /\b(ipad|tablet)\b/iu.test(name);
+  const namedPhone = options.kind === "iphone" || /\b(iphone|phone)\b/iu.test(name);
+  const wide = Number.isFinite(options.portraitAspect) && options.portraitAspect >= 0.6;
+  const tablet = namedTablet || (!namedPhone && wide);
+  if (options.platform === "android") return tablet ? ANDROID_TABLET_SHAPE : ANDROID_PHONE_SHAPE;
+  return tablet ? IOS_TABLET_SHAPE : IOS_PHONE_SHAPE;
 }

@@ -24,9 +24,9 @@ import {
 } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect, isIP, type Socket } from "node:net";
-import type { Duplex } from "node:stream";
+import type { Duplex, Transform } from "node:stream";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
-import { LOCAL_DEVICE_HOST_ID, type DeviceStreamGrant } from "../../../renderer/shared/devices.js";
+import { DEVICE_ID_PATTERN, LOCAL_DEVICE_HOST_ID, type DeviceStreamGrant } from "../../../renderer/shared/devices.js";
 
 export const DEVICE_STREAM_GRANT_TTL_MS = 60_000;
 
@@ -41,20 +41,43 @@ export const DEVICE_HUB_HTTP_PATHS: readonly RegExp[] = [
   new RegExp(`^/vendor/serve-sim/helper/${DEVICE}/(stream\\.mjpeg|stream\\.avcc|config|health|ax|foreground)$`, "u"),
   new RegExp(`^/vendor/serve-sim/helper/${DEVICE}/panel/(1|3)/stream\\.avcc$`, "u"),
   /^\/vendor\/serve-sim\/appstate$/u,
+  // serve-emu (Android), adapted from t3code DeviceHubProxy @ a6ec88f7 (MIT). Device-scoped routes take `?device=<serial>`.
+  /^\/vendor\/serve-emu\/api\/(devices|screenshot|stream-mode|stream-settings|accessibility|fold|logcat)$/u,
+  /^\/vendor\/serve-emu\/health$/u,
 ];
 
-/** Read routes are GET/HEAD only; screenshot capture is the one route that takes a body. */
-export const DEVICE_HUB_MUTABLE_PATHS: readonly RegExp[] = [/^\/vendor\/serve-sim\/api\/screenshot$/u];
+/**
+ * Read routes are GET/HEAD only. These routes also accept the listed method:
+ * screenshot captures, serve-emu's stream tuning, and the Android fold posture.
+ */
+export const DEVICE_HUB_MUTABLE_ROUTES: ReadonlyArray<{ path: RegExp; methods: readonly string[] }> = [
+  { path: /^\/vendor\/serve-sim\/api\/screenshot$/u, methods: ["POST"] },
+  { path: /^\/vendor\/serve-emu\/api\/screenshot$/u, methods: ["POST"] },
+  { path: /^\/vendor\/serve-emu\/api\/stream-mode$/u, methods: ["PUT"] },
+  { path: /^\/vendor\/serve-emu\/api\/stream-settings$/u, methods: ["PATCH"] },
+  { path: /^\/vendor\/serve-emu\/api\/fold$/u, methods: ["POST"] },
+];
 
-/** The hub's input socket route. It routes WebSockets by exact path, so the device travels as `?device=`. */
+/** Routes whose non-read requests change the device rather than capture it. */
+const DEVICE_CONTROL_PATH = /\/api\/(stream-(mode|settings)|fold)$/u;
+
+/** The hub's input socket routes. They route WebSockets by exact path, so the device travels as `?device=`. */
 const HELPER_INPUT_SOCKET_PATH = "/vendor/serve-sim/helper/ws";
-const DEVICE_ID_PATTERN = new RegExp(`^${DEVICE}$`, "u");
+/** serve-emu's one socket carries Android video down and gestures up. */
+const EMU_SOCKET_PATH = "/vendor/serve-emu/ws";
+const DEVICE_SCOPED_SOCKETS = new Set([HELPER_INPUT_SOCKET_PATH, EMU_SOCKET_PATH]);
+/**
+ * Without `?device=`, serve-emu acts on whichever emulator it picks, which may
+ * not be one the listing reported. Only its fleet listing and health skip it.
+ */
+const EMU_DEVICE_SCOPED_PATH = /^\/vendor\/serve-emu\/(api\/(?!devices$)[a-z-]+|ws)$/u;
 const HELPER_DEVICE_PATTERN = new RegExp(`^/vendor/serve-sim/helper/(${DEVICE})/`, "u");
 
-/** The device list socket and the helper input socket. */
+/** The device list socket, the iOS helper input socket, and serve-emu's video and gesture socket. */
 export const DEVICE_HUB_WS_PATHS: readonly RegExp[] = [
   /^\/api\/devices\/ws$/u,
   /^\/vendor\/serve-sim\/helper\/ws$/u,
+  /^\/vendor\/serve-emu\/ws$/u,
 ];
 
 /** Headers that must never reach the hub. WebSocket handshake headers are handled separately. */
@@ -127,13 +150,21 @@ export interface DeviceHubProxy {
   close(): Promise<void>;
 }
 
+/**
+ * What a request needs: `read` watches a device (streams, listings, state),
+ * `operate` changes or drives it (input sockets, stream tuning, fold).
+ * Screenshot captures are reads, as in T3.
+ */
+export type DeviceHubScope = "read" | "operate";
+
 export type DeviceHubRoute =
   | {
       ok: true;
       /** Path and query to send to the hub. */
       upstreamPath: string;
       mutable: boolean;
-      /** Simulator UDIDs the request names, in its path or its `device`/`udid` query. */
+      scope: DeviceHubScope;
+      /** Device ids the request names, in its path or its `device`/`udid` query. */
       deviceIds: string[];
     }
   | { ok: false; status: number; message: string };
@@ -162,13 +193,15 @@ export function decideDeviceHubRoute(input: {
     return { ok: false, status: 404, message: "Not Found" };
   }
   const queryDevice = search.get("device");
-  if (rawPath === HELPER_INPUT_SOCKET_PATH && !DEVICE_ID_PATTERN.test(queryDevice ?? "")) {
+  const needsDevice = DEVICE_SCOPED_SOCKETS.has(rawPath) || EMU_DEVICE_SCOPED_PATH.test(rawPath);
+  if (needsDevice && (search.getAll("device").length !== 1 || !DEVICE_ID_PATTERN.test(queryDevice ?? ""))) {
     return { ok: false, status: 404, message: "Not Found" };
   }
-  const mutable = isAllowed(DEVICE_HUB_MUTABLE_PATHS, rawPath);
+  const mutableRoute = DEVICE_HUB_MUTABLE_ROUTES.find((route) => route.path.test(rawPath));
+  const mutable = mutableRoute !== undefined;
   const method = input.method;
   const readOnly = method === "GET" || method === "HEAD";
-  if (!upgrade && !readOnly && method !== "OPTIONS" && !(mutable && method === "POST")) {
+  if (!upgrade && !readOnly && method !== "OPTIONS" && !mutableRoute?.methods.includes(method)) {
     return { ok: false, status: 405, message: "Method Not Allowed" };
   }
   if (upgrade && method !== "GET") {
@@ -181,7 +214,11 @@ export function decideDeviceHubRoute(input: {
     for (const value of search.getAll(name)) deviceIds.push(value);
   }
   const query = search.toString();
-  return { ok: true, upstreamPath: query ? `${rawPath}?${query}` : rawPath, mutable, deviceIds };
+  const scope: DeviceHubScope =
+    (upgrade && rawPath !== "/api/devices/ws") || (!readOnly && method !== "OPTIONS" && DEVICE_CONTROL_PATH.test(rawPath))
+      ? "operate"
+      : "read";
+  return { ok: true, upstreamPath: query ? `${rawPath}?${query}` : rawPath, mutable, scope, deviceIds };
 }
 
 /**
@@ -243,6 +280,8 @@ export function upgradeRequestHead(
 /**
  * Pipes an accepted client upgrade to an upstream socket once it is ready.
  * Frames are opaque: H.264 access units one way, input packets the other.
+ * `inbound`, when given, sits between the client and the upstream and sees
+ * every client byte (including `head`) before the upstream does.
  */
 export function pipeUpgrade(input: {
   client: Duplex;
@@ -251,6 +290,7 @@ export function pipeUpgrade(input: {
   requestHead: string;
   head: Buffer;
   track?: Set<Duplex>;
+  inbound?: Transform;
 }): void {
   const { client, upstream, track } = input;
   track?.add(client);
@@ -267,9 +307,18 @@ export function pipeUpgrade(input: {
   upstream.once("close", teardown);
   upstream.once(input.readyEvent, () => {
     upstream.write(input.requestHead);
-    if (input.head.length > 0) upstream.write(input.head);
+    const inbound = input.inbound;
+    if (!inbound) {
+      if (input.head.length > 0) upstream.write(input.head);
+      upstream.pipe(client);
+      client.pipe(upstream);
+      return;
+    }
+    inbound.once("error", teardown);
+    inbound.pipe(upstream);
+    if (input.head.length > 0) inbound.write(input.head);
     upstream.pipe(client);
-    client.pipe(upstream);
+    client.pipe(inbound);
   });
 }
 
@@ -317,7 +366,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     origin ? { "access-control-allow-origin": origin, vary: "Origin" } : { vary: "Origin" };
 
   type Decision =
-    | { ok: true; hostId: string; upstreamPath: string; mutable: boolean }
+    | { ok: true; hostId: string; upstreamPath: string; mutable: boolean; methods: readonly string[] }
     | { ok: false; status: number; message: string };
 
   function decide(request: IncomingMessage, upgrade: boolean): Decision {
@@ -344,7 +393,8 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     url.searchParams.delete("host");
     const route = decideDeviceHubRoute({ method: request.method ?? "GET", rawPath, search: url.searchParams, upgrade });
     if (!route.ok) return route;
-    return { ok: true, hostId, upstreamPath: route.upstreamPath, mutable: route.mutable };
+    const methods = DEVICE_HUB_MUTABLE_ROUTES.find((candidate) => candidate.path.test(rawPath))?.methods ?? [];
+    return { ok: true, hostId, upstreamPath: route.upstreamPath, mutable: route.mutable, methods };
   }
 
   async function resolve(hostId: string): Promise<DeviceHubTarget | null> {
@@ -369,7 +419,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
         ...corsHeaders(origin),
-        "access-control-allow-methods": decision.mutable ? "GET, HEAD, POST" : "GET, HEAD",
+        "access-control-allow-methods": ["GET", "HEAD", ...decision.methods].join(", "),
         "access-control-allow-headers": "content-type",
         "access-control-max-age": "0",
       });
@@ -410,7 +460,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
       else response.destroy();
     });
     response.once("close", () => upstream.destroy());
-    if (request.method === "POST") request.pipe(upstream);
+    if (request.method !== "GET" && request.method !== "HEAD") request.pipe(upstream);
     else upstream.end();
   }
 

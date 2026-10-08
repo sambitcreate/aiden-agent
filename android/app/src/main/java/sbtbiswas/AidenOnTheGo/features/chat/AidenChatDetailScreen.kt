@@ -110,6 +110,9 @@ import kotlin.math.abs
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.simulators.AidenSimulatorDeviceButton
+import sbtbiswas.AidenOnTheGo.features.simulators.AidenSimulatorViewer
+import sbtbiswas.AidenOnTheGo.features.simulators.AidenSimulatorsViewModel
 
 enum class MessageClusterPosition {
     SINGLE, FIRST, MIDDLE, LAST
@@ -152,6 +155,13 @@ fun AidenChatDetailScreen(
             networkAvailability
         )
     )
+
+    // Shared simulators (contract revision 26): the device button and viewer.
+    val simulators: AidenSimulatorsViewModel = viewModel(
+        key = "simulators:${coordinator.activeInstanceId}:${coordinator.installationStore.activeInstallation?.deviceId}:$chatId",
+        factory = AidenSimulatorsViewModel.factory(chatId, coordinator)
+    )
+    val simulatorDevices by simulators.chatDevices.collectAsStateWithLifecycle()
 
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val chat by viewModel.chat.collectAsStateWithLifecycle()
@@ -290,6 +300,20 @@ fun AidenChatDetailScreen(
         )
     }
 
+    // Read once when the chat opens or the grant lands, and again on every
+    // return to the foreground. Never polled.
+    LaunchedEffect(simulators, serverInfo) { simulators.refreshChatDevices() }
+    DisposableEffect(lifecycleOwner, simulators) {
+        var skippedInitialResume = false
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            // The first resume is the chat opening, already covered above.
+            if (skippedInitialResume) simulators.refreshChatDevices() else skippedInitialResume = true
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     LaunchedEffect(serverInfo) {
         viewModel.reconcileProgressAccess()
         if (progressSheet == "tasks" && !viewModel.canReadTaskProgress) progressSheet = null
@@ -299,6 +323,8 @@ fun AidenChatDetailScreen(
             viewModel.startProgressObservation()
         }
     }
+
+    AidenSimulatorViewer(simulators)
 
     fun dismissComposerKeyboard() {
         focusManager.clearFocus(force = true)
@@ -750,6 +776,16 @@ fun AidenChatDetailScreen(
                     )
                 }
 
+                if (simulatorDevices.isNotEmpty()) {
+                    AidenSimulatorDeviceButton(
+                        count = simulatorDevices.size,
+                        onClick = {
+                            dismissComposerKeyboard()
+                            simulators.openViewer()
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 val macOnlyAgentNotice = chat?.let { currentChat ->
                     val replyModel = modelCatalog?.providers
                         ?.firstOrNull { it.id == selectedProviderId }

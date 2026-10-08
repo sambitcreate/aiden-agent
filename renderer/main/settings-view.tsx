@@ -40,7 +40,7 @@ import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { ConnectionsSettings } from "../components/settings/connections-settings";
-import { SimulatorSettings } from "../components/settings/simulator-settings";
+import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import {
   availableSettingsDestinations,
@@ -102,7 +102,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   websearch: WebSearchSettings,
   approvals: ToolApprovalSettings,
   computerUse: ComputerUseSettings,
-  simulator: SimulatorSettings,
+  simulator: SimulatorSettingsPage,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
   geminiLive: AidenLiveSettings,

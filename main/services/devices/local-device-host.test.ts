@@ -15,7 +15,10 @@ import {
 import {
   HUB_RESTART_MAX_DELAY_MS,
   NPM_REQUIRED_REASON,
+  androidUnavailableReason,
   createLocalDeviceHost,
+  findAndroidSdk,
+  findAndroidStudioJava,
   findDeviceHostHelpers,
   nextHubRestartDelay,
   xcodeUnavailableReason,
@@ -87,6 +90,8 @@ async function withHost(
     platform: "darwin",
     nodePath: "/Applications/Aiden Agent.app/Contents/MacOS/Aiden Agent",
     env: { PATH: "/usr/bin", HOME: "/Users/me" },
+    pathExists: async () => false,
+    realPath: async () => null,
     spawn: (command, args, env) => {
       harness.spawns.push({ command, args, env });
       const child = new FakeChild(nextPid++);
@@ -188,11 +193,12 @@ test("unavailable Xcode or a non-Mac host leaves no child running", async () => 
       const host = createLocalDeviceHost(harness.deps);
       await assert.rejects(host.ensureReady(), (error: unknown) => {
         assert.ok(error instanceof DeviceHostUnavailableError);
-        assert.equal(error.reason, "Open Xcode once and accept its license, then try again.");
+        // Neither platform can run, so the user learns what each one needs.
+        assert.match(error.reason, /^Open Xcode once and accept its license, then try again\. Android SDK not found\./u);
         return true;
       });
       assert.equal(harness.spawns.length, 0);
-      assert.deepEqual(await host.platformAvailability(), {
+      assert.deepEqual(await host.platformAvailability("ios"), {
         platform: "ios",
         available: false,
         reason: "Open Xcode once and accept its license, then try again.",
@@ -457,4 +463,101 @@ test("serve-sim helpers are found inside the hub install, and a missing one is n
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+/** A filesystem with exactly these files, and `adb` links resolved through `links`. */
+function fakeFs(files: string[], links: Record<string, string> = {}) {
+  return {
+    pathExists: async (file: string) => files.includes(file),
+    realPath: async (file: string) => links[file] ?? (files.includes(file) ? file : null),
+  };
+}
+
+const SDK = "/Users/me/Library/Android/sdk";
+const COMPLETE_SDK = [
+  `${SDK}/platform-tools/adb`,
+  `${SDK}/emulator/emulator`,
+  `${SDK}/cmdline-tools/latest/bin/avdmanager`,
+];
+
+test("the Android SDK is found from ANDROID_HOME, Android Studio's default, or the adb on PATH", async () => {
+  const explicit = await findAndroidSdk({ env: { ANDROID_HOME: "/opt/sdk", HOME: "/Users/me" }, ...fakeFs(COMPLETE_SDK) });
+  // An explicit ANDROID_HOME wins even when it is incomplete, so the reason names that folder.
+  assert.deepEqual(explicit, { root: "/opt/sdk", adb: false, emulator: false, avdmanager: false, legacyAvdmanager: false });
+  assert.match(androidUnavailableReason(explicit) ?? "", /Platform-Tools are missing from \/opt\/sdk/u);
+
+  const studio = await findAndroidSdk({ env: { HOME: "/Users/me", PATH: "/usr/bin" }, ...fakeFs(COMPLETE_SDK) });
+  assert.equal(studio.root, SDK);
+  assert.equal(androidUnavailableReason(studio), null);
+
+  const brew = await findAndroidSdk({
+    env: { HOME: "/Users/me", PATH: "/usr/bin:/opt/homebrew/bin" },
+    ...fakeFs(["/opt/android/platform-tools/adb", "/opt/android/emulator/emulator", "/opt/android/tools/bin/avdmanager"], {
+      "/opt/homebrew/bin/adb": "/opt/android/platform-tools/adb",
+    }),
+  });
+  assert.equal(brew.root, "/opt/android");
+  assert.match(androidUnavailableReason(brew) ?? "", /command-line tools in \/opt\/android are too old/u);
+
+  const none = await findAndroidSdk({ env: { HOME: "/Users/me", PATH: "/usr/bin" }, ...fakeFs([]) });
+  assert.equal(none.root, null);
+  assert.equal(
+    androidUnavailableReason(none),
+    "Android SDK not found. Install it with Android Studio, or set ANDROID_HOME to your SDK folder.",
+  );
+  assert.match(
+    androidUnavailableReason({ ...studio, emulator: false }) ?? "",
+    /Android Emulator is missing from \/Users\/me\/Library\/Android\/sdk/u,
+  );
+});
+
+test("the hub gets Android Studio's Java when JAVA_HOME is unset, so avdmanager can list AVDs before a boot", async () => {
+  const jbr = "/Applications/Android Studio.app/Contents/jbr/Contents/Home";
+  await withHost(
+    async (harness) => {
+      const host = createLocalDeviceHost(harness.deps);
+      assert.equal((await host.platformAvailability("android")).available, true);
+      await host.ensureReady();
+      const [spawned] = harness.spawns;
+      assert.equal(spawned?.env.JAVA_HOME, jbr);
+      assert.ok(spawned?.env.PATH?.split(":").includes(`${jbr}/bin`), "java resolves from the bundled runtime");
+      await host.stop();
+    },
+    fakeFs([...COMPLETE_SDK, `${jbr}/bin/java`]),
+  );
+  // A Java the user chose is never replaced.
+  assert.equal(
+    await findAndroidStudioJava({ env: { JAVA_HOME: "/opt/jdk", HOME: "/Users/me" }, ...fakeFs([`${jbr}/bin/java`]) }),
+    null,
+  );
+  assert.equal(
+    await findAndroidStudioJava({ env: { HOME: "/Users/me" }, ...fakeFs(["/Users/me/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java"]) }),
+    "/Users/me/Applications/Android Studio.app/Contents/jbr/Contents/Home",
+  );
+  assert.equal(await findAndroidStudioJava({ env: { HOME: "/Users/me" }, ...fakeFs([]) }), null);
+});
+
+test("a Mac with the Android SDK but no Xcode starts the hub with the SDK on its PATH", async () => {
+  await withHost(
+    async (harness) => {
+      const recorded = harness.deps.runCommand;
+      harness.deps.runCommand = async (command, args, options) =>
+        command === "xcrun"
+          ? { stdout: "", stderr: "xcode-select: error: tool 'xcrun' requires Xcode", code: 72 }
+          : recorded(command, args, options);
+      const host = createLocalDeviceHost(harness.deps);
+      assert.deepEqual(await host.platformAvailability("android"), { platform: "android", available: true });
+      assert.equal((await host.platformAvailability("ios")).available, false);
+      const ready = await host.ensureReady();
+      const [spawned] = harness.spawns;
+      assert.equal(spawned?.env.ANDROID_HOME, SDK);
+      assert.equal(spawned?.env.PATH, `${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
+      // Host commands (adb, emulator) resolve against the same PATH.
+      await ready.run("adb", ["devices"]);
+      const adb = harness.commands.find((command) => command.command === "adb");
+      assert.equal(adb?.env.PATH, `${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
+      await host.stop();
+    },
+    fakeFs(COMPLETE_SDK),
+  );
 });

@@ -40,7 +40,7 @@ class AidenBotRevision25ContractTest {
 
     @Test
     fun fixtureIsRevision25AndAdvertisesTheBotFeatures() {
-        assertEquals(25, (fixture.getValue("contractRevision") as JsonPrimitive).content.toInt())
+        assertTrue((fixture.getValue("contractRevision") as JsonPrimitive).content.toInt() >= 25)
         val server = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
             .decodeFromJsonElement(AidenServer.serializer(), fixture.getValue("server"))
         assertTrue(server.supportsBotDurableSession)

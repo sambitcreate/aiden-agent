@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		51A100000000000000000006 /* AidenMJPEGMultipartParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000016 /* AidenMJPEGMultipartParser.swift */; };
+		51A100000000000000000001 /* AidenSimulatorContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000011 /* AidenSimulatorContract.swift */; };
+		51A100000000000000000002 /* AidenSimulatorStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000012 /* AidenSimulatorStream.swift */; };
+		51A100000000000000000003 /* AidenSimulatorViewerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000013 /* AidenSimulatorViewerModel.swift */; };
+		51A100000000000000000004 /* AidenSimulatorViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000014 /* AidenSimulatorViewer.swift */; };
+		51A100000000000000000005 /* AidenSimulatorViewerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000015 /* AidenSimulatorViewerTests.swift */; };
 		B0E800000000000000000001 /* AidenBotSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E800000000000000000011 /* AidenBotSessionTests.swift */; };
 		B0E700000000000000000001 /* AidenRemoteContractFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E700000000000000000011 /* AidenRemoteContractFixture.swift */; };
 		B0E600000000000000000001 /* AidenBotPresetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E600000000000000000011 /* AidenBotPresetsView.swift */; };
@@ -140,6 +146,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		51A100000000000000000016 /* AidenMJPEGMultipartParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMJPEGMultipartParser.swift; sourceTree = "<group>"; };
+		51A100000000000000000011 /* AidenSimulatorContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSimulatorContract.swift; sourceTree = "<group>"; };
+		51A100000000000000000012 /* AidenSimulatorStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSimulatorStream.swift; sourceTree = "<group>"; };
+		51A100000000000000000013 /* AidenSimulatorViewerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSimulatorViewerModel.swift; sourceTree = "<group>"; };
+		51A100000000000000000014 /* AidenSimulatorViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSimulatorViewer.swift; sourceTree = "<group>"; };
+		51A100000000000000000015 /* AidenSimulatorViewerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSimulatorViewerTests.swift; sourceTree = "<group>"; };
 		B0E800000000000000000011 /* AidenBotSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSessionTests.swift; sourceTree = "<group>"; };
 		B0E700000000000000000011 /* AidenRemoteContractFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteContractFixture.swift; sourceTree = "<group>"; };
 		B0E600000000000000000011 /* AidenBotPresetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPresetsView.swift; sourceTree = "<group>"; };
@@ -338,6 +350,7 @@
 				A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */,
 				A0D900000000000000000013 /* AidenWorkspaceEnvironmentTests.swift */,
 				A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */,
+				51A100000000000000000015 /* AidenSimulatorViewerTests.swift */,
 				A0D600000000000000000013 /* AidenRemoteClientTests.swift */,
 				AC7100000000000000000105 /* AidenActivityMarkTests.swift */,
 				A0D700000000000000000015 /* AidenChatTests.swift */,
@@ -366,6 +379,9 @@
 				A0D600000000000000000011 /* AidenRemoteClient.swift */,
 				A0D700000000000000000012 /* AidenSSEParser.swift */,
 				4E7A00000000000000000011 /* AidenNetworkPath.swift */,
+				51A100000000000000000011 /* AidenSimulatorContract.swift */,
+				51A100000000000000000012 /* AidenSimulatorStream.swift */,
+				51A100000000000000000016 /* AidenMJPEGMultipartParser.swift */,
 			);
 			path = Networking;
 			sourceTree = "<group>";
@@ -390,6 +406,7 @@
 			children = (
 				B07100000000000000000020 /* Bots */,
 				A0D600000000000000000020 /* Remote */,
+				51A100000000000000000020 /* Simulators */,
 				1A2B3C4D5E6F7000000000C4 /* Onboarding */,
 				C09300000000000000000010 /* Shared */,
 				1A2B3C4D5E6F7000000000C5 /* SessionList */,
@@ -438,6 +455,15 @@
 				A0F100000000000000000030 /* AidenMarkdownContentCache.swift */,
 			);
 			path = Remote;
+			sourceTree = "<group>";
+		};
+		51A100000000000000000020 /* Simulators */ = {
+			isa = PBXGroup;
+			children = (
+				51A100000000000000000013 /* AidenSimulatorViewerModel.swift */,
+				51A100000000000000000014 /* AidenSimulatorViewer.swift */,
+			);
+			path = Simulators;
 			sourceTree = "<group>";
 		};
 		1A2B3C4D5E6F7000000000C4 /* Onboarding */ = {
@@ -785,6 +811,11 @@
 				A0D700000000000000000001 /* AidenChat.swift in Sources */,
 				A0DC00000000000000000001 /* AidenChatProgress.swift in Sources */,
 				A0D700000000000000000002 /* AidenSSEParser.swift in Sources */,
+				51A100000000000000000001 /* AidenSimulatorContract.swift in Sources */,
+				51A100000000000000000002 /* AidenSimulatorStream.swift in Sources */,
+				51A100000000000000000006 /* AidenMJPEGMultipartParser.swift in Sources */,
+				51A100000000000000000003 /* AidenSimulatorViewerModel.swift in Sources */,
+				51A100000000000000000004 /* AidenSimulatorViewer.swift in Sources */,
 				4E7A00000000000000000001 /* AidenNetworkPath.swift in Sources */,
 				A0D700000000000000000003 /* AidenChatCache.swift in Sources */,
 				A0D700000000000000000004 /* AidenChatFeature.swift in Sources */,
@@ -816,6 +847,7 @@
 				A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */,
 				A0D900000000000000000003 /* AidenWorkspaceEnvironmentTests.swift in Sources */,
 				A0D000000000000000000003 /* AidenRemotePhase0Tests.swift in Sources */,
+				51A100000000000000000005 /* AidenSimulatorViewerTests.swift in Sources */,
 				A0D600000000000000000003 /* AidenRemoteClientTests.swift in Sources */,
 				AC7100000000000000000005 /* AidenActivityMarkTests.swift in Sources */,
 				A0D700000000000000000005 /* AidenChatTests.swift in Sources */,

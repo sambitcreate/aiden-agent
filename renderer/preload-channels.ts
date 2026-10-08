@@ -89,6 +89,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "browser:event",
   "devices:state",
   "devices:reveal",
+  "devices:trackpad-scroll-end",
+  "devices:recordings",
   "chats:activity-changed",
   "chats:read-markers-changed",
   "chats:changed",
