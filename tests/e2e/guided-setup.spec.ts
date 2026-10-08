@@ -1,4 +1,6 @@
-import type { BotCapabilityCatalog } from "../../renderer/shared/bot-capabilities";
+import type { ElectronApplication } from "playwright";
+import { BOT_FULL_ACCESS_NOTICE_VERSION, type BotCapabilityCatalog } from "../../renderer/shared/bot-capabilities";
+import { botFixture } from "../../renderer/main/bots/test-fixtures";
 import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, skipBotsOnboardingStep, test } from "./fixtures";
 
 test("onboarding exposes the four primary AI choices and validates custom setup", async ({ aiden }) => {
@@ -68,46 +70,123 @@ test("computer control respects platform support and explains access before enab
   await expect(toggle).toHaveAttribute("data-state", "unchecked");
 });
 
-test("Create a bot submits limited access in two steps and retains a failed draft", async ({ aiden }) => {
-  const { page } = aiden;
-  await finishLmStudioOnboarding(page);
-  // This editor test isolates IPC because the test profile has no native Keychain
-  // authority. Real Bot storage/permission transactions run in test:bots.
+// The e2e profile has no macOS Keychain authority, so the real Bot store cannot
+// open. Only the Bot IPC is substituted (as in bots-starter.spec.ts); the create
+// flow, Advanced page, and their renderer state are the shipped code.
+async function substituteBotIpc(app: ElectronApplication, options: { failFirstCreate: boolean }) {
   const catalog: BotCapabilityCatalog = {
     revision: "catalog-editor-fixture", providers: [{ id: "custom:lmstudio", label: "LM Studio", available: true,
       models: [{ id: "aiden-e2e-vision", label: "Aiden E2E Vision", available: true, supportsImages: true }] }],
     fileScopes: [], shellAvailable: true, connections: [], skills: [], otherCapabilities: [],
-    notice: { version: "bot-full-access-v1", requiresAcknowledgement: true },
+    notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: false, acceptedAt: "2026-10-01T00:00:00.000Z", acceptedDecision: "continue_full" },
   };
-  await aiden.app.evaluate(({ ipcMain }, fixture) => {
-    for (const channel of ["bots:list", "bots:getCapabilityCatalog", "bots:create"]) ipcMain.removeHandler(channel);
-    ipcMain.handle("bots:list", () => []);
-    ipcMain.handle("bots:getCapabilityCatalog", () => fixture);
+  const bot = botFixture({ id: "bot-meal", name: "Meal Planner", description: "Plan my meals and grocery list every week" });
+  const idle = { botId: bot.id, preview: null, updatedAt: null, state: { kind: "idle" } };
+  // Shape of the bots:getBotAccess result (BotAccessState) for a Full-access Bot.
+  const access = {
+    access: { botId: bot.id, revision: "access-1", policyEpoch: "policy-1", summary: "Everything", accessMode: "full" },
+    modelSelection: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision" },
+  };
+  await app.evaluate(({ ipcMain }, fixture) => {
+    const state = { created: false, createCalls: 0, failFirstCreate: fixture.failFirstCreate, creates: [] as unknown[], accessUpdates: [] as unknown[] };
+    (globalThis as unknown as { botCreateE2e: typeof state }).botCreateE2e = state;
+    for (const channel of [
+      "bots:list", "bots:get", "bots:create", "bots:introduce", "bots:getCapabilityCatalog",
+      "bots:getBotAccess", "bots:updateBotAccess", "bots:live:subscribe", "bots:live:summary",
+      "bots:getCanonicalPhoto", "bots:pendingApprovals",
+    ]) ipcMain.removeHandler(channel);
+    ipcMain.handle("bots:list", () => (state.created ? [fixture.bot] : []));
+    ipcMain.handle("bots:get", () => fixture.bot);
+    ipcMain.handle("bots:getCapabilityCatalog", () => fixture.catalog);
     ipcMain.handle("bots:create", (_event, input: unknown) => {
-      (globalThis as unknown as { botEditorSubmission: unknown }).botEditorSubmission = input;
-      throw new Error("The test storage is unavailable.");
+      state.createCalls += 1;
+      state.creates.push(input);
+      if (state.failFirstCreate && state.createCalls === 1) throw new Error("The test storage is unavailable.");
+      state.created = true;
+      return fixture.bot;
     });
-  }, catalog);
+    ipcMain.handle("bots:introduce", () => false);
+    ipcMain.handle("bots:getBotAccess", () => fixture.access);
+    ipcMain.handle("bots:updateBotAccess", (_event, input: unknown) => {
+      state.accessUpdates.push(input);
+      return { ...fixture.access.access, revision: "access-2", accessMode: "custom", custom: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision", fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } };
+    });
+    ipcMain.handle("bots:live:subscribe", () => ({ ...fixture.idle, epoch: "e1", seq: 0, entries: [], partial: null }));
+    ipcMain.handle("bots:live:summary", () => fixture.idle);
+    ipcMain.handle("bots:getCanonicalPhoto", () => null);
+    ipcMain.handle("bots:pendingApprovals", () => []);
+  }, { bot, catalog, access, idle, failFirstCreate: options.failFirstCreate });
+}
+
+async function botCreateE2e(app: ElectronApplication) {
+  return app.evaluate(() => (globalThis as unknown as { botCreateE2e: {
+    createCalls: number; creates: unknown[]; accessUpdates: unknown[];
+  } }).botCreateE2e);
+}
+
+test("Create a bot keeps the draft after a failed save, then creates it with Full access", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await substituteBotIpc(aiden.app, { failFirstCreate: true });
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: "Create a bot", exact: true }).first().click();
-  const editor = page.getByRole("dialog", { name: "Create a bot", exact: true });
-  await expect(editor.getByText("Step 1 of 2")).toBeVisible();
-  await editor.getByPlaceholder("Release reviewer").fill("Writing bot");
-  await editor.getByPlaceholder("Describe the role, priorities, tone, and how this bot should approach work.").fill("Turn rough notes into a clear weekly update.");
-  await editor.getByRole("button", { name: "Review model and access", exact: true }).click();
-  await expect(editor.getByText("Step 2 of 2")).toBeVisible();
-  await expect(editor.getByRole("button", { name: "Custom", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(editor.getByRole("button", { name: "Full", exact: true })).toHaveAttribute("aria-pressed", "false");
-  await expect(editor.getByRole("button", { name: "Create a bot", exact: true })).toBeEnabled();
-  await editor.getByRole("button", { name: "Create a bot", exact: true }).click();
-  await expect(editor.getByRole("alert")).toContainText("Your choices are still here.");
-  const submission = await aiden.app.evaluate(() => (globalThis as unknown as { botEditorSubmission: unknown }).botEditorSubmission);
-  expect(submission).toMatchObject({ bot: { name: "Writing bot" }, access: {
-    accessMode: "custom", custom: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision",
-      shellEnabled: false, fileScopeIds: [], connectionIds: [], skillIds: [], otherCapabilityIds: [] },
-  } });
-  await editor.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(editor.getByPlaceholder("Release reviewer")).toHaveValue("Writing bot");
+  await page.getByRole("button", { name: "New Bot", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
+  await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
+  await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  // The second step renames the dialog to "Connections".
+  const connections = page.getByRole("dialog", { name: "Connections", exact: true });
+  await expect(connections.getByRole("group", { name: "Suggested connections" })).toBeVisible();
+  await connections.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(connections.getByRole("alert")).toContainText("The test storage is unavailable.");
+  await connections.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(editor.getByRole("textbox", { name: "Name" })).toHaveValue("Meal Planner");
+  await expect(editor.getByRole("textbox", { name: "What should it help with?" })).toHaveValue("Plan my meals and grocery list every week");
+});
+
+test("Create a bot from a name and a help answer, then switch its Advanced access to Only what I choose", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await substituteBotIpc(aiden.app, { failFirstCreate: false });
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  await page.getByRole("button", { name: "New Bot", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
+  await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
+  await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("dialog", { name: "Connections", exact: true }).getByRole("button", { name: "Skip", exact: true }).click();
+
+  // Creating opens the Bot's chat; the request carries the name, the answer as
+  // the subtitle, and Full access by default (no custom selection).
+  await expect(page.getByPlaceholder("Ask Meal Planner")).toBeVisible();
+  const { creates } = await botCreateE2e(aiden.app);
+  expect(creates).toHaveLength(1);
+  const created = creates[0];
+  expect(created).toMatchObject({
+    bot: { name: "Meal Planner", description: "Plan my meals and grocery list every week" },
+    access: { accessMode: "full", catalogRevision: "catalog-editor-fixture", providerId: "custom:lmstudio", modelId: "aiden-e2e-vision" },
+  });
+  expect(created).not.toHaveProperty("access.custom");
+
+  // Advanced is reached from the Bot's Profile, which the Bots list opens from its row menu.
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  await page.getByRole("button", { name: /^Meal Planner/u }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Profile", exact: true }).click();
+  await page.getByRole("button", { name: "More for Meal Planner", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+  const onlyChoose = page.getByRole("radio", { name: "Only what I choose", exact: true });
+  await expect(page.getByRole("radio", { name: "Everything", exact: true })).toBeChecked();
+  await onlyChoose.click();
+  await expect(onlyChoose).toBeChecked();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+
+  const { accessUpdates } = await botCreateE2e(aiden.app);
+  expect(accessUpdates).toMatchObject([{
+    botId: "bot-meal",
+    expectedRevision: "access-1",
+    access: { accessMode: "custom", custom: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision", shellEnabled: false, fileScopeIds: [], connectionIds: [], skillIds: [], otherCapabilityIds: [] } },
+  }]);
 });
 
 
