@@ -147,7 +147,7 @@ test("a Screen holding a running run's draft cannot be deleted", () => {
 
 test("Discard archives an interrupted Explore's set without deleting or freeing anything, once", () => {
   const running = run(project(), "run-1", explore(3), ["One", "Two"], "running");
-  const files = new Map(Object.values(running.revisions).map((revision) => [revision.id, revision.bytes]));
+  const files = new Map(Object.values(running.revisions).map((revision) => [revision.id, { bytes: revision.bytes, sha256: revision.sha256 }]));
   const restarted = reconcileDesignManifest(running, files, 9_000).manifest;
   assert.equal(restarted.runs["run-1"]!.status, "partial");
   const discarded = op(restarted, { op: "settleRun", runId: "run-1", decision: "discard" }, 10_000);
@@ -249,7 +249,7 @@ test("a project with a running run can be neither deleted nor duplicated; an idl
   }
   const stopped = finishDesignRun(live, "run-1", "cancelled", 6_000)!;
   assert.doesNotThrow(() => assertDesignProjectIdle(stopped, "delete"));
-  const restarted = reconcileDesignManifest(live, new Map(Object.values(live.revisions).map((r) => [r.id, r.bytes])), 9_000).manifest;
+  const restarted = reconcileDesignManifest(live, new Map(Object.values(live.revisions).map((r) => [r.id, { bytes: r.bytes, sha256: r.sha256 }])), 9_000).manifest;
   assert.doesNotThrow(() => assertDesignProjectIdle(restarted, "duplicate"));
 });
 
@@ -276,7 +276,7 @@ const everyId = (manifest: DesignProjectManifestV1) =>
 
 test("a copy re-identifies everything, keeps the designs and the lineage, and leaves no Resume to offer", () => {
   const rendering = run(project(), "run-1", explore(3), ["Calm", "Bold"], "running");
-  const files = new Map(Object.values(rendering.revisions).map((revision) => [revision.id, revision.bytes]));
+  const files = new Map(Object.values(rendering.revisions).map((revision) => [revision.id, { bytes: revision.bytes, sha256: revision.sha256 }]));
   // A restart ends the run as interrupted, which is what makes the set resumable.
   let source = reconcileDesignManifest(rendering, files, 5_000).manifest;
   source.runs["run-1"]!.promptMessageId = "message-1";

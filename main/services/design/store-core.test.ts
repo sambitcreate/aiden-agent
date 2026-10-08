@@ -21,6 +21,7 @@ import {
   revisionIdForToolCall,
   reconcileDesignManifest,
   type DesignArtifactAcceptance,
+  type DesignRevisionFile,
   type DesignRunOutcome,
   type DesignStorageTotals,
 } from "./store-core.js";
@@ -62,7 +63,7 @@ function settle(manifest: DesignProjectManifestV1, runId: string, outcome: Desig
   return ended && check(ended);
 }
 
-function reconcile(manifest: DesignProjectManifestV1, files: ReadonlyMap<string, number>, now: number) {
+function reconcile(manifest: DesignProjectManifestV1, files: ReadonlyMap<string, DesignRevisionFile>, now: number) {
   const result = reconcileDesignManifest(manifest, files, now);
   check(result.manifest);
   return result;
@@ -139,7 +140,7 @@ test("Stop, app quit, provider and host failures and restart publish accepted de
     assert.deepEqual([ended.runs["run-1"]!.status, ended.runs["run-1"]!.endReason], ["partial", endReason], outcome);
     assert.equal(ended.revisions[draft]!.state, "published", outcome);
   }
-  const files = new Map(Object.values(manifest.revisions).map((revision) => [revision.id, revision.bytes]));
+  const files = new Map(Object.values(manifest.revisions).map((revision) => [revision.id, { bytes: revision.bytes, sha256: revision.sha256 }]));
   const restarted = reconcile(manifest, files, 9_000);
   assert.equal(restarted.changed, true);
   const run = restarted.manifest.runs["run-1"]!;
@@ -308,18 +309,28 @@ test("each project quota is a clear error and leaves the manifest unchanged", ()
   );
 });
 
-test("restart marks vanished or resized files missing and lists unreferenced files", () => {
-  let { manifest } = startRun(project(), "run-1", explore(2));
-  manifest = settle(accept(accept(manifest, "run-1", "A"), "run-1", "B"), "run-1", "completed", 4_000)!;
-  const [first, second] = manifest.runs["run-1"]!.revisionIds as [string, string];
-  const files = new Map([[second, manifest.revisions[second]!.bytes + 1], ["stray", 10]]);
+test("restart marks vanished, resized or same-size damaged files missing and lists unreferenced files", () => {
+  let { manifest } = startRun(project(), "run-1", explore(3));
+  manifest = settle(accept(accept(accept(manifest, "run-1", "A"), "run-1", "B"), "run-1", "C"), "run-1", "completed", 4_000)!;
+  const [first, second, third] = manifest.runs["run-1"]!.revisionIds as [string, string, string];
+  const files = new Map<string, DesignRevisionFile>([
+    [second, { bytes: manifest.revisions[second]!.bytes + 1 }],
+    [third, { bytes: manifest.revisions[third]!.bytes, sha256: "0".repeat(64) }],
+    ["stray", { bytes: 10 }],
+  ]);
   const { manifest: reconciled, changed } = reconcile(manifest, files, 9_000);
   assert.equal(changed, true);
   assert.equal(reconciled.revisions[first]!.state, "missing");
   assert.equal(reconciled.revisions[second]!.state, "missing");
+  assert.equal(reconciled.revisions[third]!.state, "missing", "the right size with the wrong digest is damage");
+  const unhashed = new Map(Object.values(manifest.revisions).map((r) => [r.id, { bytes: r.bytes }]));
+  assert.ok(
+    Object.values(reconcile(manifest, unhashed, 9_000).manifest.revisions).every((r) => r.state === "missing"),
+    "a referenced file nobody verified is not trusted",
+  );
   assert.equal(reconciled.revision, manifest.revision + 1);
   assert.deepEqual(orphanRevisionIds(reconciled, files), ["stray"]);
-  const intact = new Map(Object.values(manifest.revisions).map((revision) => [revision.id, revision.bytes]));
+  const intact = new Map(Object.values(manifest.revisions).map((revision) => [revision.id, { bytes: revision.bytes, sha256: revision.sha256 }]));
   assert.equal(reconcile(manifest, intact, 9_000).changed, false);
 });
 
@@ -386,7 +397,7 @@ test("every transition leaves a manifest the parser accepts, through replace, Re
   // Restart: a running Explore with one draft, and a missing file.
   manifest = startRun(manifest, "run-5", explore(2)).manifest;
   manifest = accept(manifest, "run-5", "Late");
-  const files = new Map(Object.values(manifest.revisions).map((revision) => [revision.id, revision.bytes]));
+  const files = new Map(Object.values(manifest.revisions).map((revision) => [revision.id, { bytes: revision.bytes, sha256: revision.sha256 }]));
   files.delete(manifest.runs["run-2"]!.revisionIds[0]!);
   const restarted = reconcile(manifest, files, 9_000);
   assert.equal(restarted.changed, true);
@@ -552,7 +563,7 @@ test("run ids that are also inherited property names behave like any other id", 
   const runId: string = "constructor";
   assert.equal(manifest.runs[runId]!.status, "partial");
   assert.equal(finishDesignRun(manifest, "hasOwnProperty", "failed", 5_000), undefined);
-  assert.equal(orphanRevisionIds(manifest, new Map([["constructor", 1]])).join(), "constructor");
+  assert.equal(orphanRevisionIds(manifest, new Map([["constructor", { bytes: 1 }]])).join(), "constructor");
 });
 
 test("beginning a run is refused while another runs or when its ids are already taken", () => {
@@ -615,7 +626,7 @@ test("a restart never publishes a design whose file vanished, and a clock that r
   let manifest = startRun(base, "run-2", refine(screen.id, screen.activeRevisionId)).manifest;
   manifest = accept(manifest, "run-2", "Home");
   const draft = manifest.runs["run-2"]!.revisionIds[0]!;
-  const files = new Map(Object.values(manifest.revisions).filter((r) => r.id !== draft).map((r) => [r.id, r.bytes]));
+  const files = new Map(Object.values(manifest.revisions).filter((r) => r.id !== draft).map((r) => [r.id, { bytes: r.bytes, sha256: r.sha256 }]));
   const restarted = check(reconcile(manifest, files, 1).manifest); // earlier than the run's start
   assert.equal(restarted.revisions[draft]!.state, "missing");
   assert.equal(restarted.screens[screen.id]!.activeRevisionId, screen.activeRevisionId, "the current design is unchanged");
@@ -863,11 +874,12 @@ test("random legal operation sequences always leave a parseable manifest that ke
         const revisionId = pick(Object.keys(manifest.revisions));
         if (revisionId !== undefined) manifest = markDesignRevisionMissing(manifest, revisionId, now);
       } else if (roll < 0.9) {
-        const files = new Map<string, number>();
+        const files = new Map<string, DesignRevisionFile>();
         for (const revision of Object.values(manifest.revisions)) {
           const luck = random();
-          if (luck < 0.8) files.set(revision.id, revision.bytes);
-          else if (luck < 0.9) files.set(revision.id, revision.bytes + 1);
+          if (luck < 0.8) files.set(revision.id, { bytes: revision.bytes, sha256: revision.sha256 });
+          else if (luck < 0.85) files.set(revision.id, { bytes: revision.bytes + 1 });
+          else if (luck < 0.9) files.set(revision.id, { bytes: revision.bytes, sha256: "f".repeat(64) });
         }
         manifest = reconcile(manifest, files, now).manifest;
       } else {

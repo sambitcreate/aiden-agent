@@ -181,16 +181,38 @@ test("a referenced file that vanished is marked missing and the project still op
   assert.equal(store.list().length, 1);
 });
 
-test("a damaged revision is detected on read and marked missing", async (t) => {
+test("a damaged revision is marked missing at restart before anything reads it, and on read after", async (t) => {
   const f = await fixture(t);
   const project = await f.store.create();
-  const [revision] = await exploreWith(f.store, project.id, ["Real"]);
+  const [real, also] = await exploreWith(f.store, project.id, ["Real", "Also"]);
   await f.store.finishRun(project.id, "run-1", "completed");
-  assert.equal((await f.store.readRevision(project.id, revision!)).html, page("Real"));
+  assert.equal((await f.store.readRevision(project.id, real!)).html, page("Real"));
+  // A Refine that was rendering when the app quit; its draft is damaged too.
+  const screen = f.store.get(project.id)!.screens[f.store.get(project.id)!.revisions[real!]!.screenId]!;
+  await f.store.beginRun(project.id, {
+    runId: "run-2", turnId: "turn-run-2", request: { op: "refine", screenId: screen.id, baseRevisionId: real! },
+  });
+  const { revisionId: draft } = await f.store.acceptRunArtifact(project.id, "run-2", {
+    toolCallId: "call-refine", title: "Real", html: page("Draft"), model: MODEL,
+  });
+  const file = (revisionId: string) => path.join(f.root, project.id, "revisions", `${revisionId}.html`);
   // Same length, different bytes: only the digest can tell.
-  await fs.writeFile(path.join(f.root, project.id, "revisions", `${revision}.html`), page("Fake"));
-  await assert.rejects(f.store.readRevision(project.id, revision!), /missing or damaged/u);
-  assert.equal(f.store.get(project.id)!.revisions[revision!]!.state, "missing");
+  await fs.writeFile(file(real!), page("Fake"));
+  await fs.writeFile(file(draft), page("Drift"));
+
+  const { store } = await f.reopen();
+  const recovered = store.get(project.id)!;
+  assert.equal(recovered.revisions[real!]!.state, "missing");
+  assert.equal(recovered.revisions[draft]!.state, "missing", "an interrupted run never publishes a damaged draft");
+  assert.equal(recovered.revisions[also!]!.state, "published", "an intact revision is untouched");
+  assert.equal(recovered.screens[screen.id]!.activeRevisionId, real, "the damaged draft did not become current");
+  assert.ok(await fs.stat(file(real!)), "a damaged file is kept, never collected as an orphan");
+  await assert.rejects(store.readRevision(project.id, real!), /missing or damaged/u);
+
+  // Damage that happens while the store runs is still caught by the read itself.
+  await fs.writeFile(file(also!), page("Else"));
+  await assert.rejects(store.readRevision(project.id, also!), /missing or damaged/u);
+  assert.equal(store.get(project.id)!.revisions[also!]!.state, "missing");
 });
 
 test("an unreadable manifest is listed and never deleted", async (t) => {

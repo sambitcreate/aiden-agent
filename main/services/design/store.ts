@@ -45,6 +45,7 @@ import {
   planDesignRun,
   reconcileDesignManifest,
   revisionIdForToolCall,
+  type DesignRevisionFile,
   type DesignRunOutcome,
   type DesignStorageTotals,
 } from "./store-core.js";
@@ -643,6 +644,33 @@ export class DesignProjectStore {
     return files;
   }
 
+  /**
+   * Attach a digest to every file a live revision references at its recorded size, so restart
+   * marks same-length damage missing before an interrupted run publishes its drafts (ADR-DS §2).
+   * Other files keep only their size: a size mismatch is already damage, and orphans are deleted.
+   * A file that vanished since it was listed simply gets no digest and is marked missing.
+   */
+  private async hashReferencedRevisions(
+    directory: string,
+    manifest: DesignProjectManifestV1,
+    sizes: ReadonlyMap<string, number>,
+  ): Promise<Map<string, DesignRevisionFile>> {
+    const files = new Map<string, DesignRevisionFile>();
+    for (const [revisionId, bytes] of sizes) {
+      const revision = own(manifest.revisions, revisionId);
+      if (!revision || revision.state === "missing" || revision.bytes !== bytes) {
+        files.set(revisionId, { bytes });
+        continue;
+      }
+      try {
+        files.set(revisionId, { bytes, sha256: sha256(await fs.readFile(path.join(directory, `${revisionId}.html`))) });
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+    }
+    return files;
+  }
+
   private async unreadableEntry(projectId: string, ...mtimeSources: string[]): Promise<ProjectEntry> {
     for (const source of mtimeSources) {
       try {
@@ -699,7 +727,14 @@ export class DesignProjectStore {
     }
     // Shown as Unreadable and never deleted automatically (ADR-DS §2).
     if (!manifest || manifest.id !== projectId) return this.unreadableEntry(projectId, manifestPath, directory);
-    const reconciled = reconcileDesignManifest(manifest, files, this.now());
+    let verified: Map<string, DesignRevisionFile>;
+    try {
+      verified = await this.hashReferencedRevisions(revisionsDirectory, manifest, files);
+    } catch (error) {
+      if (!isFsError(error)) throw error;
+      return this.unreadableEntry(projectId, manifestPath, directory);
+    }
+    const reconciled = reconcileDesignManifest(manifest, verified, this.now());
     try {
       assertDesignManifestWritable(reconciled.manifest);
     } catch (error) {

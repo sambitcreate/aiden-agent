@@ -593,16 +593,27 @@ export function finishDesignRun(
   return touchDesignManifest(next, now);
 }
 
+/**
+ * A revision file found on disk at startup. `sha256` is the digest of its bytes; the store
+ * hashes only files a live revision references at its recorded size, and a referenced file
+ * without a digest counts as unverified.
+ */
+export interface DesignRevisionFile {
+  bytes: number;
+  sha256?: string;
+}
+
 export function reconcileDesignManifest(
   manifest: DesignProjectManifestV1,
-  files: ReadonlyMap<string, number>,
+  files: ReadonlyMap<string, DesignRevisionFile>,
   now: number,
 ): { manifest: DesignProjectManifestV1; changed: boolean } {
   const next = structuredClone(manifest);
   let changed = false;
-  // Missing files first, so ending a run never publishes a design whose file is gone.
+  // Missing or damaged files first, so ending a run never publishes a design whose bytes are gone.
   for (const revision of Object.values(next.revisions)) {
-    if (revision.state !== "missing" && files.get(revision.id) !== revision.bytes) {
+    const file = files.get(revision.id);
+    if (revision.state !== "missing" && (file?.bytes !== revision.bytes || file.sha256 !== revision.sha256)) {
       revision.state = "missing";
       changed = true;
     }
@@ -616,7 +627,7 @@ export function reconcileDesignManifest(
   return changed ? { manifest: touchDesignManifest(next, now), changed } : { manifest, changed };
 }
 
-export function orphanRevisionIds(manifest: DesignProjectManifestV1, files: ReadonlyMap<string, number>): string[] {
+export function orphanRevisionIds(manifest: DesignProjectManifestV1, files: ReadonlyMap<string, unknown>): string[] {
   return [...files.keys()].filter((id) => !own(manifest.revisions, id)).sort();
 }
 
