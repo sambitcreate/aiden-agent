@@ -4,6 +4,7 @@ import { hasExactKeys, isRecord } from "../../shared/guards.js";
 import { IMAGE_IMPORT_MAX_BYTES } from "../../../renderer/shared/images/ipc-types.js";
 import type { RunScope } from "../../../renderer/shared/images/run-types.js";
 import { IMAGE_WORKFLOW_ID_PATTERN, IMAGE_WORKFLOW_LIMITS } from "../../../renderer/shared/images/schema.js";
+import { hasControlCharacter } from "../../services/create-images/workflow-schema.js";
 
 const INVALID = "Invalid Create Images request.";
 const CONSENT_ID = /^[A-Za-z0-9_-]{16,64}$/u;
@@ -13,8 +14,15 @@ function invalid(): never {
   throw new Error(INVALID);
 }
 
+/** A plain object (what IPC structured clone produces), never a Map, Date or class instance. */
+function plain(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function shape(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
-  if (!isRecord(value) || !hasExactKeys(value, required, optional)) invalid();
+  if (!plain(value) || !hasExactKeys(value, required, optional)) invalid();
   return value;
 }
 
@@ -23,10 +31,11 @@ function id(value: unknown): string {
   return typeof value === "string" && IMAGE_WORKFLOW_ID_PATTERN.test(value) ? value : invalid();
 }
 
+/** The schema's title rule (single line, no control characters, not blank), trimmed here in main. */
 function title(value: unknown): string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= IMAGE_WORKFLOW_LIMITS.maxTitleLength
-    ? value
-    : invalid();
+  if (typeof value !== "string" || hasControlCharacter(value)) invalid();
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= IMAGE_WORKFLOW_LIMITS.maxTitleLength ? trimmed : invalid();
 }
 
 function revision(value: unknown): number {
@@ -55,7 +64,7 @@ export function parseSaveRequest(value: unknown): { workflowId: string; baseRevi
 export function parseMutateRequest(
   value: unknown,
 ): { op: "rename"; workflowId: string; title: string } | { op: "duplicate" | "delete"; workflowId: string } {
-  if (!isRecord(value)) invalid();
+  if (!plain(value)) invalid();
   if (value.op === "rename") {
     const request = shape(value, ["op", "workflowId", "title"]);
     return { op: "rename", workflowId: id(request.workflowId), title: title(request.title) };
@@ -70,7 +79,7 @@ export function parseMutateRequest(
 export function parseImportRequest(
   value: unknown,
 ): { source: "dialog" } | { source: "bytes"; name: string; mimeType: string; data: Uint8Array } {
-  if (!isRecord(value)) invalid();
+  if (!plain(value)) invalid();
   if (value.source === "dialog") {
     shape(value, ["source"]);
     return { source: "dialog" };
@@ -106,7 +115,7 @@ export function parseRunRequest(value: unknown): { runId: string } {
 }
 
 export function parseGetRunRequest(value: unknown): { runId: string } | { workflowId: string } {
-  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, "runId")
+  return plain(value) && Object.prototype.hasOwnProperty.call(value, "runId")
     ? parseRunRequest(value)
     : parseWorkflowRequest(value);
 }
