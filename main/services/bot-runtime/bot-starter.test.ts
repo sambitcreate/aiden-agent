@@ -28,23 +28,28 @@ function botDirectory(root: string) {
   const keys = createBotCreationKeyStore({ root: () => root });
   let next = 0;
   const created: BotCreateInput[] = [];
-  const deps: Pick<BotStarterDeps, "findBotByCreationKey" | "createBot"> = {
+  const make = async (input: BotCreateInput) => {
+    // Creating takes a moment, so concurrent taps really overlap.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    next += 1;
+    const bot = { id: `bot:${next}`, ...input } as BotDefinition;
+    bots.set(bot.id, bot);
+    created.push(input);
+    return bot;
+  };
+  const deps: Pick<BotStarterDeps, "findBotByCreationKey" | "createBot" | "rememberCreation"> = {
     async findBotByCreationKey(key) {
       const botId = await keys.get(key);
       return botId === null ? null : (bots.get(botId) ?? null);
     },
     async createBot(input, _access, key) {
-      // Creating takes a moment, so concurrent taps really overlap.
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      next += 1;
-      const bot = { id: `bot:${next}`, ...input } as BotDefinition;
-      bots.set(bot.id, bot);
-      created.push(input);
+      const bot = await make(input);
       await keys.set(key, bot.id);
       return bot;
     },
+    rememberCreation: (key, botId) => keys.set(key, botId),
   };
-  return { deps, bots, created };
+  return { deps, bots, created, make };
 }
 
 async function sessionFor(profileDir: string, fauxModels: FauxModels, model = true): Promise<BotSessionRuntime> {
@@ -145,6 +150,58 @@ test("a starter Bot without an AI model is created but does not introduce itself
     assert.equal(result.introduced, false);
     assert.deepEqual(await session.state(result.bot.id), { kind: "needs_model" });
     assert.equal(fauxModels.calls(), 0);
+  } finally {
+    await session.shutdown();
+  }
+});
+
+test("a phone's Start Chat and the Mac's converge on one Bot and one self-intro", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const fauxModels = createFauxModels([fauxAssistantMessage("Hi, I'm your Chief of Staff."), fauxAssistantMessage("never")]);
+  const session = await sessionFor(profile, fauxModels);
+  try {
+    const starter = createBotStarter({ ...directory.deps, session });
+    const phoneAudience: BotCreateInput[] = [];
+    const fromPhone = (input: BotCreateInput) => {
+      phoneAudience.push(input);
+      return directory.make(input);
+    };
+    const [phone, mac] = await Promise.all([
+      starter.startFromPreset("chief-of-staff", { createBot: fromPhone }),
+      starter.startFromPreset("chief-of-staff"),
+    ]);
+    // A later tap from either side, even after the in-flight lane closed, finds the same Bot.
+    const later = await starter.startFromPreset("chief-of-staff");
+    const laterPhone = await starter.startFromPreset("chief-of-staff", { createBot: fromPhone });
+
+    assert.equal(directory.created.length, 1);
+    assert.equal(phoneAudience.length, 1, "the phone's tap created it for the phone's audience");
+    assert.deepEqual(new Set([phone.bot.id, mac.bot.id, later.bot.id, laterPhone.bot.id]).size, 1);
+    assert.deepEqual([phone.introduced, mac.introduced, later.introduced, laterPhone.introduced], [true, false, false, false]);
+    const state = await session.state(phone.bot.id);
+    if (state.kind === "running") await session.awaitReply(phone.bot.id, state.submissionId, new AbortController().signal);
+    assert.equal(fauxModels.calls(), 1);
+  } finally {
+    await session.shutdown();
+  }
+});
+
+test("a Bot that is already talking is never asked to introduce itself", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const fauxModels = createFauxModels([fauxAssistantMessage("Sure, here is a plan."), fauxAssistantMessage("never")]);
+  const session = await sessionFor(profile, fauxModels);
+  try {
+    const bot = await directory.make({ name: "Planner" } as BotCreateInput);
+    const sent = await session.send(bot.id, { text: "Plan my week", requestId: "desk-1" });
+    await session.awaitReply(bot.id, sent.submissionId, new AbortController().signal);
+
+    const starter = createBotStarter({ ...directory.deps, session });
+    assert.equal(await starter.introduce(bot.id), false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(fauxModels.calls(), 1);
+    assert.deepEqual(await visibleTranscript(session, bot.id), ["user:Plan my week", "assistant:Sure, here is a plan."]);
   } finally {
     await session.shutdown();
   }
