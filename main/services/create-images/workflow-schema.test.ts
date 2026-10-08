@@ -83,6 +83,30 @@ test("the parser rejects legacy fields, unknown keys and out-of-range values", (
   }
 });
 
+test("ids that name an Object.prototype member are refused for the workflow, nodes and edges", () => {
+  const reserved = Object.getOwnPropertyNames(Object.prototype);
+  assert.ok(reserved.includes("constructor") && reserved.includes("__proto__"));
+  for (const name of reserved) {
+    const asWorkflow = structuredClone(starter()) as any;
+    asWorkflow.id = name;
+    assert.equal(parseWorkflowDocV1(asWorkflow).ok, false, `workflow ${name}`);
+    const asNode = structuredClone(starter()) as any;
+    const output = asNode.nodes[2];
+    for (const edge of asNode.edges) if (edge.target === output.id) edge.target = name;
+    output.id = name;
+    assert.equal(parseWorkflowDocV1(asNode).ok, false, `node ${name}`);
+    const asEdge = structuredClone(starter()) as any;
+    asEdge.edges[0].id = name;
+    assert.equal(parseWorkflowDocV1(asEdge).ok, false, `edge ${name}`);
+  }
+  // Only the exact names are reserved.
+  const near = structuredClone(starter()) as any;
+  for (const edge of near.edges) if (edge.target === near.nodes[2].id) edge.target = "constructor-2";
+  near.nodes[2].id = "constructor-2";
+  near.id = "toStringify";
+  assert.equal(parseWorkflowDocV1(near).ok, true);
+});
+
 test("the parser enforces node, edge and document size caps", () => {
   const doc = starter() as any;
   doc.nodes = Array.from({ length: 501 }, (_, index) => ({ id: `p${index}`, type: "prompt", position: { x: 0, y: 0 }, data: { text: "" } }));

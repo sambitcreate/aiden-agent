@@ -399,7 +399,7 @@ export class ImageRunLedger {
     this.requireOpen();
     const latest: Record<string, OutputRef[]> = {};
     for (const row of this.sql.latestOutputs.all(workflowId) as unknown as { node_id: string; output: string }[]) {
-      if (latest[row.node_id] === undefined) latest[row.node_id] = parseOutput(row.output);
+      if (!Object.prototype.hasOwnProperty.call(latest, row.node_id)) latest[row.node_id] = parseOutput(row.output);
     }
     return latest;
   }
@@ -409,7 +409,7 @@ export class ImageRunLedger {
     this.requireOpen();
     const latest: Record<string, number> = {};
     for (const row of this.sql.outputSequence.all(workflowId) as unknown as { node_id: string; sequence: number }[]) {
-      if (latest[row.node_id] === undefined) latest[row.node_id] = Number(row.sequence);
+      if (!Object.prototype.hasOwnProperty.call(latest, row.node_id)) latest[row.node_id] = Number(row.sequence);
     }
     return latest;
   }
