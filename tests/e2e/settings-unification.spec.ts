@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, skipBotsOnboardingStep, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
 
@@ -500,6 +500,7 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   await expect(onboarding.getByText(/optional prompt cache warming/u)).toContainText("off by default");
   await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
   await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await skipBotsOnboardingStep(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
   const openMemory = async () => {
