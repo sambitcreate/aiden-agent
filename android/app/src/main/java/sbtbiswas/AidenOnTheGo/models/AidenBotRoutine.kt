@@ -99,7 +99,7 @@ sealed class AidenBotRoutineSchedule {
     @SerialName("monthly")
     data class Monthly(@Serializable(with = AidenStrictIntSerializer::class) val day: Int, override val time: String) : AidenBotRoutineSchedule() {
         init {
-            if (day !in 1..31) throw AidenBotContractException.InvalidField("schedule.day")
+            if (day !in 1..28) throw AidenBotContractException.InvalidField("schedule.day")
             AidenBotRoutineWire.validateTime(time)
         }
     }

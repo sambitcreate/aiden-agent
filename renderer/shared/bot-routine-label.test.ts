@@ -71,6 +71,11 @@ test("schedule parsing accepts the picker shapes and rejects anything else", () 
     date: "2026-02-28",
     time: "23:59",
   });
+  assert.deepEqual(parseBotRoutineSchedule({ kind: "monthly", day: 28, time: "07:30" }), {
+    kind: "monthly",
+    day: 28,
+    time: "07:30",
+  });
   for (const invalid of [
     null,
     "0 9 * * *",
@@ -82,6 +87,9 @@ test("schedule parsing accepts the picker shapes and rejects anything else", () 
     { kind: "weekly", days: [], time: "09:00" },
     { kind: "weekly", days: [7], time: "09:00" },
     { kind: "monthly", day: 0, time: "09:00" },
+    { kind: "monthly", day: 29, time: "09:00" },
+    { kind: "monthly", day: 30, time: "09:00" },
+    { kind: "monthly", day: 31, time: "09:00" },
     { kind: "monthly", day: 32, time: "09:00" },
     { kind: "once", date: "2026-02-30", time: "09:00" },
     { kind: "once", date: "2026-13-01", time: "09:00" },

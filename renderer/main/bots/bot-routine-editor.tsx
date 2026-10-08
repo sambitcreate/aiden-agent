@@ -4,7 +4,11 @@ import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { BotRoutine } from "../../../main/services/scheduled-bot-routines";
 import { formatBotRoutineLabel } from "../../shared/bot-routine-label";
-import type { BotRoutineSchedule, BotRoutineScheduleKind } from "../../shared/bot-routine-schedule";
+import {
+  BOT_ROUTINE_MAX_MONTH_DAY,
+  type BotRoutineSchedule,
+  type BotRoutineScheduleKind,
+} from "../../shared/bot-routine-schedule";
 import type { BotDefinition } from "../../shared/bots";
 import { cn } from "../../lib/ui-utils";
 
@@ -257,7 +261,7 @@ export function BotRoutineEditor({
               disabled={busy}
               onChange={(event) => setDay(Number(event.target.value))}
             >
-              {Array.from({ length: 28 }, (_, index) => index + 1).map((value) => (
+              {Array.from({ length: BOT_ROUTINE_MAX_MONTH_DAY }, (_, index) => index + 1).map((value) => (
                 <option key={value} value={value}>
                   {value}
                 </option>

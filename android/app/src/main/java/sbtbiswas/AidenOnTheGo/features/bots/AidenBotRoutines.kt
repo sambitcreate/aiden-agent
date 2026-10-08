@@ -316,7 +316,7 @@ private fun AidenBotRoutineEditorDialog(
                     AidenBotRoutineFrequency.MONTHLY -> AidenBotRoutineStepper(
                         label = "Day of the month",
                         value = draft.dayOfMonth,
-                        range = 1..31,
+                        range = 1..28,
                         format = { it.toString() },
                         onChange = { draft = draft.copy(dayOfMonth = it) }
                     )

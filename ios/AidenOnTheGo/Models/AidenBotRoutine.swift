@@ -88,7 +88,7 @@ enum AidenBotRoutineSchedule: Codable, Equatable, Sendable {
                 throw AidenBotContractError.invalidField("schedule.days")
             }
         case let .monthly(day, _):
-            guard (1...31).contains(day) else {
+            guard (1...28).contains(day) else {
                 throw AidenBotContractError.invalidField("schedule.day")
             }
         case .daily, .weekdays:

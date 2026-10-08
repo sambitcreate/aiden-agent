@@ -586,6 +586,9 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertFalse(decodes(AidenBotRoutine.self, noSchedule), "schedule is required, even if null")
         XCTAssertTrue(decodes(AidenBotRoutine.self, routine.merging(["schedule": NSNull()]) { $1 }))
         XCTAssertFalse(decodes(AidenBotRoutine.self, routine.merging(["schedule": ["kind": "monthly", "day": 32, "time": "08:00"]]) { $1 }))
+        // Cron skips the 29th–31st in shorter months, so monthly routines stop at the 28th.
+        XCTAssertTrue(decodes(AidenBotRoutine.self, routine.merging(["schedule": ["kind": "monthly", "day": 28, "time": "08:00"]]) { $1 }))
+        XCTAssertFalse(decodes(AidenBotRoutine.self, routine.merging(["schedule": ["kind": "monthly", "day": 29, "time": "08:00"]]) { $1 }))
         XCTAssertFalse(decodes(AidenBotRoutine.self, routine.merging(["schedule": ["kind": "daily", "time": "8:00"]]) { $1 }))
         XCTAssertFalse(decodes(AidenBotRoutine.self, routine.merging(["schedule": ["kind": "once", "date": "2026-02-30", "time": "08:00"]]) { $1 }))
         XCTAssertFalse(decodes(AidenBotRoutine.self, routine.merging(["schedule": ["kind": "weekly", "days": [7], "time": "08:00"]]) { $1 }))

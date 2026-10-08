@@ -163,6 +163,16 @@ class AidenBotRevision25ContractTest {
         assertThrows(Exception::class.java) {
             json.decodeFromJsonElement(AidenBotRoutineSchedule.serializer(), json.parseToJsonElement("""{"kind":"daily","time":"24:00"}"""))
         }
+        // Cron skips the 29th–31st in shorter months, so monthly routines stop at the 28th.
+        assertEquals(
+            AidenBotRoutineSchedule.Monthly(28, "08:00"),
+            json.decodeFromJsonElement(AidenBotRoutineSchedule.serializer(), json.parseToJsonElement("""{"kind":"monthly","day":28,"time":"08:00"}""")),
+        )
+        for (day in 29..31) {
+            assertThrows(Exception::class.java) {
+                json.decodeFromJsonElement(AidenBotRoutineSchedule.serializer(), json.parseToJsonElement("""{"kind":"monthly","day":$day,"time":"08:00"}"""))
+            }
+        }
     }
 
     private fun JsonObject.with(vararg changes: Pair<String, JsonElement>) = JsonObject(this + changes)
