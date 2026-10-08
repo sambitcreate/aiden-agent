@@ -146,6 +146,7 @@ import {
 } from "./services/aiden-remote-service-main.js";
 import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
 import { trackConnectionSetupFocus } from "./services/bot-connection-setup.js";
+import { startBotApplication } from "./services/bot-startup-core.js";
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
@@ -1990,18 +1991,12 @@ if (!ownsSingleInstanceLock) {
           );
         }
       }
-      if (hostPlatformCapabilities().bots) {
-        trackConnectionSetupFocus();
-        try {
-          await initializeBotApplicationService();
-        } catch (error) {
-          logger.error(
-            "bots",
-            "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
-            error,
-          );
-        }
-      }
+      await startBotApplication({
+        supported: hostPlatformCapabilities().bots,
+        initialize: initializeBotApplicationService,
+        trackConnectionSetupFocus,
+        logError: (message, error) => logger.error("bots", message, error),
+      });
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
       try {
