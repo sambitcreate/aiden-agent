@@ -31,6 +31,12 @@ import {
 } from "./model-kit";
 
 export const DUO_COVER_PIXELS = { width: 784, height: 1140 } as const;
+/**
+ * The cover's front camera, from the hole in the simulator's own cover display
+ * mask (`simctl io screenshot --mask=black`, 1398 × 2034): centre and radius as
+ * fractions of the framebuffer's width and height, seen from the cover's front.
+ */
+export const DUO_COVER_CAMERA = { x: 1255 / 1398, y: 143 / 2034, radius: 55 / 1398 } as const;
 /** The inner panel's canvas, already turned a quarter onto the open leaves. */
 export const DUO_INNER_PIXELS = { width: 1600, height: 1125 } as const;
 
@@ -137,13 +143,26 @@ function buildLeaf(side: Side, kit: MaterialKit): Group {
     parts.add(kit.frontGlass, backGlass);
     backGlass.dispose();
     const cx = -(L.leafWidth + L.seam) / 2;
+    // The simulator's cover mask is square along the hinge (+x) and rounded on the outer edge.
+    const r = L.coverRadius;
     const cover = new Mesh(
-      face(continuousRect(L.coverWidth, L.coverHeight, L.coverRadius, cx, 0), -t - 0.04, true, 20),
+      face(continuousRect(L.coverWidth, L.coverHeight, [r, 0, 0, r], cx, 0), -t - 0.04, true, 20),
       new MeshBasicMaterial({ color: 0x000000, name: "cover-placeholder" }),
     );
     cover.name = "cover-display";
     leaf.add(cover);
-    const punch = face(circle(1.35, cx, L.coverHeight / 2 - 5.2), -t - 0.09, true, 20);
+    // The front camera sits where the simulator's cover mask has its hole: the top corner away from the hinge.
+    const camera = DUO_COVER_CAMERA;
+    const punch = face(
+      circle(
+        camera.radius * L.coverWidth,
+        cx - (camera.x - 0.5) * L.coverWidth,
+        (0.5 - camera.y) * L.coverHeight,
+      ),
+      -t - 0.09,
+      true,
+      20,
+    );
     parts.add(kit.cutout, punch);
     punch.dispose();
     // Speaker slots on the top edge.
