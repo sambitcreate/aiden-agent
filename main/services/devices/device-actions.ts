@@ -236,8 +236,8 @@ export async function readDeviceSettings(ready: DeviceHostReady, udid: string): 
 
 // ── Device power features: erase, clipboard, and screen recording ───────────
 // Each takes the target's platform so Android's adb variants can slot in
-// beside iOS. Only iOS is implemented; any other platform is refused before
-// anything runs.
+// beside iOS. These builders are iOS-only and refuse any other platform before
+// anything runs; Android's live in `android-device-feature-actions.ts`.
 
 type DeviceRun = DeviceHostReady["run"];
 const SIMCTL_SHUTDOWN_TIMEOUT_MS = 60_000;

@@ -113,8 +113,8 @@ function defaultDeviceFeatures(): DeviceFeatures {
   deviceFeatures = createDeviceFeatures({
     service: defaultDeviceService(),
     recorder: createDeviceRecorder({
-      spawn: (command, args) => {
-        const child = nodeSpawn(command, [...args], { stdio: "ignore", detached: false });
+      spawn: (command, args, env) => {
+        const child = nodeSpawn(command, [...args], { stdio: "ignore", detached: false, ...(env ? { env } : {}) });
         // A spawn failure may never emit "exit"; the recorder settles on exit, so report one.
         child.once("error", () => {
           if (child.exitCode === null && child.signalCode === null) child.emit("exit", 127, null);
@@ -145,6 +145,8 @@ function defaultDeviceFeatures(): DeviceFeatures {
     removeFile: (file) => rm(file, { force: true }),
     writeFile: (file, bytes) => writeFile(file, bytes),
     now: () => new Date(),
+    fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   return deviceFeatures;
 }

@@ -87,7 +87,7 @@ test("the hovered element shows its label and role, or says it is unlabeled", ()
 
 test("an open event log offers filter, pause, clear, and copy around a labelled log", () => {
   const html = renderToStaticMarkup(
-    <DeviceEventLogSection hostId="local" deviceId={UDID} grants={grants} defaultOpen />,
+    <DeviceEventLogSection hostId="local" deviceId={UDID} platform="ios" grants={grants} defaultOpen />,
   );
   for (const name of ["Filter events", "Pause event log", "Clear event log", "Copy events"]) {
     assert.match(html, new RegExp(`aria-label="${name}"`, "u"), name);
@@ -158,5 +158,75 @@ test("the viewer rail offers screenshot options and recording, and a paired Mac'
   const local = render("local");
   assert.match(local, /aria-label="Screenshot options"/u);
   assert.match(local, /aria-label="Record screen"/u);
+  assert.doesNotMatch(render("peer-mac"), /aria-label="Record screen"/u);
+});
+
+const SERIAL = "emulator-5554";
+
+function androidSections(hostId: string, extra: Partial<Parameters<typeof DeviceFeatureSections>[0]> = {}) {
+  return sections(hostId, { target: { platform: "android", hostId, deviceId: SERIAL }, deviceName: "Pixel 9", ...extra });
+}
+
+test("this Mac's emulator gets the overlay, paste, logcat, and erase, with Copy from device disabled and explained", () => {
+  const html = androidSections("local");
+  for (const title of ["Accessibility", "Clipboard", "Device"]) {
+    assert.match(html, new RegExp(`>${title}</h3>`, "u"), title);
+  }
+  assert.match(html, /aria-label="Overlay element frames"/u);
+  assert.match(html, /Event log/u);
+  assert.match(html, />Erase all content and settings…</u);
+  const copy = (html.match(/<button[^>]*>(?:(?!<\/button>).)*<\/button>/gu) ?? []).find((button) =>
+    button.includes("Copy from device"),
+  );
+  assert.match(copy ?? "", /^<button[^>]*disabled=""/u);
+  const describedBy = /aria-describedby="([^"]+)"/u.exec(copy ?? "")?.[1];
+  assert.ok(describedBy, "the disabled button points at its reason");
+  assert.ok(html.includes(`id="${describedBy}"`));
+  assert.match(html, />Android Emulators do not let adb read their clipboard\.</u);
+  assert.match(html, /typed into the focused field/u);
+});
+
+test("a paired Mac's emulator offers only the overlay and logcat", () => {
+  const html = androidSections("peer-mac");
+  assert.match(html, /aria-label="Overlay element frames"/u);
+  assert.match(html, /Event log/u);
+  assert.doesNotMatch(html, /Paste to device|Copy from device|Erase all content/u);
+});
+
+test("an emulator's open log is labelled as logcat and can follow only the frontmost app", () => {
+  const html = renderToStaticMarkup(
+    <DeviceEventLogSection
+      hostId="local"
+      deviceId={SERIAL}
+      platform="android"
+      grants={grants}
+      foregroundApp="com.example.shop"
+      defaultOpen
+    />,
+  );
+  assert.match(html, /role="log" aria-label="Emulator logcat"/u);
+  assert.match(html, />Only com\.example\.shop</u);
+  assert.match(html, /aria-label="Only the frontmost app"/u);
+  const unknownApp = renderToStaticMarkup(
+    <DeviceEventLogSection hostId="local" deviceId={SERIAL} platform="android" grants={grants} defaultOpen />,
+  );
+  assert.doesNotMatch(unknownApp, /Only the frontmost app/u);
+});
+
+test("an emulator's rail offers recording capped at three minutes; a paired Mac's has none", () => {
+  const render = (hostId: string) =>
+    renderToStaticMarkup(
+      <DeviceViewer
+        chatId="chat-1"
+        session={{ chatId: "chat-1", hostId, deviceId: SERIAL, openedBy: "user" }}
+        device={{ hostId, id: SERIAL, name: "Pixel 9", platform: "android", version: "Android 16", booted: true, kind: "other" }}
+        active={false}
+        compact={false}
+        onClose={noop}
+      />,
+    );
+  const local = render("local");
+  assert.match(local, /aria-label="Screenshot options"/u);
+  assert.match(local, /title="Record screen \(up to 3 minutes\)"/u);
   assert.doesNotMatch(render("peer-mac"), /aria-label="Record screen"/u);
 });

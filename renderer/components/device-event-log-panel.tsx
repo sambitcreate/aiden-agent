@@ -1,38 +1,50 @@
 /**
  * Adapted from t3code apps/web/src/components/device/DeviceToolsPanel.tsx @ a6ec88f7 (MIT)
  *
- * The iOS event log in the Device tools drawer. It subscribes only while the
- * section is expanded, keeps a bounded buffer, and can be filtered, paused,
- * cleared, and copied. Pausing freezes the view while new events keep
- * buffering, so resuming shows what happened meanwhile.
+ * The event log in the Device tools drawer: serve-sim's iOS events, or an
+ * Android emulator's logcat. It subscribes only while the section is
+ * expanded (closing it, or the viewer going away, ends the stream and with it
+ * serve-emu's logcat child), keeps a bounded buffer, and can be filtered,
+ * paused, cleared, and copied. Pausing freezes the view while new events keep
+ * buffering, so resuming shows what happened meanwhile. On Android the log
+ * can follow only the frontmost app's processes.
  */
 import * as React from "react";
 import { ChevronDown, Copy, Pause, Play, Trash2 } from "lucide-react";
-import { Button, Input, Text, toast } from "./ui";
+import { Button, Input, Switch, Text, toast } from "./ui";
 import {
   createEventLogBuffer,
   eventLogTime,
   filterEventLog,
   formatEventLog,
+  subscribeAndroidLogcat,
   subscribeDeviceEventLog,
   type DeviceEventLogEntry,
 } from "../lib/device-event-log";
 import type { DeviceGrantSource } from "../lib/device-grant";
+import { Row } from "./device-tools-panel";
+import type { DevicePlatform } from "../shared/devices";
 
 export function DeviceEventLogSection(props: {
   hostId: string;
   deviceId: string;
+  platform: DevicePlatform;
   grants: DeviceGrantSource;
+  /** Android: the frontmost app, which the log can be narrowed to. */
+  foregroundApp?: string;
   /** Starts expanded (and subscribed); tests and restored drawers use it. */
   defaultOpen?: boolean;
 }) {
-  const { hostId, deviceId, grants } = props;
+  const { hostId, deviceId, platform, grants, foregroundApp } = props;
+  const android = platform === "android";
   const listId = React.useId();
   const [open, setOpen] = React.useState(props.defaultOpen ?? false);
   const [entries, setEntries] = React.useState<DeviceEventLogEntry[]>([]);
   const [frozen, setFrozen] = React.useState<DeviceEventLogEntry[] | null>(null);
   const [query, setQuery] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  /** Android: follow only this app's processes. Pinned when turned on, so switching apps does not move it. */
+  const [onlyApp, setOnlyApp] = React.useState<string | null>(null);
   const bufferRef = React.useRef(createEventLogBuffer());
   const listRef = React.useRef<HTMLOListElement | null>(null);
   const stickRef = React.useRef(true);
@@ -46,13 +58,14 @@ export function DeviceEventLogSection(props: {
       .get()
       .then((grant) => {
         if (cancelled) return;
-        stop = subscribeDeviceEventLog(
-          { hostId, deviceId, grant },
-          (incoming, reset) => setEntries(bufferRef.current.apply(incoming, reset)),
-          (message) => {
-            if (message) setError(message);
-          },
-        );
+        const onEvents = (incoming: DeviceEventLogEntry[], reset: boolean) =>
+          setEntries(bufferRef.current.apply(incoming, reset));
+        const onEnd = (message: string | null) => {
+          if (message) setError(message);
+        };
+        stop = android
+          ? subscribeAndroidLogcat({ hostId, deviceId, grant, ...(onlyApp ? { packageName: onlyApp } : {}) }, onEvents, onEnd)
+          : subscribeDeviceEventLog({ hostId, deviceId, grant }, onEvents, onEnd);
       })
       .catch(() => {
         if (!cancelled) setError("The event log is unavailable right now.");
@@ -61,13 +74,14 @@ export function DeviceEventLogSection(props: {
       cancelled = true;
       stop?.();
     };
-  }, [open, hostId, deviceId, grants]);
+  }, [open, hostId, deviceId, android, onlyApp, grants]);
 
   // A different device starts from an empty log.
   React.useEffect(() => {
     bufferRef.current = createEventLogBuffer();
     setEntries([]);
     setFrozen(null);
+    setOnlyApp(null);
   }, [hostId, deviceId]);
 
   const paused = frozen !== null;
@@ -152,6 +166,15 @@ export function DeviceEventLogSection(props: {
               <Copy aria-hidden />
             </Button>
           </div>
+          {android && (foregroundApp || onlyApp) ? (
+            <Row label={`Only ${onlyApp ?? foregroundApp}`}>
+              <Switch
+                aria-label="Only the frontmost app"
+                checked={onlyApp !== null}
+                onCheckedChange={(checked) => setOnlyApp(checked ? (foregroundApp ?? null) : null)}
+              />
+            </Row>
+          ) : null}
           {error ? (
             <Text variant="small" color="secondary" role="status">
               {error}
@@ -162,7 +185,7 @@ export function DeviceEventLogSection(props: {
             ref={listRef}
             className="device-event-log-list"
             role="log"
-            aria-label="Simulator events"
+            aria-label={android ? "Emulator logcat" : "Simulator events"}
             aria-live="off"
             tabIndex={0}
             onScroll={(event) => {

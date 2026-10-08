@@ -165,6 +165,12 @@ export interface DeviceService {
     ready: DeviceHostReady;
     device: DeviceSummary;
   }>;
+  /**
+   * Shuts one device on this Mac down the way the Shut down control does: an
+   * Android emulator through the hub, which waits until adb loses it. Sessions
+   * on it end when the listing drops its id.
+   */
+  shutdownLocal(input: { hostId: string; deviceId: string }): Promise<void>;
   streamGrant(): Promise<DeviceStreamGrant>;
   /** The pinned helpers and what is installed on disk. Reads files only; never starts or installs. */
   toolchain(): Promise<DeviceToolchainState>;
@@ -1658,6 +1664,19 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       if (!device) throw new Error("That simulator is no longer available.");
       if (input.booted && !device.booted) throw new Error("Open the simulator first.");
       return { ready, device: { ...device } };
+    },
+    async shutdownLocal(input) {
+      await load();
+      if (input.hostId !== host.id) throw new Error("This works only with simulators on this Mac.");
+      const ready = requireReady(input.hostId);
+      if (!devices.some((candidate) => candidate.id === input.deviceId)) {
+        throw new Error("That simulator is no longer available.");
+      }
+      try {
+        await shutdownLocal(ready, input.deviceId);
+      } finally {
+        emit();
+      }
     },
     async streamGrant() {
       await load();

@@ -284,7 +284,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     });
 
   const ready = (): DeviceHostReady | null =>
-    hub ? { nodePath: deps.nodePath, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run } : null;
+    hub ? { nodePath: deps.nodePath, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run, env: sdkEnv } : null;
 
   async function install(
     spec: ToolSpec,

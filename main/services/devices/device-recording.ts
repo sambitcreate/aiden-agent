@@ -1,11 +1,17 @@
 /**
- * Supervised simulator screen recordings.
+ * Supervised device screen recordings.
  *
- * Each recording is one `simctl io recordVideo` child writing to a private
- * temp file. Stopping sends SIGINT, which makes simctl finalize the MP4; a
- * child that ignores it is killed and its recording fails. A recording that
- * reaches the duration cap stops by itself. Nothing here shows UI: the caller
- * moves a finished file to where the user chose, or discards it.
+ * iOS: one `simctl io recordVideo` child writes a private temp file. Stopping
+ * sends SIGINT, which makes simctl finalize the MP4.
+ *
+ * Android: one `adb shell screenrecord` child writes the MP4 on the emulator.
+ * Its `remote` hooks stop it there so the file finalizes, pull it into the
+ * temp file once the child exits, and delete the emulator's copy on every
+ * exit path.
+ *
+ * A child that ignores the stop is killed and its recording fails. A
+ * recording that reaches its duration cap stops by itself. Nothing here shows
+ * UI: the caller moves a finished file to where the user chose, or discards it.
  */
 import path from "node:path";
 import {
@@ -29,7 +35,8 @@ export interface RecorderChild {
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface DeviceRecorderDeps {
-  spawn(command: string, args: readonly string[]): RecorderChild;
+  /** `env` replaces the inherited environment, e.g. to put the Android SDK on PATH. */
+  spawn(command: string, args: readonly string[], env?: NodeJS.ProcessEnv): RecorderChild;
   /** A private directory for in-progress recordings; created on demand. */
   tempDir(): Promise<string>;
   /** Byte size of a finished file, or null when it was never written. */
@@ -48,8 +55,24 @@ export interface DeviceRecordingStart {
   platform: DevicePlatform;
   hostId: string;
   deviceId: string;
-  /** The recorder argv for the temp file the recorder chose. */
-  command(file: string): { command: string; args: string[] };
+  /** The recorder argv for this recording's id and the temp file the recorder chose. */
+  command(file: string, id: string): { command: string; args: string[] };
+  /** The environment the child runs with; the inherited one when absent. */
+  env?: NodeJS.ProcessEnv;
+  /** Overrides the default cap for platforms with a shorter one. */
+  maxDurationMs?: number;
+  /** For a recorder that writes on the device rather than into `file`. */
+  remote?(id: string): DeviceRecordingRemote;
+}
+
+/** Hooks for a recorder whose file lives on the device until it is pulled. */
+export interface DeviceRecordingRemote {
+  /** Asks the device's recorder to finalize; the child exits once it has. */
+  stop(): Promise<void>;
+  /** Copies the finished recording into the local temp file. */
+  collect(file: string): Promise<void>;
+  /** Deletes the device's copy. Runs once, whatever happened. */
+  cleanup(): Promise<void>;
 }
 
 interface Entry {
@@ -59,6 +82,11 @@ interface Entry {
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   capTimer: Timer | null;
   stopping: Promise<DeviceRecordingInfo> | null;
+  /** A recorder that exited by itself, still copying or checking its file. */
+  settling: Promise<DeviceRecordingInfo> | null;
+  remote: DeviceRecordingRemote | null;
+  /** The device copy was deleted (or there never was one). */
+  cleaned: boolean;
 }
 
 export interface DeviceRecorder {
@@ -95,12 +123,28 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
     if (entries.get(entry.info.id) === entry) emit();
   };
 
-  /** A child that exits on its own (the simulator shut down, or simctl failed) settles its recording. */
+  /** Deletes the device's copy once, whatever happened to the recording. */
+  const cleanupRemote = async (entry: Entry) => {
+    if (entry.cleaned || !entry.remote) return;
+    entry.cleaned = true;
+    await entry.remote.cleanup().catch(() => undefined);
+  };
+
+  /** A child that exits on its own (the device shut down, or the recorder failed) settles its recording. */
   const settle = async (entry: Entry, reason: DeviceRecordingStopReason): Promise<DeviceRecordingInfo> => {
     const { code } = await entry.exited;
     if (entry.capTimer) deps.clearTimeout(entry.capTimer);
     entry.capTimer = null;
     entry.child = null;
+    let collectFailed = false;
+    if (entry.remote) {
+      try {
+        await entry.remote.collect(entry.file);
+      } catch {
+        collectFailed = true;
+      }
+      await cleanupRemote(entry);
+    }
     const size = await deps.fileSize(entry.file).catch(() => null);
     const stoppedAt = entry.info.stoppedAt ?? deps.now();
     if (size && size > 0 && (code === 0 || reason !== "exited")) {
@@ -112,8 +156,10 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         reason,
         error:
           code !== null && code !== 0 && reason === "exited"
-            ? `The simulator stopped recording (exit code ${code}).`
-            : "The recording is empty.",
+            ? `The device stopped recording (exit code ${code}).`
+            : collectFailed
+              ? "The recording could not be copied from the emulator."
+              : "The recording is empty.",
       });
     }
     return { ...entry.info };
@@ -129,7 +175,12 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         killTimer = null;
         child.kill("SIGKILL");
       }, stopTimeoutMs);
-      child.kill("SIGINT");
+      if (entry.remote) {
+        // The device's recorder finalizes its file; signalling the local adb would not wait for that.
+        void entry.remote.stop().catch(() => child.kill("SIGINT"));
+      } else {
+        child.kill("SIGINT");
+      }
       await entry.exited;
       const killed = killTimer === null;
       if (killTimer) deps.clearTimeout(killTimer);
@@ -137,6 +188,7 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         if (entry.capTimer) deps.clearTimeout(entry.capTimer);
         entry.capTimer = null;
         entry.child = null;
+        await cleanupRemote(entry);
         update(entry, { status: "failed", error: "The recording did not finish writing in time." });
         return { ...entry.info };
       }
@@ -148,10 +200,12 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
   const removeEntry = async (entry: Entry) => {
     if (entry.child) await stopEntry(entry, "user").catch(() => undefined);
     else if (entry.stopping) await entry.stopping.catch(() => undefined);
+    else if (entry.settling) await entry.settling.catch(() => undefined);
     if (entries.get(entry.info.id) === entry) {
       entries.delete(entry.info.id);
       emit();
     }
+    await cleanupRemote(entry);
     await deps.removeFile(entry.file).catch(() => undefined);
   };
 
@@ -168,8 +222,10 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         const id = deps.newId();
         const directory = await deps.tempDir();
         const file = path.join(directory, `${id}.mp4`);
-        const { command, args } = input.command(file);
-        const child = deps.spawn(command, args);
+        const { command, args } = input.command(file, id);
+        const remote = input.remote?.(id) ?? null;
+        const cap = input.maxDurationMs ?? maxDurationMs;
+        const child = deps.spawn(command, args, input.env);
         const startedAt = deps.now();
         let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
         const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
@@ -189,22 +245,25 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
             deviceId: input.deviceId,
             status: "recording",
             startedAt,
-            endsBy: startedAt + maxDurationMs,
+            endsBy: startedAt + cap,
           },
           file,
           child,
           exited,
           capTimer: null,
           stopping: null,
+          settling: null,
+          remote,
+          cleaned: remote === null,
         };
         entry.capTimer = deps.setTimeout(() => {
           entry.capTimer = null;
           void stopEntry(entry, "max-duration");
-        }, maxDurationMs);
+        }, cap);
         entries.set(id, entry);
         void exited.then(() => {
           // Only an exit nobody asked for settles here; stop() settles its own.
-          if (entry.info.status === "recording" && !entry.stopping) void settle(entry, "exited");
+          if (entry.info.status === "recording" && !entry.stopping) entry.settling = settle(entry, "exited");
         });
         emit();
         return { ...entry.info };

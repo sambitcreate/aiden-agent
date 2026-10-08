@@ -2,21 +2,82 @@
  * Device power features (erase, clipboard, screen recording, screenshot files)
  * cross the renderer ↔ main boundary only through these fail-closed shapes.
  *
- * Every target names its `platform`, so another platform's variant (Android's
- * adb) can be added beside iOS without changing the contract. Today only iOS
- * simulators on this Mac implement them.
+ * Every target names its `platform`: iOS simulators run `simctl`, Android
+ * emulators run `adb` (and the emulator binary for erase). Which controls a
+ * device offers comes from `deviceFeatureCapabilities`, never from a blanket
+ * platform check.
  */
-import { DEVICE_HOST_ID_PATTERN, type DevicePlatform } from "./devices.js";
+import { DEVICE_HOST_ID_PATTERN, DEVICE_ID_PATTERN, type DevicePlatform } from "./devices.js";
 
 /** Text larger than this is refused by Paste to device and Copy from device. */
 export const DEVICE_CLIPBOARD_MAX_BYTES = 64 * 1024;
-/** A screen recording stops by itself after this long. */
+/** An iOS screen recording stops by itself after this long. */
 export const DEVICE_RECORDING_MAX_MS = 10 * 60_000;
+/**
+ * Android's `screenrecord` caps one segment at 180 s on every image before
+ * Android 14, and MP4 segments cannot be joined without a muxer, so an
+ * emulator recording stops by itself at three minutes.
+ */
+export const ANDROID_RECORDING_MAX_MS = 3 * 60_000;
 
-const DEVICE_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 const RECORDING_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/u;
 const CHAT_ID_MAX_LENGTH = 256;
-const KNOWN_PLATFORMS: readonly DevicePlatform[] = ["ios"];
+const KNOWN_PLATFORMS: readonly DevicePlatform[] = ["ios", "android"];
+
+/** How long a recording on this platform may run before it stops by itself. */
+export function deviceRecordingMaxMs(platform: DevicePlatform): number {
+  return platform === "android" ? ANDROID_RECORDING_MAX_MS : DEVICE_RECORDING_MAX_MS;
+}
+
+/** One control's availability: offered, or shown disabled with the reason. */
+export type DeviceFeatureAvailability = { available: true } | { available: false; reason: string };
+
+export interface DeviceFeatureCapabilities {
+  /** Element frames over the flat screen. */
+  axOverlay: boolean;
+  /** iOS: serve-sim's event log. Android: logcat. */
+  eventLog: boolean;
+  /** Pinch, rotate, and two-finger pan on the flat screen. */
+  multiTouch: boolean;
+  /** Erase all content and settings. */
+  erase: boolean;
+  /** The Clipboard section: host clipboard text to the device. */
+  clipboardPaste: boolean;
+  /** Device clipboard text to the host, or the reason the button is disabled. */
+  clipboardCopy: DeviceFeatureAvailability;
+  /** Screen recording, up to `recordingMaxMs`. */
+  recording: boolean;
+  recordingMaxMs: number;
+  /** "Save screenshot…" to a file the user picks. */
+  screenshotSave: boolean;
+}
+
+const ANDROID_CLIPBOARD_COPY_REASON = "Android Emulators do not let adb read their clipboard.";
+
+/**
+ * The power features one device offers. Clipboard, erase, and recording run
+ * `simctl` or `adb` on this Mac, so a paired Mac's or SSH host's device gets
+ * only what travels through the hub: the overlay, the event log, multi-touch,
+ * and screenshots.
+ */
+export function deviceFeatureCapabilities(
+  platform: DevicePlatform,
+  options: { local: boolean },
+): DeviceFeatureCapabilities {
+  const { local } = options;
+  return {
+    axOverlay: true,
+    eventLog: true,
+    multiTouch: true,
+    erase: local,
+    clipboardPaste: local,
+    clipboardCopy:
+      platform === "android" ? { available: false, reason: ANDROID_CLIPBOARD_COPY_REASON } : { available: true },
+    recording: local,
+    recordingMaxMs: deviceRecordingMaxMs(platform),
+    screenshotSave: true,
+  };
+}
 
 export interface DeviceFeatureTarget {
   platform: DevicePlatform;
@@ -56,7 +117,7 @@ export type DeviceClipboardCheck = { ok: true; text: string; bytes: number } | {
 
 /** Only non-empty text up to `DEVICE_CLIPBOARD_MAX_BYTES` of UTF-8 crosses to or from a device. */
 export function checkDeviceClipboardText(value: unknown): DeviceClipboardCheck {
-  if (typeof value !== "string") return { ok: false, reason: "Only text can be pasted to the simulator." };
+  if (typeof value !== "string") return { ok: false, reason: "Only text can be pasted to the device." };
   if (value.length === 0) return { ok: false, reason: "The clipboard has no text." };
   // A UTF-16 length over the cap is always over it in UTF-8 too; skip encoding huge strings.
   if (value.length > DEVICE_CLIPBOARD_MAX_BYTES) return { ok: false, reason: CLIPBOARD_TOO_LARGE };

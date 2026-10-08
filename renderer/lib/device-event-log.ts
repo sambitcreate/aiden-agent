@@ -6,7 +6,8 @@
  * Events at `/vendor/serve-sim/api/event-log/events?device=<udid>`. T3 uses
  * EventSource; Aiden reads the stream with `fetch` through main's token proxy,
  * like the frontmost-app feed. The buffer is bounded so a long session never
- * grows the drawer without limit.
+ * grows the drawer without limit. Android emulators show logcat in the same
+ * buffer, from serve-emu's `/api/logcat` stream.
  */
 import type { DeviceStreamGrant } from "../shared/devices";
 import { createSseParser } from "./device-foreground";
@@ -110,6 +111,154 @@ export function formatEventLog(entries: readonly DeviceEventLogEntry[]): string 
 
 export interface DeviceEventLogRuntime {
   fetch(url: string, init: { signal: AbortSignal; credentials: "omit" }): Promise<Response>;
+}
+
+// ── Android: serve-emu's logcat stream ───────────────────────────────────────
+// serve-emu runs one `adb logcat -T 1 -v threadtime` child per emulator while
+// anyone subscribes, batches lines into `logs` SSE events with bounded
+// per-subscriber queues, and stops the child (SIGTERM, then SIGKILL after a
+// second) when the last subscriber's request goes away. Its `package` query
+// keeps only lines from that app's processes.
+
+const LOGCAT_LEVELS: Readonly<Record<string, string>> = {
+  V: "verbose",
+  D: "debug",
+  I: "info",
+  W: "warning",
+  E: "error",
+  F: "fatal",
+  A: "assert",
+};
+
+/** `MM-DD HH:MM:SS.mmm  PID  TID L TAG     : message`, as `-v threadtime` prints it. */
+const THREADTIME = /^\d\d-\d\d\s+\d\d:\d\d:\d\d\.\d{3}\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+(.*?)\s*:(?: (.*))?$/u;
+
+export interface LogcatLine {
+  pid: number;
+  tid: number;
+  level: string;
+  tag: string;
+  message: string;
+}
+
+/** One threadtime line, or null for anything else (buffer banners, adb's own stderr). */
+export function parseLogcatLine(line: string): LogcatLine | null {
+  const match = THREADTIME.exec(line);
+  if (!match) return null;
+  return {
+    pid: Number(match[1]),
+    tid: Number(match[2]),
+    level: match[3]!,
+    tag: match[4]!.trim(),
+    message: match[5] ?? "",
+  };
+}
+
+/** Ids keep rising across subscriptions, so a cleared log stays cleared when the section reopens. */
+let nextLogcatId = 1;
+
+/** One logcat line as an event-log entry: the level as its kind, `L Tag: message` as its summary. */
+export function logcatEntry(line: string, at: string): DeviceEventLogEntry {
+  const parsed = parseLogcatLine(line);
+  const id = nextLogcatId++;
+  if (!parsed) return { id, timestamp: text(at), kind: "logcat", summary: text(line) };
+  return {
+    id,
+    timestamp: text(at),
+    kind: LOGCAT_LEVELS[parsed.level] ?? "logcat",
+    summary: text(`${parsed.level} ${parsed.tag}: ${parsed.message}`),
+  };
+}
+
+/**
+ * One serve-emu logcat payload: a `logs` batch becomes entries (with a note
+ * when serve-emu dropped lines for a slow reader); `error` and `close`
+ * report why the feed ended.
+ */
+export function parseLogcatPayload(
+  data: unknown,
+): { entries: DeviceEventLogEntry[] } | { error: string } | { closed: true } | null {
+  if (!isRecord(data)) return null;
+  if (Array.isArray(data.lines)) {
+    const entries = data.lines.flatMap((raw) =>
+      isRecord(raw) && typeof raw.line === "string" ? [logcatEntry(raw.line, typeof raw.at === "string" ? raw.at : "")] : [],
+    );
+    const dropped = typeof data.dropped === "number" && Number.isFinite(data.dropped) ? data.dropped : 0;
+    if (dropped > 0) {
+      entries.push({
+        id: nextLogcatId++,
+        timestamp: entries[entries.length - 1]?.timestamp ?? "",
+        kind: "logcat",
+        summary: dropped === 1 ? "1 line was skipped to keep up." : `${dropped} lines were skipped to keep up.`,
+      });
+    }
+    return { entries };
+  }
+  if (typeof data.error === "string") return { error: text(data.error) };
+  if ("reason" in data || "code" in data || "signal" in data) return { closed: true };
+  return null;
+}
+
+/** An app package as Android names it; anything else is not sent as a filter. */
+const ANDROID_PACKAGE = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/u;
+
+/** Follows an emulator's logcat until the returned function is called, optionally one app's lines only. */
+export function subscribeAndroidLogcat(
+  target: { hostId: string; deviceId: string; grant: DeviceStreamGrant; packageName?: string },
+  onEvents: (entries: DeviceEventLogEntry[], reset: boolean) => void,
+  onEnd: (error: string | null) => void = () => undefined,
+  runtime: DeviceEventLogRuntime = { fetch: (url, init) => fetch(url, init) },
+): () => void {
+  const controller = new AbortController();
+  const query = new URLSearchParams({ device: target.deviceId });
+  if (target.packageName && ANDROID_PACKAGE.test(target.packageName)) query.set("package", target.packageName);
+  const url = deviceHubUrl(target, `/vendor/serve-emu/api/logcat?${query.toString()}`, "http");
+  let ended = false;
+  const end = (error: string | null) => {
+    if (ended || controller.signal.aborted) return;
+    ended = true;
+    onEnd(error);
+  };
+  const parse = createSseParser((data) => {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    const parsed = parseLogcatPayload(payload);
+    if (!parsed || controller.signal.aborted) return;
+    if ("entries" in parsed) {
+      if (parsed.entries.length > 0) onEvents(parsed.entries, false);
+    } else if ("error" in parsed) {
+      end(`Logcat stopped: ${parsed.error}`);
+    } else {
+      end(null);
+    }
+  });
+  void (async () => {
+    try {
+      const response = await runtime.fetch(url, { signal: controller.signal, credentials: "omit" });
+      if (!response.ok || !response.body) {
+        end(response.status === 429 ? "Too many logcat readers are open for this emulator." : "Logcat is unavailable for this emulator.");
+        return;
+      }
+      const reader = response.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (controller.signal.aborted) return;
+        if (done) {
+          end(null);
+          return;
+        }
+        parse(value);
+      }
+    } catch {
+      end("Logcat disconnected.");
+    }
+  })();
+  // Aborting the request is what makes serve-emu stop its logcat child.
+  return () => controller.abort();
 }
 
 /** Follows the event log until the returned function is called. Failures end the feed and are reported once. */

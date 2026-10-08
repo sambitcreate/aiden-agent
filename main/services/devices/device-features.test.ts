@@ -82,6 +82,9 @@ function harness(options: { booted?: boolean; hostText?: string; hostFormats?: s
     async screenshot() {
       return Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     },
+    async shutdownLocal() {
+      throw new Error("iOS erase shuts down with simctl itself");
+    },
   };
   const files = new Map<string, Uint8Array | string>();
   const children: Child[] = [];
@@ -125,6 +128,10 @@ function harness(options: { booted?: boolean; hostText?: string; hostFormats?: s
       files.set(file, bytes);
     },
     now: () => new Date(2026, 9, 8, 9, 30, 0),
+    fetch: async () => {
+      throw new Error("iOS features never call the hub");
+    },
+    sleep: async () => undefined,
   });
   return { features, commands, events, files, children, host, setState, device };
 }
@@ -137,10 +144,23 @@ test("erase stops the simulator's recordings, shuts it down, erases it, and refr
   const h = harness();
   const recording = await h.features.startRecording("chat-1", TARGET);
   const result = await h.features.erase(TARGET);
-  assert.deepEqual(result, { wasBooted: true });
+  assert.deepEqual(result, { wasBooted: true, deviceId: UDID });
   assert.deepEqual(h.children[0]!.signals, ["SIGINT"]);
   assert.equal(h.features.recordings().find((info) => info.id === recording.id), undefined);
   assert.deepEqual(h.events, ["run:shutdown", "run:erase", "refresh"]);
+});
+
+test("a simulator labelled Android is refused before its recording ends or any command runs", async () => {
+  const h = harness();
+  const recording = await h.features.startRecording("chat-1", TARGET);
+  const mislabelled = { ...TARGET, platform: "android" as const };
+  await assert.rejects(h.features.erase(mislabelled), /no longer available/u);
+  await assert.rejects(h.features.pasteFromHost(mislabelled), /no longer available/u);
+  await assert.rejects(h.features.copyToHost(mislabelled), /no longer available/u);
+  await assert.rejects(h.features.startRecording("chat-2", mislabelled), /no longer available/u);
+  assert.equal(h.features.recordings().find((info) => info.id === recording.id)?.status, "recording");
+  assert.deepEqual(h.children[0]!.signals, []);
+  assert.deepEqual(h.events, []);
 });
 
 test("erase is refused for a simulator the listing does not have, and only for this Mac", async () => {

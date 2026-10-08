@@ -65,7 +65,7 @@ import {
 } from "./device-screenshot-control";
 import { createDeviceGrantSource } from "../lib/device-grant";
 import type { MultiTouchSink } from "../lib/device-multitouch";
-import type { DeviceFeatureTarget } from "../shared/device-features";
+import { deviceFeatureCapabilities, type DeviceFeatureTarget } from "../shared/device-features";
 import { LOCAL_DEVICE_HOST_ID, type DeviceSession, type DeviceStreamGrant, type DeviceSummary } from "../shared/devices";
 
 /** A burst of rejected grants means the proxy is refusing us, not that one grant expired. */
@@ -151,8 +151,11 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     [device.platform, session.hostId, session.deviceId],
   );
   const localDevice = session.hostId === LOCAL_DEVICE_HOST_ID;
-  // The power features (overlay, multi-touch, clipboard, recording, event log, erase) have iOS variants only so far.
-  const iosFeatures = device.platform === "ios";
+  // Each power feature shows only where it works for this platform and host.
+  const capabilities = React.useMemo(
+    () => deviceFeatureCapabilities(device.platform, { local: localDevice }),
+    [device.platform, localDevice],
+  );
   const multiTouchSink = React.useMemo<MultiTouchSink>(
     () => ({ sendMultiTouch: (phase, first, second) => clientRef.current?.sendMultiTouch(phase, first, second) }),
     [],
@@ -568,10 +571,11 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         >
           <canvas ref={canvasRef} hidden={Boolean(mjpegUrl)} aria-hidden />
           {mjpegUrl ? <img ref={attachImage} alt="" draggable={false} /> : null}
-          {iosFeatures && axOverlay && active && !frame3d ? (
+          {capabilities.axOverlay && axOverlay && active && !frame3d ? (
             <DeviceAxOverlay
               hostId={session.hostId}
               deviceId={session.deviceId}
+              platform={device.platform}
               grants={featureGrants}
               screen={screen}
               screenRef={screenRef}
@@ -583,8 +587,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           <DeviceMultiTouchLayer
             screenRef={screenRef}
             sink={multiTouchSink}
-            enabled={iosFeatures && active && !frame3d && streaming && inputConnected}
-            onPaste={iosFeatures && localDevice ? pasteShortcut : undefined}
+            enabled={capabilities.multiTouch && active && !frame3d && streaming && inputConnected}
+            onPaste={capabilities.clipboardPaste ? pasteShortcut : undefined}
           />
           {frame3d ? null : errorOverlay}
           {restartNotice && !frame3d ? (
@@ -702,7 +706,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
               : undefined
           }
         />
-        {iosFeatures && localDevice ? <DeviceRecordControl chatId={chatId} target={featureTarget} disabled={!streaming} /> : null}
+        {capabilities.recording ? <DeviceRecordControl chatId={chatId} target={featureTarget} disabled={!streaming} /> : null}
         <Button
           variant={showing3d ? "muted" : "transparent"}
           size="small"
@@ -769,25 +773,25 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           }}
         >
           <DeviceToolsPanel controls={controls} onClose={closeTools} platform={device.platform}>
-            {iosFeatures ? (
-              <DeviceFeatureSections
-                chatId={chatId}
-                target={featureTarget}
-                deviceName={device.name}
-                grants={featureGrants}
-                axOverlay={axOverlay}
-                axStatus={axStatus}
-                onAxOverlayChange={(enabled) => {
-                  setAxOverlay(enabled);
-                  if (!enabled) setAxStatus(null);
-                }}
-                onAxRefresh={() => setAxRefresh((value) => value + 1)}
-                sendKey={streaming && inputConnected ? sendDeviceKey : null}
-                disabled={!streaming}
-                onReconnect={reconnect}
-                onCloseSession={() => onClose(false)}
-              />
-            ) : null}
+            {/* Each section inside shows only where `deviceFeatureCapabilities` says it works. */}
+            <DeviceFeatureSections
+              chatId={chatId}
+              target={featureTarget}
+              deviceName={device.name}
+              grants={featureGrants}
+              axOverlay={axOverlay}
+              axStatus={axStatus}
+              onAxOverlayChange={(enabled) => {
+                setAxOverlay(enabled);
+                if (!enabled) setAxStatus(null);
+              }}
+              onAxRefresh={() => setAxRefresh((value) => value + 1)}
+              sendKey={streaming && inputConnected ? sendDeviceKey : null}
+              disabled={!streaming}
+              onReconnect={reconnect}
+              onCloseSession={() => onClose(false)}
+              {...(controls.settings?.foregroundApp ? { foregroundApp: controls.settings.foregroundApp } : {})}
+            />
           </DeviceToolsPanel>
         </div>
       ) : null}

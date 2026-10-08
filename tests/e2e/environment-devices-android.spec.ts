@@ -35,11 +35,23 @@ function script(file: string, lines: string[]) {
   chmodSync(file, 0o755);
 }
 script(path.join(fakeBin, "xcrun"), ["echo \"xcode-select: error: tool 'xcrun' requires Xcode\" >&2", "exit 72"]);
-script(path.join(sdk, "emulator", "emulator"), ['[ "$1" = "-list-avds" ] && echo ' + AVD, "exit 0"]);
+const emulatorLog = path.join(fakeRoot, "emulator.log");
+const wipePid = path.join(fakeRoot, "wipe.pid");
+writeFileSync(emulatorLog, "");
+// The wipe boot runs until `adb emu kill` ends it, as a real headless emulator does.
+script(path.join(sdk, "emulator", "emulator"), [
+  '[ "$1" = "-list-avds" ] && echo ' + AVD + " && exit 0",
+  `printf '%s\\n' "$*" >> '${emulatorLog}'`,
+  `[ "$1" = "-avd" ] && echo $$ > '${wipePid}' && exec sleep 60`,
+  "exit 0",
+]);
 script(path.join(sdk, "cmdline-tools", "latest", "bin", "avdmanager"), ["exit 0"]);
 script(path.join(sdk, "platform-tools", "adb"), [
   `printf '%s\\n' "$*" >> '${adbLog}'`,
   'case "$*" in',
+  `  devices) printf 'List of devices attached\\n${SERIAL}\\tdevice\\n' ;;`,
+  '  *"getprop sys.boot_completed") echo 1 ;;',
+  `  *"emu kill") kill "$(cat '${wipePid}')" 2>/dev/null; echo OK ;;`,
   '  *"cmd uimode night") echo "Night mode: no" ;;',
   '  *"settings get system font_scale") echo 1.0 ;;',
   '  *"settings get global animator_duration_scale") echo 1.0 ;;',
@@ -50,7 +62,7 @@ script(path.join(sdk, "platform-tools", "adb"), [
 ]);
 
 type HubLogEntry = {
-  kind: "http" | "ws-open" | "ws-message" | "fold";
+  kind: "http" | "ws-open" | "ws-message" | "fold" | "shutdown" | "text" | "logcat-closed";
   method?: string;
   path?: string;
   query?: string;
@@ -186,5 +198,100 @@ test.describe("Android emulator", () => {
 
     await panel.getByRole("button", { name: "Close emulator" }).click();
     await expect(android.getByRole("button", { name: `Open ${AVD}` })).toBeVisible();
+  });
+
+  test("saves a screenshot, overlays element frames, follows logcat, pastes, and erases an emulator", async ({ aiden }) => {
+    const { page, app } = aiden;
+    await finishLmStudioOnboarding(page);
+    await seedInstalledFakeHub(aiden.userDataDir);
+    const savedScreenshot = path.join(fakeRoot, "emulator-shot.png");
+
+    await page.locator("textarea").fill("Open an emulator for this chat.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+    await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toHaveCount(1);
+    const tools = page.getByRole("complementary", { name: "Environment work surface" });
+    if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
+    await tools.getByRole("button", { name: "More tools…", exact: true }).click();
+    await tools.getByRole("button", { name: "Device", exact: true }).click();
+    const panel = page.locator("#environment-devices-panel");
+    await panel.getByRole("button", { name: "Start", exact: true }).click();
+    await panel.getByRole("region", { name: "Android Emulators" }).getByRole("button", { name: `Open ${AVD}` }).click();
+    await expect(panel.locator(".device-viewer-status")).toHaveText("Live");
+
+    // Save screenshot… captures through serve-emu and writes the file main's save dialog chose.
+    await app.evaluate(({ dialog }, filePath) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as unknown as typeof dialog.showSaveDialog;
+    }, savedScreenshot);
+    const options = panel.getByRole("button", { name: "Screenshot options" });
+    await options.focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "Save screenshot…" }).click();
+    await expect(page.getByText("Saved emulator-shot.png.")).toBeVisible();
+    expect([...(await readFile(savedScreenshot)).subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    // Recording is offered with the emulator's three-minute cap.
+    await expect(panel.getByRole("button", { name: "Record screen" })).toHaveAttribute("title", /up to 3 minutes/u);
+
+    // The overlay draws serve-emu's uiautomator nodes, skipping the full-screen root.
+    await panel.getByRole("button", { name: "Device tools" }).click();
+    const overlaySwitch = panel.getByRole("switch", { name: "Overlay element frames" });
+    await overlaySwitch.click();
+    await expect(panel.locator(".device-ax-frame")).toHaveCount(2);
+    await expect(panel.getByText("2 elements")).toBeVisible();
+    const screen = panel.locator(".device-viewer-screen");
+    const box = (await screen.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * (1575 / 2160));
+    await expect(panel.locator(".device-ax-label")).toContainText("Add to cart");
+    await expect(panel.locator(".device-ax-label")).toContainText("Button");
+    expect(
+      (await readHubLog()).some((entry) => entry.path === "/vendor/serve-emu/api/accessibility" && entry.query === `?device=${SERIAL}`),
+    ).toBe(true);
+    await overlaySwitch.click();
+    await expect(panel.locator(".device-ax-frame")).toHaveCount(0);
+
+    // Logcat streams only while the section is open, and can follow the frontmost app.
+    const logcatOpens = async () => (await readHubLog()).filter((entry) => entry.path === "/vendor/serve-emu/api/logcat");
+    const before = (await logcatOpens()).length;
+    await panel.getByRole("button", { name: "Event log", exact: true }).click();
+    const log = panel.getByRole("log", { name: "Emulator logcat" });
+    await expect(log).toContainText("E Shop: Cart failed to load");
+    await expect(log).toContainText("I ActivityTaskManager: START u0");
+    await panel.getByRole("textbox", { name: "Filter events" }).fill("error");
+    await expect(log.getByRole("listitem")).toHaveCount(1);
+    await panel.getByRole("switch", { name: "Only the frontmost app" }).click();
+    await expect
+      .poll(async () => (await logcatOpens()).slice(before).map((entry) => entry.query))
+      .toEqual([`?device=${SERIAL}`, `?device=${SERIAL}&package=com.example.shop`]);
+    // Closing the section ends the request, which is what stops serve-emu's logcat child.
+    await panel.getByRole("button", { name: "Event log", exact: true }).click();
+    await expect
+      .poll(async () => (await readHubLog()).filter((entry) => entry.kind === "logcat-closed").length)
+      .toBeGreaterThanOrEqual(2);
+
+    // Paste types the Mac clipboard into the emulator; Copy from device explains why it cannot.
+    await app.evaluate(({ clipboard }) => clipboard.writeText("hello emulator"));
+    await panel.getByRole("button", { name: "Paste to device" }).click();
+    await expect
+      .poll(async () => (await readHubLog()).filter((entry) => entry.kind === "text").map((entry) => entry.body))
+      .toEqual([{ text: "hello emulator" }]);
+    const copy = panel.getByRole("button", { name: "Copy from device" });
+    await expect(copy).toBeDisabled();
+    await expect(copy).toHaveAccessibleDescription("Android Emulators do not let adb read their clipboard.");
+
+    // Erase asks first; then the hub shuts the emulator down and one headless boot wipes it.
+    await panel.getByRole("button", { name: "Erase all content and settings…" }).click();
+    const confirm = page.getByRole("alertdialog", { name: `Erase ${AVD}?` });
+    await expect(confirm).toContainText("The emulator shuts down first");
+    await confirm.getByRole("button", { name: "Erase" }).click();
+    await expect(page.getByText(`${AVD} was erased. It is shut down.`)).toBeVisible({ timeout: 30_000 });
+    expect((await readHubLog()).filter((entry) => entry.kind === "shutdown").map((entry) => entry.body)).toEqual([
+      { platform: "android", id: SERIAL, name: AVD },
+    ]);
+    expect((await readFile(emulatorLog, "utf8")).trim().split("\n")).toEqual([
+      `-avd ${AVD} -wipe-data -no-snapshot-load -no-window -no-audio -no-boot-anim -port 5556`,
+    ]);
+    expect((await readFile(adbLog, "utf8")).split("\n")).toEqual(
+      expect.arrayContaining(["-s emulator-5556 shell getprop sys.boot_completed", "-s emulator-5556 emu kill"]),
+    );
   });
 });

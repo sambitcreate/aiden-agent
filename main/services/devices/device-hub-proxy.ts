@@ -42,7 +42,7 @@ export const DEVICE_HUB_HTTP_PATHS: readonly RegExp[] = [
   new RegExp(`^/vendor/serve-sim/helper/${DEVICE}/panel/(1|3)/stream\\.avcc$`, "u"),
   /^\/vendor\/serve-sim\/appstate$/u,
   // serve-emu (Android), adapted from t3code DeviceHubProxy @ a6ec88f7 (MIT). Device-scoped routes take `?device=<serial>`.
-  /^\/vendor\/serve-emu\/api\/(devices|screenshot|stream-mode|stream-settings|accessibility|fold)$/u,
+  /^\/vendor\/serve-emu\/api\/(devices|screenshot|stream-mode|stream-settings|accessibility|fold|logcat)$/u,
   /^\/vendor\/serve-emu\/health$/u,
 ];
 

@@ -4,6 +4,7 @@ import {
   DEVICE_CLIPBOARD_MAX_BYTES,
   checkDeviceClipboardText,
   deviceCaptureFileName,
+  deviceFeatureCapabilities,
   parseDeviceFeatureTarget,
   parseDeviceRecordingInfo,
   parseDeviceRecordingList,
@@ -11,6 +12,42 @@ import {
 } from "./device-features.js";
 
 const UDID = "5C1E4B7A-0000-4000-8000-000000000001";
+
+test("Android emulators are feature targets by serial or AVD name", () => {
+  for (const deviceId of ["emulator-5554", "Pixel_9_API_36", "Pixel_9.API-36"]) {
+    assert.deepEqual(parseDeviceFeatureTarget({ platform: "android", hostId: "local", deviceId }), {
+      platform: "android",
+      hostId: "local",
+      deviceId,
+    });
+  }
+  // A leading dash or dot could read as an adb or emulator flag, or a hidden path.
+  for (const deviceId of ["-wipe-data", ".avd", "emulator 5554", "a/b", ""]) {
+    assert.equal(parseDeviceFeatureTarget({ platform: "android", hostId: "local", deviceId }), null, deviceId);
+  }
+});
+
+test("each device offers only the controls that work for it", () => {
+  const iosHere = deviceFeatureCapabilities("ios", { local: true });
+  const androidHere = deviceFeatureCapabilities("android", { local: true });
+  const androidElsewhere = deviceFeatureCapabilities("android", { local: false });
+
+  // The hub carries the overlay, the event log, multi-touch, and screenshots for every device.
+  for (const capabilities of [iosHere, androidHere, androidElsewhere]) {
+    assert.equal(capabilities.axOverlay && capabilities.eventLog && capabilities.multiTouch, true);
+    assert.equal(capabilities.screenshotSave, true);
+  }
+  // Clipboard, erase, and recording run simctl or adb, so only devices on this Mac get them.
+  assert.equal(androidHere.erase && androidHere.recording && androidHere.clipboardPaste, true);
+  assert.equal(androidElsewhere.erase || androidElsewhere.recording || androidElsewhere.clipboardPaste, false);
+  // adb cannot read an emulator's clipboard; the control says why instead of failing.
+  assert.equal(iosHere.clipboardCopy.available, true);
+  assert.equal(androidHere.clipboardCopy.available, false);
+  assert.match(androidHere.clipboardCopy.available ? "" : androidHere.clipboardCopy.reason, /adb/u);
+  // screenrecord's 180-second segment caps emulator recordings at three minutes.
+  assert.equal(androidHere.recordingMaxMs, 3 * 60_000);
+  assert.equal(iosHere.recordingMaxMs, 10 * 60_000);
+});
 
 test("feature targets need a known platform, a host, and a simulator id", () => {
   assert.deepEqual(parseDeviceFeatureTarget({ platform: "ios", hostId: "local", deviceId: UDID, extra: 1 }), {

@@ -301,6 +301,27 @@ export function androidKeyMessage(detail: DeviceKeyDetail, phase: "down" | "up")
   return null;
 }
 
+const unit = (value: number) => Math.min(1, Math.max(0, value));
+
+/**
+ * Two contacts as serve-emu gestures: one `touch` per finger, told apart by
+ * `pointerId` (0 and 1), which both its scrcpy and emulator gRPC input paths
+ * carry through as separate pointers. The second finger lands after the first
+ * and lifts before it, as a real pinch does. serve-emu refuses coordinates
+ * outside 0..1, so they are clamped.
+ */
+export function androidMultiTouchMessages(
+  phase: "begin" | "move" | "end",
+  first: { x: number; y: number },
+  second: { x: number; y: number },
+): string[] {
+  const action = phase === "begin" ? "down" : phase === "move" ? "move" : "up";
+  const touch = (point: { x: number; y: number }, pointerId: number) =>
+    JSON.stringify({ type: "touch", action, x: unit(point.x), y: unit(point.y), pointerId });
+  const messages = [touch(first, 0), touch(second, 1)];
+  return phase === "end" ? messages.reverse() : messages;
+}
+
 export interface AvccChunk {
   type: "description" | "keyframe" | "delta" | "seed";
   payload: Uint8Array;
@@ -1127,8 +1148,10 @@ export function createDeviceStreamClient(
       send(taggedJson(IOS_MSG_TOUCH, { type: phase, ...rawPoint(x, y) }));
     },
     sendMultiTouch: (phase, first, second) => {
-      // serve-emu's gesture socket takes one contact; multi-touch is serve-sim only.
-      if (android) return;
+      if (android) {
+        for (const message of androidMultiTouchMessages(phase, first, second)) send(message);
+        return;
+      }
       const a = rawPoint(first.x, first.y);
       const b = rawPoint(second.x, second.y);
       send(taggedJson(IOS_MSG_MULTI_TOUCH, { type: phase, x1: a.x, y1: a.y, x2: b.x, y2: b.y }));

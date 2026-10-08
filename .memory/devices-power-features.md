@@ -44,3 +44,25 @@ Proxy grants last 60 s. The overlay and the event log use `createDeviceGrantSour
 ## Open questions
 - Whether a HID Cmd+V pastes on iOS while the hardware keyboard is reported disconnected has not been verified on a real simulator. If it does not, the simctl pasteboard is still set, and long-press → Paste works.
 - Trackpad rotation is not exposed by Chromium. Only pinch is passed through.
+
+# Android variants (devices parity, follow-up to E): 2026-10-08
+
+All seven features now work on Android emulators. Docs: `docs/devices.md` § "Device power features on Android".
+
+## Decisions
+- **Gating.** The viewer's blanket `iosFeatures` check is gone. `deviceFeatureCapabilities(platform, { local })` in `renderer/shared/device-features.ts` decides per control. Clipboard, erase, and recording are local only. Android **Copy from device** is visible but disabled with a reason (`aria-describedby`).
+- **Trust.** `device-features.ts` dispatches on the listing's `device.platform`. If a renderer target's `platform` disagrees, it is refused before any side effect, such as discarding recordings (review finding, now tested both ways).
+- **Overlay.** Uses serve-emu `/api/accessibility` (already allowlisted). `flattenAndroidAxSnapshot` normalizes it. Polls 3 s after each read finishes (`ANDROID_AX_POLL_MS`), because a dump takes about 2.6 s on API 36.
+- **Event log.** serve-emu's `/api/logcat` SSE, now allowlisted read-only. It is supervised by serve-emu's `LogcatHub`: `adb logcat -T 1 -v threadtime`, stopped when the last request aborts. Aiden does not spawn its own logcat. `package=` drives the "Only <frontmost app>" switch. Ids rise through a module counter, so a cleared log stays cleared.
+- **Paste.** Main POSTs serve-emu `/api/text` in 300-byte pieces, which is serve-emu's `MAX_TEXT_BYTES`; it silently truncates anything longer. `cmd clipboard` does not exist on API 36 ("No shell command implementation."), and serve-emu has no clipboard route, so copy cannot work.
+- **Recording.** `adb shell screenrecord --time-limit 180 /sdcard/aiden-rec-<id>.mp4` is spawned with `DeviceHostReady.env` (SDK PATH). To stop, it runs `pkill -INT -f <file>` on the device; probed, the local adb exits 0 only after the moov box is written. Then pull, then `rm -f`. Capped at 3 min (`ANDROID_RECORDING_MAX_MS`): v1.4 supports `--time-limit 0`, but older images cap at 180 s and no muxer is available to chain segments. The recorder gained per-start `env`/`maxDurationMs`/`remote` hooks. `cleanup` also runs pkill, in case the local adb was killed.
+- **Erase.** The hub boot has no wipe option. Deleting AVD files was rejected, because it would have to cover userdata, encryptionkey, cache, and snapshots. Instead: `DeviceService.shutdownLocal` (hub), then `emulator -avd <name> -wipe-data -no-snapshot-load -no-window -no-audio -no-boot-anim -port <free>`. Then wait for `sys.boot_completed`, then `adb emu kill`, which saves a fresh Quick Boot snapshot. AVD-locked exits ("Running multiple emulators with the same AVD") are retried. The erase returns `{ wasBooted, deviceId: <AVD name> }`. The renderer uses a toast with a Boot action, because the serial→AVD id change ends the session and unmounts the viewer mid-erase.
+- **Probe evidence** (a throwaway AVD in a scratch `ANDROID_AVD_HOME`, API 36 arm64): a marker in `/data/local/tmp` survived a Quick Boot. It was gone after the wipe boot (26 s) plus an ordinary Quick Boot.
+- **Multi-touch.** serve-emu `touch` takes `pointerId`. Both the scrcpy (`touchPacket` pointer id) and gRPC (`sendTouch` identifier, `activeTouches` map) paths treat ids as separate pointers. `androidMultiTouchMessages` sends ids 0 and 1, lands the second last, and lifts it first.
+- **Screenshot save.** This already worked: the serial matched the old id pattern. The IPC and shared parsers now use the shared `DEVICE_ID_PATTERN`, so AVD-style ids pass and flag-like ids do not.
+
+## Files
+- New: `main/services/devices/android-device-feature-actions.ts` (+ `android-device-features.test.ts`, registered).
+- Changed: `device-features.ts`, `device-recording.ts`, `device-feature-ipc.ts`, `device-host.ts` (`env`), `local-device-host.ts`, `device-service.ts` (`shutdownLocal`), `device-hub-proxy.ts` (logcat), and `handlers/devices.ts`.
+- Renderer: `device-ax.ts`, `device-event-log.ts`, `device-clipboard.ts`, `device-stream.ts` (`androidMultiTouchMessages`), and the overlay, event-log, clipboard, record, erase, sections, and viewer components.
+- E2E: the second test in `environment-devices-android.spec.ts`. The fake hub serves the accessibility snapshot, logcat SSE, `/api/text`, and `/api/devices/shutdown`. The fake `emulator` sleeps on `-avd` until the fake `adb emu kill` kills it.

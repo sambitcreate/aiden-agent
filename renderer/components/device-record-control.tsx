@@ -1,6 +1,7 @@
 /**
  * Screen recording from the simulator rail. Recording shows a live indicator
- * with the elapsed time; stopping (or the ten-minute cap) finalizes the file
+ * with the elapsed time; stopping (or the cap: ten minutes on iOS, three on an
+ * Android emulator, whose screenrecord stops there) finalizes the file
  * and opens the save dialog, defaulting to Downloads. A saved recording can be
  * revealed in Finder. Cancelling the dialog deletes the recording.
  */
@@ -9,7 +10,7 @@ import { Square, Video } from "lucide-react";
 import { Button, toast } from "./ui";
 import { devicesApi } from "../lib/ipc";
 import {
-  DEVICE_RECORDING_MAX_MS,
+  deviceRecordingMaxMs,
   type DeviceFeatureTarget,
   type DeviceRecordingInfo,
 } from "../shared/device-features";
@@ -34,7 +35,7 @@ const fileName = (path: string) => path.split("/").pop() ?? path;
 export async function saveRecordingWithFeedback(info: DeviceRecordingInfo): Promise<void> {
   try {
     if (info.reason === "max-duration") {
-      toast.info(`The recording stopped at ${DEVICE_RECORDING_MAX_MS / 60_000} minutes.`);
+      toast.info(`The recording stopped at ${Math.round((info.endsBy - info.startedAt) / 60_000)} minutes.`);
     }
     const result = await devicesApi.saveRecording(info.id);
     if (result.status !== "saved") return;
@@ -151,7 +152,7 @@ export function DeviceRecordControl(props: {
       size="small"
       iconOnly
       aria-label="Record screen"
-      title={`Record screen (up to ${DEVICE_RECORDING_MAX_MS / 60_000} minutes)`}
+      title={`Record screen (up to ${deviceRecordingMaxMs(target.platform) / 60_000} minutes)`}
       disabled={props.disabled || starting}
       onClick={() => void start()}
     >

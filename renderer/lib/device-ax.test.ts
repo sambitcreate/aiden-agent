@@ -5,6 +5,7 @@ import {
   DeviceAxUnauthorizedError,
   axRectToDisplay,
   fetchDeviceAxTree,
+  flattenAndroidAxSnapshot,
   flattenIosAxTree,
   hitTestAxElements,
   type DeviceAxRect,
@@ -126,5 +127,73 @@ test("the tree is fetched through the proxy, and helper errors are reported rath
     fetch: respond({ error: "ax_unavailable", message: "Accessibility is off" }, 503),
   });
   assert.deepEqual(unavailable, { elements: [], root: null, errors: ["Accessibility is off"] });
+  await assert.rejects(fetchDeviceAxTree(target, signal, { fetch: respond({}, 401) }), DeviceAxUnauthorizedError);
+});
+
+/** serve-emu's `/api/accessibility` snapshot: a flattened `uiautomator dump`, bounds in pixels. */
+const ANDROID_SNAPSHOT = {
+  ok: true,
+  capturedAt: "2026-10-08T09:41:00.000Z",
+  screen: { width: 1080, height: 2400 },
+  nodes: [
+    { id: "0", text: "", contentDescription: "", resourceId: "", className: "android.widget.FrameLayout", bounds: { left: 0, top: 0, right: 1080, bottom: 2400 } },
+    { id: "1", text: "Sign in", contentDescription: "", resourceId: "com.example.shop:id/sign_in", className: "android.widget.Button", bounds: { left: 100, top: 2000, right: 980, bottom: 2160 } },
+    { id: "2", text: "", contentDescription: "Profile", resourceId: "", className: "android.widget.ImageView", bounds: { left: 900, top: 120, right: 1020, bottom: 240 } },
+    { id: "3", text: "", contentDescription: "", resourceId: "com.example.shop:id/title", className: "android.widget.TextView", bounds: { left: 60, top: 300, right: 1020, bottom: 400 } },
+    { id: "4", text: "Broken", className: "android.view.View", bounds: { left: 10, top: 10, right: 5, bottom: 20 } },
+  ],
+};
+
+test("an emulator's uiautomator nodes become normalized frames, labelled by text, description, or resource id", () => {
+  const tree = flattenAndroidAxSnapshot(ANDROID_SNAPSHOT);
+  assert.deepEqual(tree.root, { width: 1080, height: 2400 });
+  // The full-screen root is skipped like iOS's application frame; an inverted box is dropped.
+  assert.deepEqual(
+    tree.elements.map((element) => [element.label, element.role]),
+    [
+      ["Sign in", "Button"],
+      ["Profile", "ImageView"],
+      ["title", "TextView"],
+    ],
+  );
+  close(tree.elements[0]!, { x: 100 / 1080, y: 2000 / 2400, width: 880 / 1080, height: 160 / 2400 });
+  // A point inside the button's pixels hits the button.
+  assert.equal(hitTestAxElements(tree.elements, { x: 540 / 1080, y: 2080 / 2400 })?.label, "Sign in");
+
+  // Without a screen size the furthest bound stands in, so frames still land in 0..1.
+  const { screen: _screen, ...unsized } = ANDROID_SNAPSHOT;
+  const fallback = flattenAndroidAxSnapshot(unsized);
+  assert.deepEqual(fallback.root, { width: 1080, height: 2400 });
+  assert.deepEqual(flattenAndroidAxSnapshot({ ok: true, nodes: [] }), { elements: [], root: null });
+  assert.deepEqual(flattenAndroidAxSnapshot("nonsense"), { elements: [], root: null });
+});
+
+test("a landscape emulator's dump lines up with a landscape stream without remapping", () => {
+  // uiautomator reports rotated bounds, and serve-emu swaps the screen to match.
+  const landscape = flattenAndroidAxSnapshot({
+    ok: true,
+    screen: { width: 2400, height: 1080 },
+    nodes: [{ id: "0", text: "Play", className: "android.widget.Button", bounds: { left: 2000, top: 100, right: 2300, bottom: 300 } }],
+  });
+  const [play] = landscape.elements;
+  const shown = axRectToDisplay(play!, landscape.root, { width: 2400, height: 1080, orientation: "landscape_left" });
+  close(shown, { x: 2000 / 2400, y: 100 / 1080, width: 300 / 2400, height: 200 / 1080 });
+});
+
+test("an emulator's tree is read from serve-emu for that serial, and dump failures are reported", async () => {
+  const urls: string[] = [];
+  const respond = (body: unknown, status = 200) => async (url: string) => {
+    urls.push(url);
+    return new Response(JSON.stringify(body), { status });
+  };
+  const target = { hostId: "local", deviceId: "emulator-5554", grant: GRANT, platform: "android" as const };
+  const signal = new AbortController().signal;
+  const tree = await fetchDeviceAxTree(target, signal, { fetch: respond(ANDROID_SNAPSHOT) });
+  assert.equal(tree.elements.length, 3);
+  assert.equal(urls[0], "http://127.0.0.1:4100/vendor/serve-emu/api/accessibility?device=emulator-5554&t=tok&host=local");
+  const failed = await fetchDeviceAxTree(target, signal, {
+    fetch: respond({ ok: false, error: "ERROR: could not get idle state." }, 400),
+  });
+  assert.deepEqual(failed, { elements: [], root: null, errors: ["ERROR: could not get idle state."] });
   await assert.rejects(fetchDeviceAxTree(target, signal, { fetch: respond({}, 401) }), DeviceAxUnauthorizedError);
 });

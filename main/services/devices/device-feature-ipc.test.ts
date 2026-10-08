@@ -153,6 +153,29 @@ test("targets are parsed fail-closed before any feature runs", async () => {
   ]);
 });
 
+test("Android emulators reach the features by serial or AVD name, and a flag-like id never does", async () => {
+  const ipc = harness();
+  const running = { platform: "android", hostId: "local", deviceId: "emulator-5554" };
+  const stopped = { platform: "android", hostId: "local", deviceId: "Pixel_9_API_36" };
+  await ipc.invoke("devices:clipboard-paste", running);
+  await ipc.invoke("devices:erase", stopped);
+  await ipc.invoke("devices:recording-start", { chatId: "chat-1", ...running });
+  assert.deepEqual(await ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: "Pixel_9.API-36" }), {
+    status: "saved",
+    path: "/Users/me/Downloads/chosen",
+  });
+  for (const deviceId of ["-wipe-data", ".hidden", "emulator 5554", "a/b"]) {
+    await assert.rejects(ipc.invoke("devices:erase", { ...stopped, deviceId }), /valid simulator/u, deviceId);
+    await assert.rejects(ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId }), /valid simulator/u, deviceId);
+  }
+  assert.deepEqual(ipc.calls.slice(0, 3), [
+    ["pasteFromHost", running],
+    ["erase", stopped],
+    ["startRecording", "chat-1", running],
+  ]);
+  assert.equal(ipc.calls.length, 4, "only the four valid requests ran");
+});
+
 test("saves go through the user's dialog, and a document that went away gets no file", async () => {
   const ipc = harness();
   assert.deepEqual(await ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: UDID }), {

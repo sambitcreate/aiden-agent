@@ -62,6 +62,12 @@ export interface DeviceHostReady {
     args: readonly string[],
     options?: DeviceCommandOptions,
   ): Promise<DeviceCommandResult>;
+  /**
+   * The environment `run` gives its commands, for a long-running child the
+   * caller supervises itself (an Android screen recording's `adb`). Only the
+   * local host sets it.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface DeviceHostAgentReady extends DeviceHostReady {
