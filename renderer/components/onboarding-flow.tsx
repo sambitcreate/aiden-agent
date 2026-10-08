@@ -506,7 +506,12 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
   );
 }
 
-export function OnboardingFlow() {
+export function OnboardingFlow({
+  onOpenBotChat,
+}: {
+  /** Opens a Bot's chat; called once onboarding finishes after Start Chat. */
+  onOpenBotChat?(botId: string): void;
+} = {}) {
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
   const visibleFeatureBentos = React.useMemo(
@@ -656,13 +661,17 @@ export function OnboardingFlow() {
     setIndex(afterProviderIndex);
   };
 
-  const finishBotsStep = async () => {
+  /** The starter Bot Start Chat made; its chat opens when onboarding finishes. */
+  const startedBotIdRef = React.useRef<string | null>(null);
+
+  const finishBotsStep = async (startedBotId?: string) => {
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
     try {
       const snapshot = await appApi.setOnboardingProgress("bots");
       onboardingSnapshotRef.current = snapshot;
+      startedBotIdRef.current = startedBotId ?? null;
       setIndex(visibleSteps.indexOf("tour"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Aiden couldn't save onboarding progress.");
@@ -870,6 +879,9 @@ export function OnboardingFlow() {
       onboardingSnapshotRef.current = snapshot;
       markOnboardingComplete();
       setOpen(false);
+      const startedBotId = startedBotIdRef.current;
+      startedBotIdRef.current = null;
+      if (startedBotId) onOpenBotChat?.(startedBotId);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Aiden couldn't finish onboarding.");
     } finally {
@@ -1306,7 +1318,7 @@ export function OnboardingFlow() {
 
             {stateReady && step === "bots" ? (
               <OnboardingBotsStep
-                onStarted={() => void finishBotsStep()}
+                onStarted={(bot) => void finishBotsStep(bot.id)}
                 onSkip={() => void finishBotsStep()}
               />
             ) : null}

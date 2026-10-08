@@ -420,7 +420,9 @@ function RootContent() {
   return (
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
-      <OnboardingFlow />
+      <OnboardingFlow
+        onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
+      />
       <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
       <PairingRequestSheet />
