@@ -142,6 +142,42 @@ Copyright (c) 2026 T3 Tools Inc. T3's imported Apple device models, Apple
 assets and Simulator-derived glyph art are not included: Aiden's device bodies
 (`hardware-models.ts`, `duo-model.ts`) and Duo glyphs are original work.
 
+The per-device workspace tabs (`renderer/lib/device-tabs.ts`), the floating
+device player and its layout (`renderer/components/device-mini-player.tsx`,
+`renderer/lib/device-mini-player-layout.ts`), and Quick View docking beside the
+chat (`resolveChatCardInset` in `renderer/lib/environment-panel-layout.ts`) are
+adapted from T3 Code's right-panel device surfaces and commits `8bbe2bf660`
+(floating device streams) and `429c625a85` (workspace card beside chat), under
+the same MIT license. Copyright (c) 2026 T3 Tools Inc.
+
+The accessibility-tree overlay (`renderer/lib/device-ax.ts`,
+`renderer/components/device-ax-overlay.tsx`) and the iOS event log
+(`renderer/lib/device-event-log.ts`, `renderer/components/device-event-log-panel.tsx`)
+are adapted from T3 Code at commit `a6ec88f7`, under the same MIT license.
+
+SSH device hosts (`ssh-device-host.ts`, `ssh-device-script.ts`,
+`local-ssh-target.ts`), locked helper-version maintenance
+(`device-tool-maintenance.ts`), and the SSH hosts, tool-version, and host
+diagnostics UI (`renderer/components/settings/simulator-ssh-hosts.tsx`,
+`renderer/components/device-host-diagnostics.tsx`) are adapted from T3 Code at
+commit `a6ec88f7`, under the same MIT license.
+
+The Android Emulator support (`main/services/devices/android-device-actions.ts`,
+the serve-emu stream path in `renderer/lib/device-stream.ts`, Android SDK
+discovery, the serve-emu proxy routes, and the Android fold controls in
+`renderer/lib/device-fold.ts` and
+`renderer/components/device-android-fold-controls.tsx`) is adapted from T3
+Code at commit `a6ec88f7`, under the same MIT license. The fold glyphs are
+Aiden's own.
+
+The Aiden On The Go simulator viewers (`ios/AidenOnTheGo/Features/Simulators/`,
+`ios/AidenOnTheGo/Networking/AidenSimulatorStream.swift` and
+`AidenMJPEGMultipartParser.swift`, and the Android
+`features/simulators/` and `networking/AidenSimulatorStream.kt`) adapt the
+on-demand controls, shake detector and device picker of T3 Code's
+`apps/mobile/src/features/devices`, under the same MIT license. Both apps ship
+the license as `ThirdPartyNotices/T3Code-LICENSE.txt`.
+
 ## three.js
 
 Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is

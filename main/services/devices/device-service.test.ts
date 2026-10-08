@@ -12,7 +12,13 @@ import {
 } from "./device-host.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
 import type { DevicePeerPort, PeerSimulatorListing } from "./peer-devices.js";
-import { createDeviceService, parseSimctlDevices, type DeviceServiceDeps } from "./device-service.js";
+import {
+  classifyBootFailure,
+  createDeviceService,
+  parseAndroidDevices,
+  parseSimctlDevices,
+  type DeviceServiceDeps,
+} from "./device-service.js";
 
 const IPHONE = "5C1E4B7A-0000-4000-8000-000000000001";
 const IPHONE_OLD = "5C1E4B7A-0000-4000-8000-000000000002";
@@ -61,9 +67,26 @@ const SIMCTL_FIXTURE = JSON.stringify({
   },
 });
 
+/** What the hub's `/api/devices` reports for Android: one running emulator, one AVD it has seen boot, and a phone. */
+const HUB_ANDROID_LIST = {
+  simulators: [],
+  emulators: [
+    { id: "emulator-5554", name: "Pixel_9_API_35", version: "Android 15.0", platform: "android", booted: true, physical: false },
+    { id: "Pixel_Fold_API_35", name: "Pixel_Fold_API_35", version: "Android 15.0", platform: "android", booted: false, physical: false },
+    { id: "R5CT1234", name: "Galaxy S24", version: "Android 14.0", platform: "android", booted: true, physical: true },
+  ],
+  errors: [],
+};
+/** `emulator -list-avds` also names an AVD the hub skips because it never booted. */
+const LIST_AVDS = "Pixel_9_API_35\nPixel_Fold_API_35\nMedium_Tablet_API_36\n";
+
 interface FakeHostOptions {
   installed?: boolean;
   unavailable?: string;
+  /** Android SDK availability; unavailable with this reason unless `true`. */
+  android?: true | string;
+  /** iOS availability; available unless a reason is given. */
+  ios?: string;
   listCode?: number;
   agentInstalled?: boolean;
   agentFails?: string;
@@ -84,6 +107,7 @@ function fakeHost(options: FakeHostOptions = {}) {
     helpers: { axSettings: null, serveSimCli: null },
     run: async (command, args) => {
       commands.push([command, ...args]);
+      if (command === "emulator") return { stdout: LIST_AVDS, stderr: "", code: 0 };
       if (args[1] === "list") return { stdout: SIMCTL_FIXTURE, stderr: "", code: options.listCode ?? 0 };
       return { stdout: "", stderr: "", code: 0 };
     },
@@ -91,7 +115,11 @@ function fakeHost(options: FakeHostOptions = {}) {
   const host: DeviceHost = {
     id: "local",
     kind: "local",
-    platformAvailability: async () => ({ platform: "ios", available: true }),
+    platformAvailability: async (platform) => {
+      const reason =
+        platform === "ios" ? options.ios : options.android === true ? undefined : (options.android ?? "Android SDK not found.");
+      return reason ? { platform, available: false, reason } : { platform, available: true };
+    },
     hubInstalled: async () => options.installed ?? true,
     ensureReady: async (onPhase, start) => {
       calls.push("ensureReady");
@@ -138,21 +166,39 @@ interface HubCall {
   body: unknown;
 }
 
-function fakeFetch(options: { refuse?: string; screenshotType?: string; bootGate?: Promise<void> } = {}) {
+function fakeFetch(
+  options: { refuse?: string; refusal?: string; screenshotType?: string; bootGate?: Promise<void>; bootSerial?: string } = {},
+) {
   const calls: HubCall[] = [];
+  let androidBooted: string | null = null;
   const fetch: DeviceServiceDeps["fetch"] = async (url, init) => {
-    calls.push({ url, body: JSON.parse(init.body) });
+    calls.push({ url, body: init.body === undefined ? undefined : JSON.parse(init.body) });
     if (options.bootGate && url.endsWith("/boot")) await options.bootGate;
-    const screenshot = url.endsWith("/screenshot");
+    const screenshot = /\/screenshot(\?|$)/u.test(url);
+    const bootBody = url.endsWith("/boot") ? (JSON.parse(init.body ?? "{}") as { platform?: string; name?: string }) : null;
+    if (bootBody?.platform === "android") androidBooted = bootBody.name ?? null;
+    const androidList = {
+      ...HUB_ANDROID_LIST,
+      emulators: HUB_ANDROID_LIST.emulators.map((device) =>
+        device.name === androidBooted ? { ...device, id: options.bootSerial ?? "emulator-5556", booted: true } : device,
+      ),
+    };
     const payload = screenshot
       ? Buffer.from([0x89, 0x50, 0x4e, 0x47])
-      : Buffer.from(
-          JSON.stringify(
-            options.refuse && url.endsWith(options.refuse) ? { ok: false, error: "boot failed" } : { ok: true },
-          ),
-        );
+      : url.endsWith("/api/devices")
+        ? Buffer.from(JSON.stringify(androidList))
+        : Buffer.from(
+            JSON.stringify(
+              options.refuse && url.endsWith(options.refuse)
+                ? { ok: false, error: options.refusal ?? "boot failed" }
+                : bootBody?.platform === "android"
+                  ? { ok: true, serial: options.bootSerial ?? "emulator-5556" }
+                  : { ok: true },
+            ),
+          );
+    const refused = Boolean(options.refuse && url.endsWith(options.refuse));
     return {
-      ok: true,
+      ok: !refused,
       status: 200,
       headers: {
         get: (name: string) =>
@@ -173,7 +219,14 @@ async function withService(
     states: DeviceServiceState[];
     proxyStarts: number[];
   }) => Promise<void>,
-  options: FakeHostOptions & { consent?: object; refuse?: string; screenshotType?: string; bootGate?: Promise<void> } = {},
+  options: FakeHostOptions & {
+    consent?: object;
+    refuse?: string;
+    refusal?: string;
+    screenshotType?: string;
+    bootGate?: Promise<void>;
+    bootSerial?: string;
+  } = {},
 ) {
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-service-"));
   if (options.consent) await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(options.consent));
@@ -234,7 +287,7 @@ test("loading never starts or installs anything", async () => {
   await withService(async ({ service, host }) => {
     const state = await service.load();
     assert.equal(state.hostStatus, "needs-consent");
-    assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false });
+    assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
     assert.deepEqual(state.toolVersions, { hub: "0.12.0", agent: "0.21.12" });
     assert.equal((await service.refresh()).hostStatus, "needs-consent");
     assert.deepEqual(host.calls, []);
@@ -259,6 +312,7 @@ test("streaming consent persists, installs, starts, and lists simulators", async
         streaming: true,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
       const statuses = states.map((entry) => entry.hostStatus);
       assert.deepEqual([...new Set(statuses)], ["needs-consent", "installing", "starting", "ready"]);
@@ -431,7 +485,7 @@ test("a refused boot surfaces the hub error and opens no session", async () => {
       await service.refresh();
       await assert.rejects(
         service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" }),
-        /refused \/api\/devices\/boot: boot failed/u,
+        /iPhone 17 failed to boot\. The simulator or emulator could not start\..*\(boot failed\)/u,
       );
       assert.deepEqual(service.state().sessions, []);
     },
@@ -527,12 +581,13 @@ test("revoking agent access stops only the agent; revoking streaming stops the h
         streaming: false,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
     },
   );
   await withService(
     async ({ service }) => {
-      assert.deepEqual((await service.load()).consent, { streaming: false, agentAccess: false, peerSharing: false });
+      assert.deepEqual((await service.load()).consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
     },
     { consent: { streaming: false, agentAccess: true } },
   );
@@ -704,7 +759,7 @@ test("removing installed tools turns everything off, stops both helpers, and del
       await writeFile(path.join(baseDir, "hub.json"), "{}");
       assert.ok(service.agentShimDir());
       const state = await service.removeTools();
-      assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false });
+      assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
       assert.equal(state.hostStatus, "needs-consent");
       assert.equal(service.agentShimDir(), null);
       assert.equal(host.host.current(), null);
@@ -717,6 +772,7 @@ test("removing installed tools turns everything off, stops both helpers, and del
         streaming: false,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
     },
     { agentInstalled: false },
@@ -872,6 +928,7 @@ test("concurrent consent saves never collide on a temp file", async () => {
         streaming: false,
         agentAccess: false,
         peerSharing: false,
+        mobileSharing: false,
       });
       assert.deepEqual((await readdir(baseDir)).filter((name) => name.endsWith(".tmp")), []);
     },
@@ -924,6 +981,181 @@ test("a failing simulator listing reports an error instead of throwing", async (
   );
 });
 
+test("the hub's emulators and every AVD become Android devices, without physical phones", () => {
+  const devices = parseAndroidDevices(HUB_ANDROID_LIST, LIST_AVDS);
+  assert.deepEqual(
+    devices.map((device) => [device.id, device.name, device.version, device.booted]),
+    [
+      ["emulator-5554", "Pixel_9_API_35", "Android 15.0", true],
+      ["Medium_Tablet_API_36", "Medium_Tablet_API_36", "Android", false],
+      ["Pixel_Fold_API_35", "Pixel_Fold_API_35", "Android 15.0", false],
+    ],
+  );
+  assert.ok(devices.every((device) => device.platform === "android" && device.kind === "other"));
+  // Ids that could read as flags, and malformed entries, never become devices.
+  assert.deepEqual(
+    parseAndroidDevices({ emulators: [{ id: "-s", name: "x", platform: "android" }, null, "x"] }, "-avd\n\n"),
+    [],
+  );
+  assert.deepEqual(parseAndroidDevices(null, ""), []);
+});
+
+test("boot failures are classified the way T3 does", () => {
+  assert.equal(classifyBootFailure("No space left on device"), "disk_space");
+  assert.equal(classifyBootFailure("Emulator boot timed out after 120s"), "timeout");
+  assert.equal(classifyBootFailure("PANIC: Missing emulator engine program"), "launch_failed");
+});
+
+test("Android emulators list beside iOS simulators, and a missing SDK says why", async () => {
+  await withService(
+    async ({ service, hub }) => {
+      const state = await service.refresh();
+      assert.equal(state.hostStatus, "ready");
+      assert.deepEqual(
+        state.devices.map((device) => [device.platform, device.id]),
+        [
+          ["ios", IPHONE],
+          ["ios", IPAD],
+          ["ios", IPHONE_OLD],
+          ["android", "emulator-5554"],
+          ["android", "Medium_Tablet_API_36"],
+          ["android", "Pixel_Fold_API_35"],
+        ],
+      );
+      assert.deepEqual(state.hosts[0]?.platforms, [
+        { platform: "ios", available: true },
+        { platform: "android", available: true },
+      ]);
+      assert.equal(hub.calls.filter((call) => call.url.endsWith("/api/devices")).length, 1);
+    },
+    { consent: { streaming: true }, android: true },
+  );
+  await withService(
+    async ({ service, hub }) => {
+      const state = await service.refresh();
+      assert.ok(state.devices.every((device) => device.platform === "ios"));
+      assert.deepEqual(state.hosts[0]?.platforms?.[1], {
+        platform: "android",
+        available: false,
+        reason: "Android SDK not found.",
+      });
+      // Without the SDK, Android discovery never asks the hub.
+      assert.ok(!hub.calls.some((call) => call.url.endsWith("/api/devices")));
+    },
+    { consent: { streaming: true } },
+  );
+});
+
+test("a Mac without Xcode still lists Android emulators, and a broken Android listing keeps iOS", async () => {
+  await withService(
+    async ({ service, host }) => {
+      const state = await service.refresh();
+      assert.equal(state.hostStatus, "ready");
+      assert.deepEqual(new Set(state.devices.map((device) => device.platform)), new Set(["android"]));
+      assert.ok(!host.commands.some((command) => command[0] === "xcrun"));
+      assert.equal(state.hosts[0]?.platforms?.[0]?.reason, "Xcode was not found.");
+    },
+    { consent: { streaming: true }, android: true, ios: "Xcode was not found." },
+  );
+  await withService(
+    async ({ service }) => {
+      const state = await service.refresh();
+      assert.equal(state.hostStatus, "ready");
+      assert.equal(state.devices.length, 3);
+      const android = state.hosts[0]?.platforms?.[1];
+      assert.equal(android?.available, false);
+      assert.match(android?.reason ?? "", /^Could not list Android emulators\./u);
+    },
+    { consent: { streaming: true }, android: true, refuse: "/api/devices" },
+  );
+});
+
+test("booting an AVD goes through the hub, and the session follows the emulator serial", async () => {
+  await withService(
+    async ({ service, hub }) => {
+      await service.refresh();
+      const session = await service.open({ chatId: "chat-1", deviceId: "Pixel_Fold_API_35", openedBy: "user" });
+      assert.equal(session.deviceId, "emulator-5556");
+      const posts = hub.calls.filter((call) => call.body !== undefined);
+      assert.deepEqual(posts, [
+        {
+          url: "http://127.0.0.1:52000/api/devices/boot",
+          body: { platform: "android", id: "Pixel_Fold_API_35", name: "Pixel_Fold_API_35" },
+        },
+      ]);
+      const booted = service.state().devices.find((device) => device.id === "emulator-5556");
+      assert.deepEqual([booted?.name, booted?.booted], ["Pixel_Fold_API_35", true]);
+      assert.ok(!service.state().devices.some((device) => device.id === "Pixel_Fold_API_35"));
+      // Opening it again in the same chat reuses the session.
+      await service.open({ chatId: "chat-1", deviceId: "emulator-5556", openedBy: "user" });
+      assert.equal(service.sessionsForChat("chat-1").length, 1);
+    },
+    { consent: { streaming: true }, android: true },
+  );
+});
+
+test("an emulator that fails to boot says why and opens no session", async () => {
+  await withService(
+    async ({ service }) => {
+      await service.refresh();
+      await assert.rejects(
+        service.open({ chatId: "chat-1", deviceId: "Pixel_Fold_API_35", openedBy: "user" }),
+        /Pixel_Fold_API_35 failed to boot\. There is not enough free disk space on this Mac\./u,
+      );
+      assert.deepEqual(service.state().sessions, []);
+    },
+    { consent: { streaming: true }, android: true, refuse: "/boot", refusal: "Not enough disk space to boot" },
+  );
+});
+
+test("a running emulator opens without any hub call, and Android actions run adb", async () => {
+  await withService(
+    async ({ service, hub, host }) => {
+      await service.refresh();
+      await service.open({ chatId: "chat-1", deviceId: "emulator-5554", openedBy: "user" });
+      assert.ok(!hub.calls.some((call) => call.body !== undefined));
+      await service.action({ hostId: "local", deviceId: "emulator-5554", type: "setToggle", setting: "networkEnabled", value: false });
+      assert.ok(
+        host.commands.some((command) => command.join(" ") === "adb -s emulator-5554 shell svc wifi disable"),
+      );
+      assert.ok(!host.commands.some((command) => command[0] === "xcrun" && command.includes("emulator-5554")));
+      await assert.rejects(
+        service.action({ hostId: "local", deviceId: "emulator-5554", type: "sendPush", appId: "com.a.b", payload: "Hi" }),
+        /Android Emulators do not support this setting/u,
+      );
+      await assert.rejects(
+        service.action({ hostId: "local", deviceId: IPHONE, type: "setOrientation", value: "portrait" }),
+        /iOS Simulators do not support this setting/u,
+      );
+      const png = await service.screenshot({ hostId: "local", deviceId: "emulator-5554" });
+      assert.deepEqual([...png], [0x89, 0x50, 0x4e, 0x47]);
+      assert.ok(
+        hub.calls.some(
+          (call) => call.url === "http://127.0.0.1:52000/vendor/serve-emu/api/screenshot?device=emulator-5554" && call.body === undefined,
+        ),
+      );
+    },
+    { consent: { streaming: true }, android: true },
+  );
+});
+
+test("shutting an emulator down goes through the hub, never simctl", async () => {
+  await withService(
+    async ({ service, hub, host }) => {
+      await service.refresh();
+      await service.open({ chatId: "chat-1", deviceId: "emulator-5554", openedBy: "user" });
+      await service.close({ chatId: "chat-1", hostId: "local", deviceId: "emulator-5554", shutdown: true });
+      assert.deepEqual(
+        hub.calls.filter((call) => call.url.endsWith("/api/devices/shutdown")).map((call) => call.body),
+        [{ platform: "android", id: "emulator-5554", name: "Pixel_9_API_35" }],
+      );
+      assert.ok(!host.commands.some((command) => command.includes("shutdown")));
+      assert.deepEqual(service.sessionsForChat("chat-1"), []);
+    },
+    { consent: { streaming: true }, android: true },
+  );
+});
+
 const PEER_PHONE = "5C1E4B7A-0000-4000-8000-0000000000AA";
 
 function fakePeers(listings: Record<string, PeerSimulatorListing | null | Error>) {
@@ -941,7 +1173,7 @@ function fakePeers(listings: Record<string, PeerSimulatorListing | null | Error>
     },
     open: async (hostId, deviceId) => {
       calls.push(`open:${hostId}:${deviceId}`);
-      return { id: deviceId, name: "iPhone 17", version: "iOS 27.0", booted: true, kind: "iphone" };
+      return { id: deviceId, name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: true, kind: "iphone" };
     },
     shutdown: async (hostId, deviceId) => {
       calls.push(`shutdown:${hostId}:${deviceId}`);
@@ -1008,7 +1240,7 @@ async function withPeers(
 const READY_LISTING: PeerSimulatorListing = {
   sharing: true,
   status: "ready",
-  devices: [{ id: PEER_PHONE, name: "iPhone 17", version: "iOS 27.0", booted: false, kind: "iphone" }],
+  devices: [{ id: PEER_PHONE, name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: false, kind: "iphone" }],
 };
 
 test("a refresh lists paired Macs after this Mac, and reports why a Mac has no devices", async () => {
@@ -1183,4 +1415,85 @@ test("paired Macs reach this Mac's simulators only while streaming and sharing a
     assert.equal(service.state().consent.peerSharing, false);
     await assert.rejects(service.grantConsent("peerSharing"), /Set up simulator streaming/u);
   });
+});
+
+test("phones reach this Mac's simulators only through their own consent", async () => {
+  await withService(
+    async ({ service, host }) => {
+      const desktop = service.shareHost();
+      const mobile = service.shareHost("mobile");
+      const mobileChanges: boolean[] = [];
+      const desktopChanges: boolean[] = [];
+      mobile.onSharingChanged((sharing) => mobileChanges.push(sharing));
+      desktop.onSharingChanged((sharing) => desktopChanges.push(sharing));
+      await service.load();
+      assert.equal(mobile.sharing(), false);
+      assert.deepEqual(await mobile.list(), { sharing: false, status: "stopped", devices: [] });
+      await assert.rejects(mobile.open(IPHONE), /sharing is off/u);
+
+      await service.grantConsent("mobileSharing");
+      assert.equal(service.state().consent.mobileSharing, true);
+      assert.equal(mobile.sharing(), true);
+      assert.equal(desktop.sharing(), false, "phone consent never shares with paired Macs");
+      // A chat-scoped listing answers from what is known and never starts the hub.
+      assert.deepEqual(await mobile.list({ chatId: "chat-1" }), {
+        sharing: true,
+        status: "stopped",
+        devices: [],
+        chatDeviceIds: [],
+        toolVersions: { hub: "0.12.0", agent: "0.21.12" },
+      });
+      assert.deepEqual(host.calls, []);
+
+      // An explicit listing starts the installed hub, as it does for paired Macs.
+      const listing = await mobile.list();
+      assert.equal(listing.devices.length, 3);
+      assert.deepEqual(listing.toolVersions, { hub: "0.12.0", agent: "0.21.12" });
+      assert.equal("chatDeviceIds" in listing, false);
+      assert.equal("toolVersions" in (await service.shareHost().list()), false);
+
+      await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+      await service.open({ chatId: "chat-2", deviceId: IPAD, openedBy: "user" });
+      assert.deepEqual((await mobile.list({ chatId: "chat-1" })).chatDeviceIds, [IPHONE_OLD]);
+      assert.deepEqual((await mobile.list({ chatId: "chat-3" })).chatDeviceIds, []);
+      assert.equal(mobile.isKnownDevice(IPHONE_OLD), true);
+      assert.equal(mobile.hubOrigin(), "http://127.0.0.1:52000");
+      assert.equal(desktop.hubOrigin(), null);
+
+      await service.revokeConsent("mobileSharing");
+      assert.equal(mobile.isKnownDevice(IPHONE_OLD), false);
+      assert.equal(mobile.hubOrigin(), null);
+      await service.grantConsent("peerSharing");
+      await service.grantConsent("mobileSharing");
+      await service.revokeConsent("streaming");
+      assert.deepEqual(mobileChanges, [true, false, true, false]);
+      assert.deepEqual(desktopChanges, [true, false]);
+      assert.equal(service.state().consent.mobileSharing, false);
+      await assert.rejects(service.grantConsent("mobileSharing"), /Set up simulator streaming/u);
+    },
+    { consent: { streaming: true } },
+  );
+});
+
+test("phones see shared Android emulators but open only iOS Simulators", async () => {
+  await withService(
+    async ({ service, hub }) => {
+      await service.load();
+      await service.grantConsent("mobileSharing");
+      const mobile = service.shareHost("mobile");
+      const listing = await mobile.list();
+      const emulator = listing.devices.find((device) => device.id === "emulator-5554");
+      assert.equal(emulator?.platform, "android", "Android emulators are listed for phones to show as Open on your Mac");
+      const before = hub.calls.length;
+      await assert.rejects(mobile.open("emulator-5554"), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "capability_denied");
+        return true;
+      });
+      assert.equal(hub.calls.length, before, "a refused phone open never reaches the hub");
+      const iphone = listing.devices.find((device) => device.platform === "ios");
+      assert.ok(iphone);
+      assert.equal((await mobile.open(iphone.id)).id, iphone.id);
+    },
+    { consent: { streaming: true }, android: true },
+  );
 });

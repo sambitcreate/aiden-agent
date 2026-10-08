@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceControls } from "../lib/device-controls.js";
 import type { DuoControlState } from "../lib/device-duo-control.js";
 import type { DeviceScreenSize } from "../lib/device-stream.js";
+import type { AndroidFoldView } from "../lib/device-fold.js";
+import { DeviceAndroidFoldControls } from "./device-android-fold-controls.js";
 import { DeviceDuoControls, duoFoldCommands, duoFoldLabel } from "./device-duo-controls.js";
 import { DeviceToolsPanel, parseCoordinates } from "./device-tools-panel.js";
 
@@ -128,4 +130,58 @@ test("Duo controls render both groups and surface a failed command", () => {
   assert.match(button(html, "Closed"), /aria-pressed="true"/u);
   assert.match(button(html, "Closed"), /\sdisabled=""/u);
   assert.match(html, /role="alert"[^>]*>.*Device is disconnected\./u);
+});
+
+test("an Android drawer offers only what an emulator can do", () => {
+  const html = renderToStaticMarkup(
+    <DeviceToolsPanel
+      platform="android"
+      controls={controls({
+        settings: { appearance: "light", textSize: "default", reduceMotion: false, networkEnabled: true },
+        foregroundApp: { id: "com.example.shop" },
+      })}
+      onClose={noop}
+    />,
+  );
+  for (const title of ["App", "Emulator", "Location", "Permissions"]) {
+    assert.match(html, new RegExp(`>${title}<`, "u"), title);
+  }
+  assert.doesNotMatch(html, />Push notification</u);
+  assert.doesNotMatch(html, /Liquid Glass|Color filter|VoiceOver|Increase Contrast/u);
+  assert.match(html, /aria-label="Network \(Wi-Fi and data\)"[^>]*aria-checked="true"|role="switch" aria-checked="true"[^>]*aria-label="Network \(Wi-Fi and data\)"/u);
+  assert.match(html, /role="group" aria-label="Orientation"/u);
+  assert.match(html, />Landscape</u);
+  assert.match(html, /aria-label="Package name to launch"/u);
+  assert.match(html, /aria-label="Package name for permissions"/u);
+  assert.match(html, /com\.example\.shop/u);
+  // Android has no permission reset, and the emulator keeps its last location fix.
+  assert.doesNotMatch(html, />Reset</u);
+  assert.doesNotMatch(html, />Clear</u);
+});
+
+function fold(extra: Partial<AndroidFoldView> = {}): AndroidFoldView {
+  return {
+    fold: { supported: true, posture: "opened", hingeAngle: 180 },
+    angle: 180,
+    pending: false,
+    error: null,
+    supported: true,
+    change: noop,
+    ...extra,
+  };
+}
+
+test("Android fold controls show the reported posture and a failed command", () => {
+  const html = renderToStaticMarkup(<DeviceAndroidFoldControls fold={fold({ error: "Fold command timed out." })} enabled />);
+  assert.match(html, /aria-label="Android fold controls"/u);
+  assert.match(html, /aria-label="Fold device" aria-pressed="false"/u);
+  assert.match(html, /aria-label="Unfold device" aria-pressed="true"/u);
+  assert.match(html, /role="alert"[^>]*>.*Fold command timed out\./u);
+  const pending = renderToStaticMarkup(<DeviceAndroidFoldControls fold={fold({ pending: true })} enabled />);
+  assert.match(pending, /aria-busy="true"/u);
+  assert.equal(pending.match(/disabled=""/gu)?.length, 2);
+  assert.equal(
+    renderToStaticMarkup(<DeviceAndroidFoldControls fold={fold({ supported: false, fold: null })} enabled />),
+    "",
+  );
 });

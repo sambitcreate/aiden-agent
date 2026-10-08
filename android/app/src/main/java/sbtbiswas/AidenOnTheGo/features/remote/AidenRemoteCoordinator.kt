@@ -252,6 +252,13 @@ class AidenRemoteCoordinator(
                     if (!installation.hasNegotiatedAccess(capability)) add(capability)
                 }
             }
+            // Contract revision 25: only Macs with the simulator feature are
+            // asked for the phone simulator grant.
+            if (server.supportsMobileSimulators) {
+                for (capability in AidenRemoteCapability.PHONE_SIMULATORS) {
+                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
+                }
+            }
         }
         if (requested.isEmpty()) return server
         return try {

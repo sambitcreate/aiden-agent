@@ -5,12 +5,16 @@ import { devicesApi } from "../../lib/ipc";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import {
   DEVICE_SETUP_NOTICE,
+  LOCAL_DEVICE_HOST_ID,
   type DeviceConsentKind,
   type DeviceServiceState,
   type DeviceToolchainState,
 } from "../../shared/devices";
+import { previousToolVersion, toolNeedsUpdate } from "../../shared/device-ssh-hosts";
+import { DeviceHostUpdates, useDeviceHostRetry } from "../device-host-diagnostics";
+import { SimulatorSshHosts } from "./simulator-ssh-hosts";
 
-type Pending = DeviceConsentKind | "prune" | "remove" | null;
+type Pending = DeviceConsentKind | "prune" | "remove" | "inspect" | "update-hub" | "update-agent" | null;
 
 export interface SimulatorSettingsViewProps {
   state: DeviceServiceState | null;
@@ -26,6 +30,13 @@ export interface SimulatorSettingsViewProps {
   onCancelConfirm(): void;
   onPrune(): void;
   onRemove(): void;
+  /** Reads helper versions on this Mac and every SSH host. Installs nothing. */
+  onInspect?(): void;
+  /** Installs the pinned version over an older one, under the permission already granted. */
+  onUpdate?(tool: "hub" | "agent"): void;
+  /** The host a Retry is running for. */
+  retrying?: string | null;
+  onRetry?(hostId: string): void;
 }
 
 const CONSENT_ROWS: ReadonlyArray<{ kind: DeviceConsentKind; label: string; description: string }> = [
@@ -46,6 +57,12 @@ const CONSENT_ROWS: ReadonlyArray<{ kind: DeviceConsentKind; label: string; desc
     label: "Share with paired Macs",
     description:
       "Paired Macs that you granted simulator control can view and drive this Mac’s simulators. Nothing is shared until you turn this on.",
+  },
+  {
+    kind: "mobileSharing",
+    label: "Share with Aiden On The Go",
+    description:
+      "Your paired iPhone and Android phones can watch, tap, and shut down this Mac’s simulators. They can’t change simulator settings. Turning this off disconnects them.",
   },
 ];
 
@@ -96,6 +113,10 @@ export function SimulatorSettingsView({
   onCancelConfirm,
   onPrune,
   onRemove,
+  onInspect,
+  onUpdate,
+  retrying = null,
+  onRetry,
 }: SimulatorSettingsViewProps) {
   if (!state) {
     return (
@@ -117,14 +138,17 @@ export function SimulatorSettingsView({
   const busy = pending !== null;
   const anyInstalled = toolchain?.tools.some((tool) => tool.installed.length > 0) ?? false;
   const stale = toolchain?.tools.some((tool) => tool.installed.some((version) => version !== tool.pinned)) ?? false;
-  const anyGranted = state.consent.streaming || state.consent.agentAccess || state.consent.peerSharing;
+  const anyGranted =
+    state.consent.streaming || state.consent.agentAccess || state.consent.peerSharing || state.consent.mobileSharing === true;
   const confirmCopy = confirming === "streaming" || confirming === "agentAccess" ? CONFIRM_COPY[confirming] : null;
+  const localTools = state.hosts.find((host) => host.id === LOCAL_DEVICE_HOST_ID)?.tools;
 
   return (
     <>
       <FieldSet title="Permissions">
         {CONSENT_ROWS.map((row) => {
           const needsStreaming = row.kind !== "streaming" && !state.consent.streaming;
+          const granted = state.consent[row.kind] === true;
           return (
             <Field
               key={row.kind}
@@ -136,8 +160,8 @@ export function SimulatorSettingsView({
                   <LoaderCircle className="size-4 animate-spin text-secondary motion-reduce:animate-none" aria-hidden />
                 ) : null}
                 <Switch
-                  checked={state.consent[row.kind]}
-                  disabled={busy || state.hostStatus === "disabled" || (needsStreaming && !state.consent[row.kind])}
+                  checked={granted}
+                  disabled={busy || state.hostStatus === "disabled" || (needsStreaming && !granted)}
                   aria-label={row.label}
                   onCheckedChange={(granted) => onConsent(row.kind, granted)}
                 />
@@ -150,33 +174,67 @@ export function SimulatorSettingsView({
             {statusLabel(state)}
           </Text>
         </Field>
+        {onRetry && state.hosts.some((host) => ["installing", "starting", "error"].includes(host.status)) ? (
+          <Field label="Updates" orientation="vertical">
+            <DeviceHostUpdates hosts={state.hosts} pending={retrying} onRetry={onRetry} />
+          </Field>
+        ) : null}
       </FieldSet>
 
       <FieldSet title="Helper tools">
         {(toolchain?.tools ?? []).map((tool) => {
           const others = tool.installed.filter((version) => version !== tool.pinned);
           const current = tool.installed.includes(tool.pinned);
+          const versions = localTools?.[tool.id];
+          const running = versions?.runningVersion ?? null;
+          // An older install with the matching permission granted updates here, or on the next Start.
+          const update = versions && toolNeedsUpdate(versions) ? previousToolVersion(versions) : null;
+          const permitted = tool.id === "hub" ? state.consent.streaming : state.consent.agentAccess;
+          const notes = [
+            running ? `Running ${running}.` : null,
+            update
+              ? `${tool.pinned} replaces ${update} the next time the helpers start${permitted ? ", or update now" : ""}.`
+              : null,
+            others.length > 0
+              ? `Older versions on disk: ${others.join(", ")}`
+              : current
+                ? "Installed from npm into Aiden’s app data."
+                : update
+                  ? null
+                  : "Downloaded from npm only after you allow it.",
+          ].filter(Boolean);
           return (
-            <Field
-              key={tool.id}
-              label={<span className="font-mono">{tool.name}</span>}
-              description={
-                others.length > 0
-                  ? `Older versions on disk: ${others.join(", ")}`
-                  : current
-                    ? "Installed from npm into Aiden’s app data."
-                    : "Downloaded from npm only after you allow it."
-              }
-            >
+            <Field key={tool.id} label={<span className="font-mono">{tool.name}</span>} description={notes.join(" ")}>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Badge className="whitespace-nowrap">Pinned {tool.pinned}</Badge>
-                <Badge color={current ? "green" : undefined} className="whitespace-nowrap">
-                  {current ? "Installed" : "Not installed"}
+                <Badge color={current ? "green" : update ? "warning" : undefined} className="whitespace-nowrap">
+                  {current ? "Installed" : update ? "Update available" : "Not installed"}
                 </Badge>
+                {update && permitted && onUpdate ? (
+                  <Button
+                    size="small"
+                    variant="filled"
+                    disabled={busy}
+                    aria-label={`Update ${tool.name} to ${tool.pinned}`}
+                    onClick={() => onUpdate(tool.id)}
+                  >
+                    {pending === `update-${tool.id}` ? "Updating…" : "Update"}
+                  </Button>
+                ) : null}
               </div>
             </Field>
           );
         })}
+        {onInspect ? (
+          <Field
+            label="Check device tool versions"
+            description="Reads the versions installed and running on this Mac and on your SSH hosts. Nothing is installed or changed."
+          >
+            <Button size="small" variant="transparent" disabled={busy} onClick={onInspect}>
+              {pending === "inspect" ? "Checking…" : "Check versions"}
+            </Button>
+          </Field>
+        ) : null}
         <Field
           label="Prune old versions"
           description="Delete helper versions Aiden no longer uses. The pinned versions stay."
@@ -240,6 +298,7 @@ export function SimulatorSettings() {
   const [pending, setPending] = React.useState<Pending>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState<SimulatorSettingsViewProps["confirming"]>(null);
+  const retry = useDeviceHostRetry();
   const returnFocusRef = React.useRef<HTMLElement | null>(null);
   const confirm = (next: NonNullable<SimulatorSettingsViewProps["confirming"]>) => {
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -307,30 +366,37 @@ export function SimulatorSettings() {
   }
 
   return (
-    <SimulatorSettingsView
-      state={state}
-      toolchain={toolchain}
-      pending={pending}
-      error={error}
-      confirming={confirming}
-      onConsent={(kind, granted) => {
-        // Turning on anything that downloads from npm asks first; sharing and every revoke do not.
-        if (granted && (kind === "streaming" || kind === "agentAccess")) confirm(kind);
-        else void run(kind, () => devicesApi.setConsent(kind, granted).then(setState));
-      }}
-      onConfirm={() => {
-        if (confirming === "remove") void run("remove", () => devicesApi.removeTools().then(setState));
-        else if (confirming) {
-          const kind = confirming;
-          void run(kind, () => devicesApi.setConsent(kind, true).then(setState));
-        }
-      }}
-      returnFocus={() => returnFocusRef.current}
-      onCancelConfirm={() => {
-        if (!pending) setConfirming(null);
-      }}
-      onPrune={() => void run("prune", () => devicesApi.pruneTools().then(setToolchain))}
-      onRemove={() => confirm("remove")}
-    />
+    <>
+      <SimulatorSettingsView
+        state={state}
+        toolchain={toolchain}
+        pending={pending}
+        error={error ?? retry.error}
+        confirming={confirming}
+        onConsent={(kind, granted) => {
+          // Turning on anything that downloads from npm asks first; sharing and every revoke do not.
+          if (granted && (kind === "streaming" || kind === "agentAccess")) confirm(kind);
+          else void run(kind, () => devicesApi.setConsent(kind, granted).then(setState));
+        }}
+        onConfirm={() => {
+          if (confirming === "remove") void run("remove", () => devicesApi.removeTools().then(setState));
+          else if (confirming) {
+            const kind = confirming;
+            void run(kind, () => devicesApi.setConsent(kind, true).then(setState));
+          }
+        }}
+        returnFocus={() => returnFocusRef.current}
+        onCancelConfirm={() => {
+          if (!pending) setConfirming(null);
+        }}
+        onPrune={() => void run("prune", () => devicesApi.pruneTools().then(setToolchain))}
+        onRemove={() => confirm("remove")}
+        onInspect={() => void run("inspect", () => devicesApi.inspectTools().then(setState))}
+        onUpdate={(tool) => void run(`update-${tool}`, () => devicesApi.updateTool({ hostId: LOCAL_DEVICE_HOST_ID, tool }).then(setState))}
+        retrying={retry.pending}
+        onRetry={retry.retry}
+      />
+      {state ? <SimulatorSshHosts state={state} /> : null}
+    </>
   );
 }

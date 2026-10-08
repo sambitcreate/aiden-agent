@@ -126,7 +126,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "simulator",
     title: "Simulator",
     group: "Agent",
-    keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs"],
+    keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs", "floating", "auto-show"],
   },
   {
     id: "memory",

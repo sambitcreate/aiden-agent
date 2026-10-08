@@ -97,6 +97,9 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Contract revision 24: phones may observe and control runs started on
     /// the Mac, in Telegram or by the scheduler.
     static let phoneRunControlFeature = "phone-run-control-v1"
+    /// Contract revision 25: phones may view and control the Mac's shared
+    /// iOS Simulators after negotiating `simulators:mobile`.
+    static let mobileSimulatorsFeature = "mobile-simulators-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -277,6 +280,11 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// The Mac offers the phone-scoped `runs:observe` / `runs:control` subset.
     var supportsPhoneRunControl: Bool {
         features.contains(Self.phoneRunControlFeature)
+    }
+
+    /// The Mac offers the phone simulator viewer (`simulators:mobile`).
+    var supportsMobileSimulators: Bool {
+        features.contains(Self.mobileSimulatorsFeature)
     }
 
     /// This device both may and did negotiate foreign-run observation.
@@ -677,6 +685,9 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// Sessions this client created. They hold their delegates strongly until
     /// invalidated, so the client invalidates them when it is released.
     private let ownedSessions: [URLSession]
+    /// Pinned trust for the simulator viewer's own stream session. Nil for
+    /// clients built around an injected session.
+    private let simulatorTransportTrust: AidenSimulatorTransportTrust?
 
     init(
         installation: AidenInstallation,
@@ -707,6 +718,12 @@ final class AidenRemoteClient: @unchecked Sendable {
             requestTimeout: requestTimeout
         )
         ownedSessions = [session, streamSession]
+        simulatorTransportTrust = AidenSimulatorTransportTrust(
+            host: installation.endpoint.host ?? "",
+            port: installation.endpoint.port,
+            fingerprint: installation.serverSpkiSha256,
+            policy: trustPolicy
+        )
     }
 
     init(endpoint: URL, credential: String?, session: URLSession, streamSession: URLSession? = nil) {
@@ -715,6 +732,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         self.session = session
         self.streamSession = streamSession ?? session
         ownedSessions = []
+        simulatorTransportTrust = nil
     }
 
     private init(endpoint: URL, ownedSession: URLSession) {
@@ -723,6 +741,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         session = ownedSession
         streamSession = ownedSession
         ownedSessions = [ownedSession]
+        simulatorTransportTrust = nil
     }
 
     deinit {
@@ -958,7 +977,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl,
+            .runsObserve, .runsControl, .simulatorsMobile,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -2764,6 +2783,108 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 }
 
+
+// MARK: - Contract revision 25: mobile simulator viewer
+
+extension AidenRemoteClient {
+    private struct SimulatorDeviceRequest: Encodable {
+        let deviceId: String
+    }
+
+    /// Booting a simulator can take tens of seconds.
+    static let simulatorOpenTimeout: TimeInterval = 120
+
+    /// `GET /simulators?chatId=` never starts the hub and adds
+    /// `chatDeviceIds`. Without a chat it is an explicit user action that may
+    /// start an installed hub on the Mac (Retry).
+    func simulators(chatId: String? = nil) async throws -> AidenSimulatorListing {
+        var query: [URLQueryItem] = []
+        if let chatId {
+            try validateRemoteIdentifier(chatId)
+            query = [URLQueryItem(name: "chatId", value: chatId)]
+        }
+        return try await send(method: "GET", path: ["simulators"], query: query)
+    }
+
+    func openSimulator(deviceId: String) async throws -> AidenSimulatorDevice {
+        try validateSimulatorDeviceId(deviceId)
+        let response: AidenSimulatorOpenResponse = try await send(
+            method: "POST",
+            path: ["simulators", "open"],
+            body: SimulatorDeviceRequest(deviceId: deviceId),
+            timeoutInterval: Self.simulatorOpenTimeout
+        )
+        guard response.device.id == deviceId else { try rejectContractResponse() }
+        return response.device
+    }
+
+    /// The caller must have confirmed the shutdown with the user.
+    func shutdownSimulator(deviceId: String) async throws {
+        try validateSimulatorDeviceId(deviceId)
+        let _: AidenSimulatorShutdownResponse = try await send(
+            method: "POST",
+            path: ["simulators", "shutdown"],
+            body: SimulatorDeviceRequest(deviceId: deviceId)
+        )
+    }
+
+    /// The hub relay's MJPEG stream for one device. Start it before the input
+    /// socket: serve-sim accepts input only while screen capture runs.
+    func simulatorStreamRequest(deviceId: String) throws -> URLRequest {
+        try validateSimulatorDeviceId(deviceId)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["simulators", "hub", "vendor", "serve-sim", "helper", deviceId, "stream.mjpeg"],
+            query: [],
+            body: nil,
+            headers: ["Accept": "multipart/x-mixed-replace, image/jpeg"],
+            authenticated: true
+        )
+        request.timeoutInterval = AidenSimulatorTransport.idleTimeout
+        return request
+    }
+
+    /// The helper input socket for one device. It carries the bearer and
+    /// protocol headers and never an `Origin` (the relay refuses browser origins).
+    func simulatorInputRequest(deviceId: String) throws -> URLRequest {
+        try validateSimulatorDeviceId(deviceId)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["simulators", "hub", "vendor", "serve-sim", "helper", "ws"],
+            query: [URLQueryItem(name: "device", value: deviceId)],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        guard let url = request.url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https" else {
+            throw AidenRemoteClientError.invalidEndpoint
+        }
+        components.scheme = "wss"
+        guard let socketURL = components.url else { throw AidenRemoteClientError.invalidEndpoint }
+        request.url = socketURL
+        request.setValue(nil, forHTTPHeaderField: "Accept")
+        request.setValue(nil, forHTTPHeaderField: "Origin")
+        request.timeoutInterval = AidenSimulatorTransport.idleTimeout
+        return request
+    }
+
+    /// A pinned session for one viewer's stream and socket, with the same
+    /// trust as this client. The caller closes it when the viewer goes away.
+    func makeSimulatorTransport() throws -> AidenSimulatorTransport {
+        guard let simulatorTransportTrust else {
+            throw AidenRemoteClientError.missingTrustConfiguration
+        }
+        return AidenSimulatorTransport(trust: simulatorTransportTrust)
+    }
+
+    private func validateSimulatorDeviceId(_ value: String) throws {
+        guard AidenSimulatorDevice.isValidIdentifier(value) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+}
 
 // Playback-only contract. TODO: mobile enablement/configuration is a future feature.
 struct AidenReadAloudSource: Codable, Sendable {

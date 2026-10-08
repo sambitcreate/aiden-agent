@@ -656,8 +656,10 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
 
     /// Contract revision 24: the pairing vocabulary plus the phone-scoped run
     /// subset, which a phone can only negotiate (never receive at pairing).
+    /// Contract revision 25 adds the phone simulator viewer grant.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
+        Self(rawValue: "simulators:mobile"),
     ]
 
     init(from decoder: Decoder) throws {

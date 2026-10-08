@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shared simulators (Aiden Remote contract revision 25) -->
+    <string name="simulator_view_device">View device</string>
+    <plurals name="simulator_view_devices">
+        <item quantity="one">View %1$d device</item>
+        <item quantity="other">View %1$d devices</item>
+    </plurals>
+    <string name="simulator_close_viewer">Close device viewer</string>
+    <string name="simulator_home">Home</string>
+    <string name="simulator_options">Device options</string>
+    <string name="simulator_show_controls">Show device controls</string>
+    <string name="simulator_show_controls_hint">Shaking the phone also shows them</string>
+    <string name="simulator_hide_controls">Hide device controls</string>
+    <string name="simulator_rotate">Rotate device</string>
+    <string name="simulator_app_switcher">App switcher</string>
+    <string name="simulator_reload">Reload stream</string>
+    <string name="simulator_shutdown">Shut down device</string>
+    <string name="simulator_shutting_down">Shutting down…</string>
+    <string name="simulator_tool_versions">Device tool versions</string>
+    <string name="simulator_tool_version_hub">Simulator hub: %1$s</string>
+    <string name="simulator_tool_version_agent">Device agent: %1$s</string>
+    <string name="simulator_tool_version_unknown">Not reported</string>
+    <string name="simulator_devices_section">Devices</string>
+    <string name="simulator_default_title">Devices</string>
+    <string name="simulator_open_on_mac">Open on your Mac to view</string>
+    <string name="simulator_not_running">Not running</string>
+    <string name="simulator_device_subtitle">%1$s · %2$s</string>
+    <string name="simulator_starting">Starting %1$s…</string>
+    <string name="simulator_connecting">Connecting to device…</string>
+    <string name="simulator_screen_description">%1$s simulator screen</string>
+    <string name="simulator_error_sharing_off">Turn on Share with Aiden On The Go in Aiden on your Mac (Settings → Simulator).</string>
+    <string name="simulator_error_refused">This phone can’t control simulators on this Mac.</string>
+    <string name="simulator_error_capacity">Too many simulator streams are open on your Mac. Close one and try again.</string>
+    <string name="simulator_error_unreachable">Couldn’t reach the simulator.</string>
+    <string name="simulator_shutdown_title">Shut down %1$s?</string>
+    <string name="simulator_shutdown_body">Apps running on this simulator will quit.</string>
+    <string name="simulator_shutdown_confirm">Shut Down</string>
+    <string name="simulator_shutdown_failed">Couldn’t shut down the device.</string>
+</resources>

@@ -50,7 +50,8 @@ Accessibility: the 3D wrapper is a focusable `role="application"` region that fo
 - `three@0.186.1` (MIT). The viewers, three.js, `RoomEnvironment` and the models build into one lazy chunk (about 151 kB gzip); the main window's initial JS is unchanged.
 - Models are authored in millimetres and scaled so the display is 2.2 units tall. Static parts merge per material: a handset is at most a dozen draw calls and under 25k vertices.
 - A WebGL failure (creation, render, context loss) or an undecodable Duo display feed switches to the flat screen with one toast and disables **3D view** until that simulator's viewer is reopened.
-- `capture()` on each viewer returns a PNG of the framed device; the viewports expose it through `onCaptureReady` for a future save action.
+- `capture()` on each viewer returns a PNG of the framed device; the screenshot menu offers it as **Save framed screenshot…** while the 3D view shows, saved through the same dialog as other screenshots.
+- Android foldables feed `useAndroidFold`'s hinge angle into the 3D fold body. The floating player stays flat, and a floating device's tab is a placeholder, so nothing streams twice.
 - Tests (all in `test:devices`): `device-3d.test.ts`, `device-motion.test.ts`, `hardware-models.test.ts`, `duo.test.ts`, `phone-viewer.test.ts`, `duo-viewer.test.ts`, `android-fold-scene.test.ts`, `device-duo-control.test.ts`, `device-duo-stream.test.ts`, `trackpad-scroll-end.test.ts`, and the Duo control rendering in `device-tools-panel.test.tsx`.
 
 ## Exit

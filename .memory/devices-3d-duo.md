@@ -13,8 +13,10 @@ Sibling B of the six-way T3 devices parity effort (shared context: base `4cb409d
 - Trackpad orbit end: main forwards `gestureScrollEnd` on notification channel `devices:trackpad-scroll-end` (Aiden's namespace, not T3's `desktop:`), via `forwardTrackpadScrollEnd(createdWindow.webContents)` in `main/index.ts`; renderer subscribes with `devicesApi.onTrackpadScrollEnd`.
 - Framed screenshot: `PhoneViewer.capture()` / `DuoViewer.capture()` render and `toBlob` in one task. Exposed via the viewports' `onCaptureReady` prop; deliberately not wired to UI (sibling E owns "Save screenshot…").
 
-## Integration points left open
-- **Android fold (sibling A):** `DevicePhoneViewport` takes `foldAngle: number | null`; `device-viewer.tsx` passes `null`. Feed A's renderer fold state there. `resolveDeviceShape` already accepts `platform: "android"` (typed as a local `"ios" | "android"` union so it compiles before A's `DevicePlatform` change).
+## Integration (merged with A, C, D, E, F on 2026-10-08)
+- **Android fold:** `device-viewer.tsx` passes `fold.angle` from A's `useAndroidFold` to `DevicePhoneViewport`; the Fold/Unfold controls now show in 3D too. Android has `kind: "other"`, so `resolveDeviceShape` picks android-phone/tablet by platform plus aspect.
+- **Framed screenshot:** E's screenshot menu shows **Save framed screenshot…** only while `frame3d` and a capture exist. The renderer sends PNG bytes on `devices:framed-screenshot-save`; main (`device-feature-ipc.ts`) accepts only a PNG ≤ 32 MB plus a valid host/device, and `device-features.ts` `saveFramedScreenshot` writes it via the same save dialog (name `…-framed-…`), remembered for Reveal in Finder.
+- **Mini-player (D):** streams flat only via `useDeviceStream`; the floating device's tab is a placeholder, so there is no second stream and no 3D/Duo feed. Inactive or hidden tabs unmount the 3D view, which detaches Duo feeds before the stream stops. `device-stream.ts` refuses Duo panels and raw touches on Android.
 - Magic Keyboard accessory: not built (low priority).
 
 ## Verification

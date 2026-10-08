@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceHostStatus, DeviceServiceState, DeviceSummary } from "../shared/devices.js";
 import { DeviceViewer, deviceStatusLabel } from "./device-viewer.js";
 import { DevicesPanel, DevicesPanelView, type DevicesPanelViewProps } from "./devices-panel.js";
+import { DeviceFloatingPlaceholder } from "./device-floating-placeholder.js";
 
 const IPHONE: DeviceSummary = {
   hostId: "local",
@@ -79,7 +79,7 @@ test("consent explains npm and the node-datachannel prebuilt download before set
 
 test("compact panels keep explanations for assistive technology", () => {
   const html = view({ state: state("needs-consent"), compact: true });
-  assert.match(html, /class="sr-only"[^>]*>Watch and control Xcode simulators/u);
+  assert.match(html, /class="sr-only"[^>]*>Watch and control iOS Simulators from Xcode and Android Emulators/u);
 });
 
 test("installing, starting, stopped, unavailable, and error each render their own state", () => {
@@ -179,11 +179,6 @@ test("a ready paired Mac keeps the list usable when this Mac's helpers are unava
   assert.doesNotMatch(off, /Open iPhone 17/u);
 });
 
-test("the Environment panel brings the Simulator tab forward when an agent opens a device", () => {
-  const source = readFileSync(new URL("./environment-panel.tsx", import.meta.url), "utf8");
-  assert.match(source, /devicesApi\.onReveal\(\(chatId\) => \{\s+if \(chatId === revealChatId\) showTools\("devices"\);/u);
-});
-
 test("an open session for this chat renders the viewer, other chats see the list", () => {
   const ready = state("ready", {
     devices: [IPHONE],
@@ -192,6 +187,41 @@ test("an open session for this chat renders the viewer, other chats see the list
   const viewer = () => <div>viewer-shell</div>;
   assert.match(view({ state: ready, viewer }), /viewer-shell/u);
   assert.doesNotMatch(view({ state: ready, viewer, chatId: "chat-2" }), /viewer-shell/u);
+});
+
+test("each device tab shows its own session, and no selection shows the picker", () => {
+  const ready = state("ready", {
+    devices: [IPHONE, IPAD],
+    sessions: [
+      { chatId: "chat-1", hostId: "local", deviceId: "UDID-1", openedBy: "user" },
+      { chatId: "chat-1", hostId: "local", deviceId: "UDID-2", openedBy: "agent" },
+    ],
+  });
+  const viewer = (_session: unknown, device: DeviceSummary) => <div>viewer:{device.name}</div>;
+  assert.match(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-2" } }), /viewer:iPad Air/u);
+  assert.match(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-1" } }), /viewer:iPhone 17 Pro/u);
+  const picker = view({ state: ready, viewer, selected: null });
+  assert.doesNotMatch(picker, /viewer:/u);
+  assert.match(picker, /Boot and open iPad Air/u);
+  // A tab whose session already ended falls back to the picker rather than another device.
+  assert.doesNotMatch(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "GONE" } }), /viewer:/u);
+});
+
+test("a floating device's tab offers Dock instead of a second stream", () => {
+  const html = renderToStaticMarkup(<DeviceFloatingPlaceholder name="iPhone 17 Pro" onDock={noop} />);
+  assert.match(html, /iPhone 17 Pro is floating over the chat/u);
+  assert.match(html, /<button[^>]*>Dock in this tab<\/button>/u);
+  assert.doesNotMatch(html, /<canvas|role="application"/u);
+});
+
+test("the viewer rail offers Float over chat only where the device can float", () => {
+  const session = { chatId: "chat-1", hostId: "local", deviceId: "UDID-1", openedBy: "user" as const };
+  const render = (onFloat?: () => void) =>
+    renderToStaticMarkup(
+      <DeviceViewer chatId="chat-1" session={session} device={IPHONE} active={false} compact={false} onClose={noop} onFloat={onFloat} />,
+    );
+  assert.match(render(noop), /aria-label="Float over chat"/u);
+  assert.doesNotMatch(render(), /Float over chat/u);
 });
 
 test("the viewer shell labels every control and exposes a focusable screen", () => {
@@ -248,3 +278,122 @@ test("viewer status labels", () => {
 
 // Simulator discovery and capability loss are exercised in
 // tests/e2e/environment-devices-tab.spec.ts against the rendered launcher/panel.
+
+const PIXEL: DeviceSummary = {
+  hostId: "local",
+  id: "emulator-5554",
+  name: "Pixel 9",
+  platform: "android",
+  version: "Android 15.0",
+  booted: true,
+  kind: "other",
+};
+const FOLD_AVD: DeviceSummary = { ...PIXEL, id: "Pixel_Fold_API_35", name: "Pixel Fold", booted: false };
+
+test("this Mac lists iOS Simulators and Android Emulators in their own sections", () => {
+  const html = view({
+    state: state("ready", {
+      devices: [IPHONE, PIXEL, FOLD_AVD],
+      hosts: [
+        {
+          id: "local",
+          kind: "local",
+          name: "This Mac",
+          status: "ready",
+          platforms: [
+            { platform: "ios", available: true },
+            { platform: "android", available: true },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.match(html, /aria-labelledby="devices-local-ios"/u);
+  assert.match(html, /id="devices-local-android"[^>]*>Android Emulators</u);
+  assert.ok(html.indexOf(">iOS Simulators<") < html.indexOf(">Android Emulators<"), "iOS is listed first");
+  assert.match(html, /Android 15\.0 · Booted/u);
+  assert.match(html, /aria-label="Open Pixel 9"/u);
+  assert.match(html, /aria-label="Boot and open Pixel Fold"/u);
+  // The Android section holds only Android devices.
+  const android = html.slice(html.indexOf(">Android Emulators<"));
+  assert.doesNotMatch(android, /iPhone 17 Pro/u);
+});
+
+test("a platform this Mac cannot run says why instead of listing nothing", () => {
+  const reason = "Android SDK not found. Install it with Android Studio, or set ANDROID_HOME to your SDK folder.";
+  const html = view({
+    state: state("ready", {
+      devices: [IPHONE],
+      hosts: [
+        {
+          id: "local",
+          kind: "local",
+          name: "This Mac",
+          status: "ready",
+          platforms: [
+            { platform: "ios", available: true },
+            { platform: "android", available: false, reason },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.match(html, />Android Emulators</u);
+  assert.match(html, /Android SDK not found\. Install it with Android Studio, or set ANDROID_HOME/u);
+  assert.match(html, /aria-label="Open iPhone 17 Pro"/u);
+  const empty = view({
+    state: state("ready", {
+      hosts: [
+        {
+          id: "local",
+          kind: "local",
+          name: "This Mac",
+          status: "ready",
+          platforms: [
+            { platform: "ios", available: false, reason: "Xcode was not found." },
+            { platform: "android", available: true },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.match(empty, /Xcode was not found\./u);
+  assert.match(empty, /No Android emulators found\. Create one in Android Studio/u);
+  assert.doesNotMatch(empty, /border-(red|green|blue|accent)/u);
+});
+
+test("a paired Mac's Android emulators get their own section under that Mac", () => {
+  const html = view({
+    state: state("ready", {
+      devices: [IPHONE, { ...PIXEL, hostId: "peer:studio" }],
+      hosts: [
+        { id: "local", kind: "local", name: "This Mac", status: "ready" },
+        { id: "peer:studio", kind: "peer", name: "Studio", status: "ready" },
+      ],
+    }),
+  });
+  assert.match(html, /aria-labelledby="devices-peer-studio-android"/u);
+  assert.doesNotMatch(html, /devices-peer-studio-ios/u);
+});
+
+test("an Android viewer swaps the iOS rail for Back, Home, Recents, and Power", () => {
+  const html = renderToStaticMarkup(
+    <DeviceViewer
+      chatId="chat-1"
+      session={{ chatId: "chat-1", hostId: "local", deviceId: "emulator-5554", openedBy: "user" }}
+      device={PIXEL}
+      active={false}
+      compact={false}
+      onClose={noop}
+    />,
+  );
+  for (const name of ["Back", "Home", "Recents", "Power", "Rotate", "Shut down emulator", "Close emulator"]) {
+    assert.match(html, new RegExp(`aria-label="${name}"`, "u"), name);
+  }
+  assert.doesNotMatch(html, /aria-label="Lock"/u);
+  assert.match(html, /role="toolbar" aria-label="Emulator controls"/u);
+  assert.match(html, /aria-roledescription="emulator screen"/u);
+  assert.match(html, /aspect-ratio:0\.45/u);
+  // Fold controls appear only once the emulator reports a hinge.
+  assert.doesNotMatch(html, /Fold device/u);
+});

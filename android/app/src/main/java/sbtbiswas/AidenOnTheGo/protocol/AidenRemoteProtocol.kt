@@ -54,6 +54,9 @@ object AidenRemoteProtocol {
     /** Contract revision 24: phones may observe and control runs started on
      * the Mac, in Telegram or by the scheduler. */
     const val PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1"
+    /** Contract revision 25: phones may watch and tap simulators the Mac
+     * shares, behind the negotiated `simulators:mobile` grant. */
+    const val MOBILE_SIMULATORS_FEATURE = "mobile-simulators-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4
@@ -464,6 +467,8 @@ data class AidenRemoteCapability(val rawValue: String) {
         val RUNS_OBSERVE = AidenRemoteCapability("runs:observe")
         /** Contract revision 24: Stop, approvals and questions on foreign runs. */
         val RUNS_CONTROL = AidenRemoteCapability("runs:control")
+        /** Contract revision 25: watch, tap and shut down shared simulators. */
+        val SIMULATORS_MOBILE = AidenRemoteCapability("simulators:mobile")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -479,11 +484,14 @@ data class AidenRemoteCapability(val rawValue: String) {
          * phone can only negotiate it behind `phone-run-control-v1`. */
         val PHONE_RUNS = listOf(RUNS_OBSERVE, RUNS_CONTROL)
 
-        /** Every grant `POST /device/capabilities` may add. */
-        val NEGOTIABLE = PROGRESS + PHONE_RUNS
+        /** The phone simulator grant, negotiable only behind `mobile-simulators-v1`. */
+        val PHONE_SIMULATORS = listOf(SIMULATORS_MOBILE)
 
-        /** The pairing vocabulary plus the negotiable run subset. */
-        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS
+        /** Every grant `POST /device/capabilities` may add. */
+        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS
+
+        /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
+        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS
     }
 }
 

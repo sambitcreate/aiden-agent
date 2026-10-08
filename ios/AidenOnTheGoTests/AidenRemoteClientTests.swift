@@ -3505,6 +3505,41 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(reloaded.activeInstallation?.serverCapabilities, grants)
     }
 
+    /// Contract revision 25: a phone negotiates `simulators:mobile` after
+    /// pairing, and the store persists it like the other negotiable grants.
+    @MainActor
+    func testNegotiatedSimulatorViewerGrantPersistsAndGatesAccess() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            let body = try Self.jsonBody(request)
+            XCTAssertEqual(body["accepts"] as? [String], ["simulators:mobile"])
+            return Self.response(
+                for: request,
+                status: 200,
+                json: "{\"capabilities\":[\"server:read\",\"workspace:read\",\"simulators:mobile\"]}"
+            )
+        }
+        let negotiated = try await client.updateDeviceCapabilities(accepts: [.simulatorsMobile])
+        XCTAssertEqual(negotiated, [.serverRead, .workspaceRead, .simulatorsMobile])
+
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-sim", deviceId: "device-sim", credential: "credential-sim"),
+            trust: makeSystemTrust(), name: "Simulator Mac"
+        )
+        XCTAssertEqual(store.activeInstallation?.hasNegotiatedAccess(to: .simulatorsMobile), false)
+        try store.updateNegotiatedDeviceCapabilities(negotiated, confirmedBy: AidenServer(
+            protocolVersion: 1, instanceId: "instance-sim", name: "Simulator Mac",
+            appVersion: "1.0", capabilities: negotiated, serverCapabilities: negotiated,
+            connectionMode: .lan, minimumClientVersion: nil, serverTime: Date(),
+            features: [AidenServer.mobileSimulatorsFeature]
+        ))
+        let reloaded = AidenInstallationStore(keychain: keychain)
+        XCTAssertEqual(reloaded.activeInstallation?.hasNegotiatedAccess(to: .simulatorsMobile), true)
+    }
+
     @MainActor
     func testServerRefreshCanNarrowButNeverWidenDeviceGrants() throws {
         let keychain = AidenRemoteMemoryKeychain()

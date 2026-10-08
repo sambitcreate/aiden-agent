@@ -119,6 +119,10 @@ data class AidenServer(
     val supportsPhoneRunControl: Boolean
         get() = features.contains(AidenRemoteProtocol.PHONE_RUN_CONTROL_FEATURE)
 
+    /** The Mac offers the phone-scoped `simulators:mobile` grant (revision 25). */
+    val supportsMobileSimulators: Boolean
+        get() = features.contains(AidenRemoteProtocol.MOBILE_SIMULATORS_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

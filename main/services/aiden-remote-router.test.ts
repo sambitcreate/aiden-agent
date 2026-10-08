@@ -57,7 +57,7 @@ async function fixture(options: {
   questionsAvailable?: boolean;
   skillsAvailable?: boolean;
   agentInterruptAvailable?: boolean;
-  deviceType?: "iphone" | "mac" | "linux";
+  deviceType?: "iphone" | "ipad" | "mac" | "linux";
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
@@ -208,6 +208,7 @@ async function fixture(options: {
               capability !== "agents:read" &&
               capability !== "questions:respond" &&
               capability !== "simulators:control" &&
+              capability !== "simulators:mobile" &&
               capability !== "host:events" &&
               capability !== "runs:observe" &&
               capability !== "runs:control",
@@ -4035,7 +4036,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 24,
+      contractRevision: 25,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4549,5 +4550,231 @@ test("forking is advertised with the host wiring and needs a revision and an ide
     );
   } finally {
     await summary.close();
+  }
+});
+
+/** A phone-audience host that records calls; paired Macs get a separate host that is not sharing. */
+function phoneSimulatorRelay(phoneSharing = true) {
+  const calls: unknown[] = [];
+  const phones: AidenRemoteSimulatorHost = {
+    ...simulatorHost(phoneSharing),
+    list: async (options) => {
+      calls.push(["list", options ?? null]);
+      return {
+        sharing: phoneSharing,
+        status: "ready",
+        devices: [{ id: "UDID-1", name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: true, kind: "iphone" }],
+        ...(options?.chatId ? { chatDeviceIds: ["UDID-1"] } : {}),
+      };
+    },
+    open: async (deviceId) => {
+      calls.push(["open", deviceId]);
+      return { id: deviceId, name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: true, kind: "iphone" };
+    },
+    shutdown: async (deviceId) => {
+      calls.push(["shutdown", deviceId]);
+    },
+    settings: async (deviceId) => {
+      calls.push(["settings", deviceId]);
+      return {};
+    },
+    isKnownDevice: (deviceId) => phoneSharing && deviceId === "UDID-1",
+  };
+  const relay = new AidenRemoteSimulatorRelay((audience) => (audience === "mobile" ? phones : simulatorHost(false)));
+  return { relay, calls };
+}
+
+test("a phone learns of and negotiates the simulator viewer only where this Mac has simulators", async () => {
+  const { relay } = phoneSimulatorRelay();
+  const accepts = JSON.stringify({ accepts: ["simulators:mobile"] });
+  for (const deviceType of ["iphone", "ipad"] as const) {
+    const phone = await fixture({ simulators: relay, deviceType, acceptsProgressCapabilities: true });
+    try {
+      const server = (await (await fetch(`${phone.base}/server`, { headers: SIMULATOR_HEADERS })).json()) as {
+        features: string[];
+        serverCapabilities?: string[];
+      };
+      assert.equal(server.features.includes("mobile-simulators-v1"), true, deviceType);
+      assert.equal(server.serverCapabilities?.includes("simulators:mobile"), true, deviceType);
+      assert.equal(server.serverCapabilities?.includes("simulators:control"), false, deviceType);
+      const response = await fetch(`${phone.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+      assert.equal(response.status, 200);
+      assert.deepEqual(phone.calls, ["device-capabilities:device-authorized-12345678:simulators:mobile"]);
+    } finally {
+      await phone.close();
+    }
+  }
+  // Desktops control simulators with simulators:control and are refused the phone grant.
+  const mac = await fixture({ simulators: relay, deviceType: "mac", acceptsProgressCapabilities: true });
+  try {
+    const server = (await (await fetch(`${mac.base}/server`, { headers: SIMULATOR_HEADERS })).json()) as {
+      features: string[];
+      serverCapabilities?: string[];
+    };
+    assert.equal(server.features.includes("mobile-simulators-v1"), false);
+    assert.equal(server.serverCapabilities?.includes("simulators:mobile"), false);
+    const response = await fetch(`${mac.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "capability_denied");
+    assert.equal(mac.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    await mac.close();
+  }
+  for (const simulators of [undefined, new AidenRemoteSimulatorRelay(() => null)]) {
+    const phone = await fixture({ ...(simulators ? { simulators } : {}), deviceType: "iphone" });
+    try {
+      const server = (await (await fetch(`${phone.base}/server`, { headers: SIMULATOR_HEADERS })).json()) as {
+        features: string[];
+      };
+      assert.equal(server.features.includes("mobile-simulators-v1"), false);
+      const response = await fetch(`${phone.base}/device/capabilities`, { method: "POST", headers: SIMULATOR_HEADERS, body: accepts });
+      assert.equal(response.status, 404);
+    } finally {
+      await phone.close();
+    }
+  }
+});
+
+test("a phone holding the viewer grant lists, opens and shuts down under its own consent, and nothing else", async () => {
+  const { relay, calls } = phoneSimulatorRelay();
+  const phone = await fixture({
+    simulators: relay,
+    deviceType: "iphone",
+    capabilities: ["server:read", "chat:read", "simulators:mobile"],
+  });
+  try {
+    // Paired Macs are not shared with here; the phone's own consent lets it in.
+    const listed = await fetch(`${phone.base}/simulators`, { headers: SIMULATOR_HEADERS });
+    assert.equal(listed.status, 200);
+    assert.equal(((await listed.json()) as { sharing: boolean }).sharing, true);
+    const chatScoped = await fetch(`${phone.base}/simulators?chatId=chat-1`, { headers: SIMULATOR_HEADERS });
+    assert.equal(chatScoped.status, 200);
+    assert.deepEqual(((await chatScoped.json()) as { chatDeviceIds?: string[] }).chatDeviceIds, ["UDID-1"]);
+    assert.equal(phone.calls.includes("chat-classify:chat-1"), true);
+    for (const query of ["chatId=", "chatId=chat-1&chatId=chat-2", "chat=chat-1", "chatId=..%2Fsecret"]) {
+      assert.equal((await fetch(`${phone.base}/simulators?${query}`, { headers: SIMULATOR_HEADERS })).status, 400, query);
+    }
+    for (const route of ["open", "shutdown"]) {
+      const response = await fetch(`${phone.base}/simulators/${route}`, {
+        method: "POST",
+        headers: SIMULATOR_HEADERS,
+        body: JSON.stringify({ deviceId: "UDID-1" }),
+      });
+      assert.equal(response.status, 200, route);
+    }
+    for (const route of ["settings", "action"]) {
+      const response = await fetch(`${phone.base}/simulators/${route}`, {
+        method: "POST",
+        headers: SIMULATOR_HEADERS,
+        body: JSON.stringify({ deviceId: "UDID-1", type: "setAppearance", value: "dark" }),
+      });
+      assert.equal(response.status, 403, route);
+      assert.equal((await response.json()).error.code, "capability_denied");
+    }
+    assert.deepEqual(calls, [
+      ["list", null],
+      ["list", { chatId: "chat-1" }],
+      ["open", "UDID-1"],
+      ["shutdown", "UDID-1"],
+    ]);
+  } finally {
+    await phone.close();
+  }
+
+  // Reading a chat's simulators needs chat:read and a chat the phone can see.
+  const noChatRead = await fixture({ simulators: relay, deviceType: "iphone", capabilities: ["server:read", "simulators:mobile"] });
+  try {
+    assert.equal((await fetch(`${noChatRead.base}/simulators?chatId=chat-1`, { headers: SIMULATOR_HEADERS })).status, 403);
+    assert.equal((await fetch(`${noChatRead.base}/simulators`, { headers: SIMULATOR_HEADERS })).status, 200);
+  } finally {
+    await noChatRead.close();
+  }
+  const missingChat = await fixture({
+    simulators: relay,
+    deviceType: "iphone",
+    capabilities: ["server:read", "chat:read", "simulators:mobile"],
+    chatClassification: "missing",
+  });
+  try {
+    assert.equal((await fetch(`${missingChat.base}/simulators?chatId=chat-1`, { headers: SIMULATOR_HEADERS })).status, 404);
+  } finally {
+    await missingChat.close();
+  }
+  const otherBot = await fixture({
+    simulators: relay,
+    deviceType: "iphone",
+    capabilities: ["server:read", "chat:read", "simulators:mobile"],
+    botChat: true,
+  });
+  try {
+    // A Bot chat outside the phone's Bot audience is as invisible as on every other chat route.
+    assert.equal((await fetch(`${otherBot.base}/simulators?chatId=chat-1`, { headers: SIMULATOR_HEADERS })).status, 404);
+  } finally {
+    await otherBot.close();
+  }
+
+  // The phone grant never reaches a desktop, and simulator control never reaches a phone.
+  for (const [deviceType, capability] of [
+    ["mac", "simulators:mobile"],
+    ["iphone", "simulators:control"],
+  ] as const) {
+    const forged = await fixture({ simulators: relay, deviceType, capabilities: ["server:read", capability] });
+    try {
+      const response = await fetch(`${forged.base}/simulators`, { headers: SIMULATOR_HEADERS });
+      assert.equal(response.status, 403, `${deviceType} holding ${capability}`);
+    } finally {
+      await forged.close();
+    }
+  }
+});
+
+test("a phone's consent is its own: Share with Aiden On The Go off keeps phones out while Macs stay in", async () => {
+  const { relay, calls } = phoneSimulatorRelay(false);
+  const phone = await fixture({ simulators: relay, deviceType: "iphone", capabilities: ["server:read", "simulators:mobile"] });
+  try {
+    const listed = await fetch(`${phone.base}/simulators`, { headers: SIMULATOR_HEADERS });
+    assert.deepEqual(await listed.json(), { sharing: false, status: "ready", devices: [] });
+    const opened = await fetch(`${phone.base}/simulators/open`, {
+      method: "POST",
+      headers: SIMULATOR_HEADERS,
+      body: JSON.stringify({ deviceId: "UDID-1" }),
+    });
+    assert.equal(opened.status, 404);
+    assert.deepEqual(calls, [["list", null]]);
+  } finally {
+    await phone.close();
+  }
+});
+
+test("a phone's hub WebSocket upgrade authenticates with the viewer grant and keeps the phone scope", async () => {
+  const { relay } = phoneSimulatorRelay();
+  const statusLine = (base: string, path: string) =>
+    new Promise<string>((resolve) => {
+      const url = new URL(`${base}${path}`);
+      const socket = connect({ host: url.hostname, port: Number(url.port) });
+      let text = "";
+      socket.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+      socket.on("close", () => resolve(text.split("\r\n")[0] ?? ""));
+      socket.on("error", () => undefined);
+      socket.write(
+        `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+          `Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n` +
+          `authorization: Bearer ${"a".repeat(43)}\r\naiden-protocol-version: 1\r\n\r\n`,
+      );
+    });
+  const phone = await fixture({ simulators: relay, deviceType: "iphone", capabilities: ["server:read", "simulators:mobile"] });
+  try {
+    // Authenticated and in scope: the relay answers with its own refusal because no hub is running.
+    assert.equal(await statusLine(phone.base, "/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1"), "HTTP/1.1 404 Not Found");
+    // The device list socket is a desktop route.
+    assert.equal(await statusLine(phone.base, "/simulators/hub/api/devices/ws"), "HTTP/1.1 403 Refused");
+  } finally {
+    await phone.close();
+  }
+  const ungranted = await fixture({ simulators: relay, deviceType: "iphone", capabilities: ["server:read"] });
+  try {
+    assert.equal(await statusLine(ungranted.base, "/simulators/hub/vendor/serve-sim/helper/ws?device=UDID-1"), "HTTP/1.1 403 Refused");
+  } finally {
+    await ungranted.close();
   }
 });
