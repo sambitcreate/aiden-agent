@@ -3,6 +3,7 @@ import { compactionEngineFrom, parseCompactionModelOverrides, resolveCompactionM
 import { randomUUID } from "node:crypto";
 import { type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { estimateTokens } from "./pi-legacy-harness.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 import { createPiCompactionModels, PiCompactionCoordinator } from "./pi-compaction-core.js";
 import {
@@ -138,6 +139,9 @@ export class ContextLifecycleService {
     try {
       const chat = await this.deps.getChat(chatId);
       if (!chat) return { compacted: false, reason: "archived" };
+      // A chat another feature owns (a Design project's hidden chat) is unavailable
+      // to operator compaction, as no chat surface lists it.
+      if (chatSurface(chat) === "feature") return { compacted: false, reason: "archived" };
       if ((await this.deps.compactionEligible?.(chat)) === false) {
         return { compacted: false, reason: "already_compact" };
       }
