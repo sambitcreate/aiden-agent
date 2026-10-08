@@ -423,6 +423,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         {frame3d ? (
           <div
             className="device-viewer-3d"
+            // Keys typed here belong to the device, never the chat composer.
+            data-typing-surface="device"
             tabIndex={0}
             role="application"
             aria-roledescription={noun}
@@ -444,6 +446,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         ) : null}
         <div
           className="device-viewer-screen"
+          data-typing-surface="device"
           hidden={frame3d}
           style={{ aspectRatio: String(aspect) }}
           tabIndex={0}
