@@ -528,8 +528,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
     async close(botId) {
       const targets = botId === undefined ? [...feeds.values()] : [feeds.get(botId)].filter((feed): feed is Feed => !!feed);
-      if (botId !== undefined) subscribers.delete(botId);
-      else subscribers.clear();
+      // Closed subscribers get nothing more, not even a flush already scheduled.
+      for (const [id, set] of subscribers) {
+        if (botId !== undefined && id !== botId) continue;
+        for (const subscriber of set) subscriber.closed = true;
+        subscribers.delete(id);
+        lastSeq.delete(id);
+      }
       await Promise.all(targets.map(stopFeed));
     },
   };
