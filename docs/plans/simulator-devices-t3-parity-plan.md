@@ -27,7 +27,10 @@ Each workstream is implemented in its own worktree and merged into a single PR.
 
 ## Follow-ups (not in this upgrade)
 
-- Android variants of the workstream E features: erase (wipe-data), clipboard, and recording.
+- Android "Copy from device": API 36 emulator images have no clipboard read path (`cmd clipboard` is unimplemented), so the control is shown disabled with a reason.
+- Android screen recording is capped at 3 minutes (one `screenrecord` segment); chaining segments needs an MP4 muxer.
+- Native H.264 decoding on phones, so Aiden On The Go can view Android emulators (phones list them as "Open on your Mac to view").
+- An e2e hub fake that serves a decodable AVCC stream, so Playwright can drive the 3D and Duo views.
 - Agent control of simulators on paired Macs.
 - Real-Mac and physical-device acceptance for every workstream.
 - Onboarding feature-tour tile for devices.
@@ -36,3 +39,4 @@ Each workstream is implemented in its own worktree and merged into a single PR.
 ## Status
 
 - 2026-10-08: Plan written. Workstreams A–F are in progress on `feature/ios-simulator-upgrades-compare-42da8d`.
+- 2026-10-08: Workstreams A–F, the Android power-feature variants, and two independent review passes are implemented and merged on the branch. Review fixes cover SSH stop races, phone scope (shutdown, input-tag filter), peer id rewrites, save-folder races, AVD-style ids on phones, Android in the floating player, fresh grants for Duo panel feeds, and mobile lifecycle and retry budgets.
