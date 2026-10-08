@@ -48,3 +48,18 @@ Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Spec: `docs/superpower
 - One-time startup wipe of legacy Bot transcripts (`legacyTranscriptWipe`, marker `bot-legacy-transcripts-wiped.json` in userData): each Bot keeps only its canonical chat row with no messages (`ChatStore.clearMessages`) and its Pi compaction journal removed; historical Bot chats are deleted (a Telegram-backed one is emptied instead).
 - Quit: `main/index.ts` stops the scheduler and Telegram, then `shutdownBotSessionRuntime()` (5 s budget) so running turns are left interrupted and the profile lock is released.
 - Still dead but present (owned by the Remote contract task 5.2 / desktop UI): `BotDefinition.archivedAt` in `renderer/shared/bots.ts`, Remote `POST /bots/{id}/archive|restore` (now refuse with `invalid_request`), the `includeArchived` query, `bot-archived-file-read-authority.ts` and `inspectArchivedReadAuthority`, the capability `authorityStatus` field (always `active` for new policies), and `archivedAt` guards in Telegram validation, routines, runtime authority, the legacy system prompt and the inbox projection.
+
+## Routines (Bots rework, Task 4.1)
+- A routine is a `ScheduledTask` with `botId`. It targets the Bot's one conversation, not a workspace chat. Deleting a Bot deletes its routines.
+- The schedule is frequency-first (`renderer/shared/bot-routine-schedule.ts`: once, daily, weekdays, weekly with days, monthly). Labels come from the host (`renderer/shared/bot-routine-label.ts`). Raw cron is never shown. Monthly routines are limited to days 1–28.
+- A fire submits `{ type: "input" }` with `requestId = routine:<taskId>:<scheduledFireTime>`, so a duplicate fire time dedupes to `skipped` with reason `duplicate`.
+- A fire while the Bot is interrupted is recorded as `skipped` with reason `bot_paused`. It never resumes or dismisses the paused turn (`main/services/scheduled-bot-routines.ts`, `ScheduledRunSkipReason` in `main/services/types.ts`).
+- Routine instructions end with "If there is nothing new, reply exactly `[SILENT]`". The `[SILENT]` answer is kept for audit, with no bubble, preview or unread. Failures always surface.
+- Routine runs cannot create routines. Routines are created from the Profile (`renderer/main/bots/bot-routines.tsx`, `bot-routine-editor.tsx`, `bots:routines:*`) or from chat through the Bot's schedule tool.
+
+## Connections (Bots rework, Task 5.1 / 5.2)
+- Catalog entries come from `renderer/shared/plugin-catalog.ts`. `renderer/shared/bot-connections.ts` gives the icon, display name and setup entry point for a `pluginId`.
+- In chat, the Bot-only `suggest_connection({ pluginId, reason })` tool appends a typed connect card. There is at most one pending card per plugin, and the tool is unavailable for connected plugins (`renderer/components/bots/connect-card.tsx`).
+- **Not now** persists per Bot and per `pluginId` in `main/services/bot-connection-dismissals.ts` (IPC `bots:connections:dismiss`). The Bot is not offered that plugin again.
+- Setup goes through `openConnectionSetup(pluginId)` in `main/services/bot-connection-setup.ts`, which broadcasts `bots:connections:setup` and opens `PresetSetupDialog` via `use-connection-setup.tsx`. Remote `POST /bots/{id}/connection-requests` (idempotent) calls the same function, so a phone's **Finish on your Mac** opens the Mac flow. Credentials stay on the Mac.
+- The live projection re-resolves connect cards on every subscribe, so a card updates to "Connected" after setup.
