@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Box3, BoxGeometry, PerspectiveCamera, Texture, Vector3 } from "three";
+import { BoxGeometry, PerspectiveCamera, Texture } from "three";
 import {
   DEVICE_FRAME_PREFERENCE_KEY,
   frameBlocker,
@@ -8,11 +8,24 @@ import {
   readFramePreference,
   writeFramePreference,
 } from "./frame-mode.js";
-import { createPhoneInteraction, createRenderScheduler, wheelOrbit } from "./interaction.js";
-import { createDeviceMotion, ORBIT_GAIN, PITCH_LIMIT, REST_YAW_LIMIT } from "./motion.js";
+import { createPhoneInteraction, createRenderScheduler, phoneWheelNavigation } from "./interaction.js";
 import { createPhoneScene, phoneDisplayLayout, SCREEN_HEIGHT, updateDisplayUv } from "./phone-scene.js";
-import { fitCamera } from "./phone-viewer.js";
-import { IOS_PHONE_SHAPE, IOS_TABLET_SHAPE, resolveDeviceShape } from "./shape-profile.js";
+import {
+  ANDROID_PHONE_SHAPE,
+  ANDROID_TABLET_SHAPE,
+  IOS_PHONE_SHAPE,
+  IOS_TABLET_SHAPE,
+  resolveDeviceShape,
+} from "./shape-profile.js";
+import {
+  bindPhoneTrackpad,
+  TRACKPAD_ORBIT_FALLBACK_MS,
+  TRACKPAD_PINCH_IDLE_MS,
+  type TrackpadTimers,
+} from "./trackpad.js";
+
+/** The newest entry. Equivalent to `.at(-1)`, which the ES2021 lib lacks. */
+const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 const close = (actual: number, expected: number, epsilon = 1e-6) =>
   assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} is not within ${epsilon} of ${expected}`);
@@ -97,69 +110,6 @@ test("touches land in the frame the viewer sees, whichever way the display is tu
   }
 });
 
-test("the camera fits the posed device with a margin", () => {
-  const bounds = new Box3(new Vector3(-0.6, -1.2, -0.05), new Vector3(0.6, 1.2, 0.05));
-  const tall = fitCamera(bounds, 32, 0.3);
-  const wide = fitCamera(bounds, 32, 2);
-  assert.equal(tall.x, 0);
-  assert.equal(tall.y, 0);
-  // A narrow viewport is width-bound and must back away further.
-  assert.ok(tall.distance > wide.distance);
-  const halfHeight = Math.tan((32 * Math.PI) / 360) * (wide.distance - bounds.max.z);
-  assert.ok(halfHeight > 1.2, "the device's full height is visible");
-  assert.ok(fitCamera(new Box3(new Vector3(), new Vector3()), 32, 1).distance >= 1);
-});
-
-test("dragging turns the device, and release settles it facing the viewer", () => {
-  const motion = createDeviceMotion();
-  assert.equal(motion.needsFrame(), false);
-  motion.orbit(100, 50, 0);
-  assert.ok(motion.needsFrame());
-  let now = 0;
-  for (let frame = 0; frame < 120; frame += 1) motion.advance((now += 16), false);
-  close(motion.yaw(), 100 * ORBIT_GAIN, 1e-3);
-  close(motion.pitch(), 50 * ORBIT_GAIN, 1e-3);
-  assert.equal(motion.needsFrame(), false);
-
-  motion.orbit(0, 10_000, now);
-  for (let frame = 0; frame < 120; frame += 1) motion.advance((now += 16), false);
-  close(motion.pitch(), PITCH_LIMIT);
-
-  motion.orbit(2_000, 0, now);
-  motion.release(now);
-  for (let frame = 0; frame < 200; frame += 1) motion.advance((now += 16), false);
-  assert.ok(Math.abs(motion.yaw()) <= REST_YAW_LIMIT + 1e-9);
-  assert.equal(motion.pitch(), 0);
-  assert.equal(motion.needsFrame(), false);
-});
-
-test("a long spin settles the short way, reset faces front, and reduced motion jumps", () => {
-  const motion = createDeviceMotion();
-  motion.orbit((2 * Math.PI * 3 + 0.2) / ORBIT_GAIN, 0, 0);
-  motion.advance(0, true);
-  motion.release(0);
-  motion.advance(16, true);
-  close(motion.yaw(), 0.2);
-
-  motion.reset(16);
-  // Reduced motion reaches the target in one frame.
-  assert.equal(motion.advance(32, true), true);
-  assert.equal(motion.yaw(), 0);
-  assert.equal(motion.needsFrame(), false);
-  assert.equal(motion.advance(48, true), false);
-
-  motion.orbit(Number.NaN, 1, 48);
-  assert.equal(motion.needsFrame(), false);
-});
-
-test("a long frame gap never overshoots the spring", () => {
-  const motion = createDeviceMotion();
-  motion.orbit(100, 0, 0);
-  motion.advance(10_000, false);
-  assert.ok(motion.yaw() <= 100 * ORBIT_GAIN + 1e-9);
-  assert.ok(motion.yaw() > 0);
-});
-
 test("the render scheduler coalesces invalidations and stops when disposed", () => {
   const callbacks: FrameRequestCallback[] = [];
   const cancelled: number[] = [];
@@ -184,50 +134,188 @@ test("the render scheduler coalesces invalidations and stops when disposed", () 
   assert.equal(callbacks.length, 2);
 });
 
-test("trackpad swipes orbit in bounded viewport fractions; pinch and junk are ignored", () => {
-  const base = { deltaX: 40, deltaY: -20, deltaMode: 0, ctrlKey: false, width: 400, height: 800 };
-  assert.deepEqual(wheelOrbit(base), { x: -0.1, y: 0.025 });
-  assert.equal(wheelOrbit({ ...base, ctrlKey: true }), null);
-  assert.equal(wheelOrbit({ ...base, deltaX: 0, deltaY: 0 }), null);
-  assert.equal(wheelOrbit({ ...base, deltaX: Number.NaN }), null);
-  assert.equal(wheelOrbit({ ...base, width: 0 }), null);
-  assert.equal(wheelOrbit({ ...base, deltaMode: 7 }), null);
-  assert.deepEqual(wheelOrbit({ ...base, deltaMode: 1, deltaX: 100, deltaY: 0 }), { x: -0.25, y: -0 });
+// Adapted from t3code phoneInteraction.test.ts @ a6ec88f7 (MIT).
+test("wheel navigation normalizes units, bounds coarse jumps, and turns Ctrl-wheel into a log zoom", () => {
+  const wheelInput = { width: 400, height: 800, deltaX: 16, deltaY: 32, deltaMode: 0, ctrlKey: false };
+  assert.deepEqual(phoneWheelNavigation(wheelInput), { type: "orbit", x: -0.04, y: -0.04 });
+  // Line mode is 16 px per line, so the same swipe in lines turns the same amount.
+  assert.deepEqual(
+    phoneWheelNavigation({ ...wheelInput, deltaX: 1, deltaY: 2, deltaMode: 1 }),
+    phoneWheelNavigation(wheelInput),
+  );
+  assert.deepEqual(phoneWheelNavigation({ ...wheelInput, deltaX: 1, deltaY: 1, deltaMode: 2 }), {
+    type: "orbit",
+    x: -0.25,
+    y: -0.25,
+  });
+  assert.deepEqual(phoneWheelNavigation({ ...wheelInput, ctrlKey: true }), { type: "zoom", delta: -0.32 });
+  assert.deepEqual(phoneWheelNavigation({ ...wheelInput, deltaY: -10_000, ctrlKey: true }), { type: "zoom", delta: 1 });
+  assert.equal(phoneWheelNavigation({ ...wheelInput, width: 0 }), null);
+  assert.equal(phoneWheelNavigation({ ...wheelInput, deltaY: Number.NaN }), null);
+  assert.equal(phoneWheelNavigation({ ...wheelInput, deltaMode: 9 }), null);
 });
 
-test("one pointer owns either a touch or an orbit until it ends", () => {
+test("one pointer owns either a touch or an orbit until it ends, and navigation waits for it", () => {
   const events: string[] = [];
   const interaction = createPhoneInteraction({
     screenPoint: (point) => (point.x > 0.25 && point.x < 0.75 ? { x: point.x, y: point.y } : null),
     touch: (phase, point) => events.push(`${phase}:${point.x}`),
     orbit: (dx) => events.push(`orbit:${dx}`),
-    release: () => events.push("release"),
+    zoomBy: (delta) => events.push(`zoom:${delta}`),
+    onInteractionActive: (active, mode) => events.push(`${active ? "hold" : "free"}:${mode}`),
   });
   assert.equal(interaction.begin(1, { x: 0.5, y: 0.5 }), true);
   assert.equal(interaction.begin(2, { x: 0.1, y: 0.5 }), false);
-  assert.equal(interaction.wheel({ x: 0.1, y: 0 }), false);
+  // Moving the camera under a captured touch would move its projected point.
+  assert.equal(interaction.navigate({ type: "orbit", x: 0.1, y: 0 }), false);
+  assert.equal(interaction.navigate({ type: "zoom", delta: 0.2 }), false);
   interaction.move(2, { x: 0.6, y: 0.5 });
   interaction.move(1, { x: 0.6, y: 0.5 });
   // Off the display during a captured touch: no move is sent, and the last point ends it.
   interaction.move(1, { x: 0.9, y: 0.5 });
+  // A trackpad release cannot end a captured touch.
+  interaction.endWheel();
   interaction.end(2);
   interaction.end(1);
-  assert.deepEqual(events, ["begin:0.5", "move:0.6", "end:0.6"]);
+  assert.deepEqual(events, ["hold:touch", "begin:0.5", "move:0.6", "end:0.6", "free:touch"]);
 
   events.length = 0;
   interaction.begin(3, { x: 0.1, y: 0.5 });
   interaction.move(3, { x: 0.2, y: 0.5 });
   interaction.end();
-  assert.equal(events[0], `orbit:${0.2 - 0.1}`);
-  assert.equal(events[1], "release");
+  assert.deepEqual(events, ["hold:orbit", `orbit:${0.2 - 0.1}`, "free:orbit"]);
 
   events.length = 0;
   // Alt-drag orbits even over the display.
   interaction.begin(4, { x: 0.5, y: 0.5 }, true);
   interaction.end(4);
-  assert.deepEqual(events, ["release"]);
   assert.equal(interaction.active(), false);
-  assert.equal(interaction.wheel({ x: 0.1, y: 0 }), true);
+  assert.equal(interaction.navigate({ type: "zoom", delta: 0.2 }), true);
+  assert.equal(interaction.navigate({ type: "orbit", x: 0.1, y: 0.2 }), true);
+  interaction.endWheel();
+  assert.deepEqual(events, ["hold:orbit", "free:orbit", "zoom:0.2", "orbit:0.1", "free:orbit"]);
+});
+
+class FakeCanvas extends EventTarget {
+  getBoundingClientRect() {
+    return { left: 0, top: 0, width: 400, height: 800 } as DOMRect;
+  }
+}
+
+function manualTimers() {
+  let now = 0;
+  let next = 1;
+  const pending = new Map<number, { at: number; run: () => void }>();
+  const timers: TrackpadTimers = {
+    setTimeout: (run, ms) => {
+      const id = next++;
+      pending.set(id, { at: now + ms, run });
+      return id as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimeout: (timer) => void pending.delete(timer as unknown as number),
+  };
+  const advance = (ms: number) => {
+    now += ms;
+    for (const [id, timer] of [...pending]) {
+      if (timer.at <= now) {
+        pending.delete(id);
+        timer.run();
+      }
+    }
+  };
+  return { timers, advance };
+}
+
+const wheel = (ctrlKey = false, extra: Record<string, unknown> = {}) =>
+  Object.assign(new Event("wheel", { cancelable: true }), { deltaX: 16, deltaY: -20, deltaMode: 0, ctrlKey, ...extra });
+const gesture = (type: string, scale: number) => Object.assign(new Event(type, { cancelable: true }), { scale });
+
+// Adapted from t3code phoneTrackpad.test.ts @ a6ec88f7 (MIT).
+test("the trackpad consumes scrolling and page zoom only on the bound canvas, and pinch zooms the device", () => {
+  const canvas = new FakeCanvas();
+  const navigations: unknown[] = [];
+  const { timers } = manualTimers();
+  const binding = bindPhoneTrackpad(
+    canvas,
+    { navigate: (next) => (navigations.push(next), true), endWheel: () => undefined },
+    undefined,
+    timers,
+  );
+  const swipe = wheel();
+  canvas.dispatchEvent(swipe);
+  const pinch = wheel(true);
+  canvas.dispatchEvent(pinch);
+  assert.equal(swipe.defaultPrevented, true);
+  assert.equal(pinch.defaultPrevented, true);
+  assert.deepEqual(navigations, [
+    { type: "orbit", x: -0.04, y: 0.025 },
+    { type: "zoom", delta: 0.2 },
+  ]);
+  // Safari reports cumulative scale; each change zooms by its log ratio.
+  canvas.dispatchEvent(gesture("gesturestart", 1));
+  canvas.dispatchEvent(gesture("gesturechange", 1.2));
+  assert.deepEqual(last(navigations), { type: "zoom", delta: Math.log(1.2) });
+  canvas.dispatchEvent(gesture("gestureend", 1.2));
+  binding.dispose();
+  const detached = wheel(true);
+  canvas.dispatchEvent(detached);
+  assert.equal(detached.defaultPrevented, false);
+  assert.equal(navigations.length, 3);
+});
+
+test("a hinge pinch takes Ctrl-wheel and Safari scale, expires idle sequences, and ends on detach", () => {
+  const canvas = new FakeCanvas();
+  const calls: string[] = [];
+  const pinch = {
+    begin: () => (calls.push("begin"), true),
+    move: (step: number) => void calls.push(`move:${step.toFixed(3)}`),
+    end: () => void calls.push("end"),
+  };
+  const navigations: unknown[] = [];
+  const { timers, advance } = manualTimers();
+  const binding = bindPhoneTrackpad(
+    canvas,
+    { navigate: (next) => (navigations.push(next), true), endWheel: () => undefined },
+    pinch,
+    timers,
+  );
+  canvas.dispatchEvent(wheel(true));
+  canvas.dispatchEvent(wheel(true));
+  assert.deepEqual(calls, ["begin", "move:0.200", "move:0.200"]);
+  advance(TRACKPAD_PINCH_IDLE_MS);
+  assert.equal(last(calls), "end");
+  canvas.dispatchEvent(gesture("gesturestart", 1));
+  canvas.dispatchEvent(gesture("gesturechange", 1.2));
+  assert.equal(last(calls), `move:${Math.log(1.2).toFixed(3)}`);
+  // A Ctrl-wheel echo during a Safari gesture is ignored.
+  const moves = calls.filter((call) => call.startsWith("move")).length;
+  canvas.dispatchEvent(wheel(true));
+  assert.equal(calls.filter((call) => call.startsWith("move")).length, moves);
+  binding.dispose();
+  assert.equal(last(calls), "end");
+  assert.deepEqual(navigations, []);
+});
+
+test("a paused trackpad orbit stays held until the native release or the browser fallback", () => {
+  const canvas = new FakeCanvas();
+  let ended = 0;
+  const { timers, advance } = manualTimers();
+  const binding = bindPhoneTrackpad(canvas, { navigate: () => true, endWheel: () => void ended++ }, undefined, timers);
+  canvas.dispatchEvent(wheel());
+  advance(500);
+  assert.equal(ended, 0);
+  binding.endOrbit();
+  assert.equal(ended, 1);
+  canvas.dispatchEvent(wheel());
+  advance(TRACKPAD_ORBIT_FALLBACK_MS - 1);
+  assert.equal(ended, 1);
+  advance(1);
+  assert.equal(ended, 2);
+  // Momentum after the fingers lift ends the orbit instead of extending it.
+  canvas.dispatchEvent(wheel());
+  canvas.dispatchEvent(wheel(false, { momentum: true }));
+  assert.equal(ended, 3);
+  binding.dispose();
 });
 
 test("the frame preference defaults to 3D and survives unreadable storage", () => {
@@ -255,20 +343,42 @@ test("the frame preference defaults to 3D and survives unreadable storage", () =
   assert.equal(readFramePreference(null), "3d");
 });
 
-test("MJPEG, hinged simulators, and missing WebGL keep the flat screen", () => {
-  assert.equal(frameBlocker({ mjpeg: false, hinged: false, webglUnavailable: false }), null);
-  assert.equal(frameBlocker({ mjpeg: true, hinged: true, webglUnavailable: true }), "webgl");
-  assert.equal(frameBlocker({ mjpeg: true, hinged: true, webglUnavailable: false }), "mjpeg");
-  assert.equal(frameBlocker({ mjpeg: false, hinged: true, webglUnavailable: false }), "hinged");
-  assert.equal(frameBlockerLabel(null), "3D frame");
-  for (const blocker of ["webgl", "mjpeg", "hinged"] as const) assert.match(frameBlockerLabel(blocker), /unavailable/u);
+test("MJPEG, a failed 3D view, and a Duo without hinge readback keep the flat screen; hinged Duos are framed", () => {
+  assert.equal(frameBlocker({ mjpeg: false, duoWithoutHinge: false, frameFailed: false }), null);
+  assert.equal(frameBlocker({ mjpeg: true, duoWithoutHinge: true, frameFailed: true }), "failed");
+  assert.equal(frameBlocker({ mjpeg: true, duoWithoutHinge: true, frameFailed: false }), "mjpeg");
+  assert.equal(frameBlocker({ mjpeg: false, duoWithoutHinge: true, frameFailed: false }), "duo-hub");
+  assert.equal(frameBlockerLabel(null), "3D view");
+  assert.equal(frameBlockerLabel("duo-hub"), "iPhone Duo 3D requires Device Hub 0.11.0 or newer");
+  for (const blocker of ["failed", "mjpeg"] as const) assert.match(frameBlockerLabel(blocker), /unavailable/u);
 });
 
-test("the simulator kind picks the body, and unknown devices fall back on aspect", () => {
-  assert.equal(resolveDeviceShape("iphone", 0.75), IOS_PHONE_SHAPE);
-  assert.equal(resolveDeviceShape("ipad", 0.46), IOS_TABLET_SHAPE);
-  assert.equal(resolveDeviceShape("other", 0.75), IOS_TABLET_SHAPE);
-  assert.equal(resolveDeviceShape("other", 0.46), IOS_PHONE_SHAPE);
-  assert.equal(resolveDeviceShape("other", Number.NaN), IOS_PHONE_SHAPE);
+// Adapted from t3code shapeProfile.test.ts @ a6ec88f7 (MIT).
+test("names and kinds pick a family without mistaking display rotation for device shape", () => {
+  assert.equal(
+    resolveDeviceShape({ platform: "ios", name: "iPad Pro 11-inch (M5)", portraitAspect: 0.75 }),
+    IOS_TABLET_SHAPE,
+  );
+  assert.equal(resolveDeviceShape({ platform: "ios", name: "iPhone 18 Pro", portraitAspect: 0.46 }), IOS_PHONE_SHAPE);
+  assert.equal(
+    resolveDeviceShape({ platform: "ios", kind: "ipad", name: "Julius", portraitAspect: 0.46 }),
+    IOS_TABLET_SHAPE,
+  );
+  assert.equal(resolveDeviceShape({ platform: "ios", kind: "iphone", portraitAspect: 0.75 }), IOS_PHONE_SHAPE);
+  assert.equal(resolveDeviceShape({ platform: "android", name: "Pixel 9", portraitAspect: 0.45 }), ANDROID_PHONE_SHAPE);
+  assert.equal(
+    resolveDeviceShape({ platform: "android", name: "Pixel Tablet", portraitAspect: 0.625 }),
+    ANDROID_TABLET_SHAPE,
+  );
+});
+
+test("renamed devices use the screen shape, with a phone before metadata arrives", () => {
+  assert.equal(
+    resolveDeviceShape({ platform: "ios", kind: "other", name: "Julius", portraitAspect: 0.75 }),
+    IOS_TABLET_SHAPE,
+  );
+  assert.equal(resolveDeviceShape({ platform: "ios", kind: "other", portraitAspect: 0.46 }), IOS_PHONE_SHAPE);
+  assert.equal(resolveDeviceShape({ platform: "android", portraitAspect: 0.45 }), ANDROID_PHONE_SHAPE);
+  assert.equal(resolveDeviceShape({ platform: "ios", portraitAspect: Number.NaN }), IOS_PHONE_SHAPE);
   assert.ok(SCREEN_HEIGHT > 0);
 });
