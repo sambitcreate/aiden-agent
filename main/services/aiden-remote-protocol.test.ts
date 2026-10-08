@@ -5,7 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import {
+  parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
+  parseAidenRemoteBotSessionEvent,
   AIDEN_REMOTE_BASE_PATH,
   AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
   AIDEN_REMOTE_CAPABILITIES,
@@ -2119,6 +2121,29 @@ test("failed-turn entries parse strictly, with and without a message to retry", 
     { type: "failed_turn", id: "entry 1" },
   ]) {
     assert.throws(() => parseAidenRemoteBotSessionEntry(invalid));
+  }
+});
+
+test("Bot sessions carry the waiting approval, and approval frames parse strictly", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botSession: Record<string, unknown>; botSessionEvents: unknown[] };
+  const events = raw.botSessionEvents.map(parseAidenRemoteBotSessionEvent);
+  assert.deepEqual(events, raw.botSessionEvents, "every fixture frame round-trips");
+  const approvals = events.flatMap((event) => (event.type === "approval" ? [event.payload.approval] : []));
+  assert.equal(approvals.length, 2);
+  assert.equal(approvals[0]?.canAllow, true);
+  assert.equal(approvals[1], null, "a settled approval clears");
+
+  const waiting = approvals[0]!;
+  assert.deepEqual(parseAidenRemoteBotSession({ ...raw.botSession, approval: waiting }).approval, waiting);
+  const { approval: _approval, ...missing } = raw.botSession;
+  assert.throws(() => parseAidenRemoteBotSession(missing), /approval is required/u);
+  for (const invalid of [
+    { ...waiting, scopes: ["once"] },
+    { ...waiting, canAllow: "yes" },
+    { ...waiting, waitId: "wait id" },
+    { ...waiting, summary: "" },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotSession({ ...raw.botSession, approval: invalid }));
   }
 });
 

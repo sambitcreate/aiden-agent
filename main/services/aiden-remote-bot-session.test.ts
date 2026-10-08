@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
@@ -17,6 +17,7 @@ import {
   type AidenRemoteBotSessionRuntime,
 } from "./aiden-remote-bot-session.js";
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
+import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import {
   parseAidenRemoteBotSession,
@@ -31,7 +32,7 @@ import {
 import { createBotStarter } from "./bot-runtime/bot-starter.js";
 import { spawnHarnessChild } from "./bot-runtime/test-support/child.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./bot-runtime/test-support/faux.js";
-import { recordingDeps } from "./bot-runtime/test-support/fixtures.js";
+import { countingTool, recordingDeps } from "./bot-runtime/test-support/fixtures.js";
 import { BOT_ROUTINE_SILENT_INSTRUCTION, type BotRoutine } from "./scheduled-bot-routines.js";
 
 const BOT_ID = "bot_session_1";
@@ -441,7 +442,7 @@ test("a routine label cut at the wire bound never splits an emoji, so the sessio
     user(2, "Cook something \uD83D"),
   ] as never);
   const session = parseAidenRemoteBotSession({
-    botId: BOT_ID, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries, hasOlder: false, question: null,
+    botId: BOT_ID, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries, hasOlder: false, question: null, approval: null,
   });
   const message = session.entries[0];
   assert.equal(message?.type, "message");
@@ -798,6 +799,103 @@ test("deleting a durable Bot while a phone streams its chat closes the stream", 
     await assert.rejects(service.session("bot:killed"), { code: "not_found" });
   } finally {
     await stream.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+/** A durable Bot whose `send_note` tool needs approval, watched by phones through the real Bot approval bridge. */
+async function approvalGatedBot(toolName = "send_note") {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-approval-"));
+  durableRoots.push(profileDir);
+  const approvals = createBotApprovals({ publish: () => {} });
+  const note = countingTool(toolName);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(toolName, { text: "lunch on Friday" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Sent."),
+  ]);
+  const extension = recordingDeps({
+    tools: [{ tool: note, replay: "unsafe" }],
+    policy: (name) => (name === toolName ? { allowed: true, approval: { summary: "Send a note: lunch on Friday" } } : { allowed: true }),
+  });
+  extension.requestApproval = (request) => approvals.request(request);
+  const runtime = await createBotSessionService({
+    profileDir,
+    models: fauxModels.models,
+    extension,
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([BOT_ID]),
+  });
+  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => runtime, approvals });
+  return { runtime, service, approvals, note, fauxModels };
+}
+
+test("a phone sees a Bot's waiting approval and allowing it runs the tool and finishes the turn", async () => {
+  const { runtime, service, approvals, note } = await approvalGatedBot();
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    assert.equal(stream.frames[0]!.payload.session.approval, null);
+    const sent = await runtime.send(BOT_ID, { text: "tell Dana", requestId: "send-request-0001" });
+    await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
+
+    // A phone that reconnects now gets the waiting approval in its snapshot.
+    const waiting = (await service.session(BOT_ID)).approval;
+    assert.equal(waiting?.summary, "Send a note: lunch on Friday");
+    assert.equal(waiting?.toolName, "send_note");
+    assert.equal(waiting?.canAllow, true);
+    await stream.until(() => stream.frames.some((frame) => frame.type === "approval" && frame.payload.approval !== null), "the approval frame");
+    assert.equal(note.executions.length, 0, "nothing runs before the person answers");
+
+    assert.equal(service.ownsApproval(waiting!.waitId), true);
+    const resolved = await service.respondApproval(DEVICE_ID, waiting!.waitId, "allow", "approve-request-0001");
+    assert.equal(resolved.approvalId, waiting!.waitId);
+    assert.equal(resolved.decision, "allow");
+    assert.deepEqual(
+      await runtime.awaitReply(BOT_ID, sent.submissionId, new AbortController().signal),
+      { kind: "completed", text: "Sent." },
+    );
+    assert.deepEqual(note.executions, [{ text: "lunch on Friday" }]);
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "approval" && frame.payload.approval === null),
+      "the approval to clear",
+    );
+    assert.equal((await service.session(BOT_ID)).approval, null);
+
+    // A retry of the same request replays its receipt; another request finds nothing waiting.
+    assert.deepEqual(await service.respondApproval(DEVICE_ID, waiting!.waitId, "allow", "approve-request-0001"), resolved);
+    await assert.rejects(
+      service.respondApproval("device_2", waiting!.waitId, "deny", "approve-request-0002"),
+      isError("approval_expired", 409),
+    );
+  } finally {
+    await stream.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+test("a phone can deny a Bot approval but only the Mac can allow Computer Use", async () => {
+  const { runtime, service, approvals, note } = await approvalGatedBot("computer_use");
+  try {
+    const sent = await runtime.send(BOT_ID, { text: "click it", requestId: "send-request-0003" });
+    await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
+    const waiting = (await service.session(BOT_ID)).approval!;
+    assert.equal(waiting.canAllow, false);
+    await assert.rejects(
+      service.respondApproval(DEVICE_ID, waiting.waitId, "allow", "approve-request-0003"),
+      isError("capability_denied", 403),
+    );
+    await assert.rejects(
+      service.respondApproval(DEVICE_ID, waiting.waitId, "deny", "approve-request-0004", "always"),
+      isError("invalid_request", 400),
+      "Bot approvals are answered once",
+    );
+    assert.equal(approvals.pending(BOT_ID).length, 1, "a refused answer leaves it waiting");
+    await service.respondApproval(DEVICE_ID, waiting.waitId, "deny", "approve-request-0005");
+    await runtime.awaitReply(BOT_ID, sent.submissionId, new AbortController().signal);
+    assert.equal(note.executions.length, 0, "a denied call never runs");
+  } finally {
     await service.close();
     await runtime.shutdown();
   }

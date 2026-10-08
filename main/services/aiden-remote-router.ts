@@ -260,6 +260,8 @@ export interface AidenRemoteRouterDependencies {
     | "dismiss"
     | "stop"
     | "answerQuestion"
+    | "ownsApproval"
+    | "respondApproval"
     | "listRoutines"
     | "createRoutine"
     | "updateRoutine"
@@ -3413,6 +3415,17 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "approval:respond");
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        // A durable Bot's tool approval: the same route, answered on the Bot's
+        // approval bridge, by a device that may use Bots.
+        if (dependencies.botSessions?.ownsApproval(approvalMatch[1]!)) {
+          requireDeviceCapabilities(device, ["bot:read", "bot:write"]);
+          writeJson(
+            response,
+            200,
+            await dependencies.botSessions.respondApproval(device.id, approvalMatch[1]!, decision, key, scope),
+          );
+          return;
+        }
         if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,

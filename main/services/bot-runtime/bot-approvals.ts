@@ -29,6 +29,8 @@ export interface BotApprovals {
   decide(waitId: string, decision: "allow" | "deny"): boolean;
   /** Prompts waiting for an answer, oldest first; for one Bot when `botId` is given. */
   pending(botId?: string): BotApprovalPrompt[];
+  /** Hear a prompt appear or settle (for example to update phones watching the Bot). */
+  onChange(listener: (botId: string) => void): () => void;
 }
 
 export interface BotApprovalsOptions {
@@ -44,6 +46,10 @@ function abortReason(signal: AbortSignal): unknown {
 
 export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
   const waiting = new Map<string, BotApprovalPrompt>();
+  const listeners = new Set<(botId: string) => void>();
+  const changed = (botId: string) => {
+    for (const listener of listeners) listener(botId);
+  };
   const coordinator = new ToolApprovalCoordinator(
     (prompt) => {
       const botId = prompt.streamId.slice(STREAM_PREFIX.length);
@@ -56,11 +62,15 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       };
       waiting.set(prompt.approvalId, published);
       options.publish(published);
+      changed(botId);
     },
     (approvalId, outcome) => {
       const prompt = waiting.get(approvalId);
       waiting.delete(approvalId);
-      if (prompt !== undefined) options.withdraw?.(prompt, outcome);
+      if (prompt !== undefined) {
+        options.withdraw?.(prompt, outcome);
+        changed(prompt.botId);
+      }
     },
   );
 
@@ -87,6 +97,10 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     pending(botId) {
       const all = [...waiting.values()];
       return botId === undefined ? all : all.filter((prompt) => prompt.botId === botId);
+    },
+    onChange(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
     },
   };
 }

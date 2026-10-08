@@ -901,6 +901,7 @@ export const AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES = [
   "entry",
   "state",
   "question",
+  "approval",
   "closed",
 ] as const;
 export type AidenRemoteBotSessionEventType = (typeof AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES)[number];
@@ -967,6 +968,20 @@ export interface AidenRemoteBotQuestion {
 }
 
 /**
+ * A tool call the Bot is waiting to have approved. Answered once, by `waitId`,
+ * through `POST /approvals/{waitId}/respond` (`approval:respond` plus
+ * `bot:read` and `bot:write`). `canAllow` false: a phone may only deny it
+ * (Computer Use is allowed on the Mac).
+ */
+export interface AidenRemoteBotApproval {
+  waitId: string;
+  toolCallId: string;
+  toolName: string;
+  summary: string;
+  canAllow: boolean;
+}
+
+/**
  * `POST /bots/{botId}/questions/{waitId}/answer`: the same body as a workspace
  * chat's question response. The `Idempotency-Key` header is the request UUID.
  */
@@ -990,6 +1005,8 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   hasOlder: boolean;
   /** The question the Bot is waiting on, or null. */
   question: AidenRemoteBotQuestion | null;
+  /** The oldest tool approval the Bot is waiting on, or null. */
+  approval: AidenRemoteBotApproval | null;
 }
 
 export type AidenRemoteBotSessionEventPayload =
@@ -998,6 +1015,7 @@ export type AidenRemoteBotSessionEventPayload =
   | { type: "entry"; payload: { entry: AidenRemoteBotSessionEntry } }
   | { type: "state"; payload: AidenRemoteBotSessionStateView }
   | { type: "question"; payload: { question: AidenRemoteBotQuestion | null } }
+  | { type: "approval"; payload: { approval: AidenRemoteBotApproval | null } }
   | { type: "closed"; payload: Record<string, never> };
 
 /** One frame of `GET /bots/{botId}/session/events`. */
@@ -4684,10 +4702,11 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
   if (!isRecord(value)) throw new Error("Bot session must be an object.");
   assertExactKeys(
     value,
-    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question"],
+    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval"],
     "Bot session",
   );
   if (!hasOwn(value, "question")) throw new Error("Bot session question is required.");
+  if (!hasOwn(value, "approval")) throw new Error("Bot session approval is required.");
   if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
     throw new Error(`Bot session entries must contain at most ${AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES} items.`);
   }
@@ -4706,6 +4725,7 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
     entries,
     hasOlder: requiredBooleanValue(value.hasOlder, "Bot session hasOlder"),
     question: value.question === null ? null : parseAidenRemoteBotQuestion(value.question),
+    approval: value.approval === null ? null : parseAidenRemoteBotApproval(value.approval),
   };
 }
 
@@ -4752,6 +4772,13 @@ export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotS
         type,
         payload: { question: payload.question === null ? null : parseAidenRemoteBotQuestion(payload.question) },
       };
+    case "approval":
+      assertExactKeys(payload, ["approval"], "Bot session approval event");
+      return {
+        ...base,
+        type,
+        payload: { approval: payload.approval === null ? null : parseAidenRemoteBotApproval(payload.approval) },
+      };
     case "closed":
       assertExactKeys(payload, [], "Bot session closed event");
       return { ...base, type, payload: {} };
@@ -4784,6 +4811,19 @@ export function parseAidenRemoteBotQuestion(value: unknown): AidenRemoteBotQuest
     waitId: parseBotQuestionWaitId(value.waitId, "Bot question waitId"),
     toolCallId: boundedText(value.toolCallId, "Bot question toolCallId", 128),
     questions,
+  };
+}
+
+/** A tool approval a Bot is waiting on. `null` in a session means nothing is waiting. */
+export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotApproval {
+  if (!isRecord(value)) throw new Error("Bot approval must be an object.");
+  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow"], "Bot approval");
+  return {
+    waitId: parseBotQuestionWaitId(value.waitId, "Bot approval waitId"),
+    toolCallId: boundedText(value.toolCallId, "Bot approval toolCallId", 128),
+    toolName: boundedText(value.toolName, "Bot approval toolName", 120),
+    summary: boundedText(value.summary, "Bot approval summary", 2_000),
+    canAllow: requiredBooleanValue(value.canAllow, "Bot approval canAllow"),
   };
 }
 
