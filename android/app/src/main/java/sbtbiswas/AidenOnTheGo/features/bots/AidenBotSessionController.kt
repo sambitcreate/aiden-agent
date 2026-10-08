@@ -129,6 +129,10 @@ class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
     }
 }
 
+/** The chat whose files a Bot's ••• menu opens: this Bot's canonical conversation, or null when it has none. */
+fun aidenBotFilesChatId(botId: String, conversations: List<AidenBotConversationItem>): String? =
+    aidenCanonicalBotConversations(conversations).firstOrNull { it.botId == botId }?.chatId
+
 /** True when the Mac sent an HTTP answer, so a retry is a new action rather than a replay. */
 fun aidenBotMacAnswered(error: Exception): Boolean = error is AidenRemoteClientException.Server
 
@@ -157,6 +161,21 @@ data class AidenBotSessionUiState(
     val isInterrupted: Boolean get() = session?.interrupted == true
     val canSend: Boolean
         get() = !needsModel && !isSending && !botMissing && state != AidenBotSessionState.UNAVAILABLE && session != null
+
+    /** Stop stays in the top bar while a turn runs, including while it waits on a question card. */
+    val canStopTurn: Boolean
+        get() = isRunning || (session?.question != null && !isInterrupted)
+
+    /** The failed turn Retry resends: only the newest entry, only with text, only while sending is allowed. */
+    val retryableFailedTurn: AidenBotSessionEntry.FailedTurn?
+        get() {
+            val failed = session?.entries?.lastOrNull() as? AidenBotSessionEntry.FailedTurn ?: return null
+            val text = failed.retryText ?: return null
+            if (!canSend || text.isBlank() ||
+                text.codePointCount(0, text.length) > AidenBotSessionWire.MAX_MESSAGE_LENGTH
+            ) return null
+            return failed
+        }
 }
 
 /**
@@ -276,6 +295,39 @@ class AidenBotSessionController(
         } catch (error: Exception) {
             keys.failed(SEND, error)
             if (aidenBotMacAnswered(error)) pendingSendText = null
+            _state.update { it.copy(actionError = "Aiden couldn’t send that. Try again.") }
+            false
+        } finally {
+            _state.update { it.copy(isSending = false) }
+        }
+    }
+
+    /**
+     * Resends the newest failed turn's text as a new message. The retry has its own key, never
+     * the original message's: an unanswered retry keeps it, so a second tap on the same failed
+     * turn replays instead of posting twice, and another failed turn gets a fresh one.
+     */
+    suspend fun retry(): Boolean {
+        val failed = _state.value.retryableFailedTurn ?: return false
+        val text = failed.retryText ?: return false
+        val action = "$RETRY:${failed.id}"
+        var claimed = false
+        _state.update { current ->
+            if (current.isSending) current else {
+                claimed = true
+                current.copy(isSending = true, actionError = null)
+            }
+        }
+        if (!claimed) return false
+        return try {
+            val receipt = transport.send(botId, text, keys.key(action))
+            keys.complete(action)
+            applyStateView(receipt.stateView)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
             _state.update { it.copy(actionError = "Aiden couldn’t send that. Try again.") }
             false
         } finally {
@@ -403,6 +455,7 @@ class AidenBotSessionController(
         const val DISMISS = "dismiss"
         const val STOP = "stop"
         const val ANSWER_QUESTION = "answerQuestion"
+        const val RETRY = "retry"
     }
 }
 
@@ -421,6 +474,9 @@ object AidenBotSessionCopy {
     const val CHECK_MAC = "Check your Mac to finish."
     const val FINISH_READ_ONLY = "Finish this on your Mac."
     const val CONNECTED = "Connected ✓"
+    const val FAILED_TURN = "I couldn't finish that reply."
+    const val RETRY = "Retry"
+    const val FILES_UNAVAILABLE = "Files aren’t available for this Bot right now."
 
     fun connectTitle(name: String) = "Connect $name"
 }

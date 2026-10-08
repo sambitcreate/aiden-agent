@@ -207,6 +207,24 @@ sealed class AidenBotSessionEntry {
             AidenBotWire.validateIdentifier(id, "entry.id")
         }
     }
+
+    /**
+     * A turn that ended without a reply. While it is the newest entry, Retry posts
+     * [retryText] as a new message with a new key; [retryText] is absent when there is
+     * nothing to resend.
+     */
+    @Serializable
+    @SerialName("failed_turn")
+    data class FailedTurn(
+        override val id: String,
+        @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant? = null,
+        val retryText: String? = null
+    ) : AidenBotSessionEntry() {
+        init {
+            AidenBotWire.validateIdentifier(id, "entry.id")
+            retryText?.let { AidenBotWire.validateString(it, "entry.retryText", AidenBotSessionWire.MAX_TEXT_LENGTH) }
+        }
+    }
 }
 
 /**
