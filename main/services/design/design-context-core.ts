@@ -38,9 +38,25 @@ export type DesignContextResult =
 
 const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
-/** Neutralize anything that could close or reopen the untrusted wrapper. */
+/** Fold compatibility forms (fullwidth "＜") and drop invisible format characters: what a model reads. */
+function foldForModel(text: string): string {
+  return text.normalize("NFKC").replace(/\p{Cf}/gu, "");
+}
+
+/**
+ * Neutralize anything that could close or reopen the untrusted wrapper, including
+ * lookalikes: zero-width characters, fullwidth brackets, spaces around the slash,
+ * and "design-context" or "design context".
+ */
 export function escapeDesignContext(text: string): string {
-  return text.replace(/<(\/?)(design_context)/giu, "&lt;$1$2");
+  return foldForModel(text).replace(/<(\s*\/?\s*)(design[\s_-]*context)/giu, "&lt;$1$2");
+}
+
+/** A Markdown fence longer than any backtick run in the content, so the content cannot end it. */
+function codeFence(content: string): string {
+  let longest = 0;
+  for (const run of content.matchAll(/`+/gu)) longest = Math.max(longest, run[0].length);
+  return "`".repeat(Math.max(3, longest + 1));
 }
 
 /** Deterministically drop inline script bodies and data: URIs from an oversized base. */
@@ -100,7 +116,9 @@ export function buildDesignContextBlock(input: DesignContextInput): DesignContex
   }
   if (input.targets.length > 0) sections.push("## Selected targets", ...input.targets.map(describeTarget));
   if (input.base && baseHtml !== undefined) {
-    sections.push(`## Base revision ${input.base.revisionId} "${input.base.title}"`, "```html", baseHtml, "```");
+    // Measured on the folded text: NFKC turns a fullwidth grave accent into a backtick.
+    const fence = codeFence(foldForModel(baseHtml));
+    sections.push(`## Base revision ${input.base.revisionId} "${input.base.title}"`, `${fence}html`, baseHtml, fence);
   }
   const text =
     '<design_context trust="untrusted">\n' +
