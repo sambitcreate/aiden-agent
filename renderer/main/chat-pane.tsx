@@ -2360,7 +2360,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     !streamComplete && !visibleDetachedProjection;
   const timelineActivity = visualizingLive &&
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
-      ? { phase: "visualizing" as const, label: "Visualizing", orbState: "working" as const }
+      ? { phase: "visualizing" as const, label: "Visualizing", mark: "scan-grid" as const }
       : agentActivity;
   const chronologicalLiveRows = assistantPresentationRows(
     displayedStreamingText ?? "",

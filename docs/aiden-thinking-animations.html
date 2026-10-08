@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aiden Activity Marks</title>
+<style>
+  /* Tokens mirror renderer/styles.css (light + dark). */
+  :root {
+    color-scheme: light;
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --well: rgb(61 63 65 / 0.035);
+    --control: rgb(61 63 65 / 0.084);
+    --control-hover: rgb(61 63 65 / 0.129);
+    --control-active: rgb(61 63 65 / 0.184);
+    --hairline: rgb(61 63 65 / 0.1);
+    --text: #3D3F41;
+    --text-2: #545963;
+    --text-3: #6b717d;
+    --accent: #006ad6;
+    --accent-soft: rgb(0 106 214 / 0.12);
+    --keep-soft: rgb(30 140 80 / 0.13);
+    --keep: #17784a;
+    --cut-soft: rgb(200 60 60 / 0.12);
+    --cut: #b23a3a;
+    --focus: rgb(61 63 65 / 0.55);
+    --orb-ink: var(--accent);
+    --orb-ink-2: var(--text-2);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #181b21;
+      --surface: #22262e;
+      --well: rgb(209 212 218 / 0.04);
+      --control: rgb(209 212 218 / 0.09);
+      --control-hover: rgb(209 212 218 / 0.14);
+      --control-active: rgb(209 212 218 / 0.2);
+      --hairline: rgb(209 212 218 / 0.1);
+      --text: #D1D4DA;
+      --text-2: #a9aeb8;
+      --text-3: #8b919c;
+      --accent: #3e97f6;
+      --accent-soft: rgb(62 151 246 / 0.16);
+      --keep-soft: rgb(70 190 120 / 0.16);
+      --keep: #6fd39b;
+      --cut-soft: rgb(240 100 100 / 0.15);
+      --cut: #f08a8a;
+      --focus: rgb(209 212 218 / 0.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #181b21;
+    --surface: #22262e;
+    --well: rgb(209 212 218 / 0.04);
+    --control: rgb(209 212 218 / 0.09);
+    --control-hover: rgb(209 212 218 / 0.14);
+    --control-active: rgb(209 212 218 / 0.2);
+    --hairline: rgb(209 212 218 / 0.1);
+    --text: #D1D4DA;
+    --text-2: #a9aeb8;
+    --text-3: #8b919c;
+    --accent: #3e97f6;
+    --accent-soft: rgb(62 151 246 / 0.16);
+    --keep-soft: rgb(70 190 120 / 0.16);
+    --keep: #6fd39b;
+    --cut-soft: rgb(240 100 100 / 0.15);
+    --cut: #f08a8a;
+    --focus: rgb(209 212 218 / 0.6);
+  }
+  :root[data-tint="ink"] { --orb-ink: var(--text); --orb-ink-2: var(--text-3); }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1180px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 26px; line-height: 1.2; letter-spacing: -0.01em; margin: 0 0 8px; font-weight: 650; }
+  h2 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+  p { margin: 0; color: var(--text-2); }
+  .lede { max-width: 720px; font-size: 14px; }
+  code { font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace; background: var(--control); padding: 2px 5px; border-radius: 5px; color: var(--text); }
+
+  /* Toolbar */
+  .toolbar {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
+    padding: 10px 0 12px; margin: 24px 0 8px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .field { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 12px; }
+  .seg { display: inline-flex; background: var(--control); border-radius: 9px; padding: 2px; }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--text-2);
+    font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+  }
+  .seg button:hover { color: var(--text); }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  input[type="range"] { width: 96px; accent-color: var(--accent); }
+  .meter { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-3); font-size: 12px; }
+  .meter b { color: var(--text); font-weight: 600; }
+
+  /* Sections + gallery */
+  section { margin-top: 36px; }
+  .section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .section-head p { font-size: 12.5px; flex-basis: 100%; }
+  .count { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .card {
+    background: var(--surface); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 0 0 1px var(--hairline);
+    display: flex; flex-direction: column;
+  }
+  .stage {
+    position: relative; height: 132px; display: grid; place-items: center;
+    background: var(--well);
+  }
+  .num { position: absolute; top: 10px; left: 12px; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .badge { position: absolute; top: 9px; right: 10px; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .replay {
+    position: absolute; bottom: 8px; right: 8px; appearance: none; border: 0; cursor: pointer;
+    background: var(--control); color: var(--text-2); font: inherit; font-size: 11px; padding: 3px 9px; border-radius: 7px;
+  }
+  .replay:hover { background: var(--control-hover); color: var(--text); }
+  .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .title h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .phase { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+  .desc { font-size: 12.5px; }
+  .inline {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px;
+    background: var(--well); color: var(--text-2); font-size: 13px;
+  }
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; }
+  .meta { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .verdict { display: inline-flex; gap: 4px; flex: none; }
+  .verdict button {
+    appearance: none; border: 0; cursor: pointer; font: inherit; font-size: 11px;
+    padding: 3px 9px; border-radius: 7px; background: var(--control); color: var(--text-2);
+  }
+  .verdict button:hover { background: var(--control-hover); color: var(--text); }
+  .verdict button[data-v="keep"][aria-pressed="true"] { background: var(--keep-soft); color: var(--keep); }
+  .verdict button[data-v="cut"][aria-pressed="true"] { background: var(--cut-soft); color: var(--cut); }
+
+  .picks { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; padding: 12px 14px; background: var(--surface); border-radius: 14px; box-shadow: 0 0 0 1px var(--hairline); }
+  .picks output { flex: 1 1 320px; font-size: 12.5px; color: var(--text-2); }
+
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px var(--hairline); }
+  th, td { text-align: left; padding: 9px 14px; font-size: 12.5px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+  th { color: var(--text-3); font-weight: 500; font-size: 11.5px; }
+  tr:last-child td { border-bottom: 0; }
+  td .cell { display: flex; align-items: center; gap: 8px; }
+  td.dim { color: var(--text-3); }
+  .tag { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: var(--control); color: var(--text-3); }
+  .table-wrap { overflow-x: auto; margin-top: 8px; }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+  .note { background: var(--surface); border-radius: 14px; padding: 16px 18px; box-shadow: 0 0 0 1px var(--hairline); }
+  .note h3 { font-size: 13px; margin: 0 0 8px; }
+  .note ul { margin: 0; padding-left: 18px; color: var(--text-2); }
+  .note li + li { margin-top: 5px; }
+
+  .stress-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }
+  select {
+    font: inherit; font-size: 12px; color: var(--text); background: var(--control); border: 0; border-radius: 8px; padding: 5px 8px;
+  }
+  .btn {
+    appearance: none; border: 0; cursor: pointer; font: inherit; font-size: 12px;
+    padding: 6px 12px; border-radius: 9px; background: var(--control); color: var(--text);
+  }
+  .btn:hover { background: var(--control-hover); }
+  .btn:active { background: var(--control-active); }
+  .stress { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px; background: var(--surface); border-radius: 14px; box-shadow: 0 0 0 1px var(--hairline); min-height: 52px; }
+  .stress:empty::before { content: "Nothing rendered yet."; color: var(--text-3); font-size: 12px; }
+
+  @media (max-width: 560px) {
+    main { padding: 24px 16px 60px; }
+    .meter { margin-left: 0; width: 100%; }
+  }
+
+  /* ───────── Activity marks ─────────
+     Rules: inline SVG, ≤ 11 nodes, CSS keyframes on transform + opacity only.
+     No canvas, no requestAnimationFrame, no filters/blur/masks/animated gradients. */
+  .orb { --speed: 1; display: block; flex: none; width: var(--size, 64px); height: var(--size, 64px); color: var(--orb-ink); overflow: visible; }
+  .orb.sm { --size: 20px; }
+  .orb * { transform-box: view-box; }
+  .orb .fb { transform-box: fill-box; transform-origin: center; }
+  .orb line, .orb path.stroke { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Global modes */
+  .stepped .orb *:not(.nostep) { animation-timing-function: steps(4, jump-end) !important; }
+  .reduced .orb * { animation: none !important; }
+  .paused .orb *, .orb.offscreen * { animation-play-state: paused !important; }
+
+  /* Shared "step-turn" motion: a third or quarter turn with a small overshoot, then a rest. */
+  @keyframes tri {
+    0% { transform: rotate(0); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+    22%, 33.33% { transform: rotate(120deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+    55.33%, 66.66% { transform: rotate(240deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+    88.66%, 100% { transform: rotate(360deg); }
+  }
+  @keyframes quad {
+    0% { transform: rotate(0); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+    18%, 25% { transform: rotate(90deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+    43%, 50% { transform: rotate(180deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+    68%, 75% { transform: rotate(270deg); animation-timing-function: cubic-bezier(.5, -.45, .25, 1.45); }
+    93%, 100% { transform: rotate(360deg); }
+  }
+
+  /* Tri-step */
+  .a-tri .tri { transform-origin: 12px 12px; animation: tri calc(2.7s / var(--speed)) infinite; }
+
+  /* Quad shuffle */
+  .a-shuffle circle { animation: shuffle calc(2.6s / var(--speed)) cubic-bezier(.65, 0, .35, 1) infinite; }
+  @keyframes shuffle {
+    0%, 36%, 90%, 100% { transform: translate(0, 0); }
+    18% { transform: translate(var(--ax), var(--ay)); }
+    56%, 72% { transform: translate(var(--bx), var(--by)); }
+  }
+
+  /* Compose */
+  .a-compose rect { transform-box: fill-box; transform-origin: left center; animation: compose calc(2.2s / var(--speed)) cubic-bezier(.4, 0, .2, 1) calc(var(--i) * .16s / var(--speed)) infinite both; }
+  @keyframes compose {
+    0% { transform: scaleX(.16); opacity: .35; }
+    35%, 70% { transform: scaleX(1); opacity: 1; }
+    100% { transform: scaleX(.16); opacity: .35; }
+  }
+
+  /* Scan grid */
+  .a-scan circle { animation: scan calc(1.5s / var(--speed)) ease-in-out calc((var(--i) * .18s - 1.5s) / var(--speed)) infinite; }
+  @keyframes scan { 0%, 70%, 100% { opacity: .2; transform: scale(1); } 30% { opacity: 1; transform: scale(1.18); } }
+
+  /* Glance */
+  .a-glance .look { animation: look calc(4s / var(--speed)) cubic-bezier(.5, 0, .3, 1) infinite; }
+  .a-glance .eye { animation: blink calc(4s / var(--speed)) ease-in-out infinite; }
+  @keyframes look {
+    0%, 14% { transform: translateX(0); }
+    24%, 40% { transform: translateX(-2.6px); }
+    52%, 68% { transform: translateX(2.6px); }
+    80%, 100% { transform: translateX(0); }
+  }
+  @keyframes blink { 0%, 86%, 94%, 100% { transform: scaleY(1); } 90% { transform: scaleY(.1); } }
+
+  /* Helix family. Each dot rides helixY (position) and helixZ (depth = scale + opacity),
+     with depth a quarter period behind so the strands read as passing in front/behind.
+     Tunables per mark: --amp, --dur, --step (phase per column), --zf/--zb (front/back scale), --ob (back opacity). */
+  .helix circle {
+    transform-box: fill-box; transform-origin: center;
+    --q: calc(var(--dur) / 4);
+    --d: calc(var(--i) * var(--step) * -1 - var(--ph) * var(--dur));
+    animation:
+      helixY calc(var(--dur) / var(--speed)) ease-in-out calc(var(--d) / var(--speed)) infinite,
+      helixZ calc(var(--dur) / var(--speed)) ease-in-out calc((var(--d) + var(--q)) / var(--speed)) infinite;
+  }
+  .a-hx-duplex .b { color: var(--orb-ink-2); }
+  @keyframes helixY { 0%, 100% { translate: 0 calc(var(--amp) * -1); } 50% { translate: 0 var(--amp); } }
+  @keyframes helixZ { 0%, 100% { scale: var(--zf); opacity: 1; } 50% { scale: var(--zb); opacity: var(--ob); } }
+
+  .a-hx-calm  { --amp: 3.4px; --dur: 3.6s; --step: .3s;  --zf: 1.12; --zb: .78; --ob: .5; }
+  .a-hx-twist { --amp: 5px;   --dur: 1.5s; --step: .375s; --zf: 1.3; --zb: .55; --ob: .3; }
+  .a-hx-swell { --amp: 3px;   --dur: 1.6s; --step: .2s;  --zf: 1.3; --zb: .6;  --ob: .35; }
+  .a-hx-duplex{ --amp: 5px;   --dur: 2s;   --step: .2s;  --zf: 1.3; --zb: .6;  --ob: .35; }
+  .a-hx-flat  { --amp: 0px;   --dur: 1s;   --step: 0s;   --zf: 1;   --zb: 1;   --ob: 1; }
+  .a-hx-flat circle { animation: none; }
+  .a-hx-flat .strands { opacity: .45; }
+  /* Swell: a second, slower wave rides on top of the braid (transform vs. the translate property),
+     so the combined height swells and dips like a voice. In the app, the real mic level could set --amp2. */
+  .a-hx-swell { --amp2: 3px; }
+  .a-hx-swell circle {
+    animation:
+      helixY calc(var(--dur) / var(--speed)) ease-in-out calc(var(--d) / var(--speed)) infinite,
+      helixZ calc(var(--dur) / var(--speed)) ease-in-out calc((var(--d) + var(--q)) / var(--speed)) infinite,
+      wobble calc(2.3s / var(--speed)) ease-in-out calc((var(--i) * -.45s) / var(--speed)) infinite;
+  }
+  @keyframes wobble { 0%, 100% { transform: translateY(calc(var(--amp2) * -1)); } 50% { transform: translateY(var(--amp2)); } }
+
+  /* Quad-step (new) */
+  .a-quadstep .q { transform-origin: 12px 12px; animation: quad calc(3.2s / var(--speed)) infinite; }
+
+  /* Pixel fill (new) */
+  .a-pixels rect { animation: pixel calc(2.8s / var(--speed)) cubic-bezier(.3, 1.3, .6, 1) calc(var(--i) * .14s / var(--speed)) infinite both; }
+  @keyframes pixel {
+    0% { transform: scale(.55); opacity: .16; }
+    8%, 60% { transform: scale(1); opacity: 1; }
+    72%, 100% { transform: scale(.55); opacity: .16; }
+  }
+
+  /* Assemble (new) */
+  .a-assemble circle { animation: assemble calc(2.6s / var(--speed)) cubic-bezier(.2, .9, .3, 1.15) calc(var(--i) * .12s / var(--speed)) infinite both; }
+  @keyframes assemble {
+    0% { transform: translate(var(--fx), var(--fy)) scale(.4); opacity: 0; }
+    38%, 76% { transform: translate(0, 0) scale(1); opacity: 1; }
+    92%, 100% { transform: translate(0, 0) scale(.6); opacity: 0; }
+  }
+
+  /* Undecided ─────────────────── */
+  .a-glide circle { animation: glide calc(1.9s / var(--speed)) cubic-bezier(.7, 0, .3, 1) calc(var(--i) * .07s / var(--speed)) infinite both; }
+  @keyframes glide { 0%, 8% { transform: translateX(0); } 46%, 58% { transform: translateX(12px); } 96%, 100% { transform: translateX(0); } }
+
+  .a-chase .p { animation: chase calc(1.2s / var(--speed)) linear calc((var(--i) * .15s - 1.2s) / var(--speed)) infinite; }
+  @keyframes chase { 0% { opacity: 1; } 40%, 100% { opacity: .18; } }
+
+  .a-radar .sweep { transform-origin: 12px 12px; animation: spin calc(2.4s / var(--speed)) linear infinite; }
+  .a-radar .blip { animation: blip calc(2.4s / var(--speed)) ease-out calc((var(--t) - 2.4s) / var(--speed)) infinite; }
+  @keyframes blip { 0% { opacity: 1; transform: scale(1.5); } 40%, 100% { opacity: .14; transform: scale(1); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .a-bounce circle { animation: bounce calc(1.2s / var(--speed)) cubic-bezier(.45, 0, .55, 1) calc(var(--i) * .13s / var(--speed)) infinite both; }
+  @keyframes bounce { 0%, 55%, 100% { transform: translateY(0); } 27% { transform: translateY(-5px); } }
+
+  .a-stack rect { animation: stack calc(2.6s / var(--speed)) cubic-bezier(.34, 1.3, .64, 1) calc(var(--i) * .22s / var(--speed)) infinite both; }
+  @keyframes stack { 0% { transform: translateY(-7px); opacity: 0; } 16%, 74% { transform: translateY(0); opacity: 1; } 88%, 100% { transform: translateY(0); opacity: 0; } }
+
+  .a-converge circle { animation: converge calc(2.2s / var(--speed)) cubic-bezier(.6, 0, .4, 1) infinite; }
+  .a-converge .sq { animation: stopsq calc(2.2s / var(--speed)) cubic-bezier(.6, 0, .4, 1) infinite; }
+  @keyframes converge {
+    0% { transform: translate(0, 0) scale(1); opacity: 0; }
+    12% { transform: translate(0, 0) scale(1); opacity: 1; }
+    58% { transform: translate(var(--tx), var(--ty)) scale(.5); opacity: .8; }
+    72%, 100% { transform: translate(var(--tx), var(--ty)) scale(.2); opacity: 0; }
+  }
+  @keyframes stopsq { 0%, 55% { transform: scale(.3); opacity: 0; } 70%, 86% { transform: scale(1); opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
+
+  .a-ripple .ring { animation: ripple calc(2.2s / var(--speed)) cubic-bezier(.2, .6, .35, 1) infinite; }
+  .a-ripple .ring.r2 { animation-delay: calc(-1.1s / var(--speed)); }
+  @keyframes ripple { 0% { transform: scale(.9); opacity: .75; } 100% { transform: scale(2.5); opacity: 0; } }
+
+  .a-check .bg { animation: pop calc(.35s / var(--speed)) cubic-bezier(.3, 1.5, .5, 1) both; }
+  .a-check .tick { stroke-dasharray: 1; stroke-dashoffset: 0; animation: draw calc(.4s / var(--speed)) cubic-bezier(.6, 0, .2, 1) calc(.15s / var(--speed)) both; }
+  @keyframes pop { from { transform: scale(.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+  .a-nudge .x { animation: nudge calc(.55s / var(--speed)) cubic-bezier(.36, .07, .19, .97) both; }
+  @keyframes nudge {
+    0%, 100% { transform: translateX(0); }
+    15% { transform: translateX(-2.6px); } 30% { transform: translateX(2.2px); }
+    45% { transform: translateX(-1.6px); } 60% { transform: translateX(1px); } 75% { transform: translateX(-.4px); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Aiden activity marks · round 2</h1>
+    <p class="lede">Your five picks are up top. Below them: Helix variants for Live, new candidates in the same dotted style for the phases that lost their mark, and the undecided set. Every mark is an inline SVG animated with CSS <code>transform</code> and <code>opacity</code>. Nothing runs in JavaScript per frame.</p>
+  </header>
+
+  <div class="toolbar" role="toolbar" aria-label="Preview controls">
+    <div class="field">Theme
+      <div class="seg" data-ctl="theme">
+        <button data-v="auto" aria-pressed="true">Auto</button><button data-v="light" aria-pressed="false">Light</button><button data-v="dark" aria-pressed="false">Dark</button>
+      </div>
+    </div>
+    <div class="field">Ink
+      <div class="seg" data-ctl="tint">
+        <button data-v="accent" aria-pressed="true">Accent</button><button data-v="ink" aria-pressed="false">Text</button>
+      </div>
+    </div>
+    <div class="field">Size
+      <div class="seg" data-ctl="size">
+        <button data-v="20" aria-pressed="false">20</button><button data-v="32" aria-pressed="false">32</button><button data-v="64" aria-pressed="true">64</button>
+      </div>
+    </div>
+    <div class="field">Timing
+      <div class="seg" data-ctl="timing">
+        <button data-v="smooth" aria-pressed="true">Smooth</button><button data-v="stepped" aria-pressed="false">Stepped</button>
+      </div>
+    </div>
+    <label class="field">Speed <input id="speed" type="range" min="0.5" max="2" step="0.1" value="1"> <span id="speedOut">1.0×</span></label>
+    <div class="field">Motion
+      <div class="seg" data-ctl="motion">
+        <button data-v="on" aria-pressed="true">On</button><button data-v="paused" aria-pressed="false">Paused</button><button data-v="reduced" aria-pressed="false">Reduced</button>
+      </div>
+    </div>
+    <div class="meter" aria-live="off">Running animations: <b id="running">0</b></div>
+  </div>
+
+  <div id="sections"></div>
+
+  <div class="picks">
+    <output id="pickSummary" aria-live="polite"></output>
+    <button class="btn" id="copyPicks">Copy verdicts</button>
+  </div>
+
+  <section>
+    <div class="section-head"><h2>Phase mapping</h2>
+      <p>Phases come from <code>renderer/lib/agent-activity.ts</code>, the Live assistant, and subagent chips. Marks tagged <span class="tag">undecided</span> are still waiting on your call.</p>
+    </div>
+    <div class="table-wrap"><table id="mapping">
+      <thead><tr><th>Surface · phase</th><th>Orb today</th><th>Proposed mark</th><th>Alternate</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Why these are cheaper than the orbs</h2></div>
+    <div class="notes">
+      <div class="note">
+        <h3>Today: <code>thinking-orbs</code></h3>
+        <ul>
+          <li>Each orb is a <code>&lt;canvas&gt;</code> redrawn every frame from a <code>requestAnimationFrame</code> loop. JS projects a 3D dotted shape, repaints the whole canvas, and re-uploads it to the GPU.</li>
+          <li>That runs at the display rate, up to 120 Hz on ProMotion. Several run at once: the activity row, each subagent chip, and up to four 64px canvases in Live.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <h3>These marks</h3>
+        <ul>
+          <li>Inline SVG with 11 shapes or fewer, drawn in <code>currentColor</code>. Only <code>transform</code> and <code>opacity</code> are keyframed, with no filters, blur or gradients.</li>
+          <li>They pause off-screen. Stepped timing cuts updates to about 4 per segment. Reduced Motion shows a visible still pose.</li>
+          <li>Chromium may still repaint the small SVG each frame, but at 20px with no JS that cost is small.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Stress test</h2>
+      <p>Render many inline copies of one mark at once, roughly a busy subagent roster.</p>
+    </div>
+    <div class="stress-controls">
+      <select id="stressPick" aria-label="Mark to stress test"></select>
+      <select id="stressCount" aria-label="Instance count"><option>24</option><option selected>60</option><option>120</option></select>
+      <button class="btn" id="stressGo">Render</button>
+      <button class="btn" id="stressClear">Clear</button>
+      <span class="field" id="fps" aria-live="off"></span>
+    </div>
+    <div class="stress" id="stress"></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const c = (x, y, r, a = "") => `<circle cx="${x}" cy="${y}" r="${r}" ${a}/>`;
+  const st = (o) => `style="${Object.entries(o).map(([k, v]) => `--${k}:${v}`).join(";")}"`;
+  const perimeter = [[6, 6], [12, 6], [18, 6], [18, 12], [18, 18], [12, 18], [6, 18], [6, 12]];
+
+  // Two strands across five columns. --ph is the strand's phase as a fraction of the period.
+  const helix = (opts = {}) => {
+    const cols = [4, 8, 12, 16, 20];
+    const a = cols.map((x, i) => c(x, 12, 1.8, `class="a" ${st({ i, ph: 0 })}`)).join("");
+    const b = cols.map((x, i) => c(x, 12, opts.bR ?? 1.8, `class="b" ${st({ i, ph: 0.5 })}`)).join("");
+    return `<g class="strands">${b}${a}</g>`;
+  };
+
+  // Pixel order: scattered so the grid "develops" rather than wipes.
+  const pixelOrder = [0, 5, 7, 2, 4, 8, 1, 6, 3];
+  const pixels = [3.9, 9.8, 15.7].flatMap((y, row) => [3.9, 9.8, 15.7].map((x, col) =>
+    `<rect class="fb" x="${x}" y="${y}" width="4.4" height="4.4" rx="1.2" ${st({ i: pixelOrder[row * 3 + col] })}/>`)).join("");
+
+  const MARKS = [
+    // ── Chosen ─────────────────────────────────────────────
+    { id: "tri", group: "chosen", name: "Tri-step", phase: "Thinking", label: "Thinking", badge: "Signature",
+      desc: "A dotted triangle that turns a third at a time with a small overshoot, then rests. One transform on one group.",
+      nodes: 4, props: "rotate", loop: "2.7s",
+      svg: `<g class="tri nostep">${c(12, 5.5, 2.6)}${c(17.63, 15.25, 2.6)}${c(6.37, 15.25, 2.6)}</g>` },
+
+    { id: "shuffle", group: "chosen", name: "Quad shuffle", phase: "Thinking (alt)", label: "Thinking",
+      desc: "Four dots fold into a diagonal, spread back, then trade corners.",
+      nodes: 4, props: "translate", loop: "2.6s",
+      svg: c(7, 7, 2.4, st({ ax: "-2.2px", ay: "-2.2px", bx: "10px", by: "0px" })) +
+           c(17, 7, 2.4, st({ ax: "-7.4px", ay: "2.6px", bx: "0px", by: "10px" })) +
+           c(7, 17, 2.4, st({ ax: "7.4px", ay: "-2.6px", bx: "0px", by: "-10px" })) +
+           c(17, 17, 2.4, st({ ax: "2.2px", ay: "2.2px", bx: "-10px", by: "0px" })) },
+
+    { id: "compose", group: "chosen", name: "Compose", phase: "Responding", label: "Responding…",
+      desc: "Three text lines grow from the left in turn, then retract. Reads as writing without a shimmer.",
+      nodes: 3, props: "scaleX · opacity", loop: "2.2s",
+      svg: `<rect x="4" y="5.5" width="16" height="2.6" rx="1.3" ${st({ i: 0 })}/><rect x="4" y="10.7" width="12" height="2.6" rx="1.3" ${st({ i: 1 })}/><rect x="4" y="15.9" width="14" height="2.6" rx="1.3" ${st({ i: 2 })}/>` },
+
+    { id: "scan", group: "chosen", name: "Scan grid", phase: "Searching", label: "Searching files",
+      desc: "Columns of a dot grid light up left to right, like a read head passing over an index.",
+      nodes: 9, props: "opacity · scale", loop: "1.5s",
+      svg: [6, 12, 18].flatMap((y) => [6, 12, 18].map((x, col) => c(x, y, 1.9, `class="fb" opacity=".2" ${st({ i: col })}`))).join("") },
+
+    { id: "glance", group: "chosen", name: "Glance", phase: "Waiting for approval", label: "Waiting for approval",
+      desc: "Two eyes look left, look right, then blink. Aiden is waiting on you, which reads differently from busy.",
+      nodes: 3, props: "translate · scaleY", loop: "4s",
+      svg: `<g class="look"><rect class="fb eye" x="7" y="8.5" width="3.4" height="7" rx="1.7"/><rect class="fb eye" x="13.6" y="8.5" width="3.4" height="7" rx="1.7"/></g>` },
+
+    // ── Live: Helix family ─────────────────────────────────
+    { id: "hx-calm", group: "live", name: "Helix · Calm", phase: "Live · ready", label: "Ready", cls: "helix",
+      desc: "Slow, shallow braid. Alive but idle. Replaces Breathe as Live's resting state.",
+      nodes: 10, props: "translate · scale · opacity", loop: "3.6s", svg: helix() },
+
+    { id: "hx-twist", group: "live", name: "Helix · Twist", phase: "Live · connecting", label: "Connecting…", cls: "helix",
+      desc: "A tighter, faster braid with a full twist across the width. Reads as winding up a connection.",
+      nodes: 10, props: "translate · scale · opacity", loop: "1.5s", svg: helix() },
+
+    { id: "hx-swell", group: "live", name: "Helix · Swell", phase: "Live · listening", label: "Listening", cls: "helix",
+      desc: "A second, slower wave rides on the braid, so its height swells and dips like a voice. In the app the real mic level could set that wave's size.",
+      nodes: 10, props: "translate · scale · opacity", loop: "1.6s / 2.2s", svg: helix() },
+
+    { id: "hx-duplex", group: "live", name: "Helix · Duplex", phase: "Live · talking", label: "Talking", cls: "helix",
+      desc: "The original braid with two inks: one strand for you, one for Aiden.",
+      nodes: 10, props: "translate · scale · opacity", loop: "2s", svg: helix() },
+
+    { id: "hx-flat", group: "live", name: "Helix · Flatline", phase: "Live · unavailable", label: "Unavailable", cls: "helix",
+      desc: "Both strands lie flat and dim. The family's still pose, with no animation and zero cost.",
+      nodes: 0, props: "static", loop: "—", svg: helix() },
+
+    // ── New candidates for the open slots ──────────────────
+    { id: "quadstep", group: "new", name: "Quad-step", phase: "Working (tool call)", label: "Running tool",
+      desc: "Tri-step's sibling: a 2×2 square turning a quarter at a time with the same overshoot. One lit dot shows the turn. Replaces Orbit.",
+      nodes: 5, props: "rotate", loop: "3.2s",
+      svg: `<g class="q nostep">${c(7.5, 7.5, 2.4)}${c(16.5, 7.5, 2.4, `opacity=".4"`)}${c(16.5, 16.5, 2.4, `opacity=".4"`)}${c(7.5, 16.5, 2.4, `opacity=".4"`)}</g>` },
+
+    { id: "pixels", group: "new", name: "Pixel fill", phase: "Visualizing / image gen", label: "Visualizing",
+      desc: "A 3×3 tile grid fills in scattered order, like an image developing, then clears. Replaces Spark. Same grid as Scan.",
+      nodes: 9, props: "scale · opacity", loop: "2.8s", svg: pixels },
+
+    { id: "assemble", group: "new", name: "Assemble", phase: "Preparing / model loading", label: "Model loading…",
+      desc: "Three dots fly in and lock into the Tri-step triangle, hold, then dissolve. A natural lead-in before Thinking. Replaces Ticks.",
+      nodes: 3, props: "translate · scale · opacity", loop: "2.6s",
+      svg: c(12, 5.5, 2.6, `class="fb" ${st({ i: 0, fx: "0px", fy: "-8px" })}`) +
+           c(17.63, 15.25, 2.6, `class="fb" ${st({ i: 1, fx: "8px", fy: "6px" })}`) +
+           c(6.37, 15.25, 2.6, `class="fb" ${st({ i: 2, fx: "-8px", fy: "6px" })}`) },
+
+    // ── Undecided ──────────────────────────────────────────
+    { id: "glide", group: "undecided", name: "Glide", phase: "Responding (alt)", label: "Thinking",
+      desc: "Three stacked dots slide together, stretching into a comet while moving and merging at rest.",
+      nodes: 3, props: "translate", loop: "1.9s",
+      svg: c(6, 12, 2.6, `opacity=".3" ${st({ i: 2 })}`) + c(6, 12, 2.6, `opacity=".6" ${st({ i: 1 })}`) + c(6, 12, 2.6, st({ i: 0 })) },
+
+    { id: "chase", group: "undecided", name: "Perimeter chase", phase: "Subagent active", label: "Running tests",
+      desc: "A three-cell snake runs around a 3×3 dot grid. In Stepped mode it looks like an LED matrix.",
+      nodes: 9, props: "opacity", loop: "1.2s",
+      svg: c(12, 12, 1.9, `opacity=".18"`) + perimeter.map(([x, y], i) => c(x, y, 1.9, `class="p" opacity=".18" ${st({ i })}`)).join("") },
+
+    { id: "radar", group: "undecided", name: "Radar", phase: "Searching (web)", label: "Searching the web",
+      desc: "A sweep arm rotates and each blip flashes as the arm passes it.",
+      nodes: 6, props: "rotate · opacity", loop: "2.4s",
+      svg: `<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".22"/>` +
+           `<g class="sweep"><line x1="12" y1="12" x2="12" y2="3.6" stroke-width="1.6"/><line x1="12" y1="12" x2="12" y2="3.6" stroke-width="1.6" opacity=".3" transform="rotate(-20 12 12)"/></g>` +
+           c(17.6, 8.8, 1.6, `class="fb blip" opacity=".14" ${st({ t: ".4s" })}`) +
+           c(13.1, 18.4, 1.6, `class="fb blip" opacity=".14" ${st({ t: "1.13s" })}`) +
+           c(5.9, 9.8, 1.6, `class="fb blip" opacity=".14" ${st({ t: "1.93s" })}`) },
+
+    { id: "bounce", group: "undecided", name: "Bounce", phase: "Preparing (fallback)", label: "Preparing…",
+      desc: "The familiar typing trio with a sine-shaped hop.",
+      nodes: 3, props: "translate", loop: "1.2s",
+      svg: c(5.5, 13, 2.4, st({ i: 0 })) + c(12, 13, 2.4, st({ i: 1 })) + c(18.5, 13, 2.4, st({ i: 2 })) },
+
+    { id: "stack", group: "undecided", name: "Stack", phase: "Preparing (workspace)", label: "Setting up workspace",
+      desc: "Three blocks drop into a small pyramid with a slight bounce, hold, then clear.",
+      nodes: 3, props: "translate · opacity", loop: "2.6s",
+      svg: `<rect x="4" y="13" width="7" height="7" rx="1.8" ${st({ i: 0 })}/><rect x="13" y="13" width="7" height="7" rx="1.8" ${st({ i: 1 })}/><rect x="8.5" y="4" width="7" height="7" rx="1.8" ${st({ i: 2 })}/>` },
+
+    { id: "converge", group: "undecided", name: "Converge", phase: "Stopping", label: "Stopping…",
+      desc: "Corner dots pull into the center and resolve into a stop square.",
+      nodes: 5, props: "translate · scale · opacity", loop: "2.2s",
+      svg: `<rect class="fb sq" x="9" y="9" width="6" height="6" rx="1.5" opacity="0"/>` +
+           c(5, 5, 2.4, `class="fb" ${st({ tx: "7px", ty: "7px" })}`) + c(19, 5, 2.4, `class="fb" ${st({ tx: "-7px", ty: "7px" })}`) +
+           c(5, 19, 2.4, `class="fb" ${st({ tx: "7px", ty: "-7px" })}`) + c(19, 19, 2.4, `class="fb" ${st({ tx: "-7px", ty: "-7px" })}`) },
+
+    { id: "ripple", group: "undecided", name: "Ripple", phase: "Waiting (alt)", label: "Go ahead",
+      desc: "Rings expand from a center dot and fade.",
+      nodes: 3, props: "scale · opacity", loop: "2.2s",
+      svg: `<circle class="fb ring" cx="12" cy="12" r="3.8" fill="none" stroke="currentColor" stroke-width="1.4"/><circle class="fb ring r2" cx="12" cy="12" r="3.8" fill="none" stroke="currentColor" stroke-width="1.4"/>` + c(12, 12, 3) },
+
+    { id: "check", group: "undecided", name: "Settle", phase: "Completed (one-shot)", label: "Done", oneShot: true,
+      desc: "The disc pops in and the check draws itself once, then holds still.",
+      nodes: 2, props: "scale · stroke dash, once", loop: "0.55s",
+      svg: `<circle class="fb bg" cx="12" cy="12" r="10" fill-opacity=".14"/><path class="stroke tick" d="M7.6 12.4l3 3 5.8-6.2" stroke-width="2.2" pathLength="1"/>` },
+
+    { id: "nudge", group: "undecided", name: "Nudge", phase: "Failed (one-shot)", label: "Failed", oneShot: true,
+      desc: "A short, decaying head-shake, then still.",
+      nodes: 1, props: "translate, once", loop: "0.55s",
+      svg: `<g class="x"><circle cx="12" cy="12" r="10" fill-opacity=".14"/><path class="stroke" d="M9 9l6 6M15 9l-6 6" stroke-width="2.2"/></g>` },
+  ];
+
+  const GROUPS = [
+    ["chosen", "Chosen", "The five you picked. These map straight onto Aiden's core chat phases."],
+    ["live", "Live · Helix family", "One braid, tuned per state, so Live speaks a single visual language. Duplex uses a second ink for the other voice."],
+    ["new", "New candidates", "Built in the same dotted style as your picks, for the slots that lost Orbit, Spark, Ticks and the Live marks."],
+    ["undecided", "Undecided", "Mark each one Keep or Cut. Your verdicts are collected at the bottom so you can paste them back."],
+  ];
+
+  const byId = Object.fromEntries(MARKS.map((m) => [m.id, m]));
+  const svg = (m, cls = "") => `<svg class="orb a-${m.id} ${m.cls || ""} ${cls}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${m.svg}</svg>`;
+
+  // Verdicts (per-viewer convenience only).
+  const store = { get(k) { try { return localStorage.getItem("aam:" + k); } catch { return null; } }, set(k, v) { try { localStorage.setItem("aam:" + k, v); } catch {} } };
+  let verdicts = {};
+  try { verdicts = JSON.parse(store.get("verdicts") || "{}"); } catch {}
+  for (const m of MARKS) if (m.group === "chosen") verdicts[m.id] = "keep";
+
+  let n = 0;
+  const card = (m) => `
+    <article class="card" data-id="${m.id}" aria-label="${m.name}">
+      <div class="stage">
+        <span class="num">${String(++n).padStart(2, "0")}</span>
+        ${m.badge ? `<span class="badge">${m.badge}</span>` : ""}
+        ${svg(m, "lg")}
+        ${m.oneShot ? `<button class="replay" type="button">Replay</button>` : ""}
+      </div>
+      <div class="body">
+        <div class="title"><h3>${m.name}</h3><span class="phase">${m.phase}</span></div>
+        <p class="desc">${m.desc}</p>
+        <div class="inline">${svg(m, "sm")}<span>${m.label}</span></div>
+        <div class="foot">
+          <span class="meta">${m.nodes} animated · ${m.props} · ${m.loop}</span>
+          ${m.group === "chosen" ? "" : `<span class="verdict" role="group" aria-label="Verdict for ${m.name}">
+            <button type="button" data-v="keep" aria-pressed="${verdicts[m.id] === "keep"}">Keep</button><button type="button" data-v="cut" aria-pressed="${verdicts[m.id] === "cut"}">Cut</button>
+          </span>`}
+        </div>
+      </div>
+    </article>`;
+
+  const sections = document.getElementById("sections");
+  sections.innerHTML = GROUPS.map(([g, title, blurb]) => {
+    const items = MARKS.filter((m) => m.group === g);
+    return `<section><div class="section-head"><h2>${title}</h2><span class="count">${items.length}</span><p>${blurb}</p></div>
+      <div class="grid">${items.map(card).join("")}</div></section>`;
+  }).join("");
+
+  const summary = document.getElementById("pickSummary");
+  const renderSummary = () => {
+    const by = (v) => MARKS.filter((m) => verdicts[m.id] === v).map((m) => m.name);
+    const open = MARKS.filter((m) => !verdicts[m.id]).map((m) => m.name);
+    summary.textContent = `Keep: ${by("keep").join(", ") || "—"}.  Cut: ${by("cut").join(", ") || "—"}.  Open: ${open.join(", ") || "—"}.`;
+  };
+  renderSummary();
+  sections.addEventListener("click", (e) => {
+    const b = e.target.closest(".verdict button");
+    if (b) {
+      const id = b.closest(".card").dataset.id;
+      verdicts[id] = verdicts[id] === b.dataset.v ? undefined : b.dataset.v;
+      b.parentElement.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(verdicts[id] === x.dataset.v)));
+      store.set("verdicts", JSON.stringify(verdicts));
+      renderSummary();
+      return;
+    }
+    const r = e.target.closest(".replay");
+    if (r) replay(r.closest(".card"));
+  });
+  document.getElementById("copyPicks").addEventListener("click", async (e) => {
+    try { await navigator.clipboard.writeText(summary.textContent); e.target.textContent = "Copied"; }
+    catch { getSelection().selectAllChildren(summary); e.target.textContent = "Selected — press ⌘C"; }
+    setTimeout(() => (e.target.textContent = "Copy verdicts"), 1800);
+  });
+
+  // Replay one-shots on a slow timer.
+  const replay = (root) => root.getAnimations({ subtree: true }).forEach((a) => { a.cancel(); a.play(); });
+  setInterval(() => {
+    if (document.hidden || document.body.classList.contains("paused")) return;
+    sections.querySelectorAll(".card").forEach((el) => { if (byId[el.dataset.id].oneShot) replay(el); });
+  }, 3200);
+
+  // Pause every mark that is scrolled out of view.
+  const io = new IntersectionObserver((entries) => entries.forEach((en) => en.target.classList.toggle("offscreen", !en.isIntersecting)), { rootMargin: "40px" });
+  const watch = (scope) => scope.querySelectorAll(".orb").forEach((o) => io.observe(o));
+  watch(sections);
+
+  // Toolbar
+  const root = document.documentElement, body = document.body;
+  const apply = {
+    theme: (v) => (v === "auto" ? root.removeAttribute("data-theme") : root.setAttribute("data-theme", v)),
+    tint: (v) => root.setAttribute("data-tint", v),
+    size: (v) => document.querySelectorAll(".orb.lg").forEach((s) => s.style.setProperty("--size", v + "px")),
+    timing: (v) => body.classList.toggle("stepped", v === "stepped"),
+    motion: (v) => { body.classList.toggle("paused", v === "paused"); body.classList.toggle("reduced", v === "reduced"); },
+  };
+  const setSeg = (seg, v) => {
+    seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+    apply[seg.dataset.ctl](v); store.set(seg.dataset.ctl, v);
+  };
+  document.querySelectorAll(".seg").forEach((seg) => {
+    seg.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setSeg(seg, b.dataset.v); });
+    let saved = store.get(seg.dataset.ctl);
+    if (seg.dataset.ctl === "motion" && !saved && matchMedia("(prefers-reduced-motion: reduce)").matches) saved = "reduced";
+    if (saved && seg.querySelector(`[data-v="${saved}"]`)) setSeg(seg, saved);
+  });
+  const speed = document.getElementById("speed"), speedOut = document.getElementById("speedOut");
+  const applySpeed = (scope = document) => scope.querySelectorAll(".orb").forEach((o) => o.style.setProperty("--speed", speed.value));
+  speed.addEventListener("input", () => { applySpeed(); speedOut.textContent = Number(speed.value).toFixed(1) + "×"; });
+
+  // Mapping table
+  const MAP = [
+    ["Chat · Thinking", "solving", "tri", "shuffle"],
+    ["Chat · Responding", "composing", "compose", "glide"],
+    ["Chat · Working (tool)", "working", "quadstep", "chase"],
+    ["Chat · Searching", "searching", "scan", "radar"],
+    ["Chat · Visualizing", "working", "pixels", "stack"],
+    ["Chat · Preparing", "shaping", "assemble", "bounce"],
+    ["Chat · Model loading", "shaping", "assemble", "bounce"],
+    ["Chat · Waiting for approval", "listening", "glance", "ripple"],
+    ["Chat · Stopping", "shaping", "converge", null],
+    ["Subagent chip · active", "working", "quadstep", "chase"],
+    ["Subagent chip · done", "paused orb", "check", null],
+    ["Subagent chip · failed", "paused orb", "nudge", null],
+    ["Live · ready", "breathing (paused)", "hx-calm", null],
+    ["Live · connecting", "connecting", "hx-twist", null],
+    ["Live · listening", "listening", "hx-swell", null],
+    ["Live · talking (duplex)", "listening + weaving", "hx-duplex", "hx-swell"],
+    ["Live · unavailable", "breathing (paused)", "hx-flat", null],
+  ];
+  const cell = (id) => {
+    const m = byId[id];
+    if (!m) return `<span class="dim">—</span>`;
+    const tag = m.group === "undecided" ? ` <span class="tag">undecided</span>` : "";
+    return `<div class="cell">${svg(m, "sm")}<span>${m.name}</span>${tag}</div>`;
+  };
+  const table = document.querySelector("#mapping tbody");
+  table.innerHTML = MAP.map(([phase, today, a, b]) =>
+    `<tr><td>${phase}</td><td class="dim"><code>${today}</code></td><td>${cell(a)}</td><td>${cell(b)}</td></tr>`).join("");
+  watch(table);
+
+  // Stress test
+  const pick = document.getElementById("stressPick"), count = document.getElementById("stressCount"), stress = document.getElementById("stress"), fps = document.getElementById("fps");
+  pick.innerHTML = MARKS.filter((m) => !m.oneShot && m.nodes).map((m) => `<option value="${m.id}">${m.name}</option>`).join("");
+  let raf = 0;
+  const meter = () => {
+    cancelAnimationFrame(raf);
+    let frames = 0, t0 = performance.now();
+    const tick = (t) => {
+      frames++;
+      if (t - t0 >= 1000) { fps.textContent = `Page frame rate: ${Math.round((frames * 1000) / (t - t0))} fps`; frames = 0; t0 = t; }
+      if (stress.childElementCount) raf = requestAnimationFrame(tick); else fps.textContent = "";
+    };
+    raf = requestAnimationFrame(tick);
+  };
+  document.getElementById("stressGo").addEventListener("click", () => {
+    stress.innerHTML = Array.from({ length: +count.value }, () => svg(byId[pick.value], "sm")).join("");
+    applySpeed(stress); watch(stress); meter();
+  });
+  document.getElementById("stressClear").addEventListener("click", () => { stress.innerHTML = ""; });
+
+  // Running-animation counter (shows off-screen pausing at work).
+  const running = document.getElementById("running");
+  setInterval(() => { running.textContent = document.getAnimations().filter((a) => a.playState === "running").length; }, 1000);
+})();
+</script>
+</body>
+</html>

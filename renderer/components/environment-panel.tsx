@@ -29,7 +29,7 @@ import {
 } from "./files-panel";
 import { EnvironmentOverview } from "./environment-overview";
 import { ReviewPanel } from "./review-panel";
-import { SubagentOrb } from "./subagent-chips";
+import { SubagentMark } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
 import {
   DEFAULT_PANEL_WIDTH,
@@ -1371,7 +1371,7 @@ function EnvironmentPanelSurface({
                 )}
               >
                 {tab === "subagents" ? (
-                  <SubagentOrb
+                  <SubagentMark
                     role={representativeSubagent?.role}
                     state={representativeSubagent?.state ?? "finished"}
                     activity={representativeSubagent?.snapshot?.activity}
@@ -1687,7 +1687,7 @@ function QuickViewCard({
                   aria-label={`Open Subagents, ${subagentSummary.ariaLabel}`}
                   className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                 >
-                  <SubagentOrb
+                  <SubagentMark
                     role={representativeSubagent?.role}
                     state={representativeSubagent?.state ?? "finished"}
                     activity={representativeSubagent?.snapshot?.activity}

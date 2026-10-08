@@ -18,7 +18,7 @@ import {
   type SubagentContextUsageV1,
 } from "../shared/subagent-context-usage";
 import { Markdown } from "./markdown";
-import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
+import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
 import { CopyButton } from "./copy-button";
 
@@ -232,7 +232,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
         >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
             <header className="flex min-w-0 items-start gap-2.5">
-              <SubagentOrb
+              <SubagentMark
                 role={run.role}
                 state={run.state}
                 activity={run.activity}

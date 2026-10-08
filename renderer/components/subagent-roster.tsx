@@ -22,7 +22,7 @@ import {
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
 import { subagentPendingQuestion } from "../shared/subagent-runs";
-import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
+import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { Text } from "./ui";
 
 export interface SubagentRunGroups {
@@ -132,7 +132,7 @@ function RosterNode({
             selected && "bg-list-selection",
           )}
         >
-          <SubagentOrb role={run.role} state={run.state} activity={run.snapshot?.activity} />
+          <SubagentMark role={run.role} state={run.state} activity={run.snapshot?.activity} />
           <span className="min-w-0 flex-1">
             <Text as="span" variant="small-strong" truncate className="block">
               {run.label}
