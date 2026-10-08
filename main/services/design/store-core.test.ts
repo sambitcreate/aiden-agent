@@ -176,18 +176,36 @@ test("a short run is partial, and a run that ends with nothing accepted keeps no
 });
 
 test("Resume caps a new run at the missing directions and completes the original set", () => {
-  let { manifest } = startRun(project(), "run-1", explore(3));
+  // An unrelated, finished set from an earlier Explore.
+  let { manifest } = startRun(project(), "run-0", explore(2));
+  manifest = settle(accept(manifest, "run-0", "Elsewhere"), "run-0", "completed", 2_500)!;
+  manifest = startRun(manifest, "run-1", explore(3)).manifest;
   manifest = settle(accept(manifest, "run-1", "First"), "run-1", "cancelled", 4_000)!;
   assert.equal(manifest.runs["run-1"]!.status, "partial");
   const resumed = startRun(manifest, "run-2", explore(3, { resumeRunId: "run-1" }));
   assert.equal(resumed.plan.cap, 2);
   assert.deepEqual(resumed.plan.existingTitles, ["First"]);
   assert.deepEqual(resumed.plan.model, MODEL, "a Resume defaults to the set's model");
-  manifest = accept(accept(resumed.manifest, "run-2", "Second"), "run-2", "Third");
+  // While the Resume fills the set, its earlier direction cannot be deleted: the run's cap
+  // was disclosed against that direction, so losing it would settle the set incomplete.
+  const first = screenByTitle(resumed.manifest, "First");
+  const attempt = structuredClone(resumed.manifest);
+  assert.throws(() => removeDesignScreen(attempt, first.id), expectStoreError("busy", /"First".*being filled/u));
+  assert.deepEqual(attempt, resumed.manifest, "the refusal changes nothing");
+  assert.throws(
+    () => applyDesignProjectOp(resumed.manifest, { op: "deleteScreen", screenId: first.id }, 4_500),
+    expectStoreError("busy", /being filled/u),
+  );
+  // A Screen of another set stays deletable while the Resume runs.
+  const unrelated = structuredClone(resumed.manifest);
+  const other = screenByTitle(unrelated, "Elsewhere");
+  assert.deepEqual(removeDesignScreen(unrelated, other.id), other.revisionIds);
+  manifest = check(touchDesignManifest(unrelated, 4_500));
+  manifest = accept(accept(manifest, "run-2", "Second"), "run-2", "Third");
   manifest = settle(manifest, "run-2", "completed", 5_000)!;
   assert.equal(manifest.runs["run-2"]!.status, "complete");
   const sets = Object.values(manifest.directionSets);
-  assert.equal(sets.length, 1, "a Resume fills the original set and creates none");
+  assert.equal(sets.length, 1, "a Resume fills the original set and creates none; the unrelated set went with its Screen");
   assert.deepEqual(sets[0]!.screenIds.map((id) => manifest.screens[id]!.title), ["First", "Second", "Third"]);
   assert.throws(() => planDesignRun(manifest, explore(3, { resumeRunId: "run-2" })), /already exists/u);
 });
@@ -671,21 +689,6 @@ test("the newest run of a set survives trimming, so its Resume offer stays", () 
   assert.equal(Object.keys(manifest.runs).length, 100);
   const offer = designResumeOffer(manifest, "aa-first");
   assert.deepEqual(offer.ok && offer.cap, 2);
-});
-
-test("a Resume that ends empty after its set lost every Screen leaves no set and no offer", () => {
-  let manifest = exploredProject(["A"], 3, "cancelled");
-  const screenA = screenByTitle(manifest, "A");
-  manifest = startRun(manifest, "run-2", explore(3, { resumeRunId: "run-1" })).manifest;
-  const deleting = structuredClone(manifest);
-  removeDesignScreen(deleting, screenA.id); // A is published, not a draft: allowed while run-2 runs
-  manifest = check(touchDesignManifest(deleting, 4_500));
-  assert.deepEqual(Object.keys(manifest.directionSets), ["set-run-1"], "the running Resume still fills the set");
-  manifest = settle(manifest, "run-2", "cancelled", 5_000)!;
-  assert.deepEqual(manifest.directionSets, {}, "no empty set remains");
-  assert.equal(manifest.runs["run-2"]!.directionSetId, undefined);
-  assert.equal(designResumeOffer(manifest, "run-2").ok, false);
-  assert.equal(designProjectSummary(manifest).health, "ok");
 });
 
 test("a Resume always ranks as its set's newest run, even when the clock ran backwards", () => {

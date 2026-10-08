@@ -468,10 +468,10 @@ function dropDirectionSet(manifest: DesignProjectManifestV1, setId: string): voi
 /**
  * Remove a Screen with all of its revisions from a clone; returns the deleted revision ids.
  * Refused as "busy" (nothing changes) while a run is rendering into the Screen: it holds a
- * draft of a running run, or a running Refine targets it. A direction set left without
- * Screens is dropped (a set an in-progress run is still filling stays), and a settled run
- * that no longer has any design is dropped too: complete and partial runs always keep at
- * least one revision.
+ * draft of a running run, a running Refine targets it, or a running Explore or Resume is
+ * filling the Screen's direction set. A direction set left without Screens is dropped, and
+ * a settled run that no longer has any design is dropped too: complete and partial runs
+ * always keep at least one revision.
  */
 export function removeDesignScreen(manifest: DesignProjectManifestV1, screenId: string): string[] {
   const screen = own(manifest.screens, screenId);
@@ -486,6 +486,17 @@ export function removeDesignScreen(manifest: DesignProjectManifestV1, screenId: 
   if (rendering) {
     throw new DesignStoreError("busy", `"${screen.title}" is being rendered. Wait for the design run to finish, or stop it first.`);
   }
+  // A running Resume's cap was disclosed against the directions its set already holds;
+  // losing one would let the run complete with the set still incomplete and no Resume offer.
+  const filling =
+    screen.directionSetId !== undefined &&
+    runs.some((run) => run.status === "running" && run.directionSetId === screen.directionSetId);
+  if (filling) {
+    throw new DesignStoreError(
+      "busy",
+      `"${screen.title}" is in a direction set that is being filled. Wait for the design run to finish, or stop it first.`,
+    );
+  }
   const deleted = [...screen.revisionIds];
   const deletedIds = new Set(deleted);
   for (const id of deleted) delete manifest.revisions[id];
@@ -497,10 +508,8 @@ export function removeDesignScreen(manifest: DesignProjectManifestV1, screenId: 
   }
   for (const run of runs) run.revisionIds = run.revisionIds.filter((id) => !deletedIds.has(id));
   const set = screen.directionSetId === undefined ? undefined : own(manifest.directionSets, screen.directionSetId);
-  if (set && set.screenIds.length === 0) {
-    const filling = runs.some((run) => run.directionSetId === set.id && run.status === "running");
-    if (!filling) dropDirectionSet(manifest, set.id);
-  }
+  // No run is filling this set (refused above), so an emptied set has nothing left to show.
+  if (set && set.screenIds.length === 0) dropDirectionSet(manifest, set.id);
   for (const run of runs) {
     if ((run.status === "complete" || run.status === "partial") && run.revisionIds.length === 0) {
       delete manifest.runs[run.id];
