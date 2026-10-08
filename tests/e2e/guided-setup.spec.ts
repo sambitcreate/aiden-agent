@@ -1,5 +1,5 @@
 import type { BotCapabilityCatalog } from "../../renderer/shared/bot-capabilities";
-import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, skipBotsOnboardingStep, test } from "./fixtures";
 
 test("onboarding exposes the four primary AI choices and validates custom setup", async ({ aiden }) => {
   const { page } = aiden;
@@ -35,6 +35,7 @@ test("skipping provider setup explains the blocked Next and leaves a route to Pr
 
   await onboarding.getByRole("button", { name: "Skip provider" }).click();
   await expect(onboarding.getByText("Provider setup skipped")).toBeVisible();
+  await skipBotsOnboardingStep(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 
@@ -117,7 +118,7 @@ test("feature gallery reveals complete descriptions through keyboard focus at na
   await onboarding.getByRole("button", { name: /^Next/u }).click();
   await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  await skipBotsOnboardingStep(onboarding);
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const width of [1000, 600, 390]) {
     await aiden.app.evaluate(({ BrowserWindow }, nextWidth) => {
@@ -191,7 +192,7 @@ test("feature tour explains image and classifier disclosure on rendered cards", 
   await onboarding.getByRole("button", { name: /^Next/u }).click();
   await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  await skipBotsOnboardingStep(onboarding);
   const images = onboarding.getByRole("article", { name: /Generate or edit attached images/u });
   await images.hover();
   await expect(images.getByText(/approving the prompt, reference images, and possible provider charges/u)).toBeVisible();

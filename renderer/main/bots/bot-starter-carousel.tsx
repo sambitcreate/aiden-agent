@@ -17,7 +17,8 @@ export function BotStarterCarousel({
   onOpenChat,
   presets = BOT_PRESETS,
 }: {
-  onCreateOwn(): void;
+  /** Omitted where the create flow is not offered (onboarding). */
+  onCreateOwn?(): void;
   onOpenChat(bot: BotDefinition): void;
   presets?: readonly BotPreset[];
 }) {
@@ -80,11 +81,13 @@ export function BotStarterCarousel({
           </li>
         ))}
       </ul>
-      <div>
-        <Button variant="transparent" onClick={onCreateOwn}>
-          Create My Own
-        </Button>
-      </div>
+      {onCreateOwn ? (
+        <div>
+          <Button variant="transparent" onClick={onCreateOwn}>
+            Create My Own
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }

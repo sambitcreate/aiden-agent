@@ -43,7 +43,7 @@ import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
 import { OnboardingOpenAiLogin } from "./onboarding-openai-login";
 import { Button, Dialog, Field, Input, Text, toast } from "./ui";
-import { appApi, profileApi, providersApi } from "../lib/ipc";
+import { appApi, botsApi, profileApi, providersApi } from "../lib/ipc";
 import {
   clearLegacyOnboardingCompletion,
   markOnboardingComplete,
@@ -73,14 +73,21 @@ import {
   type OnboardingSnapshot,
 } from "../shared/onboarding";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { OnboardingBotsStep } from "./onboarding-bots-step";
 
-type Step = "profile" | "provider" | "tour";
-const steps: Step[] = ["profile", "provider", "tour"];
+type Step = "profile" | "provider" | "bots" | "tour";
+const steps: Step[] = ["profile", "provider", "bots", "tour"];
 const stepLabels: Readonly<Record<Step, string>> = {
   profile: "Your profile",
   provider: "Model provider",
+  bots: "Your first Bot",
   tour: "Ready to go",
 };
+
+/** "Meet Your First Bot" appears only with the Bots capability and no Bots yet. */
+function onboardingFlowSteps(botsStepVisible: boolean): Step[] {
+  return botsStepVisible ? steps : steps.filter((item) => item !== "bots");
+}
 
 const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 
@@ -514,6 +521,9 @@ export function OnboardingFlow() {
   const [stateReady, setStateReady] = React.useState(false);
   const [onboardingLoadError, setOnboardingLoadError] = React.useState<string | null>(null);
   const [index, setIndex] = React.useState(0);
+  const [botsStepVisible, setBotsStepVisible] = React.useState(false);
+  const capabilitiesRef = React.useRef(capabilities);
+  capabilitiesRef.current = capabilities;
   const [name, setName] = React.useState("");
   const [choice, setChoice] = React.useState<OnboardingProviderChoice | null>("openai-signin");
   const [builtinChoiceId, setBuiltinChoiceId] = React.useState<string | null>(null);
@@ -550,7 +560,27 @@ export function OnboardingFlow() {
         onboardingSnapshotRef.current = snapshot;
         readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
         setProviderSkipped(false);
-        setIndex(onboardingStepIndex(snapshot));
+        // Only a first run that is still open can reach the Bots step; completed
+        // launches never read the Bot store here.
+        const botsVisible =
+          shouldOpenOnboarding(snapshot.outcome) &&
+          capabilitiesRef.current.bots &&
+          (await botsApi.list().then(
+            (bots) => bots.length === 0,
+            () => false,
+          ));
+        if (loadGenerationRef.current !== generation) return;
+        const reached = onboardingStepIndex(snapshot);
+        const resumeStep: Step =
+          reached === 0
+            ? "profile"
+            : reached === 1
+              ? "provider"
+              : snapshot.lastSatisfiedStep === "provider" && botsVisible
+                ? "bots"
+                : "tour";
+        setBotsStepVisible(botsVisible);
+        setIndex(onboardingFlowSteps(botsVisible).indexOf(resumeStep));
         setOpen(shouldOpenOnboarding(snapshot.outcome));
         if (snapshot.profileReady && !profileInitializedRef.current) {
           const current = await profileApi.get();
@@ -587,7 +617,9 @@ export function OnboardingFlow() {
   }, [index, open]);
 
   if (!open) return null;
-  const step = steps[index];
+  const visibleSteps = onboardingFlowSteps(botsStepVisible);
+  const step = visibleSteps[index];
+  const afterProviderIndex = visibleSteps.indexOf(botsStepVisible ? "bots" : "tour");
   const selected = providerChoices.find((item) => item.id === choice);
   const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
@@ -621,7 +653,23 @@ export function OnboardingFlow() {
     onboardingSnapshotRef.current = snapshot;
     readyProviderIdRef.current = providerId;
     setProviderSkipped(false);
-    setIndex(2);
+    setIndex(afterProviderIndex);
+  };
+
+  const finishBotsStep = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const snapshot = await appApi.setOnboardingProgress("bots");
+      onboardingSnapshotRef.current = snapshot;
+      setIndex(visibleSteps.indexOf("tour"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden couldn't save onboarding progress.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const validateHostedApiKey = async () => {
@@ -671,7 +719,7 @@ export function OnboardingFlow() {
     setShowMoreProviders(false);
     setProviderSkipped(true);
     readyProviderIdRef.current = null;
-    setIndex(2);
+    setIndex(afterProviderIndex);
   };
 
   const openCustomProvider = () =>
@@ -856,7 +904,7 @@ export function OnboardingFlow() {
               </Text>
             </div>
             <ol className="space-y-2" aria-label="Setup progress">
-              {steps.map((item, itemIndex) => (
+              {visibleSteps.map((item, itemIndex) => (
                 <li
                   key={item}
                   aria-current={itemIndex === index ? "step" : undefined}
@@ -886,7 +934,7 @@ export function OnboardingFlow() {
                 className="hidden size-8 max-[760px]:block"
               />
               <Text variant="small-strong" color="secondary">
-                Step {index + 1} of {steps.length}
+                Step {index + 1} of {visibleSteps.length}
               </Text>
             </div>
             {step === "provider" ? (
@@ -1256,6 +1304,13 @@ export function OnboardingFlow() {
               </div>
             ) : null}
 
+            {stateReady && step === "bots" ? (
+              <OnboardingBotsStep
+                onStarted={() => void finishBotsStep()}
+                onSkip={() => void finishBotsStep()}
+              />
+            ) : null}
+
             {stateReady && step === "tour" ? (
               <div>
                 {providerSkipped ? (
@@ -1396,24 +1451,26 @@ export function OnboardingFlow() {
                   {nextBlockedReason}
                 </Text>
               ) : null}
-              <Button
-                variant="accent"
-                pressFeedback
-                disabled={!stateReady || !canContinue || saving}
-                aria-describedby={nextBlockedReason ? "onboarding-next-blocked-reason" : undefined}
-                onClick={() => void next()}
-              >
-                {discovering
-                  ? choice === "openai-key" || choice === "anthropic"
-                    ? "Validating key…"
-                    : "Discovering models…"
-                  : saving && step === "provider"
-                    ? "Adding provider…"
-                    : step === "tour"
-                      ? "Start using Aiden"
-                      : "Next"}{" "}
-                <ChevronRight />
-              </Button>
+              {step !== "bots" ? (
+                <Button
+                  variant="accent"
+                  pressFeedback
+                  disabled={!stateReady || !canContinue || saving}
+                  aria-describedby={nextBlockedReason ? "onboarding-next-blocked-reason" : undefined}
+                  onClick={() => void next()}
+                >
+                  {discovering
+                    ? choice === "openai-key" || choice === "anthropic"
+                      ? "Validating key…"
+                      : "Discovering models…"
+                    : saving && step === "provider"
+                      ? "Adding provider…"
+                      : step === "tour"
+                        ? "Start using Aiden"
+                        : "Next"}{" "}
+                  <ChevronRight />
+                </Button>
+              ) : null}
             </div>
           </footer>
         </div>
