@@ -871,6 +871,8 @@ export const devicesApi = {
       const state = parseDeviceServiceState(payload);
       if (state) handler(state);
     }),
+  /** The native trackpad gesture ended (Electron's `gestureScrollEnd`), so a 3D orbit can settle. */
+  onTrackpadScrollEnd: (handler: () => void) => onNotification<unknown>("devices:trackpad-scroll-end", () => handler()),
   /** An agent opened a simulator for this chat; the Simulator tab should come forward. */
   onReveal: (handler: (chatId: string) => void) =>
     onNotification<unknown>("devices:reveal", (payload) => {
