@@ -1,5 +1,6 @@
 import { sanitizeSubagentSnapshotText } from "./subagent-safe-text.js";
 import { boundedUnicodePrefix } from "./unicode-prefix.js";
+import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "./generation-thinking.js";
 
 export const SUBAGENT_RUN_SNAPSHOT_VERSION = 1 as const;
 export const MAX_SUBAGENT_RUNS_PER_GENERATION = 8;
@@ -53,6 +54,16 @@ export function subagentProjectionNoticesAreMonotonic(
   return allowTerminalAdditions || [...nextSet].every((notice) => currentSet.has(notice));
 }
 
+/** How a child's model was chosen: inherited, requested by the agent, configured, or a locked role. */
+export const SUBAGENT_MODEL_SELECTION_SOURCES = [
+  "inherited",
+  "requested",
+  "configured",
+  "role_locked",
+] as const;
+export type SubagentModelSelectionSource = (typeof SUBAGENT_MODEL_SELECTION_SOURCES)[number];
+const MODEL_SELECTION_SOURCES = new Set<string>(SUBAGENT_MODEL_SELECTION_SOURCES);
+
 export type SubagentRunState =
   | "queued"
   | "starting"
@@ -96,6 +107,11 @@ export interface SubagentRunSnapshotV1 {
   updatedAt: number;
   finishedAt?: number;
   modelId: string;
+  /** Present for runs recorded with per-child model selection; older runs omit it. */
+  providerId?: string;
+  /** The reasoning effort this child actually ran with, when recorded. */
+  thinkingLevel?: GenerationThinkingLevel;
+  modelSelection?: SubagentModelSelectionSource;
   turns: number;
   tools: number;
   tokens: number;
@@ -176,6 +192,9 @@ const OPTIONAL_SNAPSHOT_KEYS = new Set([
   "latestText",
   "terminalMarkdown",
   "error",
+  "providerId",
+  "thinkingLevel",
+  "modelSelection",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -287,6 +306,10 @@ export function parseSubagentRunSnapshotV1(value: unknown): SubagentRunSnapshotV
     !finiteTimestamp(value.updatedAt) ||
     value.updatedAt < value.startedAt ||
     !safeText(value.modelId, 160) ||
+    (value.providerId !== undefined && !safeText(value.providerId, 160)) ||
+    (value.thinkingLevel !== undefined && !isGenerationThinkingLevel(value.thinkingLevel)) ||
+    (value.modelSelection !== undefined &&
+      (typeof value.modelSelection !== "string" || !MODEL_SELECTION_SOURCES.has(value.modelSelection))) ||
     !nonNegativeInteger(value.turns) ||
     !nonNegativeInteger(value.tools) ||
     !nonNegativeInteger(value.tokens) ||
@@ -363,6 +386,13 @@ export function parseSubagentRunSnapshotV1(value: unknown): SubagentRunSnapshotV
     updatedAt: value.updatedAt,
     ...(value.finishedAt === undefined ? {} : { finishedAt: value.finishedAt as number }),
     modelId: value.modelId,
+    ...(value.providerId === undefined ? {} : { providerId: value.providerId as string }),
+    ...(value.thinkingLevel === undefined
+      ? {}
+      : { thinkingLevel: value.thinkingLevel as GenerationThinkingLevel }),
+    ...(value.modelSelection === undefined
+      ? {}
+      : { modelSelection: value.modelSelection as SubagentModelSelectionSource }),
     turns: value.turns,
     tools: value.tools,
     tokens: value.tokens,
@@ -662,6 +692,9 @@ function v2BaseProjection(
     updatedAt: value.updatedAt,
     ...(value.finishedAt === undefined ? {} : { finishedAt: value.finishedAt }),
     modelId: value.modelId,
+    ...(value.providerId === undefined ? {} : { providerId: value.providerId }),
+    ...(value.thinkingLevel === undefined ? {} : { thinkingLevel: value.thinkingLevel }),
+    ...(value.modelSelection === undefined ? {} : { modelSelection: value.modelSelection }),
     turns: value.turns,
     tools: value.tools,
     tokens: value.tokens,
@@ -766,6 +799,9 @@ function sameSubagentRunSnapshotIdentity(
     current.taskPreview === next.taskPreview &&
     current.startedAt === next.startedAt &&
     current.modelId === next.modelId &&
+    current.providerId === next.providerId &&
+    current.thinkingLevel === next.thinkingLevel &&
+    current.modelSelection === next.modelSelection &&
     (current.version !== 2 ||
       (next.version === 2 &&
         current.authorityRevision === next.authorityRevision &&

@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
 import android.app.Activity
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -8,9 +9,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -29,12 +32,16 @@ val LocalAidenAppearanceConfig = staticCompositionLocalOf {
     AidenAppearanceConfig()
 }
 
+/**
+ * Material 3 corner scale. Screens take radii from `MaterialTheme.shapes` (or the
+ * `AidenShape` component tokens built on it) instead of literal `RoundedCornerShape`s.
+ */
 val AidenShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(24.dp),
-    extraLarge = RoundedCornerShape(32.dp)
+    extraSmall = RoundedCornerShape(4.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(28.dp)
 )
 
 object AidenTheme {
@@ -60,16 +67,14 @@ fun AidenTheme(
         AidenAppearanceMode.DARK -> true
     }
 
-    val basePalette = AidenThemeCatalog.palette(config.preset, isDark)
-    val palette = basePalette.applyingContrast(config.contrast)
+    val basePalette = aidenPresetPalette(config.preset, isDark)
+    val palette = remember(basePalette, config.contrast) { basePalette.applyingContrast(config.contrast) }
 
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as? Activity)?.window
             if (window != null) {
-                window.statusBarColor = android.graphics.Color.TRANSPARENT
-                window.navigationBarColor = android.graphics.Color.TRANSPARENT
                 window.decorView.setBackgroundColor(palette.canvas.toArgb())
 
                 val insetsController = WindowCompat.getInsetsController(window, view)
@@ -79,66 +84,9 @@ fun AidenTheme(
         }
     }
 
-    val tones = aidenTonalSurfaces(palette, isDark)
-    val colorScheme = if (isDark) {
-        darkColorScheme(
-            primary = palette.accent,
-            onPrimary = Color.White,
-            primaryContainer = palette.accent.copy(alpha = 0.22f),
-            onPrimaryContainer = palette.accent,
-            secondary = palette.secondary,
-            onSecondary = palette.foreground,
-            secondaryContainer = palette.raised,
-            onSecondaryContainer = palette.foreground,
-            background = palette.canvas,
-            onBackground = palette.foreground,
-            surface = palette.sidebar,
-            onSurface = palette.foreground,
-            surfaceVariant = palette.raised,
-            onSurfaceVariant = palette.secondary,
-            surfaceContainerLowest = tones.lowest,
-            surfaceContainerLow = tones.low,
-            surfaceContainer = tones.container,
-            surfaceContainerHigh = tones.high,
-            surfaceContainerHighest = tones.highest,
-            outline = Color.Transparent,
-            outlineVariant = Color.Transparent,
-            error = palette.danger,
-            onError = Color.White,
-            errorContainer = palette.danger.copy(alpha = 0.2f),
-            onErrorContainer = palette.danger
-        )
-    } else {
-        lightColorScheme(
-            primary = palette.accent,
-            onPrimary = Color.White,
-            primaryContainer = palette.accent.copy(alpha = 0.14f),
-            onPrimaryContainer = palette.accent,
-            secondary = palette.secondary,
-            onSecondary = palette.foreground,
-            secondaryContainer = palette.raised,
-            onSecondaryContainer = palette.foreground,
-            background = palette.canvas,
-            onBackground = palette.foreground,
-            surface = palette.sidebar,
-            onSurface = palette.foreground,
-            surfaceVariant = palette.raised,
-            onSurfaceVariant = palette.secondary,
-            surfaceContainerLowest = tones.lowest,
-            surfaceContainerLow = tones.low,
-            surfaceContainer = tones.container,
-            surfaceContainerHigh = tones.high,
-            surfaceContainerHighest = tones.highest,
-            outline = Color.Transparent,
-            outlineVariant = Color.Transparent,
-            error = palette.danger,
-            onError = Color.White,
-            errorContainer = palette.danger.copy(alpha = 0.12f),
-            onErrorContainer = palette.danger
-        )
-    }
+    val colorScheme = aidenColorScheme(palette, isDark)
 
-    val typography = aidenTypography(palette, config.fontSize.scaleFactor)
+    val typography = aidenTypography(config.fontSize.scaleFactor)
 
     CompositionLocalProvider(
         LocalAidenPalette provides palette,
@@ -147,10 +95,111 @@ fun AidenTheme(
         MaterialTheme(
             colorScheme = colorScheme,
             typography = typography,
-            shapes = AidenShapes,
-            content = content
-        )
+            shapes = AidenShapes
+        ) {
+            // Typography carries no color, so text and icons outside a Material container
+            // read the theme foreground; containers still supply their own content color.
+            CompositionLocalProvider(LocalContentColor provides palette.foreground, content = content)
+        }
     }
+}
+
+/**
+ * Palette for [preset]. The dynamic preset derives one from the device's Material You
+ * scheme on Android 12+; below that (or in previews) it falls back to the Aiden palette.
+ */
+@Composable
+fun aidenPresetPalette(preset: AidenThemePresetID, isDark: Boolean): AidenPalette {
+    if (!preset.isDynamic || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        return AidenThemeCatalog.palette(preset, isDark)
+    }
+    val context = LocalContext.current
+    return remember(context, isDark) {
+        val scheme = if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        aidenDynamicPalette(scheme, isDark)
+    }
+}
+
+/**
+ * Maps a Material You [scheme] onto Aiden's palette slots so every screen follows it:
+ * the canvas is the base surface, the sidebar and raised cards step through the container
+ * tones the same way Aiden's own palettes do, and accent and danger take the primary and
+ * error roles. Material has no success or warning roles, so those keep Aiden's semantic
+ * colors for the mode.
+ */
+fun aidenDynamicPalette(scheme: ColorScheme, isDark: Boolean): AidenPalette {
+    val semantic = AidenThemeCatalog.palette(AidenThemePresetID.AIDEN, isDark)
+    fun hex(color: Color) = String.format("#%06X", color.toArgb() and 0xFFFFFF)
+    return AidenPalette(
+        canvasHex = hex(scheme.surface),
+        sidebarHex = hex(if (isDark) scheme.surfaceContainerLow else scheme.surfaceContainer),
+        raisedHex = hex(if (isDark) scheme.surfaceContainer else scheme.surfaceContainerLowest),
+        foregroundHex = hex(scheme.onSurface),
+        secondaryHex = hex(scheme.onSurfaceVariant),
+        accentHex = hex(scheme.primary),
+        successHex = semantic.successHex,
+        warningHex = semantic.warningHex,
+        dangerHex = hex(scheme.error)
+    )
+}
+
+/**
+ * Maps an Aiden palette onto every Material color role. Container roles are opaque tones
+ * composited over the surface they sit on, so pairs such as `primaryContainer` /
+ * `onPrimaryContainer` keep their contrast on any background, and `outline` /
+ * `outlineVariant` give switches, dividers, and checkboxes a visible boundary.
+ */
+fun aidenColorScheme(palette: AidenPalette, isDark: Boolean): ColorScheme {
+    val tones = aidenTonalSurfaces(palette, isDark)
+    val base = palette.sidebar
+    fun tint(color: Color, alpha: Float) = color.copy(alpha = alpha).compositeOver(base)
+    val primaryContainer = tint(palette.accent, if (isDark) 0.24f else 0.14f)
+    val secondary = palette.accent.copy(alpha = 0.72f).compositeOver(palette.secondary)
+    val secondaryContainer = tint(palette.accent, if (isDark) 0.18f else 0.10f)
+    val tertiaryContainer = tint(palette.success, if (isDark) 0.22f else 0.12f)
+    val errorContainer = tint(palette.danger, if (isDark) 0.22f else 0.12f)
+    val outline = palette.foreground.copy(alpha = if (isDark) 0.50f else 0.55f).compositeOver(base)
+    val outlineVariant = palette.foreground.copy(alpha = if (isDark) 0.16f else 0.12f).compositeOver(base)
+    val seed = if (isDark) darkColorScheme() else lightColorScheme()
+    return seed.copy(
+        primary = palette.accent,
+        onPrimary = palette.onAccent,
+        primaryContainer = primaryContainer,
+        onPrimaryContainer = palette.foreground,
+        inversePrimary = palette.accent,
+        secondary = secondary,
+        onSecondary = AidenPalette.readableOn(secondary),
+        secondaryContainer = secondaryContainer,
+        onSecondaryContainer = palette.foreground,
+        tertiary = palette.success,
+        onTertiary = AidenPalette.readableOn(palette.success),
+        tertiaryContainer = tertiaryContainer,
+        onTertiaryContainer = palette.foreground,
+        background = palette.canvas,
+        onBackground = palette.foreground,
+        surface = palette.sidebar,
+        onSurface = palette.foreground,
+        // Distinct from every container tier so contentColorFor never maps a container to grey text.
+        surfaceVariant = palette.foreground.copy(alpha = if (isDark) 0.10f else 0.07f).compositeOver(base),
+        onSurfaceVariant = palette.secondary,
+        surfaceTint = palette.accent,
+        inverseSurface = palette.foreground,
+        inverseOnSurface = palette.canvas,
+        error = palette.danger,
+        onError = AidenPalette.readableOn(palette.danger),
+        errorContainer = errorContainer,
+        onErrorContainer = palette.foreground,
+        outline = outline,
+        outlineVariant = outlineVariant,
+        scrim = Color.Black.copy(alpha = 0.32f),
+        surfaceBright = if (isDark) tones.highest else palette.raised,
+        surfaceContainer = tones.container,
+        surfaceContainerHigh = tones.high,
+        surfaceContainerHighest = tones.highest,
+        surfaceContainerLow = tones.low,
+        surfaceContainerLowest = tones.lowest,
+        surfaceDim = if (isDark) palette.canvas else tones.high
+    )
 }
 
 /** The five Material container tiers Aiden derives from a palette. */
@@ -189,10 +238,11 @@ fun aidenTonalSurfaces(palette: AidenPalette, isDark: Boolean): AidenTonalSurfac
 
 /**
  * Aiden's type scale. Display and headline roles use tighter optical tracking; body and
- * label roles open up slightly. Every role trims font padding and centers glyphs inside
+ * label roles open up slightly. Styles carry no color: Material components and
+ * `LocalContentColor` decide it, so labels on filled buttons and chips stay readable. Every role trims font padding and centers glyphs inside
  * the line box so icon-and-label rows align on the cap height.
  */
-fun aidenTypography(palette: AidenPalette, scale: Float): Typography {
+fun aidenTypography(scale: Float): Typography {
     val optical = LineHeightStyle(
         alignment = LineHeightStyle.Alignment.Center,
         trim = LineHeightStyle.Trim.Both
@@ -201,33 +251,31 @@ fun aidenTypography(palette: AidenPalette, scale: Float): Typography {
         weight: FontWeight,
         size: Float,
         lineHeight: Float,
-        tracking: Double,
-        color: Color
+        tracking: Double
     ) = TextStyle(
         fontWeight = weight,
         fontSize = (size * scale).sp,
         lineHeight = (lineHeight * scale).sp,
         letterSpacing = tracking.sp,
-        color = color,
         lineHeightStyle = optical,
         platformStyle = PlatformTextStyle(includeFontPadding = false)
     )
     return Typography(
-        displayLarge = style(FontWeight.SemiBold, 44f, 50f, -0.9, palette.foreground),
-        displayMedium = style(FontWeight.SemiBold, 36f, 42f, -0.7, palette.foreground),
-        displaySmall = style(FontWeight.SemiBold, 32f, 38f, -0.6, palette.foreground),
-        headlineLarge = style(FontWeight.SemiBold, 28f, 34f, -0.45, palette.foreground),
-        headlineMedium = style(FontWeight.SemiBold, 24f, 30f, -0.25, palette.foreground),
-        headlineSmall = style(FontWeight.Medium, 20f, 26f, -0.1, palette.foreground),
-        titleLarge = style(FontWeight.Medium, 20f, 26f, -0.1, palette.foreground),
-        titleMedium = style(FontWeight.SemiBold, 16f, 22f, 0.1, palette.foreground),
-        titleSmall = style(FontWeight.Medium, 14f, 20f, 0.1, palette.secondary),
-        bodyLarge = style(FontWeight.Normal, 16f, 25f, 0.1, palette.foreground),
-        bodyMedium = style(FontWeight.Normal, 14f, 20f, 0.25, palette.foreground),
-        bodySmall = style(FontWeight.Normal, 12f, 16f, 0.3, palette.secondary),
-        labelLarge = style(FontWeight.SemiBold, 14f, 20f, 0.1, palette.foreground),
-        labelMedium = style(FontWeight.SemiBold, 12f, 16f, 0.4, palette.foreground),
-        labelSmall = style(FontWeight.Medium, 11f, 14f, 0.5, palette.secondary)
+        displayLarge = style(FontWeight.SemiBold, 44f, 50f, -0.9),
+        displayMedium = style(FontWeight.SemiBold, 36f, 42f, -0.7),
+        displaySmall = style(FontWeight.SemiBold, 32f, 38f, -0.6),
+        headlineLarge = style(FontWeight.SemiBold, 28f, 34f, -0.45),
+        headlineMedium = style(FontWeight.SemiBold, 24f, 30f, -0.25),
+        headlineSmall = style(FontWeight.Medium, 20f, 26f, -0.1),
+        titleLarge = style(FontWeight.Medium, 20f, 26f, -0.1),
+        titleMedium = style(FontWeight.SemiBold, 16f, 22f, 0.1),
+        titleSmall = style(FontWeight.Medium, 14f, 20f, 0.1),
+        bodyLarge = style(FontWeight.Normal, 16f, 25f, 0.1),
+        bodyMedium = style(FontWeight.Normal, 14f, 20f, 0.25),
+        bodySmall = style(FontWeight.Normal, 12f, 16f, 0.3),
+        labelLarge = style(FontWeight.SemiBold, 14f, 20f, 0.1),
+        labelMedium = style(FontWeight.SemiBold, 12f, 16f, 0.4),
+        labelSmall = style(FontWeight.Medium, 11f, 14f, 0.5)
     )
 }
 

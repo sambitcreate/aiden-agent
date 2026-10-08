@@ -4279,6 +4279,26 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(catalog.visibleProviders.first?.models.map(\.id), ["text"])
     }
 
+    func testCustomGLMEffortCatalogSupportsOffAndMaxWithoutInventingMedium() throws {
+        let catalog = try JSONDecoder().decode(AidenModelCatalog.self, from: Data(
+            #"{"providers":[{"id":"custom:private","label":"Private","models":[{"id":"glm","label":"GLM","thinkingLevels":["off","low","high","max"],"defaultThinkingLevel":"max","thinkingCanDisable":true}]}],"defaults":{}}"#.utf8
+        ))
+        let model = try XCTUnwrap(catalog.providers.first?.models.first)
+        XCTAssertEqual(model.thinkingLevels, ["off", "low", "high", "max"])
+        XCTAssertEqual(model.effectiveThinkingLevel, "max")
+        XCTAssertEqual(model.thinkingLabel(for: "off"), "Off")
+        XCTAssertFalse(model.thinkingLevels?.contains("medium") ?? true)
+        let expanded = try JSONDecoder().decode(AidenModelCatalog.self, from: Data(
+            #"{"providers":[{"id":"custom:private","label":"Private","models":[{"id":"all","label":"All","thinkingLevels":["off","low","medium","high","xhigh","max"],"defaultThinkingLevel":"xhigh","thinkingCanDisable":true},{"id":"subset","label":"Subset","thinkingLevels":["medium","xhigh","max"],"defaultThinkingLevel":"max","thinkingCanDisable":false}]}],"defaults":{}}"#.utf8
+        ))
+        let models = try XCTUnwrap(expanded.providers.first?.models)
+        XCTAssertEqual(models[0].effectiveThinkingLevel, "xhigh")
+        XCTAssertEqual(models[0].thinkingLabel(for: "medium"), "Medium")
+        XCTAssertEqual(models[1].thinkingLevels, ["medium", "xhigh", "max"])
+        XCTAssertEqual(models[1].effectiveThinkingLevel, "max")
+        XCTAssertFalse(models[1].thinkingCanDisable ?? true)
+    }
+
     func testModelCatalogPreservesThinkingDefaultAndRequiredThinkingPresentation() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,

@@ -110,9 +110,12 @@ class AidenScheduledRunNotifier(context: Context) {
         val failed = item.status == "failed"
         val title = displaySafe(item.taskName, 120)
         val body = when {
-            failed -> "Scheduled run failed (${item.errorCode ?: "error"})."
+            failed -> appContext.getString(
+                R.string.notification_scheduled_failed,
+                item.errorCode ?: appContext.getString(R.string.notification_scheduled_failed_default_code)
+            )
             !item.summary.isNullOrEmpty() -> displaySafe(item.summary, 200)
-            else -> "Scheduled run completed."
+            else -> appContext.getString(R.string.notification_scheduled_completed)
         }
         val notification = NotificationCompat.Builder(appContext, AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)

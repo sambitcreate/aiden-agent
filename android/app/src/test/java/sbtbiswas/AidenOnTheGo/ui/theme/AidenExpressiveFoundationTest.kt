@@ -121,14 +121,39 @@ class AidenExpressiveFoundationTest {
 
     @Test
     fun typographyKeepsTighterTrackingOnLargerRoles() {
-        val palette = AidenThemeCatalog.palette(AidenThemePresetID.AIDEN, isDark = false)
-        val type = aidenTypography(palette, scale = 1f)
+        val type = aidenTypography(scale = 1f)
 
         assertTrue(type.displayLarge.letterSpacing.value < type.headlineLarge.letterSpacing.value)
         assertTrue(type.headlineLarge.letterSpacing.value < type.bodyLarge.letterSpacing.value)
         assertTrue(type.bodyLarge.lineHeight.value > type.bodyLarge.fontSize.value)
-        val scaled = aidenTypography(palette, scale = 1.2f)
+        val scaled = aidenTypography(scale = 1.2f)
         assertEquals(type.bodyLarge.fontSize.value * 1.2f, scaled.bodyLarge.fontSize.value, 0.01f)
+    }
+
+    @Test
+    fun typographyLeavesColorToContainers() {
+        val type = aidenTypography(scale = 1f)
+        listOf(type.bodyLarge, type.bodySmall, type.labelLarge, type.titleSmall, type.labelSmall).forEach {
+            assertEquals(Color.Unspecified, it.color)
+        }
+    }
+
+    @Test
+    fun everyThemeKeepsReadableTextOnAccentAndVisibleBoundaries() {
+        for (preset in AidenThemePresetID.entries) {
+            for (dark in listOf(false, true)) {
+                val palette = AidenThemeCatalog.palette(preset, dark)
+                val scheme = aidenColorScheme(palette, dark)
+                val label = "${preset.name} dark=$dark"
+                assertTrue("$label onPrimary", contrast(scheme.primary, scheme.onPrimary) >= 4.5f)
+                assertTrue("$label onError", contrast(scheme.error, scheme.onError) >= 3f)
+                listOf(scheme.primaryContainer, scheme.secondaryContainer, scheme.errorContainer, scheme.outline, scheme.outlineVariant)
+                    .forEach { assertEquals("$label opaque role", 1f, it.alpha, 0.001f) }
+                // Unchecked switches draw their thumb in `outline`; it must stand off the track.
+                assertTrue("$label outline", contrast(scheme.outline, scheme.surfaceContainerHighest) >= 1.8f)
+                assertTrue("$label container text", contrast(scheme.primaryContainer, scheme.onPrimaryContainer) >= 4.5f)
+            }
+        }
     }
 
     private fun contrast(a: Color, b: Color): Float {

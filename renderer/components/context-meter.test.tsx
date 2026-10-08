@@ -84,3 +84,16 @@ test("the trigger reports usable-input pressure without clamping", () => {
   assert.match(over, />131%</u);
   assert.match(over, /text-support-warning/u);
 });
+
+
+test("context details aggregate durable turn totals once without inventing unavailable usage", async () => {
+  const { recordedChatUsage, ChatContextPanel } = await import("./chat-context-panel.js");
+  const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage: { input: 100, output: 20, cacheRead: 500, cacheWrite: 40, total: 660, requests: 3 } } };
+  const messages = [turn, turn, { id: "old", role: "assistant" as const, content: "legacy", createdAt: 1 }];
+  assert.deepEqual(recordedChatUsage({ messages }), { input: 100, output: 20, cacheRead: 500, cacheWrite: 40, total: 660, requests: 3, turns: 1, assistantMessages: 2, userMessages: 0 });
+  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages }, pressure: pressure(), compacting: false, providerLabel: "Local", modelLabel: "Model" }} />);
+  assert.match(html, /Reported usage from 1 of 2 saved assistant turns/);
+  assert.match(html, /Total cost<.*Unavailable/);
+  assert.doesNotMatch(html, /\$0\.00/);
+  assert.match(html, /42% of usable context/);
+});

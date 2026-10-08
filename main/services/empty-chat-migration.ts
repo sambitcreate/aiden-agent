@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { Chat, ChatMeta } from "./types.js";
 
@@ -40,8 +40,8 @@ export function isLegacyEmptyWorkspaceChat(
   reservedChatIds: ReadonlySet<string>,
 ): boolean {
   const workspaceId = persistedChatWorkspaceId(chat.workspaceId);
-  return chat.messages.length === 0 && chat.botId === undefined &&
-    workspaceId !== ASSISTANT_WORKSPACE_ID && workspaceIds.has(workspaceId) &&
+  return chat.messages.length === 0 && chatSurface(chat) === "regular" &&
+    workspaceIds.has(workspaceId) &&
     !chat.id.startsWith("telegram-") && !chat.id.startsWith("assistant-") &&
     !reservedChatIds.has(chat.id);
 }

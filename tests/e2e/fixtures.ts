@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startFakeOpenRouter, type FakeOpenRouter } from "./fake-openrouter";
 
 export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -159,6 +160,8 @@ export type AidenE2e = {
   rootDir: string;
   workspaceDir: string;
   lmStudio: LmStudioEndpoint;
+  /** Present only when the spec opts into the fake OpenRouter. */
+  openRouter?: FakeOpenRouter;
   /** Relaunches the app; `appEnvironment` replaces the test's extra app environment. */
   relaunch: (
     afterClose?: () => Promise<void>,
@@ -171,6 +174,8 @@ type AidenE2eOptions = {
   workspaceSeed: boolean;
   /** Extra variables for the app process, such as experimental feature flags. */
   appEnvironment: Record<string, string>;
+  /** Routes OpenRouter to a loopback fake and provides a test-only key via env. */
+  fakeOpenRouter: boolean;
 };
 
 type MockLmStudio = LmStudioEndpoint & {
@@ -494,6 +499,8 @@ async function assertRuntimeIsolation(
     xdgDataDir: string;
     environment: Record<string, string>;
     runtimeProfile: "development" | "production";
+    /** Credential names this launch deliberately provides; every other one is still forbidden. */
+    allowedCredentialKeys: readonly string[];
   },
 ): Promise<void> {
   const runtime = await app.evaluate(({ app: electronApp }) => ({
@@ -558,8 +565,9 @@ async function assertRuntimeIsolation(
       `The E2E app environment was not hermetic: expected ${expectedEnvironmentKeys.join(", ")}; received ${runtimeEnvironmentKeys.join(", ")}.`,
     );
   }
+  const allowedKeys = new Set(expected.allowedCredentialKeys);
   const forbiddenAuthKeys = runtime.environmentKeys.filter(
-    (key) => PI_AMBIENT_AUTH_ENV_NAMES.has(key) || CREDENTIAL_ENV_NAME.test(key),
+    (key) => !allowedKeys.has(key) && (PI_AMBIENT_AUTH_ENV_NAMES.has(key) || CREDENTIAL_ENV_NAME.test(key)),
   );
   if (forbiddenAuthKeys.length > 0) {
     throw new Error(
@@ -735,14 +743,16 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
   workspaceSeed: [false, { option: true }],
   appEnvironment: [{}, { option: true }],
+  fakeOpenRouter: [false, { option: true }],
   aiden: async (
-    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment },
+    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, fakeOpenRouter },
     use,
     testInfo,
   ) => {
     let extraAppEnvironment = appEnvironment;
     let rootDir: string | undefined;
     let mock: MockLmStudio | undefined;
+    let openRouter: FakeOpenRouter | undefined;
     let app: ElectronApplication | undefined;
     let state: AidenE2e | undefined;
     let primaryFailure: unknown;
@@ -783,6 +793,13 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         );
       }
 
+      if (fakeOpenRouter) openRouter = await startFakeOpenRouter();
+      const fakeOpenRouterEnvironment: Record<string, string> = openRouter
+        ? {
+            AIDEN_E2E_OPENROUTER_REDIRECT_ORIGIN: openRouter.origin,
+            OPENROUTER_API_KEY: "sk-or-v1-aiden-e2e-not-a-real-key",
+          }
+        : {};
       const launch = async (): Promise<Page> => {
         const runtimeProfile = process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "production" : "development";
         const launchEnvironment: Record<string, string> = {
@@ -801,6 +818,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           XDG_CONFIG_HOME: testXdgConfigDir,
           XDG_DATA_HOME: testXdgDataDir,
           ...(redirectOrigin ? { [LM_STUDIO_REDIRECT_ENV]: redirectOrigin } : {}),
+          ...fakeOpenRouterEnvironment,
           ...extraAppEnvironment,
         };
         const launchArgs = [
@@ -831,6 +849,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           xdgDataDir: testXdgDataDir,
           environment: launchEnvironment,
           runtimeProfile,
+          allowedCredentialKeys: openRouter ? ["OPENROUTER_API_KEY"] : [],
         });
         const page = await firstAidenWindow(launchedApp);
         if (state) {
@@ -849,6 +868,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         rootDir: testRootDir,
         workspaceDir: testWorkspaceDir,
         lmStudio,
+        openRouter,
         relaunch: async (afterClose, nextAppEnvironment) => {
           if (nextAppEnvironment) extraAppEnvironment = nextAppEnvironment;
           const previous = app;
@@ -901,6 +921,13 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       await closeAiden(app);
     } catch (error) {
       teardownFailures.push(error);
+    }
+    if (openRouter) {
+      try {
+        await openRouter.close();
+      } catch (error) {
+        teardownFailures.push(error);
+      }
     }
     if (mock) {
       try {

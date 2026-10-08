@@ -5,6 +5,7 @@ import type { TtsSettingsV1 } from "../shared/tts";
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { ChatOwnerV1 } from "../shared/chat-visibility";
 import type { KeybindingOverridesV1 } from "../shared/keybindings";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -274,6 +275,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -308,6 +310,8 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 
@@ -637,6 +641,8 @@ export interface ChatMeta {
   lastAssistantSequence?: number;
   /** Set when this chat was created by Fork. */
   forkedFrom?: ChatForkLineageV1;
+  /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
+  owner?: ChatOwnerV1;
   createdAt: number;
   updatedAt: number;
 }

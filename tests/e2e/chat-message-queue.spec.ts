@@ -71,7 +71,7 @@ test("workspace bar auto-hides after sending and its appearance setting survives
   const composer = () => page.locator("textarea");
   const bar = () => page.locator(".composer-context-collapse");
   const transcriptMessage = (text: string) =>
-    page.getByRole("main").getByText(text, { exact: true }).last();
+    page.locator("[data-subagent-chip-focus-scope]").getByText(text, { exact: true });
   const sentChat = () =>
     page
       .locator("[data-sidebar]")
@@ -592,7 +592,7 @@ test("Stop after revisiting cancels the detached response and permits a new mess
       .locator("[data-sidebar]")
       .getByRole("button", { name: /^Stop after returning to this chat/u });
   const transcriptMessage = () =>
-    page.getByRole("main").getByText(originalMessage, { exact: true }).last();
+    page.locator("[data-subagent-chip-focus-scope]").getByText(originalMessage, { exact: true });
   const stop = () => page.getByRole("button", { name: "Stop generating" });
   await composer.fill(originalMessage);
   await composer.press("Enter");

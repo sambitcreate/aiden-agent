@@ -6,6 +6,7 @@
 
 import type { Query, QueryClient } from "@tanstack/react-query";
 import { queryKeys } from "./queries";
+import { githubPausedUntil } from "./github-pause";
 import { subscribeWindowActivated } from "./window-activity";
 
 type Subscribe = (channel: string, handler: (payload: unknown) => void) => () => void;
@@ -51,11 +52,15 @@ export function subscribeGitQuerySync(
   const refreshWorkingTree = (workspaceId?: string) => {
     void queryClient.invalidateQueries({ predicate: matches(WORKING_TREE_ROOTS, workspaceId) });
   };
-  // `gh pr view` is a network call: refresh pull-request status on change
-  // events only when its cached answer is already stale.
+  // Pull-request status is a GitHub API call: refresh it on change events
+  // only when its cached answer is already stale, and never while GitHub has
+  // paused reads after a rate limit.
   const refreshPullRequestIfStale = (workspaceId?: string) => {
     void queryClient.refetchQueries({
-      predicate: (query) => query.queryKey[0] === PULL_REQUEST_ROOT && (workspaceId === undefined || query.queryKey[1] === workspaceId),
+      predicate: (query) =>
+        query.queryKey[0] === PULL_REQUEST_ROOT &&
+        (workspaceId === undefined || query.queryKey[1] === workspaceId) &&
+        githubPausedUntil(query.state.data, now()) === undefined,
       type: "active",
       stale: true,
     });

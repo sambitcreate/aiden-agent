@@ -2,7 +2,7 @@
 
 Aiden can show an iOS Simulator in the Environment panel's **Simulator** tab. There you can tap, type and turn the device yourself. You can also let chats drive it with the `device_*` agent tools while you watch. The design is adapted from T3 Code (MIT, commit `1c127066`); see `THIRD_PARTY_NOTICES.md`.
 
-The feature is experimental. It is off unless Aiden is launched with `AIDEN_EXPERIMENTAL_DEVICES=1` (or `true`), and it is available only on macOS with Xcode installed.
+The feature is on by default on macOS and needs Xcode installed. It is never available on other platforms. To turn it off, launch Aiden with `AIDEN_EXPERIMENTAL_DEVICES=0` (any value other than `1` or `true` disables it).
 
 ## Using it
 

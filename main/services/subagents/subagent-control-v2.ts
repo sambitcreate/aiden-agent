@@ -160,6 +160,9 @@ function sameRunIdentity(left: SubagentRunSnapshotV2, right: SubagentRunSnapshot
     left.taskPreview === right.taskPreview &&
     left.startedAt === right.startedAt &&
     left.modelId === right.modelId &&
+    left.providerId === right.providerId &&
+    left.thinkingLevel === right.thinkingLevel &&
+    left.modelSelection === right.modelSelection &&
     sameOptional(left.parentRunId, right.parentRunId) &&
     sameOptional(left.retryOfRunId, right.retryOfRunId) &&
     left.depth === right.depth &&

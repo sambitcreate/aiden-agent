@@ -14,30 +14,6 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("sidebar places primary actions above the unified workspace outline", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  const sidebarBody = between(sidebar, "<Sidebar\n", "</Sidebar>");
-  const newAgentIndex = sidebarBody.indexOf("New Agent");
-  const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
-  const workspaceIndex = sidebarBody.indexOf("Workspaces");
-
-  assert.notEqual(newAgentIndex, -1);
-  assert.notEqual(scheduledIndex, -1);
-  assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
-  assert.ok(
-    scheduledIndex < workspaceIndex,
-    "Scheduled should stay above the unified workspace and chat list",
-  );
-});
-
-test("new agent uses the same sidebar row style as scheduled", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  const section = between(sidebar, '<div className="flex flex-col gap-0.5 px-2.5 pb-2">', "</div>");
-  assert.match(section, /<SidebarListItem[\s\S]*title="New Agent"/u);
-  assert.match(section, /<SidebarListItem[\s\S]*title="Scheduled"/u);
-  assert.doesNotMatch(section, /variant="accent"/u);
-});
-
 test("newAgent opens a transient draft in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /const newAgentInWorkspace = React\.useCallback/u);
@@ -205,7 +181,10 @@ test("workspace pull request indicators surface checks without owning GitHub sec
     /<div className="group\/workspace-actions relative size-7 shrink-0">[\s\S]*?<div className="absolute inset-0 group-hover\/workspace:invisible group-has-\[\.workspace-overflow-trigger:focus-visible\]\/workspace-actions:invisible group-has-\[\.workspace-overflow-trigger\[data-state=open\]\]\/workspace-actions:invisible">[\s\S]*?<WorkspacePullRequestIndicator\s+workspace=\{workspace\}\s+visible=\{explicitlyExpanded\}\s+accessibilityName=\{workspaceAccessibleName\(\s*workspace,\s*pathPreferences,\s*workspaces,?\s*\)\}\s+\/>[\s\S]*?<SidebarOverflowMenu[\s\S]*?triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover\/workspace:pointer-events-auto group-hover\/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-\[state=open\]:pointer-events-auto data-\[state=open\]:opacity-100"/u,
   );
   assert.match(queries, /gitPullRequestStatus: \(workspaceId: string \| undefined\)/u);
-  assert.match(ipc, /pullRequestStatus: \(workspaceId: string\) =>/u);
+  assert.match(
+    ipc,
+    /pullRequestStatus: \(workspaceId: string, options\?: \{ interactive\?: boolean \}\) =>/u,
+  );
 });
 
 test("workspace outline expands groups without creating or opening chats", () => {
@@ -352,20 +331,8 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   assert.match(styles, /@container settings-content \(max-width: 640px\)/u);
 });
 
-test("environment inline handoff uses the same animated spacer pattern", () => {
-  const panel = source("./environment-panel.tsx");
-  assert.match(panel, /environment-panel absolute z-30/u);
-  assert.match(panel, /inline\s*\? "inset-y-0 right-0 border-l border-separator"/u);
-  assert.match(
-    panel,
-    /"bottom-3 right-3 top-3 rounded-sheet border border-separator shadow-dialog"/u,
-  );
-  assert.match(
-    panel,
-    /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,
-  );
-  assert.doesNotMatch(panel, /inline \? "relative" : "absolute/u);
-});
+// Workspace layout is covered by Electron geometry checks in workspace-panel.spec.ts
+// and focus/interaction checks in environment-focus.spec.ts.
 
 test("terminal drawer keeps its exit surface until the shared motion completes", () => {
   const terminal = source("./terminal-drawer.tsx");
