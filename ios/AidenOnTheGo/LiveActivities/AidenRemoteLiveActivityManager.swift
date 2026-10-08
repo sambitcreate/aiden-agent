@@ -5,7 +5,14 @@ import Foundation
 /// bounded state written here and never receives network credentials.
 @MainActor
 final class AidenRemoteLiveActivityManager {
-    static let shared = AidenRemoteLiveActivityManager()
+    /// The unit-test host never drives the device's ActivityKit through the
+    /// shared manager (chat models, coordinator purges): ActivityKit is
+    /// system-wide and slow on loaded simulators, and those flows await it
+    /// before transcript reads and purges. ActivityKit tests build their own
+    /// managers.
+    static let shared = AidenRemoteLiveActivityManager(
+        drivesActivityKit: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+    )
 
     static let responseExcerptPreferenceKey = "aiden.live-activities.response-excerpts"
 
@@ -24,9 +31,6 @@ final class AidenRemoteLiveActivityManager {
     private let defaults: UserDefaults
     /// False keeps this manager off the device's ActivityKit entirely: it
     /// requests, updates and ends nothing and sees no existing activities.
-    /// Chat view-model tests use it because their flows await `finish`
-    /// before reconciling the transcript, and a loaded simulator's Live
-    /// Activity daemon can hold that await for seconds.
     private let drivesActivityKit: Bool
     private var currentActivity: Activity<AgentRunActivityAttributes>?
     private var stateByActivityID: [String: ContentState] = [:]
