@@ -46,6 +46,8 @@ import {
 
 export const SSH_START_TIMEOUT_MS = 22 * 60_000;
 export const SSH_PROBE_TIMEOUT_MS = 45_000;
+/** Stopping is best effort; a host that does not answer must not hold up a revoke or quit. */
+export const SSH_STOP_TIMEOUT_MS = 10_000;
 export const SSH_FORWARD_READY_TIMEOUT_MS = 15_000;
 export const SSH_RECONNECT_ATTEMPTS = 5;
 export const SSH_RECONNECT_MAX_DELAY_MS = 30_000;
@@ -285,7 +287,12 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
   async function bootstrap(mode: SshDeviceScriptMode, allowInstall = false): Promise<SshCommandResult> {
     const result = await deps.runSsh(sshCommandArgs(config, remoteNodeBootstrap), {
       stdin: remoteDeviceScript(deps.owner, mode, { allowInstall }),
-      timeoutMs: mode === "start" || mode === "agent-start" ? SSH_START_TIMEOUT_MS : SSH_PROBE_TIMEOUT_MS,
+      timeoutMs:
+        mode === "start" || mode === "agent-start"
+          ? SSH_START_TIMEOUT_MS
+          : mode === "probe"
+            ? SSH_PROBE_TIMEOUT_MS
+            : SSH_STOP_TIMEOUT_MS,
     });
     if (result.code === SSH_MISSING_TOOL_EXIT) {
       const line = result.stderr.split(/\r?\n/u).find((entry) => entry.startsWith(SSH_MISSING_TOOL_PREFIX));

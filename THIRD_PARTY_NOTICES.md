@@ -137,6 +137,13 @@ its stream client, simulator controls, and procedural 3D device frame
 Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
 not included; the device-motion spring is Aiden's own.
 
+SSH device hosts (`ssh-device-host.ts`, `ssh-device-script.ts`,
+`local-ssh-target.ts`), locked helper-version maintenance
+(`device-tool-maintenance.ts`), and the SSH hosts, tool-version, and host
+diagnostics UI (`renderer/components/settings/simulator-ssh-hosts.tsx`,
+`renderer/components/device-host-diagnostics.tsx`) are adapted from T3 Code at
+commit `a6ec88f7`, under the same MIT license.
+
 ## three.js
 
 Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is

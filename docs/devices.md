@@ -26,21 +26,47 @@ A Mac you paired as an Aiden desktop can share its simulators. On the Mac that h
 - turn on **Share with paired Macs**, and
 - grant the other Mac simulator control in **Aiden On The Go**.
 
-The paired Mac's simulators then appear under their own heading in your tab. Aiden checks paired Macs only when you open the tab or choose refresh. It never polls in the background. Agent tools use this Mac's simulators only.
+The paired Mac's simulators then appear under their own heading in your tab. Aiden checks paired Macs only when you open the tab or choose refresh. It never polls in the background. Agent tools never use a paired Mac's simulators.
+
+### Simulators on SSH hosts
+
+Any Mac you can already reach with `ssh` can lend its simulators. It needs Xcode, Node.js 22 or newer, and npm on the PATH of a non-interactive SSH shell (Aiden adds `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`).
+
+1. In Settings → **Simulator** → **SSH hosts**, choose **Add SSH host**. Enter a name, an SSH target (`user@host` or an alias from `~/.ssh/config`), and optionally an identity file and port.
+2. Choose **Test connection**. Aiden checks Node, npm, Xcode, and the helper versions on the host. It installs and starts nothing. A target that resolves to this Mac is reported as such and skipped.
+3. Save the host, then choose **Install…** on its row. After you confirm, Aiden runs `npm` on the host to install the pinned `expo-device-hub` (and `agent-device` when agent access is on) into `~/.aiden/devices` there.
+4. In the Simulator tab the host appears after This Mac and any paired Macs. Choose **Connect**, then open a simulator as usual.
+
+Aiden runs the system `/usr/bin/ssh` with `BatchMode=yes`. It never asks for or stores passwords or keys, so the key must be loaded in `ssh-agent` or named in your SSH config or the identity-file field. SSH hosts are contacted only when you choose **Connect**, **Retry**, **Refresh**, **Open**, **Test connection**, **Install**, **Update**, or **Check versions**. Startup and background refreshes never contact them. Turning simulator streaming off, removing a host, or quitting Aiden closes the tunnels and stops the helpers Aiden started on the host. Helpers installed on a host stay there.
+
+When agent access is on, `device_list` and `device_open` also cover SSH hosts that you have connected. The agent never connects a host or installs anything on it. If agent tools are missing on a host, the agent asks you to install them in Settings.
+
+### Helper versions and updates
+
+Each host shows its helpers' installed, running, and pinned versions: in Settings → Simulator, on each SSH host row, and under **Host diagnostics** in the Device tools drawer and the Simulator tab before the hub is ready.
+
+When a new Aiden release pins a newer helper, the update runs only as part of an explicit action, and only for a helper you already approved. Approval means simulator streaming for this Mac's hub, agent access for its `agent-device`, and **Install** for an SSH host. The explicit actions are **Start**, **Retry**, or **Update** on this Mac, and **Connect**, **Refresh**, or **Retry** on an SSH host. Progress such as "Updating the device hub from 0.11.0 to 0.12.0…" shows wherever the host is listed, and a failure offers **Retry** for that host. Nothing updates at startup or in the background.
+
+**Check versions** only reads: the disk on this Mac, and one SSH call per SSH host. It never queries the npm registry.
+
+After a successful update, Aiden reclaims old versions. It keeps the newest previous version as a fallback. **Prune old versions** removes every unpinned version. Both run under a maintenance lock and never delete a version that a running helper was started from.
 
 ## Settings → Simulator
 
 Settings → **Simulator** appears in the settings list and command palette only when the feature flag is on. It contains:
 
 - **Simulator streaming**, **Agent access** and **Share with paired Macs** switches. Turning on either of the first two asks before anything is downloaded from npm. Turning streaming off also turns the other two off.
-- **Helper tools**: the pinned version of each helper, whether it is installed, and any older versions still on disk. Reading this touches only the disk.
-- **Prune old versions**: deletes every helper version except the pinned ones. An install in progress is left alone.
+- **Helper tools**: the pinned version of each helper, whether it is installed or running, and any older versions still on disk. Reading this touches only the disk. An outdated helper shows **Update** when its permission is on.
+- **Check device tool versions**: re-reads the versions on this Mac and on each SSH host. It installs and changes nothing.
+- **Prune old versions**: deletes every helper version except the pinned ones and any version a running helper uses. It runs under the maintenance lock, and an install in progress is left alone.
+- **SSH hosts**: add, edit, test, connect, install on, and remove SSH device hosts (see [Simulators on SSH hosts](#simulators-on-ssh-hosts)).
 - **Remove installed tools**: asks first, then turns every permission off, stops both helpers, and deletes them together with saved screenshots and agent state. Your simulators and their apps are not touched.
 
 ## Network and privacy
 
 - The only new outbound traffic is `npm install <tool>@<exact version>` against your configured npm registry. It runs only after you confirm simulator setup or agent access. The install also lets `node-datachannel` download its prebuilt native binary. Aiden sends nothing about your chats.
 - Startup, background refreshes, onboarding and the agent tools never install anything. If the helpers are missing, they say so.
+- SSH hosts are contacted over your own `ssh` only from the actions listed in [Simulators on SSH hosts](#simulators-on-ssh-hosts). Their installs run `npm` on that host against its configured registry, and only after you confirm **Install**. Streams from a host travel through the SSH tunnel to this Mac's token proxy. The renderer never connects to the host directly.
 - Screenshots you send to a chat go to that chat's selected model, like any image attachment.
 
 ## Troubleshooting
@@ -52,6 +78,10 @@ Settings → **Simulator** appears in the settings list and command palette only
 | The screen stays black | Close the device and open it again. If the stream can't renew its grant three times in a minute, **Reconnect** appears. |
 | The 3D frame never shows | The stream is using MJPEG, the device has a hinge, or WebGL is unavailable. The flat view is intended in these cases. |
 | A paired Mac shows no simulators | On that Mac, check **Share with paired Macs** and the simulator-control grant for this Mac. |
+| An SSH host says SSH was refused | Load the key with `ssh-add`, or set the host's identity file. Aiden runs ssh in batch mode and never prompts for passwords. |
+| An SSH host stops at host key verification | Run `ssh <target>` once in Terminal to accept the host key, then choose **Retry**. |
+| "Node.js was not found" or "npm was not found" on an SSH host | Install Node.js 22 or newer with npm on the host. Make sure a non-interactive shell can find it, for example in `/opt/homebrew/bin`, `/usr/local/bin` or `~/.local/bin`. |
+| An SSH host is listed as this Mac | The target resolves to this Mac, whose simulators already appear under This Mac. |
 
 ## Internals
 
@@ -98,6 +128,23 @@ There are deliberately only four `device_*` tools (`device-tools.ts`). Driving h
 ### Paired Macs
 
 A paired desktop serves `/simulators*` through the Aiden Remote router (`aiden-remote-simulators.ts`). This needs both the desktop-only `simulators:control` capability and the owner's `peerSharing` consent. The client side (`peer-devices.ts`) relays streams over the pinned-TLS peer connection. The proxy resolves `?host=` to that relay, so the renderer's contract is the same for every host.
+
+### SSH hosts
+
+`ssh-device-host.ts` implements `DeviceHost` over the system ssh, adapted from T3's `SshDeviceHost`:
+
+- It pipes `ssh-device-script.ts` to `node` on the host. The script has modes `probe`, `start`, `agent-start`, `stop-agent`, and `stop`. State lives in `~/.aiden/devices/hosts/<owner>` and tools in `~/.aiden/devices/tools/<name>@<version>`. The owner is a hash of this Aiden's data directory and the host id, so two Aiden installs never stop each other's hub.
+- A start installs only when the service passes `allowInstall`, which happens only for an approved host. Otherwise a missing tool exits with code 3 and the service asks for Install.
+- The hub, and the agent-device daemon after agent access, are forwarded to this Mac's loopback with `ssh -N -L` (`ExitOnForwardFailure`, `ServerAliveInterval=10`). The proxy treats the forwarded origin like the local hub, so the renderer contract is unchanged.
+- There is no health polling. When the tunnel exits, the host reconnects up to five times with a 1 s doubling backoff and never installs while reconnecting. Before a user action reuses a forward, the host checks `/readyz` through it.
+
+`local-ssh-target.ts` parses `ssh -G` (and does a name lookup only for a non-IP hostname) to skip targets that are this Mac. Hosts and their per-host install approval are stored in `userData/devices/ssh-hosts.json`. Revoking streaming clears that approval.
+
+Agent access to an SSH host uses the local `agent-device` CLI through the PATH shim, with a per-host `--config` in `userData/devices/hosts/<hash>.json` that points at the forwarded daemon.
+
+### Tool maintenance
+
+`device-tool-maintenance.ts` holds one JavaScript program, shared with the SSH script. It takes a directory lock (rename of a populated directory, with stale-owner recovery). It never removes the pinned install or any version that appears in `ps` output as a running helper's path. The `reclaim` policy runs after an update and keeps the newest previous version. The `prune` policy backs **Prune old versions**.
 
 ### The viewer
 

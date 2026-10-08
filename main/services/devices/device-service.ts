@@ -279,6 +279,25 @@ function parseConsent(text: string): DeviceConsent {
 const STREAMING_OFF = "Set up simulator streaming first.";
 const SSH_IDLE: DeviceHostState = { status: "stopped", detail: "Not connected. Aiden connects only when you ask." };
 const NO_SSH_CONSENT: SshHostToolConsent = { hub: false, agent: false };
+/** Tunnels close at once; the remote cleanup gets this long before a revoke or quit moves on. */
+const SSH_STOP_BUDGET_MS = 5_000;
+
+function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+    work.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
 const AGENT_ACCESS_OFF = "Agent access to simulators is off. Ask the user to allow it in the Simulator tab.";
 const chatKey = (chatId: string) => createHash("sha256").update(chatId).digest("hex").slice(0, 24);
 
@@ -864,7 +883,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     entry.unsubscribe();
     if (ssh.get(entry.config.id) === entry) ssh.delete(entry.config.id);
     dropSshDevices(entry);
-    await entry.host.stop().catch(() => undefined);
+    await withinBudget(entry.host.stop(), SSH_STOP_BUDGET_MS);
     await rm(agentDeviceConfigPath(deps.baseDir, entry.config.id), { force: true }).catch(() => undefined);
   }
 
@@ -877,7 +896,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       entry.state = { ...SSH_IDLE };
       entry.toolInspectionError = undefined;
     }
-    await Promise.all(entries.map((entry) => entry.host.stop().catch(() => undefined)));
+    await withinBudget(Promise.all(entries.map((entry) => entry.host.stop())), SSH_STOP_BUDGET_MS);
     if (options.forgetToolConsent && Object.keys(sshStored.toolConsent).length > 0) {
       await saveSshStore({ ...sshStored, toolConsent: {} }).catch(() => undefined);
     }
@@ -1603,13 +1622,11 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       }
     },
     async stop() {
-      await Promise.all(
-        [...ssh.values()].map(async (entry) => {
-          entry.unsubscribe();
-          await entry.host.stop().catch(() => undefined);
-        }),
-      );
+      const entries = [...ssh.values()];
+      for (const entry of entries) entry.unsubscribe();
       ssh.clear();
+      // Every tunnel closes immediately; each host's own helpers get a bounded chance to stop.
+      await withinBudget(Promise.all(entries.map((entry) => entry.host.stop())), SSH_STOP_BUDGET_MS);
       for (const listener of sharingListeners) listener(false);
       sharingListeners.clear();
       await stopHost();
