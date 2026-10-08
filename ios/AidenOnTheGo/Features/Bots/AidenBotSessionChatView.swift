@@ -147,7 +147,7 @@ struct AidenBotSessionChatView: View {
                 .disabled(isDeleting)
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
         }
         .disabled(bot == nil)
         .accessibilityLabel("More for \(bot?.name ?? "this Bot")")
