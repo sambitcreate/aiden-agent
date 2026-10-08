@@ -6,6 +6,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.test.espresso.Espresso
+import androidx.test.espresso.action.ViewActions
+import androidx.test.espresso.matcher.RootMatchers
+import androidx.test.espresso.matcher.ViewMatchers
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.onNodeWithText
@@ -34,6 +37,16 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 class AidenChatProgressUiTest {
     @get:Rule
     val compose = createComposeRule()
+
+    /**
+     * Back goes to the roster sheet's own dialog window. `Espresso.pressBack()`
+     * picks a root by focus, and right after a state restore it can pick the
+     * activity window while the recreated sheet window holds focus, then time
+     * out waiting for the activity to regain it.
+     */
+    private fun pressBackInSheet() {
+        Espresso.onView(ViewMatchers.isRoot()).inRoot(RootMatchers.isDialog()).perform(ViewActions.pressBack())
+    }
 
     @Test
     fun chatInspectorOwnerRestoresAfterDelayedNegotiationAndRosterHydration() {
@@ -65,12 +78,12 @@ class AidenChatProgressUiTest {
         compose.onNodeWithText("Child").assertDoesNotExist()
         compose.runOnIdle { roster.value = hydrated }
         compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Sub-agents").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Agents").assertExists()
         compose.runOnIdle { assertEquals(0, dismissals) }
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.runOnIdle { assertEquals(1, dismissals) }
     }
 
@@ -134,14 +147,14 @@ class AidenChatProgressUiTest {
         compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Sub-agents").assertExists()
         compose.onNodeWithText("Back").assertExists()
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.onNodeWithText("Agents").assertExists()
         compose.onNodeWithText("Back").assertDoesNotExist()
         compose.runOnIdle { assertEquals(false, dismissed) }
-        Espresso.pressBack()
+        pressBackInSheet()
         compose.runOnIdle { assertEquals(true, dismissed) }
     }
 
