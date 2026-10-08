@@ -13,9 +13,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.util.UUID
 
-/** The routes a durable Bot chat uses. [AidenRemoteClient] provides them on a revision-26 Mac. */
+/** The routes a durable Bot chat uses. [AidenRemoteClient] provides them on a revision-25 Mac. */
 interface AidenBotSessionTransport {
     suspend fun session(botId: String): AidenBotSession
     fun events(botId: String): Flow<AidenBotSessionEvent>
@@ -93,8 +94,9 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
 }
 
 /**
- * Idempotency keys for one logical action. A retry of the same action reuses its key until
- * the action succeeds, so the Mac replays the first outcome instead of acting twice.
+ * Idempotency keys for one logical action. A retry after a lost connection reuses the key, so
+ * the Mac replays the first outcome instead of acting twice. Once the Mac has answered (success
+ * or an error response) the action is finished and the next tap gets a fresh key.
  */
 class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
     private val keys = mutableMapOf<String, UUID>()
@@ -106,7 +108,15 @@ class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
     fun complete(action: String) {
         keys.remove(action)
     }
+
+    /** Ends [action] when [error] is an answer from the Mac; keeps its key when the outcome is unknown. */
+    fun failed(action: String, error: Exception) {
+        if (aidenBotMacAnswered(error)) complete(action)
+    }
 }
+
+/** True when the Mac sent an HTTP answer, so a retry is a new action rather than a replay. */
+fun aidenBotMacAnswered(error: Exception): Boolean = error is AidenRemoteClientException.Server
 
 /** Where a connect card's action stands on this phone. */
 enum class AidenBotConnectRequestPhase { IDLE, SENDING, SENT, FAILED }
@@ -115,6 +125,8 @@ data class AidenBotSessionUiState(
     val session: AidenBotSession? = null,
     val isLoading: Boolean = true,
     val loadFailed: Boolean = false,
+    /** The Mac no longer has this Bot (deleted elsewhere): the feed stops. */
+    val botMissing: Boolean = false,
     val isSending: Boolean = false,
     val isResuming: Boolean = false,
     val isDismissing: Boolean = false,
@@ -129,7 +141,7 @@ data class AidenBotSessionUiState(
     val isRunning: Boolean get() = state == AidenBotSessionState.RUNNING
     val isInterrupted: Boolean get() = session?.interrupted == true
     val canSend: Boolean
-        get() = !needsModel && !isSending && state != AidenBotSessionState.UNAVAILABLE && session != null
+        get() = !needsModel && !isSending && !botMissing && state != AidenBotSessionState.UNAVAILABLE && session != null
 }
 
 /**
@@ -160,14 +172,18 @@ class AidenBotSessionController(
         feedJob = null
     }
 
-    suspend fun refetch() {
-        try {
+    /** Reloads `GET /bots/{id}/session`; returns false when it could not. */
+    suspend fun refetch(): Boolean {
+        return try {
             val session = transport.session(botId)
             _state.update { it.copy(session = session, isLoading = false, loadFailed = false) }
+            true
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
-            _state.update { it.copy(isLoading = false, loadFailed = it.session == null) }
+        } catch (error: Exception) {
+            val missing = (error as? AidenRemoteClientException.Server)?.statusCode == 404
+            _state.update { it.copy(isLoading = false, loadFailed = it.session == null, botMissing = it.botMissing || missing) }
+            false
         }
     }
 
@@ -182,24 +198,33 @@ class AidenBotSessionController(
                 true
             }
             AidenBotSessionEventOutcome.Ignored -> true
-            AidenBotSessionEventOutcome.Refetch -> {
-                _state.update { it.copy(session = null) }
-                refetch()
-                true
-            }
+            // Keep showing what we have; a failed refetch reopens the feed, whose first
+            // frame is a fresh snapshot.
+            AidenBotSessionEventOutcome.Refetch -> refetch()
             AidenBotSessionEventOutcome.Reconnect -> false
         }
     }
 
     private suspend fun follow() {
         refetch()
-        while (scope.isActive) {
+        while (scope.isActive && !_state.value.botMissing) {
             try {
                 transport.events(botId).collect { event ->
                     if (!handle(event)) throw ReopenFeed()
                 }
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: AidenRemoteClientException.Server) {
+                // A deleted Bot has no feed to come back to.
+                if (error.statusCode == 404) {
+                    _state.update { it.copy(botMissing = true, isLoading = false, loadFailed = it.session == null) }
+                    return
+                }
+                // This phone isn't allowed to read the chat: retrying cannot help.
+                if (error.statusCode == 401 || error.statusCode == 403) {
+                    _state.update { it.copy(isLoading = false, loadFailed = it.session == null) }
+                    return
+                }
             } catch (_: Exception) {
                 // Closed or dropped feed: wait, then reconnect; the next snapshot restores state.
             }
@@ -231,7 +256,9 @@ class AidenBotSessionController(
             true
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            keys.failed(SEND, error)
+            if (aidenBotMacAnswered(error)) pendingSendText = null
             _state.update { it.copy(actionError = "Aiden couldn’t send that. Try again.") }
             false
         } finally {
@@ -272,7 +299,8 @@ class AidenBotSessionController(
             AidenBotConnectRequestPhase.SENT
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            keys.failed(action, error)
             AidenBotConnectRequestPhase.FAILED
         }
         _state.update { it.copy(connectRequests = it.connectRequests + (pluginId to next)) }
@@ -299,7 +327,8 @@ class AidenBotSessionController(
             true
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            keys.failed(action, error)
             _state.update { it.copy(actionError = "Aiden couldn’t reach your Mac. Try again.") }
             false
         } finally {
@@ -327,9 +356,10 @@ object AidenBotSessionCopy {
     const val INTERRUPTED = "I got interrupted while working on this."
     const val RESUME = "Resume"
     const val DISMISS = "Dismiss"
-    const val ACCESS_CHANGED = "This Bot's access changed. Review it on your Mac."
+    const val ACCESS_CHANGED = "This Bot's access changed. Review it in Advanced."
+    const val REVIEW_ADVANCED = "Advanced"
     const val NEEDS_MODEL = "Needs an AI model"
-    const val NEEDS_MODEL_HINT = "Set up on your Mac"
+    const val SET_UP = "Set up"
     const val PAUSED_ROW = "Paused — tap to resume"
     const val SESSION_RESET = "This chat was restarted."
     const val FINISH_ON_MAC = "Finish on your Mac"

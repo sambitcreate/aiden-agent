@@ -249,6 +249,11 @@ class MainActivity : ComponentActivity() {
                                     onNavigateBack = {
                                         botsViewModel.loadBots(force = true)
                                         navigator.back()
+                                    },
+                                    // A deleted Bot's profile may sit below its chat: return to the list.
+                                    onBotDeleted = {
+                                        botsViewModel.loadBots(force = true)
+                                        navigator.navigate(AidenNavigationStack.Root)
                                     }
                                 )
                             }

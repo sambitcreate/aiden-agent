@@ -4,7 +4,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.ListSerializer
@@ -16,6 +21,9 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.io.IOException
 import java.util.UUID
 
@@ -190,5 +198,173 @@ class AidenBotSessionControllerTest {
         assertEquals(AidenBotSessionEventOutcome.Refetch, at(session.epoch, session.seq + 3))
         assertEquals(AidenBotSessionEventOutcome.Refetch, at("another_epoch", session.seq + 1))
         assertEquals(AidenBotSessionEventOutcome.Refetch, aidenApplyBotSessionEvent(null, fixtureEvents[1]))
+    }
+
+    private fun serverError(status: Int, code: AidenRemoteErrorCode = AidenRemoteErrorCode.NOT_FOUND) =
+        AidenRemoteClientException.Server(status, AidenRemoteErrorEnvelope.Body(code, "Nope.", "req_1", false))
+
+    private fun snapshotOf(session: AidenBotSession) =
+        AidenBotSessionEvent(session.botId, session.epoch, session.seq, AidenBotSessionEventPayload.Snapshot(session))
+
+    @Test
+    fun aMidStreamSnapshotReplacesEverythingAndAnEntryUpsertsById() = runTest {
+        val controller = AidenBotSessionController(interruptedSession.botId, FakeTransport(interruptedSession), backgroundScope)
+        assertTrue(controller.handle(fixtureEvents[0]))
+        assertTrue(controller.handle(fixtureEvents[1]))
+        assertEquals("Your first meeting is at 9:30", controller.state.value.session?.partial)
+
+        // An empty partial clears the in-flight text.
+        val s0 = requireNotNull(controller.state.value.session)
+        assertTrue(controller.handle(AidenBotSessionEvent(s0.botId, s0.epoch, s0.seq + 1, AidenBotSessionEventPayload.Partial(""))))
+        assertEquals(null, controller.state.value.session?.partial)
+
+        // Re-sending an existing id changes it in place instead of appending a copy.
+        val s1 = requireNotNull(controller.state.value.session)
+        val last = s1.entries.last() as AidenBotSessionEntry.Message
+        val cutOff = last.copy(text = "cut off", interrupted = true)
+        assertTrue(controller.handle(AidenBotSessionEvent(s1.botId, s1.epoch, s1.seq + 1, AidenBotSessionEventPayload.Entry(cutOff))))
+        val after = requireNotNull(controller.state.value.session)
+        assertEquals(s1.entries.size, after.entries.size)
+        assertEquals(cutOff, after.entries.last())
+
+        // A snapshot mid-stream (history rewritten on the Mac) replaces entries, partial,
+        // state and seq.
+        val rewritten = interruptedSession.copy(
+            seq = after.seq + 5,
+            state = AidenBotSessionState.IDLE,
+            interrupted = false,
+            partial = null,
+            entries = interruptedSession.entries.take(2)
+        )
+        assertTrue(controller.handle(snapshotOf(rewritten)))
+        assertEquals(rewritten, controller.state.value.session)
+        // Live events then continue from the snapshot's seq.
+        assertTrue(controller.handle(AidenBotSessionEvent(rewritten.botId, rewritten.epoch, rewritten.seq + 1, AidenBotSessionEventPayload.Partial("Next"))))
+        assertEquals("Next", controller.state.value.session?.partial)
+    }
+
+    @Test
+    fun aGapKeepsTheChatOnScreenAndAFailedRefetchReopensTheFeed() = runTest {
+        var reads = 0
+        val transport = object : AidenBotSessionTransport by FakeTransport(interruptedSession) {
+            override suspend fun session(botId: String): AidenBotSession {
+                reads += 1
+                throw IOException("offline")
+            }
+        }
+        val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope)
+        controller.handle(fixtureEvents[0])
+        val gap = AidenBotSessionEvent(interruptedSession.botId, interruptedSession.epoch, interruptedSession.seq + 4, AidenBotSessionEventPayload.Partial("x"))
+        assertFalse(controller.handle(gap))
+        assertEquals(1, reads)
+        assertEquals(interruptedSession, controller.state.value.session)
+        assertFalse(controller.state.value.loadFailed)
+    }
+
+    @Test
+    fun theFeedReconnectsAfterADropOrCloseAndStopsForADeletedBot() = runTest {
+        val idle = interruptedSession.copy(state = AidenBotSessionState.IDLE, interrupted = false, partial = null)
+        var opens = 0
+        val transport = object : AidenBotSessionTransport by FakeTransport(interruptedSession) {
+            override fun events(botId: String): Flow<AidenBotSessionEvent> = flow {
+                opens += 1
+                when (opens) {
+                    1 -> {
+                        emit(fixtureEvents[0])
+                        throw IOException("dropped")
+                    }
+                    2 -> {
+                        emit(snapshotOf(idle))
+                        emit(AidenBotSessionEvent(idle.botId, idle.epoch, idle.seq + 1, AidenBotSessionEventPayload.Closed))
+                        awaitCancellation()
+                    }
+                    else -> throw serverError(404)
+                }
+            }
+        }
+        val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope, reconnectDelayMillis = 100)
+        controller.start()
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(3, opens)
+        assertTrue(controller.state.value.botMissing)
+        assertFalse(controller.state.value.canSend)
+        // The last good snapshot stays on screen, and nothing reconnects any more.
+        assertEquals(idle, controller.state.value.session)
+        advanceTimeBy(10_000)
+        assertEquals(3, opens)
+    }
+
+    @Test
+    fun leavingTheScreenCancelsTheFeed() = runTest {
+        var cancelled = false
+        val transport = object : AidenBotSessionTransport by FakeTransport(interruptedSession) {
+            override fun events(botId: String): Flow<AidenBotSessionEvent> =
+                flow<AidenBotSessionEvent> { awaitCancellation() }.onCompletion { cancelled = it != null }
+        }
+        val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope)
+        controller.start()
+        runCurrent()
+        assertFalse(cancelled)
+        controller.stopFollowing()
+        runCurrent()
+        assertTrue(cancelled)
+    }
+
+    @Test
+    fun aResumeTheMacRefusedIsFinishedSoTheNextTapIsANewRequest() = runTest {
+        val keys = mutableListOf<UUID>()
+        var refuse = true
+        val transport = object : AidenBotSessionTransport by FakeTransport(interruptedSession) {
+            override suspend fun resume(botId: String, key: UUID): AidenBotSessionStateView {
+                keys += key
+                if (refuse) {
+                    refuse = false
+                    throw serverError(409, AidenRemoteErrorCode.REVISION_CONFLICT)
+                }
+                return AidenBotSessionStateView(AidenBotSessionState.RUNNING, false)
+            }
+        }
+        val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope)
+        controller.refetch()
+        assertFalse(controller.resume())
+        assertEquals("Aiden couldn’t reach your Mac. Try again.", controller.state.value.actionError)
+        assertTrue(controller.resume())
+        assertNotEquals(keys[0], keys[1])
+    }
+
+    @Test
+    fun aConnectionRequestForAnUnknownPluginFailsAndCanBeRetried() = runTest {
+        val keys = mutableListOf<UUID>()
+        var known = false
+        val transport = object : AidenBotSessionTransport by FakeTransport(interruptedSession) {
+            override suspend fun requestConnection(botId: String, pluginId: String, key: UUID): AidenBotConnectionRequestReceipt {
+                keys += key
+                if (!known) throw serverError(404)
+                return AidenBotConnectionRequestReceipt(pluginId, "Google Calendar", AidenBotConnectionRequestStatus.SENT)
+            }
+        }
+        val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope)
+        controller.requestConnection("google-calendar")
+        assertEquals(AidenBotConnectRequestPhase.FAILED, controller.state.value.connectRequests["google-calendar"])
+        known = true
+        controller.requestConnection("google-calendar")
+        assertEquals(AidenBotConnectRequestPhase.SENT, controller.state.value.connectRequests["google-calendar"])
+        assertNotEquals(keys[0], keys[1])
+        // A second tap after it was sent posts nothing.
+        controller.requestConnection("google-calendar")
+        assertEquals(2, keys.size)
+    }
+
+    @Test
+    fun sendingWhileInterruptedIsAllowedAndTheMacsStateReplacesThePause() = runTest {
+        val transport = FakeTransport(interruptedSession)
+        val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope)
+        controller.refetch()
+        assertTrue(controller.state.value.isInterrupted)
+        assertTrue(controller.state.value.canSend)
+        assertTrue(controller.send("  Never mind, plan lunch  "))
+        assertEquals(listOf("Never mind, plan lunch"), transport.sends.map { it.first })
+        assertFalse(controller.state.value.isInterrupted)
+        assertEquals(AidenBotSessionState.RUNNING, controller.state.value.state)
     }
 }
