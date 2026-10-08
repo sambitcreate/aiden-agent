@@ -387,7 +387,10 @@ test("renderer rename and delete refuse feature-owned chats when asked to", asyn
       markAppendReconciliationRequired: () => undefined,
       clearAppendReconciliationRequired: () => undefined,
       beginChatWorkspaceChange: () => () => undefined,
-      beginChatDeletion: () => () => undefined,
+      beginChatDeletion: (id: string) => {
+        events.push(`deleting:${id}`);
+        return () => undefined;
+      },
       cancelChat: async (id: string) => {
         events.push(`cancelled:${id}`);
       },
@@ -402,7 +405,7 @@ test("renderer rename and delete refuse feature-owned chats when asked to", asyn
     application.service.remove("design-chat", { rejectFeatureOwned: true }),
     /belongs to another Aiden feature/u,
   );
-  // A refused delete never cancels the owning run or reaches the store.
+  // A refused delete never marks the chat as deleting, cancels the owning run or reaches the store.
   assert.deepEqual(events, []);
 
   // Without the option the shared service keeps its existing behavior.

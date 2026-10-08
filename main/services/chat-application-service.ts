@@ -244,6 +244,13 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       chatId: string,
       options: ChatApplicationMutationOptions = {},
     ): Promise<void> {
+      if (options.rejectFeatureOwned) {
+        // Refuse before the deletion window opens, so a live design run never sees
+        // its chat as deleting. A chat's owner never changes, so this cannot race
+        // the check below.
+        const target = await deps.chatStore.get(chatId);
+        if (target) assertRenameAllowedFromChat(target, options);
+      }
       const finishDeletion = deps.llmClient.beginChatDeletion(chatId);
       let finishAttachmentDeletion: (() => void) | undefined;
       let releaseAdmission = false;
