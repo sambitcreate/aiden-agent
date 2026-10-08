@@ -437,3 +437,36 @@ object AidenWorkspaceFileLink {
         return path.takeIf { parts.size <= 21 && parts.all { it.isNotEmpty() && it != "." && it != ".." } }
     }
 }
+
+@Serializable
+data class AidenProviderCreationModel(val id: String, val vision: Boolean = false, val reasoning: Boolean = false, val toolCall: Boolean = true)
+
+@Serializable
+data class AidenProviderCreation(
+    val label: String, val baseUrl: String, val kind: String = "openai", val deployment: String = "hosted",
+    val needsKey: Boolean = true, val apiKey: String? = null, val models: List<AidenProviderCreationModel>,
+    val confirmedForeground: Boolean = true
+) {
+    val isValid: Boolean get() = validationMessage == null
+    val validationMessage: String? get() {
+        fun bounded(value: String, maximum: Int) = value.isNotBlank() && value.length <= maximum && value.none { it.code < 32 || it.code == 127 }
+        if (!bounded(label, 120)) return "Enter a name of up to 120 characters without line breaks."
+        val url = runCatching { java.net.URI(baseUrl) }.getOrNull()
+        if (!bounded(baseUrl, 2048) || url == null || url.scheme?.lowercase() !in listOf("http", "https") || url.host.isNullOrBlank() ||
+            url.userInfo != null || url.query != null || url.fragment != null) return "Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment (up to 2,048 characters)."
+        if (kind !in listOf("openai", "anthropic") || deployment !in listOf("local", "hosted") || !confirmedForeground) return "Choose an API format and deployment."
+        if (if (needsKey) !bounded(apiKey.orEmpty(), 4096) else apiKey != null) return "Enter an API key of up to 4,096 characters without line breaks, or turn off Requires API key."
+        if (models.size !in 1..32 || models.any { !bounded(it.id, 128) } || models.map { it.id.trim() }.toSet().size != models.size)
+            return "Enter 1–32 unique model IDs, each up to 128 characters without line breaks."
+        return null
+    }
+    override fun toString() = "AidenProviderCreation(redacted)"
+}
+
+@Serializable
+data class AidenProviderCreationReceipt(val id: String, val label: String, val models: List<String>) {
+    init {
+        require(id.startsWith("custom:remote-") && id.length <= 128 && label.isNotBlank() && label.length <= 120 &&
+            models.size in 1..32 && models.all { it.isNotBlank() && it.length <= 128 } && models.toSet().size == models.size)
+    }
+}

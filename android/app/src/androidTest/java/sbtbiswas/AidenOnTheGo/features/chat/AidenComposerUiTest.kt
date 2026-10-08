@@ -1,13 +1,28 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import sbtbiswas.AidenOnTheGo.config.AidenAppearanceConfig
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.AidenStillBottomSheetTag
 import sbtbiswas.AidenOnTheGo.models.AidenComposerSuggestion
+import sbtbiswas.AidenOnTheGo.models.AidenModel
+import sbtbiswas.AidenOnTheGo.models.AidenProvider
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteSkillCatalogEntry
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteSkillSource
 import sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode
@@ -51,48 +66,181 @@ class AidenComposerUiTest {
     }
 
     @Test
-    fun busyComposerOffersSteerQueueRedirectAlongsideStop() {
-        val submitted = mutableListOf<AidenStreamInputMode>()
-        var redirectRequested = false
-        var stopClicks = 0
+    fun sameNamedAttachmentsRenderAndRemoveIndependently() {
+        val removed = mutableListOf<String>()
         compose.setContent {
             AidenTheme {
                 AidenComposerView(
-                    draft = "hold on",
+                    draft = "",
                     onDraftChange = {},
                     onSend = {},
-                    onStop = { stopClicks++ },
+                    onStop = {},
+                    canSend = true,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    pendingAttachments = listOf(
+                        AidenComposerPendingAttachment(id = "first", name = "notes.txt", isImage = false),
+                        AidenComposerPendingAttachment(id = "second", name = "notes.txt", isImage = false)
+                    ),
+                    onRemoveAttachment = { removed += it.id }
+                )
+            }
+        }
+
+        val removeButtons = compose.onAllNodesWithContentDescription("Remove notes.txt")
+        removeButtons.assertCountEquals(2)
+        removeButtons[1].performClick()
+        compose.runOnIdle { assertEquals(listOf("second"), removed) }
+    }
+
+    /** Hosts the busy composer with the mode held the way the chat screen
+     * holds it, so relabelling is observable. */
+    private fun setBusyComposer(
+        draft: String,
+        canSubmitRunInput: Boolean,
+        submitted: MutableList<AidenStreamInputMode>,
+        onStop: () -> Unit = {}
+    ) {
+        compose.setContent {
+            var mode by remember { mutableStateOf(AidenStreamInputMode.QUEUE) }
+            AidenTheme {
+                AidenComposerView(
+                    draft = draft,
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = onStop,
                     canStop = true,
                     canSend = false,
                     isStreaming = true,
                     showsRunInputOptions = true,
-                    canSubmitRunInput = true,
+                    canSubmitRunInput = canSubmitRunInput,
                     onSubmitRunInput = { submitted += it },
-                    onRedirectRequest = { redirectRequested = true },
+                    runInputMode = mode,
+                    onRunInputModeChange = { mode = it },
                     isVoiceListening = false,
                     onToggleVoice = {}
                 )
             }
         }
+    }
 
-        // Stop stays its own control next to the run-input options button.
+    @Test
+    fun busyPillDefaultsToQueueAndItsLabelSubmitsTheCurrentMode() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        var stopClicks = 0
+        setBusyComposer(draft = "hold on", canSubmitRunInput = true, submitted = submitted, onStop = { stopClicks++ })
+
+        // Stop stays its own control next to the pill.
         compose.onNodeWithContentDescription("Stop generation").assertIsEnabled()
-        compose.onNodeWithContentDescription("Run input options").assertIsEnabled().performClick()
-        compose.onNodeWithText("Steer now").assertExists()
-        compose.onNodeWithText("Queue to run next").assertExists()
-        compose.onNodeWithText("Redirect…").assertExists()
-
-        compose.onNodeWithText("Steer now").performClick()
-        compose.runOnIdle { assertEquals(listOf(AidenStreamInputMode.STEER), submitted) }
-
-        // Redirect is confirm-gated: the menu reports a request, never the action.
-        compose.onNodeWithContentDescription("Run input options").performClick()
-        compose.onNodeWithText("Redirect…").performClick()
+        compose.onNodeWithContentDescription("Queue message").assertIsEnabled().performClick()
         compose.runOnIdle {
-            assertEquals(true, redirectRequested)
-            assertEquals(listOf(AidenStreamInputMode.STEER), submitted)
+            assertEquals(listOf(AidenStreamInputMode.QUEUE), submitted)
             assertEquals(0, stopClicks)
         }
+        // A plain tap sends; it does not open the mode menu.
+        compose.onNodeWithText("Run after this response").assertDoesNotExist()
+    }
+
+    @Test
+    fun chevronOffersOnlySteerAndQueueAndPickingSteerWithADraftSendsAndRelabels() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        setBusyComposer(draft = "hold on", canSubmitRunInput = true, submitted = submitted)
+
+        compose.onNodeWithContentDescription("Choose message action").assertIsEnabled().performClick()
+        compose.onAllNodes(isSelectable()).assertCountEquals(2)
+        compose.onNode(hasText("Steer") and hasText("Add guidance without stopping")).assertIsNotSelected()
+        compose.onNode(hasText("Queue") and hasText("Run after this response")).assertIsSelected()
+        compose.onAllNodes(hasText("Redirect", substring = true, ignoreCase = true)).assertCountEquals(0)
+
+        compose.onNodeWithText("Steer").performClick()
+        compose.runOnIdle { assertEquals(listOf(AidenStreamInputMode.STEER), submitted) }
+        compose.onNodeWithText("Add guidance without stopping").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Queue message").assertDoesNotExist()
+
+        // The chosen mode sticks: the next label tap steers again.
+        compose.onNodeWithContentDescription("Steer response").assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(AidenStreamInputMode.STEER, AidenStreamInputMode.STEER), submitted)
+        }
+    }
+
+    @Test
+    fun withAnEmptyDraftThePillIsDimmedAndPickingAModeOnlySwitches() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        setBusyComposer(draft = "", canSubmitRunInput = false, submitted = submitted)
+
+        compose.onNodeWithContentDescription("Queue message").assertIsNotEnabled().performClick()
+        compose.runOnIdle { assertEquals(emptyList<AidenStreamInputMode>(), submitted) }
+
+        compose.onNodeWithContentDescription("Choose message action").assertIsEnabled().performClick()
+        compose.onNodeWithText("Steer").performClick()
+        compose.onNodeWithContentDescription("Steer response").assertExists()
+        compose.runOnIdle { assertEquals(emptyList<AidenStreamInputMode>(), submitted) }
+    }
+
+    @Test
+    fun longPressingThePillLabelOpensTheModeMenuWithoutSending() {
+        val submitted = mutableListOf<AidenStreamInputMode>()
+        setBusyComposer(draft = "hold on", canSubmitRunInput = true, submitted = submitted)
+
+        compose.onNodeWithContentDescription("Queue message").performTouchInput { longClick() }
+        compose.onNodeWithText("Run after this response").assertExists()
+        compose.onNodeWithText("Add guidance without stopping").assertExists()
+        compose.runOnIdle { assertEquals(emptyList<AidenStreamInputMode>(), submitted) }
+    }
+
+    @Test
+    fun onAPhoneWidthWorkspaceChatTheModelPickerShrinksBeforeThePillAndStop() {
+        val model = AidenModel(
+            id = "long",
+            label = "A very long model name that would fill the whole row",
+            thinkingLevels = listOf("high")
+        )
+        val provider = AidenProvider(id = "custom", label = "Custom", models = listOf(model))
+        compose.setContent {
+            AidenTheme {
+                Box(Modifier.width(360.dp)) {
+                    AidenComposerView(
+                        draft = "hold on",
+                        onDraftChange = {},
+                        onSend = {},
+                        onStop = {},
+                        canStop = true,
+                        canSend = false,
+                        isStreaming = true,
+                        showsRunInputOptions = true,
+                        canSubmitRunInput = true,
+                        runInputMode = AidenStreamInputMode.QUEUE,
+                        selectedProvider = provider,
+                        selectedModel = model,
+                        selectedThinkingLevel = "high",
+                        availableProviders = listOf(provider),
+                        onSelectModel = { _, _, _ -> },
+                        isVoiceListening = false,
+                        onToggleVoice = {}
+                    )
+                }
+            }
+        }
+
+        val rowRight = compose.onRoot().getBoundsInRoot().right
+        for (description in listOf("Queue message", "Choose message action", "Stop generation")) {
+            val node = compose.onNodeWithContentDescription(description).assertIsDisplayed()
+            val bounds = node.getBoundsInRoot()
+            val width = bounds.right - bounds.left
+            val height = bounds.bottom - bounds.top
+            assertTrue("$description is $width wide", width >= 44.dp)
+            assertTrue("$description is $height tall", height >= 44.dp)
+            assertTrue("$description stays inside the row", bounds.right <= rowRight)
+        }
+        // The picker stays a recognizable control: a usable target with its chevron whole.
+        val picker = compose.onNodeWithContentDescription("Select model").assertIsDisplayed().getBoundsInRoot()
+        assertTrue("model picker is ${picker.right - picker.left} wide", picker.right - picker.left >= 48.dp)
+        val chevron = compose.onNodeWithContentDescription("Select model", useUnmergedTree = true).getBoundsInRoot()
+        assertTrue("model chevron is ${chevron.right - chevron.left} wide", chevron.right - chevron.left >= 13.dp)
+        // Dictation is off while the response streams, so its button gives way to the pill.
+        compose.onNodeWithContentDescription("Start voice input").assertDoesNotExist()
     }
 
     @Test
@@ -115,7 +263,8 @@ class AidenComposerUiTest {
         }
 
         compose.onNodeWithContentDescription("Stop generation").assertIsEnabled()
-        compose.onNodeWithContentDescription("Run input options").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Queue message").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Choose message action").assertDoesNotExist()
     }
 
     @Test
@@ -170,5 +319,229 @@ class AidenComposerUiTest {
         // The selected-skill chip clears without touching the draft.
         compose.onNodeWithContentDescription("Remove skill review-code").performClick()
         compose.runOnIdle { assertEquals(true, cleared) }
+    }
+
+    @Test
+    fun sendAndStopEachFireOncePerTap() {
+        var sends = 0
+        var stops = 0
+        var streaming by mutableStateOf(false)
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "ship it",
+                    onDraftChange = {},
+                    onSend = { sends++ },
+                    onStop = { stops++ },
+                    canSend = !streaming,
+                    isStreaming = streaming,
+                    isVoiceListening = false,
+                    onToggleVoice = {}
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Send message").assertHasClickAction().performClick()
+        compose.runOnIdle {
+            assertEquals(1, sends)
+            streaming = true
+        }
+        compose.onNodeWithContentDescription("Stop generation").assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(1, sends)
+            assertEquals(1, stops)
+        }
+    }
+
+    private class PickedModel(val providerId: String, val modelId: String, val thinkingLevel: String?)
+
+    private fun setModelPickerComposer(
+        providers: List<AidenProvider>,
+        picks: MutableList<PickedModel>,
+        config: AidenAppearanceConfig = AidenAppearanceConfig()
+    ) {
+        compose.setContent {
+            var provider by remember { mutableStateOf(providers.first()) }
+            var model by remember { mutableStateOf(providers.first().models.first()) }
+            var level by remember { mutableStateOf(providers.first().models.first().thinkingLevels?.lastOrNull()) }
+            AidenTheme(config = config) {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    selectedProvider = provider,
+                    selectedModel = model,
+                    selectedThinkingLevel = level,
+                    availableProviders = providers,
+                    onSelectModel = { p, m, l ->
+                        picks += PickedModel(p.id, m.id, l)
+                        provider = p
+                        model = m
+                        level = l
+                    }
+                )
+            }
+        }
+    }
+
+    @Test
+    fun reduceMotionPreferencePresentsAStillModelSheetThatClosesInstantly() {
+        val model = AidenModel(id = "fast", label = "Fast model", thinkingLevels = listOf("low", "high"))
+        val other = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        setModelPickerComposer(
+            listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(model, other))),
+            picks,
+            AidenAppearanceConfig(reduceMotion = true)
+        )
+
+        // With the clock held, the sheet is fully on screen after a single frame: no slide-in.
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithTag(AidenStillBottomSheetTag).assertExists()
+        compose.onNodeWithText("Model & Thinking").assertIsDisplayed()
+
+        // A scrim tap dismisses on the next frame without an exit animation.
+        compose.onNodeWithTag(AidenStillBottomSheetTag).performTouchInput { click(Offset(centerX, 8f)) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Model & Thinking").assertDoesNotExist()
+
+        // Picking a model still applies it and closes the still sheet at once.
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNode(hasText("Deep model") and isSelectable()).performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.runOnIdle {
+            assertEquals(1, picks.size)
+            assertEquals("deep", picks.single().modelId)
+        }
+        compose.onNodeWithTag(AidenStillBottomSheetTag).assertDoesNotExist()
+        compose.mainClock.autoAdvance = true
+    }
+
+    @Test
+    fun modelSheetSetsThinkingInPlaceAndPicksModelsFromRadioRows() {
+        val fast = AidenModel(id = "fast", label = "Fast model", thinkingLevels = listOf("low", "medium", "high"))
+        val deep = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        setModelPickerComposer(listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(fast, deep))), picks)
+
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.onNodeWithText("Model & Thinking").assertIsDisplayed()
+
+        // Effort is one connected radio group: exactly one segment is chosen.
+        compose.onNode(hasText("High") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("Low") and isSelectable()).assertIsNotSelected()
+        compose.onNode(hasText("Low") and isSelectable()).performClick()
+        compose.runOnIdle {
+            assertEquals(1, picks.size)
+            assertEquals("fast", picks.single().modelId)
+            assertEquals("low", picks.single().thinkingLevel)
+        }
+        // Thinking applies in place, so the sheet stays open on the new choice.
+        compose.onNode(hasText("Low") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("High") and isSelectable()).assertIsNotSelected()
+
+        compose.onNode(hasText("Fast model") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("Deep model") and isSelectable()).assertIsNotSelected().performClick()
+        compose.runOnIdle {
+            assertEquals(2, picks.size)
+            assertEquals("deep", picks.last().modelId)
+            assertEquals(null, picks.last().thinkingLevel)
+        }
+        // Picking a model applies it and closes the sheet.
+        compose.onNodeWithText("Model & Thinking").assertDoesNotExist()
+        compose.onNode(hasText("Deep model") and isSelectable()).assertDoesNotExist()
+        compose.onNodeWithText("Deep model").assertIsDisplayed()
+    }
+
+    @Test
+    fun aChatOnTheMacDefaultShowsACheckedDefaultRowNamingTheResolvedModel() {
+        val fast = AidenModel(id = "fast", label = "Fast model")
+        val deep = AidenModel(id = "deep", label = "Deep model")
+        val picks = mutableListOf<PickedModel>()
+        compose.setContent {
+            AidenTheme {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = false,
+                    onToggleVoice = {},
+                    selectedProvider = null,
+                    selectedModel = null,
+                    availableProviders = listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(fast, deep))),
+                    onSelectModel = { p, m, l -> picks += PickedModel(p.id, m.id, l) },
+                    defaultModelRoute = AidenModelRoute("custom", "deep")
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Select model").performClick()
+        compose.onNode(hasText("Default") and isSelectable()).assertIsSelected()
+        compose.onNodeWithText("Uses Deep model · Custom").assertIsDisplayed()
+        compose.onNode(hasText("Fast model") and isSelectable()).assertIsNotSelected()
+        compose.onNode(hasText("Deep model") and isSelectable()).assertIsNotSelected()
+
+        compose.onNode(hasText("Fast model") and isSelectable()).performClick()
+        compose.runOnIdle {
+            assertEquals("custom", picks.single().providerId)
+            assertEquals("fast", picks.single().modelId)
+        }
+    }
+
+    @Test
+    fun aLongThinkingLadderIsAConnectedRadioListInsteadOfSegments() {
+        val levels = listOf("off", "minimal", "low", "medium", "high")
+        val model = AidenModel(id = "m", label = "Ladder model", thinkingLevels = levels)
+        val picks = mutableListOf<PickedModel>()
+        setModelPickerComposer(listOf(AidenProvider(id = "custom", label = "Custom", models = listOf(model))), picks)
+
+        compose.onNodeWithContentDescription("Select model").performClick()
+        for (label in listOf("Off", "Minimal", "Low", "Medium")) {
+            compose.onNode(hasText(label) and isSelectable()).assertIsDisplayed().assertIsNotSelected()
+        }
+        compose.onNode(hasText("High") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("Minimal") and isSelectable()).performClick()
+        compose.runOnIdle { assertEquals(listOf("minimal"), picks.map { it.thinkingLevel }) }
+        // Tapping the current effort again is not a new choice.
+        compose.onNode(hasText("Minimal") and isSelectable()).assertIsSelected().performClick()
+        compose.runOnIdle { assertEquals(1, picks.size) }
+    }
+
+    @Test
+    fun withReducedMotionDictationShowsAStillStopGlyphThatTogglesOnce() {
+        var toggles = 0
+        compose.setContent {
+            AidenTheme(config = AidenAppearanceConfig(reduceMotion = true)) {
+                AidenComposerView(
+                    draft = "",
+                    onDraftChange = {},
+                    onSend = {},
+                    onStop = {},
+                    canSend = false,
+                    isStreaming = false,
+                    isVoiceListening = true,
+                    isVoiceBusy = true,
+                    onToggleVoice = { toggles++ },
+                    voiceErrorMessage = "Microphone unavailable"
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Start voice input").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Stop voice input").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, toggles) }
+        // A voice error is hidden while dictation runs.
+        compose.onNodeWithText("Microphone unavailable").assertDoesNotExist()
     }
 }

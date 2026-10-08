@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CHAT_SESSION_ID_LIMITS,
@@ -66,17 +65,6 @@ test("session command exact-key rejection stays bounded for hostile fields", () 
     Array.from({ length: 10_000 }, (_, index) => [`extra${index}`, true]),
   );
   assert.throws(() => parseChatOnlyRequest({ chatId: "chat", ...many }));
-});
-
-test("copied chat metadata uses the renderer notification contract", () => {
-  const handlers = readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
-  const broadcast = handlers.slice(
-    handlers.indexOf('ipcMain.broadcast("chats:metadata-updated"'),
-    handlers.indexOf("return copied;", handlers.indexOf('ipcMain.broadcast("chats:metadata-updated"')),
-  );
-  assert.match(broadcast, /chatId: copied\.id/u);
-  assert.match(broadcast, /title: copied\.title/u);
-  assert.doesNotMatch(broadcast, /\bid: copied\.id/u);
 });
 
 test("context pressure requests accept a bounded optional draft", () => {

@@ -138,7 +138,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   const authority = createBotRuntimeAuthorityResolver({ botStore, chatStore: daemon.chatStore, capabilityStore: capabilities, catalog, managedWorkspace, inventoryLeases });
   let rootFingerprint = JSON.stringify(approvedRoots());
   const watcher = watch(agentDir, (_event, filename) => {
-    if (["auth.json", "models.json", "mcp.json", "web-search.json"].includes(String(filename))) inventoryLeases.invalidate("inventory_changed");
+    if (["auth.json", "models.json", "aiden-mcp.json", "web-search.json"].includes(String(filename))) inventoryLeases.invalidate("inventory_changed");
     if (String(filename) === "remote.json") {
       try { const next = JSON.stringify(approvedRoots()); if (next !== rootFingerprint) { rootFingerprint = next; inventoryLeases.invalidate("inventory_changed"); } }
       catch { inventoryLeases.invalidate("inventory_changed"); }

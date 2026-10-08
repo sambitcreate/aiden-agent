@@ -25,7 +25,14 @@ final class AidenNativeIntegrationTests: XCTestCase {
 
     func testBinaryContractRejectionsEmitExactlyOneDiagnosticEach() async throws {
         var records: [(AidenDiagnosticArea, AidenDiagnosticEvent, AidenDiagnosticOutcome, AidenDiagnosticCode)] = []
-        AidenDiagnostics.testSink = { records.append(($0, $1, $2, $3)) }
+        // The sink is process-wide, and other suites trigger the same contract rejections from
+        // async work that can finish while this test runs. Count only diagnostics emitted inside
+        // this test's own task, so the "exactly one each" check measures these two calls alone.
+        let scope = UUID()
+        AidenDiagnostics.testSink = { area, event, outcome, code in
+            guard DiagnosticsTestScope.current == scope else { return }
+            records.append((area, event, outcome, code))
+        }
         defer {
             AidenDiagnostics.testSink = nil
             AidenNativeActivityURLProtocol.handler = nil
@@ -38,40 +45,42 @@ final class AidenNativeIntegrationTests: XCTestCase {
             session: URLSession(configuration: configuration)
         )
 
-        AidenNativeActivityURLProtocol.handler = { request in
-            let response = try XCTUnwrap(HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "image/gif"]
-            ))
-            return (response, Data("GIF89a".utf8))
-        }
-        do {
-            _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
-            XCTFail("Expected the attachment MIME contract to be rejected.")
-        } catch AidenRemoteClientError.invalidResponse {}
+        try await DiagnosticsTestScope.$current.withValue(scope) {
+            AidenNativeActivityURLProtocol.handler = { request in
+                let response = try XCTUnwrap(HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "image/gif"]
+                ))
+                return (response, Data("GIF89a".utf8))
+            }
+            do {
+                _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
+                XCTFail("Expected the attachment MIME contract to be rejected.")
+            } catch AidenRemoteClientError.invalidResponse {}
 
-        AidenNativeActivityURLProtocol.handler = { request in
-            let response = try XCTUnwrap(HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "image/png",
-                    "Cache-Control": "public",
-                    "X-Content-Type-Options": "nosniff",
-                ]
-            ))
-            return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+            AidenNativeActivityURLProtocol.handler = { request in
+                let response = try XCTUnwrap(HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "image/png",
+                        "Cache-Control": "public",
+                        "X-Content-Type-Options": "nosniff",
+                    ]
+                ))
+                return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+            }
+            do {
+                _ = try await client.botAvatar(
+                    botId: "bot-1",
+                    assetRevision: "avatar_revision_0123456789abcdef0123456789abcdef"
+                )
+                XCTFail("Expected the avatar cache/security contract to be rejected.")
+            } catch AidenRemoteClientError.invalidResponse {}
         }
-        do {
-            _ = try await client.botAvatar(
-                botId: "bot-1",
-                assetRevision: "avatar_revision_0123456789abcdef0123456789abcdef"
-            )
-            XCTFail("Expected the avatar cache/security contract to be rejected.")
-        } catch AidenRemoteClientError.invalidResponse {}
 
         XCTAssertEqual(records.count, 2)
         XCTAssertTrue(records.allSatisfy {
@@ -344,6 +353,75 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(roundTripped.toolCallCount, 1)
     }
 
+    func testStaleLiveActivityKeepsWaitingForApprovalAskAndOtherStatusesShowLatestStatus() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        for status in AgentRunActivityStatus.allCases {
+            let fresh = AgentRunActivityAttributes.ContentState(
+                sessionID: "chat-1",
+                sessionTitle: "Chat",
+                status: status,
+                currentActivity: "Running bash",
+                responseExcerpt: "Earlier reply",
+                startedAt: start,
+                updatedAt: start + 5,
+                errorSummary: status == .failed ? "Provider error" : nil
+            )
+            // A fresh run, whichever way it is checked, has no stale override.
+            XCTAssertNil(AgentRunStalePresentation.copy(for: fresh, systemMarkedStale: false), "\(status)")
+
+            let reducerStale = AgentRunActivityStateReducer.stale(state: fresh)
+            for (label, state, systemMarkedStale) in [
+                ("reducer", reducerStale, false),
+                ("system", fresh, true),
+            ] {
+                let copy = AgentRunStalePresentation.copy(for: state, systemMarkedStale: systemMarkedStale)
+                if status == .waitingForApproval {
+                    XCTAssertEqual(copy?.lead, "Waiting for approval", label)
+                    XCTAssertEqual(copy?.action, "Open to answer", label)
+                    // Stale styling still applies to the waiting state.
+                    XCTAssertTrue(AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale), label)
+                } else {
+                    XCTAssertEqual(copy?.lead, "Latest status shown", "\(status) \(label)")
+                    XCTAssertNil(copy?.action, "\(status) \(label)")
+                }
+            }
+        }
+    }
+
+    func testFinishedLiveActivityIsNeverPresentedAsStaleWaiting() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let waiting = AgentRunActivityStateReducer.waitingForApproval(
+            state: AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start),
+            now: start + 1
+        )
+        let done = AgentRunActivityStateReducer.final(
+            status: .cancelled,
+            activity: "Cancelled",
+            state: AgentRunActivityStateReducer.stale(state: waiting),
+            now: start + 2
+        )
+        XCTAssertNil(AgentRunStalePresentation.copy(for: done, systemMarkedStale: true))
+    }
+
+    func testStaleWaitingStateWithoutActivityLineFallsBackToWaitingTitle() throws {
+        // State persisted by an older build: no `toolCallCount`, empty activity line.
+        let legacy = Data("""
+        {"sessionID":"chat-1","sessionTitle":"Chat","status":"waitingForApproval",
+         "currentActivity":"","responseExcerpt":"","startedAt":0,
+         "updatedAt":12,"isStale":true,"isFinal":false}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AgentRunActivityAttributes.ContentState.self, from: legacy)
+        XCTAssertEqual(
+            AgentRunStalePresentation.copy(for: decoded, systemMarkedStale: false),
+            AgentRunStalePresentation.Copy(lead: "Waiting for approval", action: "Open to answer")
+        )
+
+        XCTAssertEqual(AgentRunActivityStateReducer.stale(state: decoded).currentActivity, "Waiting for approval")
+        var thinking = decoded
+        thinking.status = .thinking
+        XCTAssertEqual(AgentRunActivityStateReducer.stale(state: thinking).currentActivity, "Latest status shown")
+    }
+
     @MainActor
     func testLiveActivityStateIsBoundedAndResponseExcerptDefaultsOff() throws {
         let longTitle = String(repeating: "Title ", count: 30)
@@ -409,7 +487,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
 
         await manager.endAll(forInstanceID: proofID)
 
-        XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
+        await assertDeliveredEnd(of: activity)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
 
@@ -484,7 +562,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(reconciled.responseExcerpt, "")
 
         await adoptingManager.endAll(forInstanceID: proofID)
-        XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
+        await assertDeliveredEnd(of: activity)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
 
@@ -588,7 +666,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
             XCTAssertEqual(reconciled.responseExcerpt, "")
 
             await manager.endAll(forInstanceID: proofID)
-            XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
+            await assertDeliveredEnd(of: activity)
             XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
             print("AIDEN_ACTIVITYKIT_PROCESS checkpoint=reconciled-and-ended proof=\(proofID)")
 
@@ -801,6 +879,87 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: Int16.self) }, 16_383)
         XCTAssertEqual(pcm.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: Int16.self) }, 32_767)
     }
+
+    func testWaitingStatusDistinguishesApprovalFromAnswerFromPendingPrompts() {
+        XCTAssertEqual(
+            AgentRunBlockingStatus.status(hasPendingApproval: false, hasPendingQuestion: true),
+            .waitingForAnswer
+        )
+        XCTAssertEqual(
+            AgentRunBlockingStatus.status(hasPendingApproval: true, hasPendingQuestion: false),
+            .waitingForApproval
+        )
+        // The approval gates the tool call, so it wins when both are pending.
+        XCTAssertEqual(
+            AgentRunBlockingStatus.status(hasPendingApproval: true, hasPendingQuestion: true),
+            .waitingForApproval
+        )
+
+        let start = Date(timeIntervalSince1970: 1_000)
+        let running = AgentRunActivityStateReducer.toolStarted(
+            name: "bash",
+            state: AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start),
+            now: start + 1
+        )
+        let answer = AgentRunActivityStateReducer.waitingForAnswer(state: running, now: start + 2)
+        let approval = AgentRunActivityStateReducer.waitingForApproval(state: running, now: start + 2)
+        XCTAssertEqual(answer.status, .waitingForAnswer)
+        XCTAssertEqual(answer.currentActivity, "Needs your answer")
+        XCTAssertEqual(approval.status, .waitingForApproval)
+        XCTAssertEqual(approval.currentActivity, "Needs your approval")
+        XCTAssertNotEqual(answer.status.title, approval.status.title)
+        XCTAssertEqual(answer.toolCallCount, 1)
+        XCTAssertTrue(answer.status.isAwaitingUser)
+        XCTAssertTrue(approval.status.isAwaitingUser)
+        XCTAssertFalse(running.status.isAwaitingUser)
+    }
+
+    func testServerWaitingSnapshotAndStaleMarkingKeepAQuestionWait() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let initial = AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start)
+        let answer = AgentRunActivityStateReducer.waitingForAnswer(state: initial, now: start + 3)
+
+        // A reconcile reports only `waiting_for_approval`; it must not flip a
+        // known question back to approval or claim new progress.
+        let refreshed = AgentRunActivityStateReducer.refreshedWaiting(state: answer)
+        XCTAssertEqual(refreshed.status, .waitingForAnswer)
+        XCTAssertEqual(refreshed.currentActivity, "Needs your answer")
+        XCTAssertEqual(refreshed.updatedAt, start + 3)
+
+        // Without a known question, the snapshot reads as an approval wait.
+        let refreshedRunning = AgentRunActivityStateReducer.refreshedWaiting(state: initial)
+        XCTAssertEqual(refreshedRunning.status, .waitingForApproval)
+        XCTAssertEqual(refreshedRunning.currentActivity, "Needs your approval")
+
+        let stale = AgentRunActivityStateReducer.stale(state: answer)
+        XCTAssertTrue(stale.isStale)
+        XCTAssertEqual(stale.status, .waitingForAnswer)
+        XCTAssertEqual(stale.currentActivity, "Needs your answer")
+        XCTAssertTrue(stale.status.isAwaitingUser)
+    }
+
+    func testQuestionWaitRoundTripsAndOlderApprovalStateStillDecodes() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let answer = AgentRunActivityStateReducer.waitingForAnswer(
+            state: AgentRunActivityStateReducer.initialState(sessionID: "chat-1", sessionTitle: "Chat", startedAt: start),
+            now: start + 1
+        )
+        let roundTripped = try JSONDecoder().decode(
+            AgentRunActivityAttributes.ContentState.self,
+            from: JSONEncoder().encode(answer)
+        )
+        XCTAssertEqual(roundTripped, answer)
+
+        // State persisted by a build that predates the question status.
+        let legacy = Data("""
+        {"sessionID":"chat-1","sessionTitle":"Chat","status":"waitingForApproval",
+         "currentActivity":"Waiting for approval","responseExcerpt":"","startedAt":0,
+         "updatedAt":12,"isStale":false,"isFinal":false}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AgentRunActivityAttributes.ContentState.self, from: legacy)
+        XCTAssertEqual(decoded.status, .waitingForApproval)
+        XCTAssertEqual(AgentRunActivityStateReducer.refreshedWaiting(state: decoded).status, .waitingForApproval)
+    }
 }
 
 /// ActivityKit echoes an app's own `update(_:)` back to its `Activity`
@@ -828,7 +987,7 @@ private func deliveredContent(
     // Race the stream against the ceiling without a task group: ActivityKit's
     // `contentUpdates` does not end when its task is cancelled, and a group
     // would wait for that child before returning, so it would hang anyway.
-    let race = AidenDeliveredContentRace()
+    let race = AidenDeliveryRace<AgentRunActivityAttributes.ContentState>()
     let outcome = await withCheckedContinuation { continuation in
         race.continuation = continuation
         race.observer = Task { @MainActor in
@@ -871,23 +1030,91 @@ private func deliveredContent(
     return nil
 }
 
-private enum AidenDeliveredContentOutcome: Sendable {
-    case delivered(AgentRunActivityAttributes.ContentState)
+/// `Activity.activities` hands out a separate instance per call, so the
+/// instance a test holds is not the one the manager ends. ActivityKit
+/// propagates the ended state to other instances asynchronously, and under a
+/// loaded simulator that lands after `end(_:dismissalPolicy:)` returns. Await
+/// the delivered state event instead of reading `activityState` right away.
+/// The ceiling has the same failure-only role as in `deliveredContent`.
+@MainActor
+private func assertDeliveredEnd(
+    of activity: Activity<AgentRunActivityAttributes>,
+    failureCeiling: Duration = .seconds(30),
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    let isEnded: @Sendable (ActivityState) -> Bool = { $0 == .ended || $0 == .dismissed }
+    let race = AidenDeliveryRace<ActivityState>()
+    let outcome = await withCheckedContinuation { continuation in
+        race.continuation = continuation
+        race.observer = Task { @MainActor in
+            // Subscribe before reading the current state so a transition that
+            // lands between the two is buffered rather than missed.
+            let updates = activity.activityStateUpdates.makeAsyncIterator()
+            let current = activity.activityState
+            race.last = current
+            if isEnded(current) {
+                race.finish(.delivered(current))
+                return
+            }
+            while let state = await updates.next() {
+                race.last = state
+                if isEnded(state) {
+                    race.finish(.delivered(state))
+                    return
+                }
+            }
+            race.finish(.streamFinished)
+        }
+        race.ceiling = Task { @MainActor in
+            guard (try? await Task.sleep(for: failureCeiling)) != nil else { return }
+            race.finish(.ceilingReached)
+        }
+    }
+    race.observer?.cancel()
+    race.ceiling?.cancel()
+
+    let lastSeen = race.last.map { "\($0)" } ?? "no state"
+    switch outcome {
+    case .delivered:
+        break
+    case .streamFinished:
+        XCTFail(
+            "ActivityKit ended the state stream before the activity ended; last seen: \(lastSeen).",
+            file: file,
+            line: line
+        )
+    case .ceilingReached:
+        XCTFail(
+            "ActivityKit did not deliver the ended state within the \(failureCeiling) failure ceiling; last seen: \(lastSeen).",
+            file: file,
+            line: line
+        )
+    }
+}
+
+private enum AidenDeliveryOutcome<Value: Sendable>: Sendable {
+    case delivered(Value)
     case streamFinished
     case ceilingReached
 }
 
 @MainActor
-private final class AidenDeliveredContentRace {
-    var last: AgentRunActivityAttributes.ContentState?
-    var continuation: CheckedContinuation<AidenDeliveredContentOutcome, Never>?
+private final class AidenDeliveryRace<Value: Sendable> {
+    var last: Value?
+    var continuation: CheckedContinuation<AidenDeliveryOutcome<Value>, Never>?
     var observer: Task<Void, Never>?
     var ceiling: Task<Void, Never>?
 
-    func finish(_ outcome: AidenDeliveredContentOutcome) {
+    func finish(_ outcome: AidenDeliveryOutcome<Value>) {
         continuation?.resume(returning: outcome)
         continuation = nil
     }
+}
+
+/// Tags diagnostics with the test task that caused them (see the binary contract test).
+private enum DiagnosticsTestScope {
+    @TaskLocal static var current: UUID?
 }
 
 private final class AidenNativeActivityURLProtocol: URLProtocol, @unchecked Sendable {

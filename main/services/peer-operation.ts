@@ -11,9 +11,11 @@ import {
   type PeerRequest,
 } from "./peer-transport.js";
 import {
+  parseAidenRemoteChatForkResult,
   parseAidenRemoteChatProjection,
   parseAidenRemoteChatSummaryPage,
 } from "./aiden-remote-protocol.js";
+import { MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS } from "../../renderer/shared/chat-copy-contract.js";
 
 const OPERATION_FIELDS = new Set([
   "operation",
@@ -54,7 +56,46 @@ export const PEER_CHAT_MUTATIONS: ReadonlySet<string> = new Set([
   "markRead",
   "interruptAgent",
   "updateBotChatAccess",
+  // A fork never changes its source, but a summary action changes the fork.
+  "forkSummaryRetry",
+  "forkSummarySkip",
+  "forkSummaryCancel",
 ]);
+
+/** A fork names one message to cut at and, optionally, a summary of what followed. */
+function forkBody(value: unknown): Record<string, unknown> {
+  const body = peerRecord(value);
+  const keys = Object.keys(body);
+  if (
+    keys.some((key) => key !== "messageId" && key !== "position" && key !== "summary") ||
+    typeof body.messageId !== "string" ||
+    !PUBLIC_ID.test(body.messageId) ||
+    (body.position !== "after" && body.position !== "before")
+  )
+    throw new Error("Invalid peer fork request.");
+  if (body.summary === undefined) return { messageId: body.messageId, position: body.position };
+  const summary = peerRecord(body.summary);
+  const focus = summary.focus;
+  if (
+    Object.keys(summary).some((key) => key !== "focus") ||
+    (focus !== undefined &&
+      (typeof focus !== "string" || !focus.trim() || focus.length > MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS))
+  )
+    throw new Error("Invalid peer fork request.");
+  return {
+    messageId: body.messageId,
+    position: body.position,
+    summary: focus === undefined ? {} : { focus },
+  };
+}
+
+/** `{cancelled}` from `POST /chats/{chatId}/fork-summary/cancel`. */
+function forkSummaryCancelled(value: unknown): { cancelled: boolean } {
+  const record = peerRecord(value);
+  if (typeof record.cancelled !== "boolean")
+    throw new Error("Invalid peer fork summary answer.");
+  return { cancelled: record.cancelled };
+}
 
 function binaryContent(value: unknown): PeerAttachmentContent {
   const record = peerRecord(value);
@@ -81,8 +122,17 @@ export async function peerOperationResult(
   await validatePeerResponse(name, value);
   if (name === "summaries")
     return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
-  if (name === "chat" || name === "createChat" || name === "renameChat")
+  if (
+    name === "chat" ||
+    name === "createChat" ||
+    name === "renameChat" ||
+    name === "forkSummaryRetry" ||
+    name === "forkSummarySkip"
+  )
     return parseAidenRemoteChatProjection(value, "Peer chat");
+  if (name === "forkChat")
+    return parseAidenRemoteChatForkResult(value, "Peer chat fork");
+  if (name === "forkSummaryCancel") return forkSummaryCancelled(value);
   return value;
 }
 
@@ -128,6 +178,7 @@ export function peerOperationRequest(
   let needsKey = false;
   let needsRevision = false;
   let maxBodyBytes: number | undefined;
+  let body: unknown = input.body;
   switch (operation) {
     case "server":
       path = "/server";
@@ -324,6 +375,24 @@ export function peerOperationRequest(
       path = `/chats/${id()}/attachments/${pattern(input.itemId, STAGED_ATTACHMENT_ID)}`;
       method = "DELETE";
       break;
+    case "forkChat":
+      path = `/chats/${id()}/fork`;
+      method = "POST";
+      needsKey = true;
+      needsRevision = true;
+      body = forkBody(input.body);
+      break;
+    case "forkSummaryRetry":
+    case "forkSummarySkip":
+    case "forkSummaryCancel":
+      // Not keyed: retry and skip act only on the summary state they find, and
+      // the host reads no body for any of them.
+      path = `/chats/${id()}/fork-summary/${operation === "forkSummaryRetry" ? "retry" : operation === "forkSummarySkip" ? "skip" : "cancel"}`;
+      method = "POST";
+      if (input.body !== undefined && Object.keys(peerRecord(input.body)).length > 0)
+        throw new Error("Invalid peer fork summary request.");
+      body = {};
+      break;
     default:
       throw new Error("Unsupported peer operation.");
   }
@@ -337,7 +406,7 @@ export function peerOperationRequest(
     path,
     method,
     ...(method !== "GET" && method !== "DELETE"
-      ? { body: input.body ?? {} }
+      ? { body: body ?? {} }
       : {}),
     ...(needsKey ? { idempotencyKey: token(input.idempotencyKey, 16) } : {}),
     ...(needsRevision ? { revision: token(input.revision, 1) } : {}),

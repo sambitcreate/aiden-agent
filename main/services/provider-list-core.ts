@@ -17,7 +17,7 @@ export interface CodexProviderStatusChangedEvent {
 
 /** Stable product copy for upstream provider names that are unclear in Aiden's UI. */
 export function providerDisplayLabel(providerId: string, upstreamLabel: string): string {
-  return providerId === "opencode-go" ? "OpenCode Zen" : upstreamLabel;
+  return providerId === "opencode-go" ? "OpenCode Go" : upstreamLabel;
 }
 
 /** Electron-free bridge contract: every service notification becomes one global renderer event. */

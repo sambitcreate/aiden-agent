@@ -15,6 +15,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -487,7 +492,7 @@ class AidenRemoteClient(
     suspend fun updateDeviceCapabilities(
         accepts: List<AidenRemoteCapability>
     ): List<AidenRemoteCapability> {
-        val allowed = AidenRemoteCapability.PROGRESS.toSet()
+        val allowed = AidenRemoteCapability.NEGOTIABLE.toSet()
         if (accepts.isEmpty() || accepts.toSet().size != accepts.size || accepts.any { it !in allowed }) {
             throw AidenRemoteClientException.InvalidResponse("Invalid progress capability request.")
         }
@@ -499,10 +504,10 @@ class AidenRemoteClient(
             maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
         ) { bytes ->
             val response = strictJsonParser.decodeFromString<DeviceCapabilitiesUpdateResponse>(String(bytes, Charsets.UTF_8))
-            if (response.capabilities.size > AidenRemoteCapability.V1_KNOWN.size ||
+            if (response.capabilities.size > AidenRemoteCapability.PHONE_KNOWN.size ||
                 response.capabilities.toSet().size != response.capabilities.size ||
                 response.capabilities.any { capability ->
-                    AidenRemoteCapability.V1_KNOWN.none { it == capability }
+                    AidenRemoteCapability.PHONE_KNOWN.none { it == capability }
                 } ||
                 (response.capabilities.contains(AidenRemoteCapability.BOT_WRITE) &&
                     !response.capabilities.contains(AidenRemoteCapability.BOT_READ)) ||
@@ -562,6 +567,12 @@ class AidenRemoteClient(
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
+
+    suspend fun createProvider(input: AidenProviderCreation, idempotencyKey: UUID): AidenProviderCreationReceipt =
+        executeRequest("/providers", method = "POST", idempotencyKey = idempotencyKey,
+            acceptedStatus = setOf(201), bodyJson = json.encodeToString(input)) { bytes ->
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
 
     suspend fun memorySettings(): AidenMemorySettings =
         executeRequest("/memory/settings") { bytes ->
@@ -690,6 +701,34 @@ class AidenRemoteClient(
         c
     }
 
+    /**
+     * One page of a chat's visible messages, oldest first. Without [before]
+     * the page ends at the newest message; otherwise it ends just before that
+     * message. A [before] the Mac no longer has is `409 revision_conflict`.
+     */
+    suspend fun messagesWindow(
+        chatId: String,
+        before: String? = null,
+        limit: Int = AidenChatMessagesWindow.DEFAULT_LIMIT
+    ): AidenChatMessagesWindow {
+        if (limit !in 1..AidenChatMessagesWindow.MAXIMUM_LIMIT) throw AidenRemoteClientException.InvalidResponse()
+        val path = buildString {
+            append("/chats/").append(chatId).append("/messages?limit=").append(limit)
+            if (before != null) {
+                append("&before=").append(URLEncoder.encode(before, Charsets.UTF_8.name()).replace("+", "%20"))
+            }
+        }
+        return executeRequest(path, botScope = AidenBotPrivateResponseScope.MessagesWindowProjection) { bytes ->
+            val window = json.decodeFromString<AidenChatMessagesWindow>(String(bytes, Charsets.UTF_8))
+            if (window.chatId != chatId || window.messages.size > limit ||
+                (before != null && window.messages.any { it.id == before })
+            ) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            window
+        }
+    }
+
     suspend fun chatTasks(id: String): AidenChatTaskProgress = executeRequest(
         "/chats/$id/tasks",
         botScope = AidenBotPrivateResponseScope.ChatProgressProjection,
@@ -812,6 +851,66 @@ class AidenRemoteClient(
         botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    /**
+     * Forks [id] at [messageId] (contract revision 21, `chat-fork-v1`).
+     * [summaryFocus] is only sent with [withSummary], which needs
+     * `chat-fork-summary-v1`; a blank focus asks for an unfocused summary.
+     * A replay with the same [idempotencyKey] and body returns the first fork.
+     */
+    suspend fun forkChat(
+        id: String,
+        revision: String,
+        messageId: String,
+        position: AidenChatForkPosition,
+        withSummary: Boolean = false,
+        summaryFocus: String? = null,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatForkResult = executeRequest(
+        "/chats/$id/fork",
+        method = "POST",
+        ifMatchRevision = revision,
+        idempotencyKey = idempotencyKey,
+        bodyJson = json.encodeToString(
+            ChatForkRequest(
+                messageId = messageId,
+                position = position,
+                summary = if (withSummary) {
+                    ChatForkSummaryRequest(summaryFocus?.trim()?.takeIf { it.isNotEmpty() })
+                } else null
+            )
+        ),
+        acceptedStatus = setOf(201),
+        botScope = AidenBotPrivateResponseScope.ChatProjection
+    ) { bytes ->
+        val result = json.decodeFromString<AidenChatForkResult>(String(bytes, Charsets.UTF_8))
+        if (result.chat.id == id) throw AidenRemoteClientException.InvalidResponse()
+        result
+    }
+
+    /** Asks for a failed fork summary again with the same focus. */
+    suspend fun retryForkSummary(chatId: String): AidenChat = forkSummaryChatAction(chatId, "retry")
+
+    /** Drops the fork summary, which turns the chat into a plain fork. */
+    suspend fun skipForkSummary(chatId: String): AidenChat = forkSummaryChatAction(chatId, "skip")
+
+    /** Stops a running fork summary, which then fails; `cancelled` is false when nothing ran. */
+    suspend fun cancelForkSummary(chatId: String): AidenChatForkSummaryCancel = executeRequest(
+        "/chats/$chatId/fork-summary/cancel",
+        method = "POST"
+    ) { bytes ->
+        json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    private suspend fun forkSummaryChatAction(chatId: String, action: String): AidenChat = executeRequest(
+        "/chats/$chatId/fork-summary/$action",
+        method = "POST",
+        botScope = AidenBotPrivateResponseScope.ChatProjection
+    ) { bytes ->
+        val chat = json.decodeFromString<AidenChat>(String(bytes, Charsets.UTF_8))
+        if (chat.id != chatId) throw AidenRemoteClientException.InvalidResponse()
+        chat
     }
 
     suspend fun uploadAttachment(
@@ -1037,12 +1136,134 @@ class AidenRemoteClient(
         expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS
     )
 
+    // --- Contract revision 24: runs started on the Mac, in Telegram or by the scheduler ---
+
+    /** The chat's newest run, possibly already ended. The first frame fixes
+     * the run identity; a frame naming any other run ends the feed. */
+    fun currentRunEvents(chatId: String): Flow<AidenRemoteRunEvent> = rawSseEvents(
+        path = "/chats/$chatId/runs/current/events",
+        after = 0
+    ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = null) }
+
+    /** One run's feed, resumed after [after] with `?after` and `Last-Event-ID`. */
+    fun runEvents(runId: String, after: Int = 0): Flow<AidenRemoteRunEvent> = rawSseEvents(
+        path = "/runs/$runId/events",
+        after = after
+    ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = runId) }
+
+    /** Stop a run this phone did not start. Control writes never auto-retry. */
+    suspend fun cancelRun(
+        runId: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenRemoteRunCancelResult = executeRequest(
+        "/runs/$runId/cancel",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = "{}",
+        idempotencyKey = idempotencyKey,
+        acceptedStatus = setOf(202)
+    ) { bytes ->
+        val obj = runResponseObject(bytes)
+        val result = AidenRemoteRunCancelResult(
+            runId = obj.requiredString("runId"),
+            chatId = obj.requiredString("chatId"),
+            state = obj.requiredString("state"),
+            cancelRequested = (obj["cancelRequested"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+                ?: throw AidenRemoteClientException.InvalidResponse()
+        )
+        if (result.runId != runId) throw AidenRemoteClientException.InvalidResponse()
+        result
+    }
+
+    /** First responder wins: a loser receives `409 approval_resolved` naming
+     * the winning decision. A deny never carries a remembered scope. */
+    suspend fun respondToRunApproval(
+        runId: String,
+        approvalId: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope? = null,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenRemoteRunApprovalResult {
+        val decisionWire = if (decision == AidenApprovalDecision.ALLOW) "allow" else "deny"
+        val body = buildJsonObject {
+            put("decision", decisionWire)
+            if (decision == AidenApprovalDecision.ALLOW && scope != null) put("scope", scope.wireName)
+        }
+        return executeRequest(
+            "/runs/$runId/approvals/$approvalId/respond",
+            method = "POST",
+            retryConnectionFailure = false,
+            bodyJson = body.toString(),
+            idempotencyKey = idempotencyKey
+        ) { bytes ->
+            val obj = runResponseObject(bytes)
+            if (obj.requiredString("runId") != runId || obj.requiredString("approvalId") != approvalId) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            val echoed = when (obj.requiredString("decision")) {
+                "allow" -> AidenApprovalDecision.ALLOW
+                "deny" -> AidenApprovalDecision.DENY
+                else -> throw AidenRemoteClientException.InvalidResponse()
+            }
+            val echoedScope = (obj["scope"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { raw ->
+                AidenApprovalScope.entries.firstOrNull { it.wireName == raw }
+                    ?: throw AidenRemoteClientException.InvalidResponse()
+            }
+            AidenRemoteRunApprovalResult(runId, approvalId, echoed, echoedScope, obj.requiredInstant("resolvedAt"))
+        }
+    }
+
+    /** First responder wins: a loser receives `409 question_already_resolved`. */
+    suspend fun respondToRunQuestion(
+        runId: String,
+        promptId: String,
+        response: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ): AidenRemoteRunQuestionResult = executeRequest(
+        "/runs/$runId/questions/$promptId/respond",
+        method = "POST",
+        retryConnectionFailure = false,
+        bodyJson = response.toJson().toString(),
+        idempotencyKey = idempotencyKey
+    ) { bytes ->
+        val obj = runResponseObject(bytes)
+        if (obj.requiredString("runId") != runId || obj.requiredString("promptId") != promptId) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        AidenRemoteRunQuestionResult(runId, promptId, obj.requiredString("outcome"), obj.requiredInstant("resolvedAt"))
+    }
+
+    private fun runResponseObject(bytes: ByteArray): JsonObject =
+        runCatching { json.parseToJsonElement(String(bytes, Charsets.UTF_8)) }.getOrNull() as? JsonObject
+            ?: throw AidenRemoteClientException.InvalidResponse()
+
+    private fun JsonObject.requiredString(key: String): String =
+        (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
+            ?: throw AidenRemoteClientException.InvalidResponse()
+
+    private fun JsonObject.requiredInstant(key: String): Instant =
+        runCatching { Instant.parse(requiredString(key)) }.getOrNull()
+            ?: throw AidenRemoteClientException.InvalidResponse()
+
     private fun sseEvents(
         path: String,
         expectedStreamId: String,
         after: Int,
         expectedChannel: AidenSSEParser.ExpectedChannel
-    ): Flow<AidenRemoteStreamEvent> = callbackFlow {
+    ): Flow<AidenRemoteStreamEvent> = rawSseEvents(path, after) { stream ->
+        AidenSSEParser.parseStream(
+            stream,
+            expectedStreamId = expectedStreamId,
+            startSequence = after,
+            expectedChannel = expectedChannel
+        )
+    }
+
+    private fun <T> rawSseEvents(
+        path: String,
+        after: Int,
+        parse: (java.io.InputStream) -> Flow<T>
+    ): Flow<T> = callbackFlow {
         if (credential.isNullOrEmpty()) {
             AidenDiagnostics.record(AidenDiagnosticArea.AUTHENTICATION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.UNAUTHORIZED)
             close(AidenRemoteClientException.MissingCredential)
@@ -1073,13 +1294,7 @@ class AidenRemoteClient(
                     }
                     val stream = response.body?.byteStream()
                         ?: throw AidenRemoteClientException.InvalidResponse()
-                    AidenSSEParser.parseStream(
-                        stream,
-                        expectedStreamId = expectedStreamId,
-                        startSequence = after,
-                        expectedChannel = expectedChannel
-                    )
-                        .collect { event -> send(event) }
+                    parse(stream).collect { event -> send(event) }
                 }
                 close()
             } catch (error: Exception) {
@@ -1936,6 +2151,17 @@ class AidenRemoteClient(
     /** Encodes to `{}` without a message id so the Mac reads through its newest message. */
     @Serializable
     private data class ChatReadRequest(val throughMessageId: String? = null)
+
+    @Serializable
+    private data class ChatForkRequest(
+        val messageId: String,
+        val position: AidenChatForkPosition,
+        val summary: ChatForkSummaryRequest? = null
+    )
+
+    /** Encodes to `{}` for an unfocused summary. */
+    @Serializable
+    private data class ChatForkSummaryRequest(val focus: String? = null)
 
     @Serializable
     private data class ChatMoveRequest(

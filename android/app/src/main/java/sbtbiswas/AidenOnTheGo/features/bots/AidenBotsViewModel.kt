@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import sbtbiswas.AidenOnTheGo.features.shared.AidenRevalidation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -55,6 +56,7 @@ class AidenBotsViewModel(
     private var searchJob: Job? = null
     private var loadedClient: AidenRemoteClient? = null
     private var loadingClient: AidenRemoteClient? = null
+    private var lastLoadedAtMillis: Long? = null
 
     init {
         viewModelScope.launch {
@@ -100,7 +102,10 @@ class AidenBotsViewModel(
                     }
                     val failure = botsResult.exceptionOrNull() ?: conversationsResult.exceptionOrNull()
                     _errorMessage.value = failure?.message
-                    if (failure == null) loadedClient = client
+                    if (failure == null) {
+                        loadedClient = client
+                        lastLoadedAtMillis = System.currentTimeMillis()
+                    }
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
@@ -111,6 +116,14 @@ class AidenBotsViewModel(
                 _isLoading.value = false
             }
         }
+    }
+
+    /** Rereads Bots and chats on return to the foreground once they are stale. */
+    fun revalidate(nowMillis: Long = System.currentTimeMillis()) {
+        if (coordinator.connectionState.value != AidenConnectionState.CONNECTED) return
+        if (loadedClient !== coordinator.client.value) lastLoadedAtMillis = null
+        if (!AidenRevalidation.isDue(lastLoadedAtMillis, nowMillis, inFlight = loadingClient != null)) return
+        loadBots(force = true)
     }
 
     private suspend fun <T> request(block: suspend () -> T): Result<T> = try {

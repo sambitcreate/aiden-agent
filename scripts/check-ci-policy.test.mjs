@@ -55,9 +55,18 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(filter.env.FORCE_FULL, "${{ github.event_name == 'push' && 'true' || 'false' }}");
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
   assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES].toSorted());
-  // Linux packaging is not required, but it must still follow its own area.
-  assert.equal(jobs.linux.if, "${{ needs.changes.outputs.linux == 'true' }}");
-  assert.equal(jobs["linux-rpm"].needs, "linux");
+  // Linux packaging still follows its own area, but the branch ruleset
+  // requires its per-arch checks. A skipped matrix job reports under the
+  // unexpanded name, so the job always starts and every step carries the gate.
+  const linuxGate = "needs.changes.outputs.linux == 'true'";
+  assert.equal(jobs.linux.if, undefined);
+  assert.ok([jobs.linux.needs].flat().includes("changes"));
+  for (const step of jobs.linux.steps) {
+    if (String(step.if ?? "").includes("failure()")) continue;
+    assert.ok(String(step.if ?? "").includes(linuxGate), step.name);
+  }
+  assert.deepEqual(jobs["linux-rpm"].needs, ["changes", "linux"]);
+  assert.equal(jobs["linux-rpm"].if, `\${{ ${linuxGate} }}`);
   assert.ok(jobs.catalog.steps.some((step) => step.run === "npm run test:model-catalog"));
 });
 
@@ -124,9 +133,9 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
     /- name: Upload baseline-verified RPM for Fedora acceptance\n[\s\S]*?(?=\n {6}- name:|$)/u,
   )?.[0];
   assert.ok(uploadStep, "Baseline RPM upload step is missing");
-  assert.match(uploadStep, /if: matrix\.arch == 'x64'/u);
+  assert.match(uploadStep, /if: \$\{\{ needs\.changes\.outputs\.linux == 'true' && matrix\.arch == 'x64' \}\}/u);
   assert.match(uploadStep, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
-  assert.match(rpmJob, /^ {4}needs: linux$/mu);
+  assert.match(rpmJob, /^ {4}needs: \[changes, linux\]$/mu);
   assert.match(rpmJob, /actions\/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e/u);
   assert.match(
     rpmJob,
@@ -227,10 +236,15 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     .map(([name]) => name);
   assert.deepEqual(builders, ["build"]);
   const bundle = jobs.build.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  // Downloads follow the producer output, even when only a consumer is rerun
+  // and its github.run_attempt differs from the successful build's attempt.
+  assert.equal(jobs.build.outputs["artifact-name"], bundle.with.name);
+  assert.equal(bundle.with.name, "${{ steps.bundle.outputs.name }}");
+  assert.ok(jobs.build.steps.some((step) => step.id === "bundle"));
   for (const consumer of ["e2e", "verify"]) {
     assert.ok(jobs[consumer].needs.includes("build"), consumer);
     const download = jobs[consumer].steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
-    assert.equal(download?.with.name, bundle.with.name, consumer);
+    assert.equal(download?.with.name, "${{ needs.build.outputs.artifact-name }}", consumer);
   }
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -433,4 +447,40 @@ test("foreground Electron smoke is a required package command in desktop verific
   assert.ok(smoke, "Desktop CI must execute the foreground runtime assertions");
   assert.notEqual(smoke["continue-on-error"], true, "Smoke failures must fail CI");
   assert.equal(smoke.if, undefined, "Every desktop verification run must execute the smoke");
+});
+
+
+test("Linux required contexts exist for scoped PRs and fail closed", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const gate = jobs["linux-required"];
+  assert.equal(gate.name, "Linux ${{ matrix.arch }}");
+  assert.equal(gate.if, "${{ always() }}");
+  assert.deepEqual(gate.strategy.matrix.arch, ["x64", "arm64"]);
+  assert.deepEqual(gate.needs, ["changes", "linux"]);
+  assert.notEqual(jobs.linux.name, gate.name);
+  const step = gate.steps[0];
+  assert.deepEqual(step.env, {
+    CHANGES_RESULT: "${{ needs.changes.result }}",
+    LINUX_SELECTED: "${{ needs.changes.outputs.linux }}",
+    LINUX_RESULT: "${{ needs.linux.result }}",
+  });
+  for (const [detection, selected, result, expected] of [
+    ["success", "false", "skipped", 0],
+    // The linux matrix always starts and skips its steps when unselected, so GitHub reports success.
+    ["success", "false", "success", 0],
+    ["success", "true", "success", 0],
+    ["success", "true", "failure", 1],
+    ["success", "true", "cancelled", 1],
+    ["success", "true", "skipped", 1],
+    ["failure", "false", "skipped", 1],
+    ["cancelled", "false", "skipped", 1],
+    ["success", "", "skipped", 1],
+    ["success", "false", "failure", 1],
+  ]) {
+    const run = spawnSync("bash", ["-e", "-c", step.run], {
+      env: { ...process.env, CHANGES_RESULT: detection, LINUX_SELECTED: selected, LINUX_RESULT: result },
+      encoding: "utf8",
+    });
+    assert.equal(run.status, expected, `${detection}/${selected}/${result}: ${run.stdout}${run.stderr}`);
+  }
 });

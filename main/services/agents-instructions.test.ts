@@ -15,7 +15,7 @@ import {
   withAgentsInstructionsEstimate,
   withoutAgentsInstructions,
 } from "./agents-instructions.js";
-import { assertGenerationContextCapacity, projectChatContextPressure } from "./generation-context.js";
+import { assertGenerationContextCapacity, projectChatContextPressure, updateGenerationContextOptions } from "./generation-context.js";
 import type { AgentsInstructionNotice } from "../../renderer/shared/agents-instructions-notice.js";
 import {
   createGenerationContextProfile,
@@ -412,4 +412,21 @@ test("a profile captured under one tool policy is not reused after the policy fl
   // The reverse flip also discards a capture that still holds tools.
   const withTools = createGenerationContextProfile(ambient, { permission: "ask", toolsDisabled: false });
   assert.equal(await rememberedContextOptions(withTools, { ...request, toolsDisabled: true }), undefined);
+});
+
+
+test("initial and refreshed AGENTS instructions retain a captured large compaction reserve", async (t) => {
+  const f = await fixture(t);
+  const refresher = await createAgentsInstructionRefresher(f);
+  const captured = { contextWindow: 32_768, compactionReserveTokens: 30_000, systemPrompt: "HOST", tools: [] };
+  updateGenerationContextOptions(captured, context());
+  assert.equal(captured.systemPrompt, "HOST");
+  await fs.writeFile(path.join(f.workspaceRoot, "AGENTS.md"), "guidance ".repeat(1700));
+  const prepared = await refresher.apply(context());
+  const defaults = { contextWindow: 32_768, systemPrompt: "HOST", tools: [] };
+  updateGenerationContextOptions(defaults, prepared);
+  assert.match(defaults.systemPrompt, /guidance/);
+  assert.throws(() => updateGenerationContextOptions(captured, prepared), /context window is too small/);
+  assert.equal(captured.systemPrompt, "HOST", "failed admission cannot publish oversized instructions");
+  assert.equal(captured.compactionReserveTokens, 30_000);
 });

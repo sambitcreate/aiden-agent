@@ -1,3 +1,5 @@
+import { registerMcpProviderAuthHandler } from "./mcp-provider-auth.js";
+import { hasMcpProviderAuthGrant, setMcpProviderAuthGrant } from "../services/mcp-provider-auth.js";
 // Phase-2 IPC handlers: Skills, MCP servers, Exa web search, and voice transcription.
 
 import { ipcMain } from "../platform.js";
@@ -19,6 +21,7 @@ import {
 import {
   mcpCredentialConnectionSnapshot,
   mcpRuntimeConnectionSnapshot,
+  sameMcpRuntimeConnection,
   pendingMcpCredentialCleanupForRemove,
   pendingMcpCredentialCleanupForSave,
   replaceMcpCredentialAfterDisconnect,
@@ -38,7 +41,7 @@ import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
-import { withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
+import { mcpConfigurationLeases, withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
 import {
   webSearchCredentials,
   webSearchKeyPoolTracker,
@@ -304,7 +307,7 @@ export function registerPhase2Handlers(): void {
                   JSON.stringify(mcpCredentialConnectionSnapshot(existing)),
                 )),
               )
-            : await hasOAuthTokens(serverId, existing?.url ?? preset.url);
+            : await hasOAuthTokens(serverId, existing?.url ?? preset.url, existing?.authServerMetadataUrl, existing?.oauthClientName);
         return {
           preset,
           serverId,
@@ -408,7 +411,7 @@ export function registerPhase2Handlers(): void {
         );
         return {
           ...status,
-          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url) : undefined,
+          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url, parsed.authServerMetadataUrl, parsed.oauthClientName) : undefined,
         };
       },
       () => !owner.isDestroyed(),
@@ -453,10 +456,24 @@ export function registerPhase2Handlers(): void {
       stopWatching();
     }
   });
+  registerMcpProviderAuthHandler<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("MCP credential approval requires the active application document.")),
+    publish: (parsed, allowed, isCurrent) => mutateCredentialForConfiguredMcp(parsed.id, async (configured) => {
+      if (!sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(parsed), mcpRuntimeConnectionSnapshot(configured))) throw new Error("This MCP server configuration changed. Try again.");
+      const admission = mcpConfigurationLeases.acquire(parsed.id);
+      await mcpManager.disconnect(parsed.id);
+      admission.assertCurrent();
+      await withMcpConfigurationPublication(parsed.id, () => {
+        const publication = mcpConfigurationLeases.acquire(parsed.id);
+        return setMcpProviderAuthGrant(parsed, allowed, () => isCurrent() && !publication.signal.aborted);
+      });
+    }, isCurrent),
+  });
   ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => {
     const serverId = asString(id, "id");
     const server = (await configStore.listMcpServers()).find((item) => item.id === serverId);
-    return { authorized: await hasOAuthTokens(serverId, server?.url) };
+    return { authorized: await hasOAuthTokens(serverId, server?.url, server?.authServerMetadataUrl, server?.oauthClientName), providerAuthorized: server ? await hasMcpProviderAuthGrant(server) : false };
   });
   // Force-drop all cached MCP connections so the next message reconnects fresh.
   ipcMain.handle("mcp:reconnect", async () => {

@@ -477,3 +477,22 @@ test("production batch composition joins indexed previews by chat identity", () 
     ],
   );
 });
+
+test("feature-owned chats never appear in the Bot inbox even when they carry a botId", async () => {
+  const app = fixture({
+    chats: [
+      chat("owned-bot-chat", "bot-a", 60, {
+        owner: { kind: "design-project", projectId: "project-1" },
+      }),
+      chat("bot-chat", "bot-b", 20),
+    ],
+  });
+
+  const page = await app.service.list();
+
+  assert.deepEqual(
+    page.conversations.map((entry) => entry.chatId),
+    ["bot-chat"],
+  );
+  assert.deepEqual(app.calls.requested, [["bot-chat"]]);
+});

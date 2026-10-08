@@ -1,5 +1,5 @@
 import { InMemorySessionRepo } from "../pi-session-repository-port.js";
-import { estimateTokens, prepareCompaction } from "@earendil-works/pi-agent-core";
+import { estimateTokens, prepareCompaction } from "../pi-legacy-harness.js";
 import { createPiSessionPort } from "../pi-session-port.js";
 import { compileVccInWorker } from "./worker-client.js";
 import { recallVcc } from "./recall-core.js";

@@ -2,6 +2,8 @@
 
 Status: Active — Telegram slice merged in [PR #216](https://github.com/sambitcreate/aiden-agent/pull/216) (0.43.0); shared foreground admission (`chat-run-input-v1`), native Steer/Queue/Redirect and pending-question prompts merged in [PR #251](https://github.com/sambitcreate/aiden-agent/pull/251) (0.50.0). Earlier stacked PRs #220 and #223 are still open.
 
+October 5, 2026: Redirect was removed from the desktop, iOS, and Android composers. All three now show one Steer/Queue pill (see `docs/chat-composer-busy-controls.md`); Stop, then send, replaces Redirect. The Redirect notes below are history.
+
 September 23 desktop composer slice: Steer is exposed through exact-stream,
 document-owned IPC to Pi's existing queue, with text-only validation and a
 host-visible user append awaited before the next model step. Queue keeps the

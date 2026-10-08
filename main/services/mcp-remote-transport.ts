@@ -3,12 +3,13 @@ import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/s
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { createMcpFetchPolicy, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
 import { observeSseReauthentication } from "./mcp-sse-auth-lifecycle.js";
+import { withMcpOAuthMetadataObservation } from "./mcp-oauth-metadata.js";
 
 /** Shared by attended sign-in, stored-token connections, and isolated children. */
 export function createMcpRemoteTransport(
   options: McpFetchPolicyOptions & {
     transport: "http" | "sse";
-    authProvider?: OAuthClientProvider;
+    authProvider?: OAuthClientProvider & { observeAuthorizationMetadata?: (url: URL, document: unknown) => void };
     onTerminalFailure?: () => void;
   },
 ) {
@@ -19,7 +20,11 @@ export function createMcpRemoteTransport(
       ? AbortSignal.any([lifetime.signal, options.signal])
       : lifetime.signal,
   })(input, init);
-  const transportOptions = { fetch, authProvider: options.authProvider };
+  const observer = options.authProvider?.observeAuthorizationMetadata;
+  const transportOptions = {
+    fetch: observer ? withMcpOAuthMetadataObservation(fetch, observer.bind(options.authProvider)) : fetch,
+    authProvider: options.authProvider,
+  };
   const transport = options.transport === "sse"
     ? new SSEClientTransport(new URL(options.serviceUrl), transportOptions)
     : new StreamableHTTPClientTransport(new URL(options.serviceUrl), transportOptions);

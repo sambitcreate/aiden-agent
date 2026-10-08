@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Callout, Text } from "./ui";
-import { AidenOrb } from "./aiden-orb";
+import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
@@ -76,6 +76,11 @@ interface MessageListProps {
   onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
   /** This fork's summary card, placed after the last copied message. */
   forkSummary?: { afterMessageId: string; node: React.ReactNode };
+  /**
+   * False where nothing comes before the first prompt shown, and editing it
+   * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
+   */
+  forkBeforeFirstPrompt?: boolean;
 }
 
 interface AssistantResponseProps {
@@ -358,6 +363,7 @@ export function MessageList({
   forkDisabledReason = null,
   onForkWithSummary,
   forkSummary,
+  forkBeforeFirstPrompt = true,
 }: MessageListProps) {
   const onForkRef = React.useRef(onFork);
   const onForkWithSummaryRef = React.useRef(onForkWithSummary);
@@ -499,6 +505,8 @@ export function MessageList({
 
   const transcriptRows: React.ReactNode[] = [];
   const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
+  const unforkablePromptId =
+    forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined;
   for (const message of messages) {
     transcriptRows.push(
       <SettledMessageRow
@@ -508,7 +516,7 @@ export function MessageList({
         richLinks={message.id !== richLinkHandoffDuplicateId}
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
-        onFork={forkEnabled ? stableOnFork : undefined}
+        onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
         forkDisabledReason={forkDisabledReason}
         onForkWithSummary={summaryRows?.has(message.id) ? stableOnForkWithSummary : undefined}
       />,
@@ -584,7 +592,7 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
     }
     const timer = window.setTimeout(() => setCurrent(activity), delay);
     return () => window.clearTimeout(timer);
-  }, [activity?.phase, activity?.label, activity?.orbState, current]);
+  }, [activity?.phase, activity?.label, activity?.mark, current]);
 
   if (!current) return null;
   return (
@@ -594,7 +602,7 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
       className="agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2 py-0.5"
       data-agent-activity={current.phase}
     >
-      <AidenOrb state={current.orbState} size={20} className="shrink-0 text-primary" />
+      <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
       <Text
         variant="small"
         color="secondary"

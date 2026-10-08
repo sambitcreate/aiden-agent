@@ -17,6 +17,8 @@ export const hostQueryKeys = {
   /** The open remote chat's paged transcript (newest window plus older pages). */
   messagesWindow: (hostId: string, chatId: string) =>
     ["host", hostId, "chat", chatId, "messages"] as const,
+  /** A forked chat's lineage with its summary, which feed rows leave out. */
+  forkLineage: (hostId: string, chatId: string) => ["host", hostId, "chat", chatId, "fork-lineage"] as const,
   /** The skills one chat on one host may invoke. */
   skills: (hostId: string, chatId: string) => ["host", hostId, "chat", chatId, "skills"] as const,
   /** The models a host offers for new chats. */

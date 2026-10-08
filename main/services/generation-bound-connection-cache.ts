@@ -236,6 +236,7 @@ export class GenerationBoundConnectionAttempts<T> {
       if (!current()) throw new Error("The MCP connection was superseded.");
       return result;
     } finally {
+      attempt.cancelled = true;
       await attempt.close();
       records.delete(attempt);
       if (records.size === 0 && this.attempts.get(id) === records) {

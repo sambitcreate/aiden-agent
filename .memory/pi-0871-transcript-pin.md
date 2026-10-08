@@ -1,5 +1,7 @@
 # Pi 0.87.1 transcript-owned prompt pin (2026-09-24)
 
+Successor work (2026-10-05): see `pi-1.0.3-upgrade.md` and `docs/plans/pi-1.0.3-upgrade-plan.md`. The 0.87.1 history below remains the frozen journal compatibility record; the successor target is not yet shipped.
+
 This branch pins `@earendil-works/pi-agent-core` and `pi-ai` to 0.87.1. Pi's system prompt and tool declarations now live in leading transcript system messages. Aiden's host refresher appends section patches for AGENTS and browser discovery; the harness installs returned context messages and preserves the effective leading system message through compaction, emergency projection, and recovery. Context projection counts static prompt/tools once.
 
 Pi 0.87.1 also replaced the 0.84.4 session repository interface and JSONL storage header. `pi-session-port.ts` retains Aiden's narrow journal contract over the new Session/Branch APIs. `pi-session-v4-upgrade.ts` converts old v4 journals on open with an exact private backup, including header-only and interrupted-operation journals, and maps legacy usage into native usage rows. Deleting a promoted chat removes its owned backup. The v3 migration now emits the new storage format and retains its rollback receipt contract. Child sessions use the new in-memory repository through the same port.

@@ -5,6 +5,7 @@ import type {
   AidenRemoteBotConversationPage,
   AidenRemoteBotConversationQuery,
 } from "./aiden-remote-protocol.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import type { ChatMeta } from "./types.js";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 
@@ -379,6 +380,7 @@ function indexBotChats(
   for (const chat of metadata) {
     if (
       typeof chat.botId !== "string" ||
+      chatSurface(chat) !== "bot" ||
       !bots.has(chat.botId) ||
       (botFilter !== undefined && chat.botId !== botFilter) ||
       !SAFE_CHAT_ID.test(chat.id) ||

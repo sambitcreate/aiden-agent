@@ -1,13 +1,5 @@
-import {
-  MemorySessionRepo,
-  JsonlSessionRepo,
-  TODO_CONTEXT,
-  value,
-  type JsonlSessionMetadata,
-  type JsonValue,
-  type Session,
-} from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { MemorySessionRepo, JsonlSessionRepo, TODO_CONTEXT, value, type JsonlSessionMetadata, type JsonValue, type Session } from "./pi-legacy-harness.js";
+import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import { open, readdir, stat, unlink } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";

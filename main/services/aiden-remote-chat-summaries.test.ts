@@ -382,7 +382,7 @@ test("summary query enforces chat:read, defaults, and hard bounds over HTTP", as
     headers,
   })).json() as { features?: string[] };
   // The read-only messages window is advertised to every device that can read chats.
-  assert.deepEqual(serverProjection.features, ["chat-summaries-v1", "chat-skills-v1", "chat-messages-window-v1"]);
+  assert.deepEqual(serverProjection.features, ["chat-summaries-v1", "chat-skills-v1", "chat-messages-window-v1", "chat-messages-window-metadata-v1"]);
 });
 
 test("pathological synthetic history keeps summary responses bounded without payload reads", async () => {
@@ -586,4 +586,26 @@ test("read reports require chat:read, validate the body, and advertise only when
     features?: string[];
   };
   assert.ok(serverProjection.features?.includes("chat-read-state-v1"));
+});
+
+test("feature-owned chats never reach summaries or the host feed", async () => {
+  const owner = { kind: "design-project" as const, projectId: "project-1" };
+  const fixture = summaryService([
+    metadata("chat-a", 3_000),
+    metadata("design-chat", 4_000, { workspaceId: "default", owner }),
+    metadata("owned-bot-chat", 4_500, { botId: "bot-1", owner }),
+    metadata("bot-chat", 4_600, { botId: "bot-1" }),
+    metadata("assistant-chat", 5_000, { workspaceId: "assistant" }),
+  ], { active: new Set(["design-chat"]) });
+
+  const page = await fixture.service.listSummaries();
+  assert.deepEqual(page.summaries.map(({ id }) => id), ["chat-a"]);
+  assert.equal(JSON.stringify(page).includes("design-chat"), false);
+
+  const feed = await fixture.service.hostFeedChats();
+  assert.deepEqual(feed.summaries.map(({ id }) => id), ["chat-a"]);
+  // A Bot chat that is also feature-owned is a feature chat: it fails closed
+  // out of the Bot id set too, while genuine Bot chats stay announced.
+  assert.equal(feed.botChatIds.has("owned-bot-chat"), false);
+  assert.equal(feed.botChatIds.has("bot-chat"), true);
 });

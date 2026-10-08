@@ -36,22 +36,24 @@ test("voice-only Gemini 3.8 Live ships on with an explicit kill switch", () => {
   );
 });
 
-test("screen sharing stays separately opt-in and cannot outlive the Live gate", () => {
+test("screen sharing ships on with its own kill switch and cannot outlive the Live gate", () => {
   const live = { AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1" };
-  assert.equal(geminiLiveScreenEnabled({}), false);
-  assert.equal(geminiLiveScreenEnabled(live), false);
+  assert.equal(geminiLiveScreenEnabled({}), true);
+  assert.equal(geminiLiveScreenEnabled(live), true);
   assert.equal(
-    geminiLiveScreenEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "1" }),
+    geminiLiveScreenEnabled({ ...live, AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: " TRUE " }),
     true,
-    "the screen flag admits capture when the default-on voice gate is healthy",
   );
+  assert.equal(geminiLiveScreenEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "0" }), false);
+  assert.equal(geminiLiveScreenEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "" }), false);
   assert.equal(
-    geminiLiveScreenEnabled({ ...live, AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "true" }),
+    geminiLiveScreenEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "enabled" }),
     false,
   );
   assert.equal(
-    geminiLiveScreenEnabled({ ...live, AIDEN_EXPERIMENTAL_GEMINI_LIVE_SCREEN: "1" }),
-    true,
+    geminiLiveScreenEnabled({ AIDEN_EXPERIMENTAL_GEMINI_LIVE: "0" }),
+    false,
+    "the screen gate follows the Live incident kill switch",
   );
   assert.equal(
     geminiLiveScreenEnabled({

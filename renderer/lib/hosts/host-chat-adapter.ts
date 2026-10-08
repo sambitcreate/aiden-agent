@@ -1,4 +1,5 @@
 import type { AskUserQuestionAnswerStatus, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
+import type { ChatForkLineageV1, ChatForkPosition } from "../../shared/chat-copy-contract";
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
 import type {
   PeerBlockedReason,
@@ -36,6 +37,10 @@ export type HostChatCapability =
   | "attach"
   /** Read the host's skill catalog and invoke a skill with a turn. */
   | "skills"
+  /** Fork a chat at a settled reply, or just before a prompt to edit it. */
+  | "fork"
+  /** Fork with summary, and retry, skip or cancel a fork's summary. */
+  | "forkSummary"
   // Host-wide: starting new work on the host.
   | "createChat"
   | "browseFolders"
@@ -157,6 +162,34 @@ export interface HostChatRenameInput {
   revision?: string;
 }
 
+export interface HostChatForkInput {
+  messageId: string;
+  position: ChatForkPosition;
+  /** Fork with summary: the host summarizes what the fork leaves out. */
+  summary?: { instructions?: string };
+  /** The source chat's revision; a paired host refuses a fork of an older one. */
+  revision: string;
+  /** Minted once per fork intent and reused by a retry, so a lost answer never makes a second fork. */
+  idempotencyKey: string;
+}
+
+export interface HostForkedChat {
+  id: string;
+  title: string;
+  forkedFrom: ChatForkLineageV1;
+  /**
+   * A fork before a prompt hands the prompt back for editing. The attachments
+   * are staged on the host under these IDs.
+   */
+  prefill?: { text: string; attachmentIds: string[] };
+}
+
+/** A chat's fork lineage, read with the revision it belongs to. */
+export interface HostChatLineage {
+  revision: string;
+  forkedFrom?: ChatForkLineageV1;
+}
+
 /**
  * Why a control call failed. `outcome_unknown` means the request may or may
  * not have been applied: retry it with the same idempotency key, never a new
@@ -223,6 +256,17 @@ export interface HostChatAdapter {
   uploadAttachment?(chatId: string, upload: HostChatAttachmentUpload): Promise<HostStagedAttachment>;
   /** Drops a staged attachment no turn will use. */
   removeAttachment?(chatId: string, attachmentId: string): Promise<void>;
+  /**
+   * Copies the chat into a new one on the same host. The local pane forks
+   * through `chatsApi` directly, so only a paired host's adapter has these.
+   */
+  fork?(chatId: string, input: HostChatForkInput): Promise<HostForkedChat>;
+  /** Retries or skips a fork's failed or pending summary; resolves to the fork's new lineage. */
+  forkSummary?(chatId: string, action: "retry" | "skip"): Promise<HostChatLineage>;
+  /** Stops a pending summary. Resolves false when it had already settled. */
+  cancelForkSummary?(chatId: string): Promise<boolean>;
+  /** Reads the chat's lineage, including its summary, which list rows leave out. */
+  forkLineage?(chatId: string): Promise<HostChatResult<HostChatLineage>>;
   dispose(): void;
 }
 

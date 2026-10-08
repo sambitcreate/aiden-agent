@@ -12,6 +12,7 @@ import type { createCliWorkspaceApplication } from "./workspace-application.ts";
 import type { createCliBots } from "./bots.ts";
 import { listCliProviders } from "./providers.ts";
 import { JsonStore, readJson } from "./state.ts";
+import { createCliChatForks } from "./daemon-forks.ts";
 
 export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<typeof createDaemonChats>, workspace: ReturnType<typeof createCliWorkspaceApplication>, state: AidenRemoteStateRegistry,
   idempotency: AidenIdempotencyLedger, persistIdempotency: (value: AidenIdempotencySnapshot) => Promise<void>, bots: Awaited<ReturnType<typeof createCliBots>>) {
@@ -63,6 +64,8 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     retainedBotChatAuthorizer: (input) => bots.application.authorizeRetainedChat({ ...input, audienceId: input.deviceId }),
     botTurnAuthorityPreflight: (input) => bots.preflight(input),
     idempotency, persistIdempotency, activeChatIds: () => daemon.activity.snapshot().activeChatIds,
+    // Plain forks only: the daemon has no summarizer, so it never advertises chat-fork-summary-v1.
+    forks: createCliChatForks(daemon, workspace),
   });
   return { chats, streams, models: modelService, application };
 }

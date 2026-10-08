@@ -72,11 +72,11 @@ test("revocation during successful or failed discovery never returns stale metad
     const barrier = new Promise<void>((resolve) => { release = resolve; });
     const pending = inspectInitializedMcpStatus({
       getServerCapabilities: () => ({ tools: {}, extensions: { "private/stale": {} } }),
-      listTools: async () => {
+      request: (async () => {
         await barrier;
         if (fails) throw new Error("discovery failure");
         return { tools: [] };
-      },
+      }) as never,
     }, () => current);
     current = false;
     release();
@@ -94,7 +94,7 @@ test("generation-bound status disconnect rejects stale capabilities and permits 
   const stale = attempts.run("server", attempts.generation("server"), () => ({ version: 1 }), async () => {},
     (_client, isCurrent) => inspectInitializedMcpStatus({
       getServerCapabilities: () => ({ tools: {}, extensions: { "private/stale": {} } }),
-      listTools: async () => { entered(); await barrier; return { tools: [] }; },
+      request: (async () => { entered(); await barrier; return { tools: [] }; }) as never,
     }, isCurrent), async () => { closes += 1; });
   await started;
   await attempts.disconnect("server");
@@ -102,8 +102,31 @@ test("generation-bound status disconnect rejects stale capabilities and permits 
   await assert.rejects(stale, /superseded/u);
   const replacement = await attempts.run("server", attempts.generation("server"), () => ({ version: 2 }), async () => {},
     (_client, isCurrent) => inspectInitializedMcpStatus({
-      getServerCapabilities: () => ({}), listTools: async () => { throw new Error("must not discover"); },
+      getServerCapabilities: () => ({}), request: (async () => { throw new Error("must not discover"); }) as never,
     }, isCurrent), async () => { closes += 1; });
   assert.deepEqual(replacement.serverCapabilities, {});
   assert.ok(closes >= 2);
+});
+
+test("status includes later pages and preserves capabilities when pagination is incomplete", async (t) => {
+  const server = new Server({ name: "paged", version: "1" }, { capabilities: { tools: {} } });
+  let failSecond = false;
+  server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => {
+    if (params?.cursor === "next") {
+      if (failSecond) throw new Error("later page unavailable");
+      return { tools: [{ name: "last", inputSchema: { type: "object" as const } }] };
+    }
+    return { tools: [{ name: "first", inputSchema: { type: "object" as const } }], nextCursor: "next" };
+  });
+  const client = new Client({ name: "paged-test", version: "1" }, { capabilities: {} });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  t.after(async () => { await client.close(); await server.close(); });
+  assert.deepEqual(await inspectInitializedMcpStatus(client, () => true), { connected: true, tools: ["first", "last"], toolCount: 2, serverCapabilities: { tools: {} } });
+  failSecond = true;
+  const failed = await inspectInitializedMcpStatus(client, () => true);
+  assert.equal(failed.connected, false);
+  assert.deepEqual(failed.tools, []);
+  assert.deepEqual(failed.serverCapabilities, { tools: {} });
+  assert.match(failed.error!, /later page unavailable/u);
 });

@@ -10,6 +10,7 @@ import {
   buildChatRenamePrompt,
   buildChatTitlePrompt,
   canReplaceGeneratedChatTitle,
+  assertRenameAllowedFromChat,
   deriveChatTitleSeed,
   sanitizeGeneratedChatTitle,
 } from "./chat-title-policy.js";
@@ -25,6 +26,7 @@ import {
   unreportedUsageRecord,
 } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
+import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 
 const TITLE_TIMEOUT_MS = 15_000;
 const inFlight = new Map<string, Promise<void>>();
@@ -214,6 +216,8 @@ async function generateFirstTurnTitle(input: {
       : await foundationModelsConnection.status();
   const route = resolveChatTitleRoute(titleProviderId, foundationModelsStatus);
   if (route === "seed-only") return;
+  // An agent harness only runs inside its chat turn; keep the seeded title.
+  if (route === "chat-model" && isAcpHarnessProvider(input.fallbackSelection.providerId)) return;
 
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), TITLE_TIMEOUT_MS);
@@ -241,7 +245,10 @@ async function generateFirstTurnTitle(input: {
   }
 }
 
-async function generateFoundationModelsRename(chatId: string): Promise<ChatTitleRenameResult> {
+async function generateFoundationModelsRename(
+  chatId: string,
+  options: { rejectFeatureOwned?: boolean } = {},
+): Promise<ChatTitleRenameResult> {
   if (!hostPlatformCapabilities().appleFoundationModels) {
     throw new Error("Apple Foundation Models are not available on this platform.");
   }
@@ -250,6 +257,7 @@ async function generateFoundationModelsRename(chatId: string): Promise<ChatTitle
 
   const chat = await chatStore.get(chatId);
   if (!chat) throw new Error("That chat no longer exists.");
+  assertRenameAllowedFromChat(chat, options);
   const hasUserContext = chat.messages.some(
     (message) =>
       message.role === "user" &&
@@ -323,10 +331,13 @@ export const chatTitleService = {
     inFlight.set(input.chatId, task);
   },
 
-  async renameWithFoundationModels(chatId: string): Promise<ChatTitleRenameResult> {
+  async renameWithFoundationModels(
+    chatId: string,
+    options: { rejectFeatureOwned?: boolean } = {},
+  ): Promise<ChatTitleRenameResult> {
     const existing = manualRenameInFlight.get(chatId);
     if (existing) return existing;
-    const task = generateFoundationModelsRename(chatId);
+    const task = generateFoundationModelsRename(chatId, options);
     manualRenameInFlight.set(chatId, task);
     try {
       return await task;

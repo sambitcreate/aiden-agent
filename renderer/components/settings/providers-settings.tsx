@@ -437,7 +437,7 @@ export function ProvidersSettings() {
 
       {capabilities.appleFoundationModels && foundationModels.data ? (
         <div
-          className="settings-card rounded-card border border-separator"
+          className="settings-card rounded-card"
           aria-busy={refreshingFoundationModels}
         >
           <div className="flex items-start gap-3 px-4 py-3">
@@ -515,7 +515,7 @@ export function ProvidersSettings() {
           </details>
         </div>
       ) : !capabilities.appleFoundationModels ? (
-        <div className="rounded-card border border-separator px-3.5 py-3">
+        <div className="rounded-card bg-well px-3.5 py-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <Text variant="small-strong" as="p">
@@ -565,7 +565,7 @@ export function ProvidersSettings() {
             Connect with credentials when required; Aiden keeps their model catalogs current.
           </Text>
         </div>
-        <div className="settings-card rounded-card border border-separator">
+        <div className="settings-card rounded-card">
           <BuiltinProviderRows
             providers={featuredBuiltins}
             onSetUp={openBuiltinSetup}
@@ -594,7 +594,7 @@ export function ProvidersSettings() {
           ) : null}
         </div>
         {showMoreBuiltinProviders && moreBuiltins.length > 0 ? (
-          <div id="more-pi-providers" className="settings-card rounded-card border border-separator">
+          <div id="more-pi-providers" className="settings-card rounded-card">
             <div className="px-4 py-3">
               <Text variant="small-strong">More built-in providers</Text>
               <Text variant="small" color="tertiary" className="mt-0.5 block">
@@ -619,7 +619,7 @@ export function ProvidersSettings() {
               Configure local, private, and vendor-compatible endpoints here.
             </Text>
           </div>
-          <div className="settings-card rounded-card border border-separator">
+          <div className="settings-card rounded-card">
             {customProviders.map((p, i) => (
               <React.Fragment key={p.id}>
                 {i > 0 ? <Separator /> : null}
@@ -633,14 +633,14 @@ export function ProvidersSettings() {
                     />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <Text variant="strong" truncate>
                         {p.label}
                       </Text>
                       {statusBadge(p)}
                     </div>
                     <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                      {p.baseUrl}
+                      {p.models.length} model{p.models.length === 1 ? "" : "s"} · {p.baseUrl}
                     </Text>
                   </div>
                   <Button
@@ -651,7 +651,7 @@ export function ProvidersSettings() {
                       setEditing(p);
                     }}
                   >
-                    Configure
+                    Manage
                   </Button>
                   <Button
                     variant="transparent"
@@ -679,7 +679,7 @@ export function ProvidersSettings() {
             Provider catalogs determine what can run; model details improve names and capability hints.
           </Text>
         </div>
-        <div className="settings-card rounded-card border border-separator px-4 py-3">
+        <div className="settings-card rounded-card px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Text variant="small" color="secondary" aria-live="polite">
               {catalogOutcome ??

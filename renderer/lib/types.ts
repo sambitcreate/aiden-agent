@@ -1,10 +1,11 @@
 import type { CustomModelOptions } from "../shared/custom-model-options";
-import type { CompactionEngine } from "../shared/compaction";
+import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { ChatOwnerV1 } from "../shared/chat-visibility";
 import type { KeybindingOverridesV1 } from "../shared/keybindings";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -86,6 +87,8 @@ export interface Provider {
   needsKey: boolean;
   /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
   deployment?: ProviderDeployment;
+  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
+  llamaCppClassifierEnabled?: boolean;
   isPreset?: boolean;
   /** Pi owns this provider's endpoint, models, auth, and transport. */
   isBuiltin?: boolean;
@@ -272,6 +275,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -306,6 +310,8 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 
@@ -635,6 +641,8 @@ export interface ChatMeta {
   lastAssistantSequence?: number;
   /** Set when this chat was created by Fork. */
   forkedFrom?: ChatForkLineageV1;
+  /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
+  owner?: ChatOwnerV1;
   createdAt: number;
   updatedAt: number;
 }
@@ -759,6 +767,13 @@ export interface McpServer {
   url?: string;
   headers?: Record<string, string>;
   oauth?: boolean;
+  /** Explicit authorization-server metadata document for custom remote OAuth connections. */
+  authServerMetadataUrl?: string;
+  oauthClientName?: string;
+  /** Built-in provider reference; requires separate device-local consent before use. */
+  authProvider?: string;
+  /** Optional bounded server description used for tool discovery. */
+  description?: string;
   /** Set when this record came from the built-in preset catalog. */
   presetId?: string;
   enabled: boolean;
@@ -873,6 +888,9 @@ export interface AssistantConfigSnapshot {
 
 export interface AppSettings {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
+  /** Explicit opt-in to paid cache refreshes during active foreground runs. */
+  cacheWarmingEnabled?: boolean;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;

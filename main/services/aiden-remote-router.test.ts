@@ -23,10 +23,17 @@ import {
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
+import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
+import { HostRunRegistry } from "./host-run-registry.js";
+import {
+  ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
+  ASSISTANT_AUTOMATION_TOOL_NAME,
+} from "../../renderer/shared/assistant.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
 import { BOT_FULL_ACCESS_NOTICE_VERSION } from "../../renderer/shared/bot-capabilities.js";
 
 async function fixture(options: {
+  providers?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["providers"];
   readAloud?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["readAloud"];
   authenticate?: "valid" | "revoked" | "denied" | "invalid";
   capabilities?: AidenRemoteCapability[];
@@ -54,8 +61,11 @@ async function fixture(options: {
   simulators?: AidenRemoteSimulatorRelay;
   /** `true` installs a recording fake; an object installs that feed service. */
   hostFeed?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostFeed"]>;
-  hostRuns?: boolean;
+  /** `true` installs a recording fake; an object installs that run service. */
+  hostRuns?: boolean | NonNullable<Parameters<typeof createAidenRemoteRequestHandler>[0]["hostRuns"]>;
   messagesWindow?: boolean;
+  /** "plain" forks; "summary" also forks with a summary. */
+  forks?: "plain" | "summary";
   platform?: "mac" | "linux" | "windows";
 } = {}) {
   const logs: unknown[] = [];
@@ -377,7 +387,30 @@ async function fixture(options: {
         ? {
             messagesWindow: async (id: string, input: { before?: string; limit: number }) => {
               calls.push(`messages-window:${id}:${input.before ?? ""}:${input.limit}`);
-              return { chatId: id, revision: chat.revision, messages: [], hasOlder: false };
+              const { id: _id, messages: _messages, revision, ...metadata } = chat;
+              return { chatId: id, revision, messages: [], hasOlder: false, ...metadata };
+            },
+          }
+        : {}),
+      ...(options.forks
+        ? {
+            supportsForks: true,
+            supportsForkSummaries: options.forks === "summary",
+            fork: async (deviceId: string, id: string, revision: string, key: string, body: unknown) => {
+              calls.push(`chat-fork:${deviceId}:${id}:${revision}:${key}:${JSON.stringify(body)}`);
+              return { chat: { ...chat, id: "fork-1" } } as never;
+            },
+            retryForkSummary: async (id: string) => {
+              calls.push(`fork-summary-retry:${id}`);
+              return chat as never;
+            },
+            skipForkSummary: async (id: string) => {
+              calls.push(`fork-summary-skip:${id}`);
+              return chat as never;
+            },
+            cancelForkSummary: async (id: string) => {
+              calls.push(`fork-summary-cancel:${id}`);
+              return { cancelled: true };
             },
           }
         : {}),
@@ -450,6 +483,7 @@ async function fixture(options: {
             response.end();
           },
         },
+    ...(options.providers ? { providers: options.providers } : {}),
     models: {
       list: async () => ({
         providers: [{
@@ -965,7 +999,8 @@ async function fixture(options: {
           },
         }
       : {}),
-    ...(options.hostRuns
+    ...(typeof options.hostRuns === "object" ? { hostRuns: options.hostRuns } : {}),
+    ...(options.hostRuns === true
       ? {
           hostRuns: {
             chatIdForRun: (runId) => {
@@ -3484,7 +3519,8 @@ function concreteRequestPath(template: string): string {
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":action":
-          return template.includes("/git/") ? "review" : "run";
+          if (template.includes("/git/")) return "review";
+          return template.includes("/fork-summary/") ? "retry" : "run";
         default:
           return `x${parameterIndex}`;
       }
@@ -3999,7 +4035,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 20,
+      contractRevision: 24,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4012,7 +4048,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
   }
 });
 
-test("phones never see, negotiate or use host control, even holding the grants", async () => {
+test("phones never see, negotiate or use the host feed, even holding the grant", async () => {
   const phone = await fixture({
     hostFeed: true,
     hostRuns: true,
@@ -4022,25 +4058,19 @@ test("phones never see, negotiate or use host control, even holding the grants",
   });
   try {
     const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
-    for (const capability of ["host:events", "runs:observe", "runs:control"]) {
-      assert.equal(server.capabilities.includes(capability), false, capability);
-      assert.equal(server.serverCapabilities.includes(capability), false, capability);
-    }
+    assert.equal(server.capabilities.includes("host:events"), false);
+    assert.equal(server.serverCapabilities.includes("host:events"), false);
     for (const feature of ["host-events-v1", "run-streams-v1", "run-control-v1"]) {
       assert.equal(server.features.includes(feature), false, feature);
     }
-
-    for (const path of ["/host/events", "/runs/run-1/events", "/chats/chat-1/runs/current/events"]) {
-      const response = await fetch(`${phone.base}${path}`, { headers: HOST_HEADERS });
-      assert.equal(response.status, 403, path);
-      assert.equal(await errorCode(response), "capability_denied", path);
+    // What a phone holds is always something the server says it offers.
+    for (const capability of server.capabilities) {
+      assert.equal(server.serverCapabilities.includes(capability), true, capability);
     }
-    const cancel = await fetch(`${phone.base}/runs/run-1/cancel`, {
-      method: "POST",
-      headers: { ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": "k".repeat(16) },
-      body: "{}",
-    });
-    assert.equal(cancel.status, 403);
+
+    const feed = await fetch(`${phone.base}/host/events`, { headers: HOST_HEADERS });
+    assert.equal(feed.status, 403);
+    assert.equal(await errorCode(feed), "capability_denied");
 
     const negotiate = await fetch(`${phone.base}/device/capabilities`, {
       method: "POST",
@@ -4049,9 +4079,191 @@ test("phones never see, negotiate or use host control, even holding the grants",
     });
     assert.equal(negotiate.status, 403);
     assert.equal(await errorCode(negotiate), "capability_denied");
-    assert.equal(phone.calls.some((call) => /^(host-feed|run-|device-capabilities)/u.test(call)), false);
+    assert.equal(phone.calls.some((call) => /^(host-feed|device-capabilities)/u.test(call)), false);
   } finally {
     await phone.close();
+  }
+});
+
+test("a phone negotiates the phone run subset only where the host advertises phone-run-control-v1", async () => {
+  const older = await fixture({ deviceType: "iphone", acceptsProgressCapabilities: true });
+  try {
+    const server = await (await fetch(`${older.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("phone-run-control-v1"), false);
+    assert.equal(server.serverCapabilities.includes("runs:observe"), false);
+    const refused = await fetch(`${older.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...HOST_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["runs:observe", "runs:control"] }),
+    });
+    assert.equal(refused.status, 404);
+  } finally {
+    await older.close();
+  }
+
+  const phone = await fixture({ hostRuns: true, deviceType: "iphone", acceptsProgressCapabilities: true });
+  try {
+    const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("phone-run-control-v1"), true);
+    assert.equal(server.serverCapabilities.includes("runs:observe"), true);
+    assert.equal(server.serverCapabilities.includes("runs:control"), true);
+    const negotiated = await fetch(`${phone.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...HOST_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["runs:observe", "runs:control"] }),
+    });
+    assert.equal(negotiated.status, 200);
+    assert.deepEqual(
+      ((await negotiated.json()) as { capabilities: string[] }).capabilities.filter((c) => c.startsWith("runs:")),
+      ["runs:observe", "runs:control"],
+    );
+  } finally {
+    await phone.close();
+  }
+
+  const mac = await fixture({ hostRuns: true, deviceType: "mac", acceptsProgressCapabilities: true });
+  try {
+    const server = await (await fetch(`${mac.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("phone-run-control-v1"), false);
+  } finally {
+    await mac.close();
+  }
+});
+
+test("a phone's run grants reach a foreign run only through its own per-chat grants", async () => {
+  const PHONE_RUN_GRANTS = ["server:read", "chat:read", "chat:write", "approval:respond", "runs:observe", "runs:control"] as AidenRemoteCapability[];
+  const controlHeaders = (key: string) => ({ ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": key });
+  const phone = await fixture({ hostRuns: true, deviceType: "iphone", capabilities: PHONE_RUN_GRANTS });
+  try {
+    const current = await fetch(`${phone.base}/chats/chat-1/runs/current/events`, { headers: HOST_HEADERS });
+    assert.equal(current.status, 200);
+    await current.text();
+    const resumed = await fetch(`${phone.base}/runs/run-1/events`, { headers: { ...HOST_HEADERS, "last-event-id": "4" } });
+    assert.equal(resumed.status, 200);
+    await resumed.text();
+    const cancelled = await fetch(`${phone.base}/runs/run-1/cancel`, {
+      method: "POST",
+      headers: controlHeaders("key-phone-cancel-01"),
+      body: "{}",
+    });
+    assert.equal(cancelled.status, 202);
+    const answered = await fetch(`${phone.base}/runs/run-1/approvals/approval-1/respond`, {
+      method: "POST",
+      headers: controlHeaders("key-phone-approve-1"),
+      body: JSON.stringify({ decision: "deny" }),
+    });
+    assert.equal(answered.status, 200);
+    assert.deepEqual(
+      phone.calls.filter((call) => call.startsWith("run-")),
+      [
+        "run-events:device-authorized-12345678:run-1:0",
+        "run-events:device-authorized-12345678:run-1:4",
+        "run-cancel:device-authorized-12345678:run-1:key-phone-cancel-01",
+        "run-approval:device-authorized-12345678:run-1:approval-1:key-phone-approve-1",
+      ],
+    );
+  } finally {
+    await phone.close();
+  }
+
+  // The run grants alone do not open a chat the phone could not read or write.
+  const runOnly = await fixture({
+    hostRuns: true,
+    deviceType: "iphone",
+    capabilities: ["server:read", "runs:observe", "runs:control"] as AidenRemoteCapability[],
+  });
+  try {
+    for (const path of ["/runs/run-1/events", "/chats/chat-1/runs/current/events"]) {
+      const response = await fetch(`${runOnly.base}${path}`, { headers: HOST_HEADERS });
+      assert.equal(response.status, 403, path);
+      assert.equal(await errorCode(response), "capability_denied", path);
+    }
+    for (const [path, body] of [
+      ["/runs/run-1/cancel", "{}"],
+      ["/runs/run-1/approvals/approval-1/respond", JSON.stringify({ decision: "deny" })],
+      ["/runs/run-1/questions/prompt-1/respond", JSON.stringify({ outcome: "dismissed" })],
+    ] as const) {
+      const response = await fetch(`${runOnly.base}${path}`, {
+        method: "POST",
+        headers: controlHeaders("key-phone-denied-1"),
+        body,
+      });
+      assert.equal(response.status, 403, path);
+      assert.equal(await errorCode(response), "capability_denied", path);
+    }
+    assert.equal(runOnly.calls.some((call) => call.startsWith("run-")), false);
+  } finally {
+    await runOnly.close();
+  }
+});
+
+test("a phone allowing an automation approval on a foreign run needs schedule:write, as on its own approvals", async () => {
+  const controlHeaders = (key: string) => ({ ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": key });
+  const PHONE_RUN_GRANTS = ["server:read", "chat:read", "chat:write", "approval:respond", "runs:observe", "runs:control"] as AidenRemoteCapability[];
+  const scenario = async (capabilities: AidenRemoteCapability[]) => {
+    const registry = new HostRunRegistry({ now: () => 1_000, epoch: "epoch-router" });
+    const approvals: string[] = [];
+    const service = new AidenRemoteHostRunService({
+      registry,
+      now: () => 1_000,
+      controls: {
+        cancel: () => false,
+        approve: ({ approvalId, decision }) => {
+          if (!registry.pendingPrompt(approvalId)) return false;
+          approvals.push(`${approvalId}:${decision}`);
+          registry.resolveAttention(approvalId, { kind: "approval", decision });
+          return true;
+        },
+        answer: () => "rejected",
+        admitInput: async () => ({ admitted: false, reason: "unavailable" }) as never,
+      },
+    });
+    registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+    for (const [approvalId, toolName] of [
+      ["approval-create", ASSISTANT_AUTOMATION_TOOL_NAME],
+      ["approval-edit", ASSISTANT_AUTOMATION_EDIT_TOOL_NAME],
+    ] as const) {
+      registry.publish("run-1", "chat:approval", {
+        approvalId,
+        summary: "Create a nightly automation",
+        toolCallId: `call-${approvalId}`,
+        toolName,
+        scopes: ["once"],
+      });
+    }
+    const phone = await fixture({ hostRuns: service, deviceType: "iphone", capabilities });
+    const respond = (approvalId: string, decision: "allow" | "deny", key: string) =>
+      fetch(`${phone.base}/runs/run-1/approvals/${approvalId}/respond`, {
+        method: "POST",
+        headers: controlHeaders(key),
+        body: JSON.stringify({ decision }),
+      });
+    return { phone, approvals, respond };
+  };
+
+  const without = await scenario(PHONE_RUN_GRANTS);
+  try {
+    for (const approvalId of ["approval-create", "approval-edit"]) {
+      const refused = await without.respond(approvalId, "allow", `key-allow-${approvalId}`);
+      assert.equal(refused.status, 403, approvalId);
+      assert.equal(await errorCode(refused), "capability_denied", approvalId);
+    }
+    assert.deepEqual(without.approvals, []);
+    // Deny stays available without the automation grant.
+    const denied = await without.respond("approval-create", "deny", "key-deny-approval-create");
+    assert.equal(denied.status, 200);
+    assert.deepEqual(without.approvals, ["approval-create:deny"]);
+  } finally {
+    await without.phone.close();
+  }
+
+  const granted = await scenario([...PHONE_RUN_GRANTS, "schedule:write"]);
+  try {
+    const allowed = await granted.respond("approval-edit", "allow", "key-allow-approval-edit");
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(granted.approvals, ["approval-edit:allow"]);
+  } finally {
+    await granted.phone.close();
   }
 });
 
@@ -4158,6 +4370,7 @@ test("a host without the services offers no grant and answers not_found", async 
     assert.equal(server.serverCapabilities.includes("host:events"), false);
     assert.equal(server.features.includes("host-events-v1"), false);
     assert.equal(server.features.includes("chat-messages-window-v1"), false);
+    assert.equal(server.features.includes("chat-messages-window-metadata-v1"), false);
     const feed = await fetch(`${mac.base}/host/events`, { headers: HOST_HEADERS });
     assert.equal(feed.status, 404);
     const negotiate = await fetch(`${mac.base}/device/capabilities`, {
@@ -4176,6 +4389,7 @@ test("the messages window is offered to every device and validates its query", a
   try {
     const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
     assert.equal(server.features.includes("chat-messages-window-v1"), true);
+    assert.equal(server.features.includes("chat-messages-window-metadata-v1"), true);
 
     const page = await fetch(`${phone.base}/chats/chat-1/messages?before=message-9&limit=20`, { headers: HOST_HEADERS });
     assert.equal(page.status, 200);
@@ -4184,6 +4398,12 @@ test("the messages window is offered to every device and validates its query", a
       revision: `rev_${"c".repeat(43)}`,
       messages: [],
       hasOlder: false,
+      workspaceId: "workspace-1",
+      title: "Chat",
+      providerId: "provider-1",
+      modelId: "model-1",
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(2_000).toISOString(),
     });
     const defaults = await fetch(`${phone.base}/chats/chat-1/messages`, { headers: HOST_HEADERS });
     assert.equal(defaults.status, 200);
@@ -4237,5 +4457,97 @@ test("a revocation that wins while the host feed is opening refuses the subscrip
   } finally {
     hostFeed.close();
     await mac.close();
+  }
+});
+
+
+test("provider creation is feature-gated, authorized, foreground-only, and exposes only its receipt", async () => {
+  const requests: unknown[] = [];
+  const providers = {create: async (_device: string, _key: string, body: unknown, current?: () => boolean) => {
+    assert.equal(current?.(), true); requests.push(body); return {id: "custom:remote-test", label: "Private", models: ["vision"]};
+  }};
+  const headers = {authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json", "idempotency-key": "fixture-provider-creation"};
+  const input = {label: "Private", baseUrl: "https://private.example.test/v1", kind: "openai", deployment: "hosted", needsKey: false, models: [{id: "vision", vision: true, reasoning: false, toolCall: true}], confirmedForeground: true};
+  for (const [grants, expected] of [[[], 403], [["server:read"], 403], [["server:read", "workspace:manage"], 201]] as const) {
+    const app = await fixture({providers, capabilities: [...grants]});
+    try {
+      const response = await fetch(`${app.base}/providers`, {method: "POST", headers, body: JSON.stringify(input)});
+      assert.equal(response.status, expected);
+      if (expected === 201) {
+        assert.deepEqual(await response.json(), {id: "custom:remote-test", label: "Private", models: ["vision"]});
+        const info = await (await fetch(`${app.base}/server`, {headers})).json() as {features: string[]};
+        assert.ok(info.features.includes("providers-create-v1"));
+      }
+    } finally { await app.close(); }
+  }
+  assert.equal(requests.length, 1);
+  const legacy = await fixture({capabilities: ["workspace:manage", "server:read"]});
+  try { assert.equal((await fetch(`${legacy.base}/providers`, {method: "POST", headers, body: JSON.stringify(input)})).status, 404); }
+  finally { await legacy.close(); }
+});
+
+test("forking is advertised with the host wiring and needs a revision and an idempotency key", async () => {
+  const headers = { ...HOST_HEADERS, "content-type": "application/json" };
+  const forkBody = JSON.stringify({ messageId: "message-1", position: "after" });
+  const fork = (base: string, extra: Record<string, string> = {}) =>
+    fetch(`${base}/chats/chat-1/fork`, { method: "POST", headers: { ...headers, ...extra }, body: forkBody });
+  const keyed = { "if-match": `rev_${"c".repeat(43)}`, "idempotency-key": "fork-key-000000000001" };
+
+  const none = await fixture({ capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${none.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-fork-v1"), false);
+    assert.equal(server.features.includes("chat-fork-summary-v1"), false);
+    assert.equal((await fork(none.base, keyed)).status, 404);
+  } finally {
+    await none.close();
+  }
+
+  const plain = await fixture({ forks: "plain", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${plain.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-fork-v1"), true);
+    assert.equal(server.features.includes("chat-fork-summary-v1"), false);
+    for (const missing of [{ "if-match": keyed["if-match"] }, { "idempotency-key": keyed["idempotency-key"] }] as Record<string, string>[]) {
+      assert.equal((await fork(plain.base, missing)).status, 400);
+    }
+    const created = await fork(plain.base, keyed);
+    assert.equal(created.status, 201);
+    assert.equal((await created.json()).chat.id, "fork-1");
+    assert.deepEqual(
+      plain.calls.filter((call) => call.startsWith("chat-fork:")),
+      [`chat-fork:device-authorized-12345678:chat-1:${keyed["if-match"]}:${keyed["idempotency-key"]}:${forkBody}`],
+    );
+    // Summary actions exist only where summaries do.
+    const retry = await fetch(`${plain.base}/chats/chat-1/fork-summary/retry`, { method: "POST", headers });
+    assert.equal(retry.status, 404);
+  } finally {
+    await plain.close();
+  }
+
+  const readOnly = await fixture({ forks: "summary", capabilities: ["server:read", "chat:read"] });
+  try {
+    assert.equal((await fork(readOnly.base, keyed)).status, 403);
+    assert.equal(readOnly.calls.some((call) => call.startsWith("chat-fork:")), false);
+  } finally {
+    await readOnly.close();
+  }
+
+  const summary = await fixture({ forks: "summary", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${summary.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-fork-summary-v1"), true);
+    for (const action of ["retry", "skip", "cancel"]) {
+      const response = await fetch(`${summary.base}/chats/chat-1/fork-summary/${action}`, { method: "POST", headers });
+      assert.equal(response.status, 200, action);
+    }
+    assert.deepEqual(await (await fetch(`${summary.base}/chats/chat-1/fork-summary/cancel`, { method: "POST", headers })).json(), { cancelled: true });
+    assert.equal((await fetch(`${summary.base}/chats/chat-1/fork-summary/restart`, { method: "POST", headers })).status, 404);
+    assert.deepEqual(
+      summary.calls.filter((call) => call.startsWith("fork-summary-")),
+      ["fork-summary-retry:chat-1", "fork-summary-skip:chat-1", "fork-summary-cancel:chat-1", "fork-summary-cancel:chat-1"],
+    );
+  } finally {
+    await summary.close();
   }
 });

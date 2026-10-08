@@ -124,15 +124,19 @@ export type ChatPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface ChatPullRequestListResult {
   links: ChatPullRequestView[];
+  /** Epoch ms until which GitHub reads are paused after a rate limit. */
+  rateLimitedUntil?: number;
 }
 
 export interface ChatPullRequestCandidatesResult {
   availability: ChatPullRequestAvailability;
   message?: string;
+  retryAt?: number;
   pullRequests: ChatPullRequestView[];
 }
 
@@ -149,6 +153,7 @@ export type ChatPullRequestCreateResult =
 export interface ChatPullRequestDetectResult {
   availability: ChatPullRequestAvailability;
   message?: string;
+  retryAt?: number;
   matches: ChatPullRequestView[];
   refreshed: ChatPullRequestView[];
 }

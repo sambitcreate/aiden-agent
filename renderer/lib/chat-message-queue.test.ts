@@ -4,6 +4,7 @@ import {
   ChatMessageQueue,
   chatMessageQueue,
   canSteerQueuedMessage,
+  committedRunInputNotice,
   deliverQueuedMessage,
   steerQueuedMessage,
   withCommittedRunInput,
@@ -107,13 +108,9 @@ test("FIFO, priority, deleting and keyboard reorder preserve stable identities",
   assert.equal(queue.claim()?.id, "one");
 });
 
-test("redirect replacement is atomic and discarding a deleted chat clears queued work", () => {
+test("discarding a deleted chat clears queued work", () => {
   const queue = new ChatMessageQueue();
   queue.add(message("old"));
-  assert.throws(() => queue.replaceWith({ ...message("invalid"), text: "" }), /Add a message/u);
-  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["old"]);
-  queue.replaceWith(message("replacement"));
-  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["replacement"]);
   queue.discard();
   assert.equal(queue.getSnapshot().messages.length, 0);
   assert.equal(queue.claim(), undefined);
@@ -431,6 +428,22 @@ test("a steer committed as history after the run ended is removed, never resent 
   assert.deepEqual(outcome, { kind: "committed", reason: "run_not_active" });
   assert.deepEqual(ids(queue), []);
   assert.deepEqual((await drain(queue)).sent, []);
+});
+
+test("input saved as history but not taken by the run reads the same as on the phones", () => {
+  // Mirrors AidenRunInputPresentation.receipt on iOS and Android for committed
+  // rejections, so a Stop that strands saved input is described identically.
+  assert.equal(
+    committedRunInputNotice("cancelled"),
+    "Saved to the chat — the run was cancelled before it could use it",
+  );
+  assert.equal(committedRunInputNotice("capacity"), "Saved to the chat — the run queue was full");
+  for (const reason of ["run_not_active", "invalid", undefined] as const) {
+    assert.equal(
+      committedRunInputNotice(reason),
+      "Saved to the chat — the run ended before it could use it",
+    );
+  }
 });
 
 test("an uncommitted steer rejection keeps the message queued for the normal follow-up", async () => {

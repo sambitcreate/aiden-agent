@@ -3,7 +3,7 @@ import {
   findArtificialAnalysisModel,
   type ArtificialAnalysisCatalog,
 } from "./artificial-analysis-catalog-core.js";
-import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { SamplingParamsByThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 import {
@@ -49,6 +49,7 @@ export interface RuntimeModelMetadata {
   maxTokens?: number;
   reasoning?: boolean;
   input?: readonly string[];
+  samplingParamsByThinkingLevel?: SamplingParamsByThinkingLevel;
   thinkingLevelMap?: ThinkingLevelMap;
   forceAdaptiveThinking?: boolean;
 }
@@ -58,6 +59,7 @@ export interface RuntimeModelLimits {
   maxTokens: number;
   reasoning: boolean;
   input: Array<"text" | "image">;
+  samplingParamsByThinkingLevel?: SamplingParamsByThinkingLevel;
   thinkingLevelMap?: ThinkingLevelMap;
   forceAdaptiveThinking?: boolean;
 }
@@ -447,6 +449,7 @@ export function resolveRuntimeLimits(
         : CONSERVATIVE_RUNTIME_LIMITS.reasoning),
     input: vision ? ["text", "image"] : ["text"],
   };
+  if (exact?.samplingParamsByThinkingLevel !== undefined) limits.samplingParamsByThinkingLevel = exact.samplingParamsByThinkingLevel;
   if (exact?.thinkingLevelMap !== undefined) {
     limits.thinkingLevelMap = exact.thinkingLevelMap;
   }
@@ -465,6 +468,7 @@ function discoveredRuntimeMetadata(
   return {
     contextWindow: metadata.overrides?.contextLength ?? metadata.contextLength,
     maxTokens: metadata.overrides?.outputLimit,
+    samplingParamsByThinkingLevel: metadata.overrides?.samplingParamsByThinkingLevel,
     reasoning: metadata.overrides?.reasoning ?? metadata.reasoning,
     input:
       (metadata.overrides?.vision ?? metadata.vision) === undefined ? undefined : (metadata.overrides?.vision ?? metadata.vision) ? ["text", "image"] : ["text"],
@@ -482,6 +486,7 @@ function mergeRuntimeMetadata(
     maxTokens: primary.maxTokens ?? fallback.maxTokens,
     reasoning: primary.reasoning ?? fallback.reasoning,
     input: primary.input ?? fallback.input,
+    samplingParamsByThinkingLevel: primary.samplingParamsByThinkingLevel ?? fallback.samplingParamsByThinkingLevel,
     thinkingLevelMap: primary.thinkingLevelMap ?? fallback.thinkingLevelMap,
     forceAdaptiveThinking: primary.forceAdaptiveThinking ?? fallback.forceAdaptiveThinking,
   };

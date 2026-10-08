@@ -1,9 +1,13 @@
+import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
+import { providerRegistry } from "./provider-registry.js";
+import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
-import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
+import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
@@ -16,14 +20,13 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import {
-  convertToLlm,
-  DEFAULT_COMPACTION_SETTINGS,
-  type AgentMessage,
-} from "@earendil-works/pi-agent-core";
-import { createInitialSystemMessage, getCurrentSystemPrompt, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
-import { access } from "node:fs/promises";
-import { ipcMain, logger } from "../platform.js";
+import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
+import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
+import { access, mkdir, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { app, ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
 import {
   BROWSER_MUTATION_TOOL_NAMES,
@@ -136,6 +139,8 @@ import { admitBotAfterProviderAuthPreflight } from "./bot-provider-auth-admissio
 import {
   AssistantRequestUsageTracker,
   assistantUsageRecord,
+  isLocalModelProvider,
+  modelOperationUsageRecord,
   reportedTokens,
   unreportedUsageRecord,
 } from "./usage-accounting.js";
@@ -154,6 +159,7 @@ import type {
   Chat,
   ChatStartParams,
   WorkspacePermission,
+  StoredProvider,
 } from "./types.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
@@ -203,6 +209,7 @@ import {
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
+  appendPiMessages,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
@@ -211,6 +218,10 @@ import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
+import { canHostAcpHarness, createAcpGenerationHost } from "./acp/generation-host.js";
+import { acpHosts } from "./acp/hosts.js";
+import { captureRootIdentity } from "./acp/client-files.js";
+import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
@@ -218,6 +229,7 @@ import { persistGenerationInitializationTerminal } from "./generation-initializa
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
+  updateGenerationContextOptions,
   chatContextPressureFromProjection,
   createGenerationContextTransform,
   modelRetainsSystemUpdates,
@@ -267,6 +279,17 @@ import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
+import {
+  parseSubagentModelSettings,
+  subagentModelToolOptions,
+  type SubagentModelPolicy,
+} from "./subagents/subagent-model-selection.js";
+import {
+  createSubagentChildModelResolver,
+  savedThinkingLevelFor,
+  subagentModelCandidatesFromSettings,
+} from "./subagents/subagent-model-runtime.js";
+import { listConfiguredProviders } from "./provider-list-main.js";
 import {
   subagentsAllowedForGeneration,
   subagentWorkspaceWriteAllowedForGeneration,
@@ -320,6 +343,9 @@ import {
 } from "./chat-run-input-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
+import { createPiCodemodeTool } from "./pi-codemode.js";
+import { createPiToolDiscovery } from "./pi-tool-discovery.js";
+import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import {
   PiAgentRuntimeHarness,
   piAgentRuntimeExtensions,
@@ -347,6 +373,8 @@ import {
 } from "./pi-upgrade-rollout.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
+import { createPiModelImageReferences } from "./pi-model-image-references.js";
+import { classifierApprovalFor, createPiModelTools, piModelOperationProviderLabel, piModelOperationUsage } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
@@ -367,6 +395,15 @@ import {
 } from "./generative-ui-extension.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
+import { createGenerationHarness } from "./generation-harness.js";
+import {
+  resolveGenerationProfile,
+  selectRuntimeExtensions,
+  type DesignRunBinding,
+  type GenerationProfile,
+} from "./generation-profile.js";
+import { designGenerationWiring, designRunOutcome } from "./design/design-generation.js";
+import type { DesignRunOutcome } from "./design/store-core.js";
 import {
   createAskUserQuestionExtension,
   resolveAskUserQuestionTimeoutMs,
@@ -437,6 +474,8 @@ export interface GenerationExecutionOptions {
   interactionSurface?: "telegram";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
+  /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
+  designRun?: DesignRunBinding;
 }
 
 interface BotGenerationAuthorityContext {
@@ -454,6 +493,7 @@ interface ActiveGeneration {
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
+  stopCacheWarming?: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
@@ -464,6 +504,8 @@ interface ActiveGeneration {
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
   releaseBotAuthority: () => void;
+  /** Runs that take no mid-flight input (Design Studio). */
+  inputClosed: boolean;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -475,6 +517,7 @@ const initializing = new Map<
     chatId: string;
     owner: ChatGenerationOwner;
     removeOwnerInvalidation: () => void;
+    stopCacheWarming?: () => void;
     workspaceId?: string;
     cancelRequested: boolean;
     cancellationOrigin?: GenerationCancellationOrigin;
@@ -723,6 +766,25 @@ function resetGenerationAgent(agent: PiAgentRuntimeHarness, streamId: string): v
   }
 }
 
+function savedGenerationThinkingLevel(
+  settings: Awaited<ReturnType<typeof configStore.getSettings>>,
+  providerId: string,
+  model: string,
+  provider: Pick<StoredProvider, "isBuiltin" | "kind" | "modelMetadata">,
+) {
+  return providerId === GOOGLE_PROVIDER_ID
+    ? settings.googleThinkingByModel?.[model]
+    : providerId === OPENAI_CODEX_PROVIDER_ID
+      ? settings.codexThinkingByModel?.[model]
+      : providerId === ANTHROPIC_PROVIDER_ID
+        ? settings.anthropicThinkingByModel?.[model]
+        : provider.isBuiltin ||
+            (provider.kind === "openai" &&
+              customModelThinkingLevels(provider.modelMetadata?.[model]?.overrides))
+          ? settings.providerThinkingByModel?.[providerId]?.[model]
+          : undefined;
+}
+
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -743,6 +805,19 @@ async function prepareGeneration(
   const displayedHtmlIds = new Set<string>();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
+  const modelImageReferences = createPiModelImageReferences({
+    snapshot: chat.messages.flatMap((message) => message.attachments ?? []),
+    generated: responseImages,
+    readCurrent: async (referenceSignal) => {
+      signal.throwIfAborted();
+      referenceSignal?.throwIfAborted();
+      const current = await chatStore.get(params.chatId);
+      signal.throwIfAborted();
+      referenceSignal?.throwIfAborted();
+      if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
+      return current.messages.flatMap((message) => message.attachments ?? []);
+    },
+  });
   const shareImage = (attachment: Attachment) => {
     const existing = responseImages();
     if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
@@ -760,6 +835,55 @@ async function prepareGeneration(
   const runtime =
     botContext?.prepared.runtime ??
     (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
+
+  if (options.designRun) {
+    // A design run composes exactly its binding's extension (designGenerationWiring);
+    // createGenerationHarness refuses any other extension, tool or skill (ADR-DS §4).
+    const designSettings = await configStore.getSettings();
+    const designModel = runtime.model;
+    return {
+      runtime: { ...runtime, model: designModel },
+      agentsInstructions: undefined,
+      agentsInstructionRoots: undefined,
+      browserDiscovery: undefined,
+      browserSelection: { initialized: false } as { initialized: boolean; tabId?: string },
+      browserFileApprovals: new Map<string, PreparedBrowserFile>(),
+      browserActionApprovals: new Map<
+        string,
+        { approval: BrowserToolApproval; args: Record<string, unknown> }
+      >(),
+      permission: "none" as GenerationPermission,
+      folderPath: undefined,
+      git: await generationGitContext(undefined, signal),
+      tools: [] as AgentTool[],
+      generationExtensions,
+      modelImageReferences,
+      mcpServerInstructions: createMcpInstructionCollector().snapshot(),
+      displayedImages,
+      displayedHtmlArtifacts,
+      supportsImages: runtimeSupportsImages(designModel),
+      thinkingLevel: resolveGenerationThinkingLevel(
+        params.providerId,
+        designModel,
+        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model, runtime.provider),
+      ),
+      computerUse: undefined,
+      formFill: undefined,
+      googleWorkspaceSnapshot: undefined,
+      skillSnapshot: undefined,
+      workspaceId: undefined,
+      subagentSupervisor: undefined,
+      showLocalModelReasoning: designSettings.showLocalModelReasoning,
+      compactionEngine: compactionEngineFrom(designSettings.compactionEngine),
+      compactionModelOverrides: designSettings.compactionModelOverrides,
+      cacheWarmingEnabled: false,
+      sharedImages,
+      botContext: undefined,
+      botApprovedRoots: [] as string[],
+      botMutatingToolNames: new Set<string>(),
+      assistantSettingsPermission: designSettings.assistant?.settingsPermission ?? "ask",
+    };
+  }
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -873,14 +997,7 @@ async function prepareGeneration(
   };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
-  const savedThinkingLevel =
-    params.providerId === GOOGLE_PROVIDER_ID
-      ? settings.googleThinkingByModel?.[params.model]
-      : params.providerId === OPENAI_CODEX_PROVIDER_ID
-        ? settings.codexThinkingByModel?.[params.model]
-        : params.providerId === ANTHROPIC_PROVIDER_ID
-          ? settings.anthropicThinkingByModel?.[params.model]
-          : settings.providerThinkingByModel?.[params.providerId]?.[params.model];
+  const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
@@ -927,6 +1044,7 @@ async function prepareGeneration(
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
   const allowSubagents = subagentsAllowedForGeneration({
     assistantMode,
+    providerId: params.providerId,
     allowSubagents:
       options.allowSubagents !== false &&
       (!botContext || botHasOrdinaryCapability(botContext, "subagents")),
@@ -1088,10 +1206,40 @@ async function prepareGeneration(
       },
     });
   }
+  // Bot and Assistant runtimes are bound by their grant, so their children
+  // always run on the parent model. Model choice never reaches capabilities.
+  const subagentModelOverridesAllowed = !botBound && !assistantMode;
+  const subagentModelSettings = subagentModelOverridesAllowed
+    ? parseSubagentModelSettings(settings.subagentModels)
+    : undefined;
+  const subagentModelPolicy: SubagentModelPolicy | undefined =
+    allowSubagents && folderPath && workspace?.id
+      ? {
+          parent: {
+            providerId: runtime.provider.id,
+            providerLabel: runtime.provider.label,
+            modelId: model.id,
+            modelLabel: model.name?.trim() || model.id,
+            effort: thinkingLevel,
+          },
+          candidates: subagentModelOverridesAllowed
+            ? subagentModelCandidatesFromSettings(
+                await listConfiguredProviders().catch(() => []),
+                subagentModelSettings,
+              )
+            : [],
+          overridesAllowed: subagentModelOverridesAllowed,
+          settings: subagentModelSettings,
+        }
+      : undefined;
+  const subagentModelOptions = subagentModelPolicy
+    ? subagentModelToolOptions(subagentModelPolicy)
+    : undefined;
   const subagentSupervisor =
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
           compactionEngine: compactionEngineFrom(settings.compactionEngine),
+          compactionModelOverrides: settings.compactionModelOverrides,
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -1121,6 +1269,17 @@ async function prepareGeneration(
             return persisted;
           },
           prepareRun: subagentPersistence?.prepareRun,
+          selectChildModel: subagentModelPolicy
+            ? createSubagentChildModelResolver({
+                policy: subagentModelPolicy,
+                parentRuntime: runtime,
+                savedEffort: (providerId, modelId) =>
+                  savedThinkingLevelFor(settings, providerId, modelId),
+                resolveRuntime: (providerId, modelId, modelSignal) =>
+                  resolveModelRuntime(providerId, modelId, modelSignal, chat.id),
+              })
+            : undefined,
+          modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
           projector: subagentProjector,
         })
@@ -1287,6 +1446,15 @@ async function prepareGeneration(
   let tools = (
     await buildAgentTools({
       onMcpServerInstructions: mcpInstructionCollector.capture,
+      mcpProviderScope: {
+        signal,
+        onInvalidated: (listener) => browserOwner.onInvalidated(listener),
+        isCurrent: () => {
+          const generation = active.get(streamId) ?? initializing.get(streamId);
+          return !signal.aborted && !!generation && generation.owner === browserOwner && !generation.cancelRequested && !generation.rendererDetached && !generation.owner.isDestroyed();
+        },
+      },
+      allowMcpProviderAuth: canUseProviderAuthenticatedMcp({ rendererOwner, permission, workspace: Boolean(workspace?.folderPath), assistant: assistantMode, bot: Boolean(botContext), usageSource: options.usageSource, interactionSurface: options.interactionSurface }),
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       skillSnapshot,
@@ -1324,6 +1492,7 @@ async function prepareGeneration(
                 : [],
               subagentShellEnabled,
               subagentDelegationEnabled,
+              subagentModelOptions,
             )
         : undefined,
       shareImage: folderPath ? shareImage : undefined,
@@ -1445,7 +1614,7 @@ async function prepareGeneration(
       assistantMode,
       workspaceRoot: folderPath,
       permission,
-      excluded: options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME) ?? false,
+      excluded: false,
     })
   ) {
     const artifactStoreAvailability = displayImageArtifactStore.availability();
@@ -1505,7 +1674,38 @@ async function prepareGeneration(
         return true;
       },
     });
-    generationExtensions.push(displayImageRuntime.extension);
+    if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
+      generationExtensions.push(displayImageRuntime.extension);
+    }
+    // Labels, local/remote accounting and classifier opt-in need provider shape only, not keychain presence.
+    const savedOperationProviders = await configStore.listStoredProviders();
+    const localClassifierModels = createLocalClassifierModels({
+      models: providerRegistry.models,
+      providers: savedOperationProviders,
+      getProvider: (id) => configStore.getProvider(id),
+      resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
+    });
+    const operationProviders = [runtime.provider, ...savedOperationProviders];
+    generationExtensions.push({
+      id: "aiden.model-operations",
+      systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+      tools: createPiModelTools({
+        models: localClassifierModels.models,
+        providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
+        listImages: modelImageReferences.listImages,
+        resolveImage: modelImageReferences.resolveImage,
+        resolveImages: modelImageReferences.resolveImages,
+        onImage: displayImageRuntime.presentGeneratedImage,
+        // Account at the provider-call boundary, not at nested/parent tool events.
+        onUsage: async (record) => {
+          await usageStore.record(modelOperationUsageRecord(
+            record, operationProviders, options.usageSource ?? "chat",
+            localClassifierModels.isLocalProvider(record.provider),
+          ));
+        },
+      })
+        .filter((tool) => !options.excludeToolNames?.has(tool.name)),
+    });
   }
   if (
     !botContext &&
@@ -1615,6 +1815,7 @@ async function prepareGeneration(
     git,
     tools,
     generationExtensions,
+    modelImageReferences,
     mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
@@ -1628,6 +1829,8 @@ async function prepareGeneration(
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
     compactionEngine: compactionEngineFrom(settings.compactionEngine),
+    compactionModelOverrides: settings.compactionModelOverrides,
+    cacheWarmingEnabled: settings.cacheWarmingEnabled === true,
     sharedImages,
     botContext,
     botApprovedRoots,
@@ -1639,6 +1842,30 @@ async function prepareGeneration(
   };
 }
 
+const acpScratchFallbacks = new Map<string, Promise<string>>();
+
+/** Working directory for an agent turn in a chat without a folder. It grants no file access. */
+async function acpScratchDir(chatId: string): Promise<string> {
+  const safe = chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
+  const directory = join(app.getPath("userData"), "acp", "scratch", safe);
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    return directory;
+  } catch (error) {
+    // Never fail a generation over its working directory; this one grants no
+    // file access either way.
+    logger.warn("acp", "Could not prepare the agent scratch directory.", error);
+    // A private directory, never the shared temp folder itself, reused for the
+    // chat so its agent session is not rebuilt on every turn.
+    let fallback = acpScratchFallbacks.get(chatId);
+    if (!fallback) {
+      fallback = mkdtemp(join(tmpdir(), "aiden-acp-scratch-")).catch(() => tmpdir());
+      acpScratchFallbacks.set(chatId, fallback);
+    }
+    return fallback;
+  }
+}
+
 export const llmClient = {
   async start(
     streamId: string,
@@ -1646,6 +1873,8 @@ export const llmClient = {
     owner: ChatGenerationOwner,
     options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
+    const designRun = options.designRun;
+    const designWiring = designRun ? designGenerationWiring(designRun, appendPiMessages) : undefined;
     const turnId = options.turnId;
     const ownsTurn =
       typeof turnId === "string" &&
@@ -1683,6 +1912,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
+      stopCacheWarming: undefined as (() => void) | undefined,
       workspaceId: undefined as string | undefined,
       cancelRequested: false,
       cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
@@ -1730,6 +1960,7 @@ export const llmClient = {
     let authoritativeBot: BotDefinition | undefined;
     let botContext: BotGenerationAuthorityContext | undefined;
     let authoritativeMode: ChatStartParams["mode"];
+    let generationProfile: GenerationProfile = { kind: "default" };
     const initializationTerminalState = { attempted: false };
     const persistInitializationTerminal = async (
       status: "failed" | "cancelled",
@@ -1761,6 +1992,9 @@ export const llmClient = {
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
+      // A design-owned chat runs only with its own project's main-built binding.
+      // It throws before authoritativeChat is set, so no failure turn is written.
+      generationProfile = resolveGenerationProfile(chat, options);
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
       if (chat.botId && !hostPlatformCapabilities().bots) {
@@ -1943,6 +2177,7 @@ export const llmClient = {
       git,
       tools,
       generationExtensions,
+      modelImageReferences,
       mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
@@ -1957,6 +2192,8 @@ export const llmClient = {
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
+      compactionModelOverrides,
+      cacheWarmingEnabled,
       sharedImages,
       botContext: preparedBotContext,
       botApprovedRoots,
@@ -1965,6 +2202,9 @@ export const llmClient = {
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
     const { model } = runtime;
+    // Agent-backed providers (ACP harnesses) own their conversation context:
+    // Aiden neither trims nor compacts the transcript they receive.
+    const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
     const approvalModelSelection = {
       providerId: runtime.provider.id,
       providerName: runtime.provider.label,
@@ -2047,7 +2287,13 @@ export const llmClient = {
             content,
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
-            pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
+            pi: lastAssistantMessage
+              ? storedPiAssistantMessage(
+                  designWiring
+                    ? designWiring.storedAssistantMessage(lastAssistantMessage)
+                    : lastAssistantMessage,
+                )
+              : undefined,
             providerFailure,
             timeline:
               finalTimeline.steps.length || finalTimeline.status === "cancelled"
@@ -2117,6 +2363,7 @@ export const llmClient = {
     let activeCompactionStepId: string | undefined;
     let piSession: PiSessionPort | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
+    let cacheWarmer: PiCacheWarmer | undefined;
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
@@ -2147,40 +2394,43 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      try {
-        const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
-          development: !isPackagedRuntime(),
-          behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
-        });
-        if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
-        if (!(await memoryEnabledForChat(configStore, generationChat))) {
-          throw new Error("Durable memory is disabled by the current memory policy.");
+      // Design runs never read or write durable memory.
+      if (generationProfile.kind === "default") {
+        try {
+          const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
+            development: !isPackagedRuntime(),
+            behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+          });
+          if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+          if (!(await memoryEnabledForChat(configStore, generationChat))) {
+            throw new Error("Durable memory is disabled by the current memory policy.");
+          }
+          const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
+            ? undefined
+            : await configStore.getWorkspace(generationChat.workspaceId);
+          const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
+          await memoryStore.replaceChatMetadata(
+            scope,
+            generationChat.id,
+            memoryMetadataForChat(generationChat),
+          );
+          const provenance = memoryProvenanceForGeneration(
+            generationChat,
+            options.turnId,
+            owner.id !== 0,
+          );
+          memoryExtension = await createMemoryExtension({
+            store: memoryStore,
+            enabled: () => memoryEnabledForChat(configStore, generationChat),
+            scope,
+            ...(provenance ? { provenance } : {}),
+          });
+          if (provenance) memoryApprovalContext = { scope, provenance };
+        } catch {
+          // Memory is an optional local context source. Corruption or an
+          // unsupported SQLite build must remove both read and write tools.
+          logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
         }
-        const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
-          ? undefined
-          : await configStore.getWorkspace(generationChat.workspaceId);
-        const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
-        await memoryStore.replaceChatMetadata(
-          scope,
-          generationChat.id,
-          memoryMetadataForChat(generationChat),
-        );
-        const provenance = memoryProvenanceForGeneration(
-          generationChat,
-          options.turnId,
-          owner.id !== 0,
-        );
-        memoryExtension = await createMemoryExtension({
-          store: memoryStore,
-          enabled: () => memoryEnabledForChat(configStore, generationChat),
-          scope,
-          ...(provenance ? { provenance } : {}),
-        });
-        if (provenance) memoryApprovalContext = { scope, provenance };
-      } catch {
-        // Memory is an optional local context source. Corruption or an
-        // unsupported SQLite build must remove both read and write tools.
-        logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
       }
       let todoRuntimeExtension: PiAgentRuntimeExtension | undefined;
       if (
@@ -2228,7 +2478,11 @@ export const llmClient = {
       // Arbitrary runtime extensions remain outside the exact Bot catalog.
       // Only the explicitly admitted task extension and existing memory/recall
       // contributions enter Bot prompts and schemas.
-      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
+      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
+        generationProfile.kind === "design"
+          ? // Exactly the binding's extension; an empty base fails the composition check.
+            [...(designWiring?.extensions ?? [])]
+          : preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             ...(memoryExtension ? [memoryExtension] : []),
@@ -2263,7 +2517,9 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
-      const advisorExtension = await advisorRuntime.extensionForGeneration({
+      // A design run composes exactly its own extension: no advisor, codemode or
+      // other base extension may join it (ADR-DS §4).
+      const advisorExtension = generationProfile.kind === "design" ? undefined : await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -2313,9 +2569,29 @@ export const llmClient = {
             }
           : {}),
       });
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = advisorExtension
-        ? [...baseRuntimeExtensions, advisorExtension]
-        : baseRuntimeExtensions;
+      const codemodeExtension: PiAgentRuntimeExtension | undefined =
+        generationProfile.kind === "design"
+          ? undefined
+          : workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
+        permission !== "none" && !options.excludeToolNames?.has("codemode")
+          ? {
+              id: "aiden.workspace-codemode",
+              tools: [createPiCodemodeTool({
+                tools: () => candidate?.getCallableTools() ?? [],
+                executeTool: (parentId, name, args, requestSignal) => {
+                  if (!candidate) throw new Error("The workspace runtime is not ready.");
+                  return candidate.executeNestedToolCall(parentId, name, args, requestSignal);
+                },
+              }), ...(!options.excludeToolNames?.has("tool_search") ? [createPiToolDiscovery({
+                tools: () => candidate?.getCallableTools() ?? [],
+                isCallable: isPiCodemodeCallable,
+              }).toolSearch] : [])],
+            }
+          : undefined;
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = selectRuntimeExtensions(
+        generationProfile,
+        { base: baseRuntimeExtensions, advisor: advisorExtension, codemode: codemodeExtension },
+      );
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -2340,7 +2616,9 @@ export const llmClient = {
             };
       const telegramInteractive = options.interactionSurface === "telegram";
       const baseSystemPrompt =
-        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
+        generationProfile.kind === "design"
+          ? (designWiring?.baseSystemPrompt ?? "")
+          : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: devicesEnabled()
                 ? SETTINGS_SECTIONS
@@ -2397,9 +2675,18 @@ export const llmClient = {
         ),
         mcpServerInstructions,
       );
-      const runtimeContributions = modelContributions;
+      // Freeze only the already-admitted MCP inventory. The provider sees the
+      // discovery/script tools; nested calls still use the ordinary host gates.
+      const { declared, deferred: deferredTools } = partitionPiCodemodeTools(modelContributions.tools);
+      const runtimeContributions = {
+        ...modelContributions,
+        tools: declared,
+      };
       const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      const compactionBudget = resolveCompactionModelBudget(compactionModelOverrides, model, compactionEngine);
+      const compactionInputReserveTokens = configuredCompactionReserveTokens(compactionModelOverrides, model, compactionEngine);
       const generationContextOptions = {
+        compactionReserveTokens: compactionInputReserveTokens,
         contextWindow: model.contextWindow,
         systemPrompt,
         tools: runtimeTools,
@@ -2408,13 +2695,10 @@ export const llmClient = {
         modelId: model.id,
         retainsSystemUpdates: modelRetainsSystemUpdates(model),
       };
-      assertGenerationContextCapacity({
-        contextWindow: model.contextWindow,
-        systemPrompt,
-        tools: runtimeTools,
-      });
+      assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
         if (event.type === "start") {
+          cacheWarmer?.stop();
           activeCompactionStepId = timeline.compactionStarted();
           logger.info("pi", `Started ${event.reason} compaction for stream ${streamId}.`, {
             model: model.id,
@@ -2459,7 +2743,8 @@ export const llmClient = {
         thinkingLevel,
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
-          enabled: piUpgradeCompactionEnabled,
+          ...compactionBudget,
+          enabled: piUpgradeCompactionEnabled && !harnessProvider,
         },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
@@ -2559,12 +2844,7 @@ export const llmClient = {
           tools: [...runtimeTools],
         }, initialization.controller.signal);
         initialMessages = prepared.messages;
-        generationContextOptions.systemPrompt = getCurrentSystemPrompt(initialMessages);
-        assertGenerationContextCapacity({
-          contextWindow: model.contextWindow,
-          systemPrompt: generationContextOptions.systemPrompt,
-          tools: runtimeTools,
-        });
+        updateGenerationContextOptions(generationContextOptions, prepared);
       }
       // Register once the transcript carries AGENTS.md, so the profile's
       // instruction baseline matches the prompt it captured.
@@ -2575,8 +2855,36 @@ export const llmClient = {
       });
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
-      candidate = new PiAgentRuntimeHarness({
+      const agentRuntimeOptions = buildAgentRuntimeOptions(params.chatId, runtime);
+      if (canWarmForegroundChat({
+        enabled: cacheWarmingEnabled,
+        local: isLocalModelProvider(runtime.provider),
+        bot: Boolean(preparedBotContext),
+        owner,
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+        mode: authoritativeMode,
+      })) {
+        cacheWarmer = new PiCacheWarmer({
+          signal: initialization.controller.signal,
+          enabled: async () => (await configStore.getSettings()).cacheWarmingEnabled === true,
+          isCurrent: () => {
+            const generation = active.get(streamId) ?? initializing.get(streamId);
+            return !!generation && generation.owner === owner && !generation.cancelRequested &&
+              !generation.rendererDetached && !owner.isDestroyed();
+          },
+          resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
+          recordUsage: async (message, freshRuntime) => {
+            await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
+          },
+        });
+      }
+      initialization.stopCacheWarming = () => cacheWarmer?.dispose();
+      const realStream = agentRuntimeOptions.streamFn!;
+      const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
+        deferredTools,
         models: runtime.models,
         identity: {
           runId: streamId,
@@ -2603,7 +2911,8 @@ export const llmClient = {
             pressure: chatContextPressureFromProjection(projection, projectionOptions),
           });
         },
-        ...buildAgentRuntimeOptions(params.chatId, runtime),
+        ...agentRuntimeOptions,
+        streamFn: observedStream,
         convertToLlm,
         ...(params.providerId === GOOGLE_PROVIDER_ID &&
         runtime.apiKey &&
@@ -2617,24 +2926,31 @@ export const llmClient = {
               }),
             }
           : {}),
-        transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
-          logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
-            model: model.id,
-            estimatedTokensBefore: result.estimatedTokensBefore,
-            estimatedTokensAfter: result.estimatedTokensAfter,
-            inputBudgetTokens: result.inputBudgetTokens,
-            truncatedToolResults: result.truncatedToolResults,
-            compactedToolResults: result.compactedToolResults,
-            removedHistoryMessages: result.removedHistoryMessages,
-            removedCurrentTurnMessages: result.removedCurrentTurnMessages,
-            usedContextFallback: result.usedContextFallback,
-          });
-        }),
+        ...(harnessProvider
+          ? {}
+          : {
+              transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
+                logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
+                  model: model.id,
+                  estimatedTokensBefore: result.estimatedTokensBefore,
+                  estimatedTokensAfter: result.estimatedTokensAfter,
+                  inputBudgetTokens: result.inputBudgetTokens,
+                  truncatedToolResults: result.truncatedToolResults,
+                  compactedToolResults: result.compactedToolResults,
+                  removedHistoryMessages: result.removedHistoryMessages,
+                  removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+                  usedContextFallback: result.usedContextFallback,
+                });
+              }),
+            }),
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
+          compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
+          // Design HTML lives in the project store, never in the Pi journal (ADR-DS §10).
+          ...(designWiring ? { appendMessages: designWiring.journalAppend } : {}),
           beforeQueuedUser: async (message, signal) => {
             if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
               throw new Error("Queued guidance must contain text.");
@@ -2694,13 +3010,7 @@ export const llmClient = {
           if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
           let changed = nextContext !== context;
           if (changed) {
-            assertGenerationContextCapacity({
-              ...generationContextOptions,
-              systemPrompt: getCurrentSystemPrompt(nextContext.messages),
-              tools: nextContext.tools ?? [],
-            });
-            generationContextOptions.tools = nextContext.tools ?? [];
-            generationContextOptions.systemPrompt = getCurrentSystemPrompt(nextContext.messages);
+            updateGenerationContextOptions(generationContextOptions, nextContext);
           }
           if (attendedAssistant) {
             const state = advanceAttendedToolErrorState(
@@ -2992,6 +3302,26 @@ export const llmClient = {
                           )
                         : summarizeToolCall(context.toolCall.name, context.args);
           }
+          if (context.toolCall.name === "classify") {
+            try {
+              const providerId = (context.args as { provider?: unknown }).provider;
+              const provider = typeof providerId === "string" ? await configStore.getProvider(providerId) : undefined;
+              approvalDetails = classifierApprovalFor(context.args, provider?.label ?? (typeof providerId === "string" ? providerRegistry.builtinProvider(providerId)?.label : undefined));
+              summary += ". Review the complete state and questions on the owning desktop before allowing. Full classification inputs are available only in the desktop approval.";
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Classification inputs could not be reviewed." };
+            }
+          }
+          if (context.toolCall.name === "generate_image") {
+            try { summary += await modelImageReferences.disclosure(context.args, signal); }
+            catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+              return { block: true, reason: error instanceof Error ? error.message : "Reference images could not be verified." };
+            }
+          }
           if (browserFileApproval?.requiresApproval) {
             summary = `Open this exact local document and its listed assets in Aiden's browser:\n${browserFileApproval.displayPaths.join("\n")}`;
           }
@@ -3160,6 +3490,9 @@ export const llmClient = {
 
       candidate.subscribe(async (event) => {
         switch (event.type) {
+          case "agent_end":
+            cacheWarmer?.dispose();
+            break;
           case "message_start":
             if (event.message.role === "assistant") {
               requestUsage.started();
@@ -3318,6 +3651,9 @@ export const llmClient = {
             timeline.toolRunning(event.toolCallId);
             break;
           case "tool_execution_end": {
+            // Nested calls emit their own events; the enclosing codemode usage
+            // includes these again, so only the actual paid operation counts.
+            turnUsage = addTurnUsage(turnUsage, reportedTokens(piModelOperationUsage(event.toolName, event.result)));
             const denied = deniedToolCalls.delete(event.toolCallId);
             const terminalStatus = generationCancelRequested()
               ? "cancelled"
@@ -3360,6 +3696,7 @@ export const llmClient = {
         }
       });
     } catch (error) {
+      cacheWarmer?.dispose();
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       formFill?.revoke();
@@ -3565,12 +3902,14 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
+      stopCacheWarming: initialization.stopCacheWarming,
       workspaceId: initialization.workspaceId,
       cancelRequested: initialization.cancelRequested,
       cancellationOrigin: initialization.cancellationOrigin,
       rendererDetached: initialization.rendererDetached,
       computerUse,
       formFill,
+      inputClosed: designWiring?.inputClosed ?? false,
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -3593,6 +3932,7 @@ export const llmClient = {
           error,
         );
       });
+      cacheWarmer?.dispose();
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       formFill?.revoke();
@@ -3647,6 +3987,45 @@ export const llmClient = {
     };
     const withUndeliveredGuidance = <T extends object>(payload: T) =>
       undeliveredGuidance.length > 0 ? { ...payload, undeliveredGuidance } : payload;
+    const unregisterAcpHost =
+      harnessProvider &&
+      canHostAcpHarness({
+        rendererOwner: owner.id !== 0,
+        remoteOwner: owner.kind === "remote",
+        bot: preparedBotContext !== undefined,
+        assistant: authoritativeMode !== undefined,
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+      })
+        ? acpHosts.register(
+            createAcpGenerationHost({
+              chatId: params.chatId,
+              streamId,
+              label: runtime.provider.label,
+              folderPath,
+              // Bind file access to this exact directory for the whole turn.
+              ...(folderPath
+                ? {
+                    folderIdentity: await captureRootIdentity(folderPath).catch((error: unknown) => {
+                      // No identity means no agent file access this turn.
+                      logger.warn("acp", "Could not capture the chat folder identity; agent file access is off.", error);
+                      return undefined;
+                    }),
+                  }
+                : {}),
+              scratchDir: await acpScratchDir(params.chatId),
+              permission: () => permission,
+              timeline,
+              requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
+              takeApprovalScope: (approvalStreamId, toolCallId) =>
+                approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
+              requestQuestion: (toolCallId, questions, questionSignal) =>
+                questionnaires.request({ streamId, toolCallId, questions }, owner.documentId, questionSignal),
+            }),
+          )
+        : undefined;
+    // A throw before the outcome is known is Aiden's failure, not the provider's.
+    let designOutcome: DesignRunOutcome = "host_failed";
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -3716,8 +4095,10 @@ export const llmClient = {
             );
           }
         }
+        const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
+        let replyNotSaved = false;
         const finalError =
-          generationEmergencyUserError(runtimeOutcome.emergencyProjection) ??
+          emergencyError ??
           (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
@@ -3754,7 +4135,8 @@ export const llmClient = {
           !generationHasVisibleOutput(
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
-              displayedHtmlArtifacts.length,
+              displayedHtmlArtifacts.length +
+              (designRun?.acceptedCount() ?? 0),
           ) &&
           !wasCancelled
         ) {
@@ -3781,6 +4163,7 @@ export const llmClient = {
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
+          replyNotSaved = Boolean(persisted.error);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
@@ -3799,6 +4182,14 @@ export const llmClient = {
             }));
           }
         }
+        // Only after persistence: a reply that throws while saving stays host_failed.
+        designOutcome = designRunOutcome({
+          runtimeKind: runtimeOutcome.kind,
+          emergency: Boolean(emergencyError),
+          cancelled: wasCancelled,
+          cancellationOrigin: activeGeneration.cancellationOrigin,
+          persistenceFailed: replyNotSaved,
+        });
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
@@ -3819,10 +4210,12 @@ export const llmClient = {
       } finally {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
+          cacheWarmer?.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
+          unregisterAcpHost?.();
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
@@ -3836,6 +4229,8 @@ export const llmClient = {
             activeGeneration.workspaceId,
             params.workspaceId,
           );
+          // Exactly once per started run; pre-run failures reach DesignRunService through start().
+          designRun?.onSettled(designOutcome);
         }
       }
     })();
@@ -3904,6 +4299,7 @@ export const llmClient = {
     if (generation) generation.rendererDetached = true;
     const runtimeOwner = generation ?? initialization;
     if (!runtimeOwner) return false;
+    runtimeOwner.stopCacheWarming?.();
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();
@@ -3928,6 +4324,7 @@ export const llmClient = {
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.cancellationOrigin = origin;
+      initialization.stopCacheWarming?.();
       initialization.controller.abort(new Error("Chat initialization cancelled."));
       endLoadMonitor(initialization, streamId, false);
       initialization.formFill?.revoke();
@@ -3936,6 +4333,7 @@ export const llmClient = {
     if (generation) {
       generation.cancelRequested = true;
       generation.cancellationOrigin = origin;
+      generation.stopCacheWarming?.();
       generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       generation.formFill?.revoke();

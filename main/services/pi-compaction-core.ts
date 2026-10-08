@@ -2,24 +2,8 @@ import { compactionEngineFrom, type CompactionEngine } from "../../renderer/shar
 import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import { VccError } from "./pi-vcc/errors.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
-import {
-  DEFAULT_COMPACTION_SETTINGS,
-  CompactionError,
-  calculateContextTokens,
-  compact,
-  estimateContextTokens,
-  estimateTokens,
-  prepareCompaction,
-  shouldCompact,
-  uuidv7,
-  TODO_CONTEXT,
-  withAbortSignal,
-  type AgentMessage,
-  type CompactionSettings,
-  type CompactionPreparation,
-  type CompactResult,
-  type ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { DEFAULT_COMPACTION_SETTINGS, CompactionError, calculateContextTokens, compact, estimateContextTokens, estimateTokens, prepareCompaction, shouldCompact, uuidv7, TODO_CONTEXT, withAbortSignal, type CompactionSettings, type CompactionPreparation, type CompactResult } from "./pi-legacy-harness.js";
 import {
   isContextOverflow,
   isRetryableAssistantError,
@@ -94,7 +78,7 @@ export interface PiCompactionCoordinatorOptions {
   model: ResolvedModelRuntime["model"];
   thinkingLevel: ThinkingLevel;
   consumeHostFailure?: () => "inference" | "policy" | undefined;
-  settings?: CompactionSettings;
+  settings?: Partial<CompactionSettings>;
   signal?: AbortSignal;
   onEvent?: (event: PiCompactionEvent) => void;
   /** Bounded host backoff for transient provider/transport retries. */
@@ -478,12 +462,10 @@ export class PiCompactionCoordinator {
     if (assistantMessage.stopReason !== "error") {
       this.providerRetryAttempted = false;
     }
-    const recoverableLength =
-      assistantMessage.stopReason === "length" &&
-      this.options.model.maxTokens > 0 &&
-      assistantMessage.usage.output < this.options.model.maxTokens;
-
-    if (sameModel && (isContextOverflow(assistantMessage, contextWindow) || recoverableLength)) {
+    // Output below the current cap does not prove context overflow: the cap
+    // may have changed since this response, or the provider may enforce less.
+    // Let detected overflow or measured context pressure drive compaction.
+    if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
       const willRetry = assistantMessage.stopReason !== "stop";
       if (!willRetry) return this.run("overflow", false);
       if (this.overflowRecoveryAttempted) {

@@ -9,7 +9,6 @@ import {
 } from "../../renderer/shared/generative-ui.js";
 import { readGenerativeUiHostLibrary } from "./generative-ui-host-libraries.js";
 
-let schemesRegistered = false;
 let handlerRegistered = false;
 
 const PREVIEW_TTL_MS = 30 * 60 * 1000;
@@ -26,23 +25,6 @@ export function registerGenerativeUiPreviewDocument(body: string): string {
   const token = randomBytes(32).toString("hex");
   previews.set(token, { body, expiresAt: Date.now() + PREVIEW_TTL_MS });
   return `${GENERATIVE_UI_PROTOCOL_SCHEME}://${GENERATIVE_UI_PREVIEW_HOST}/${token}`;
-}
-
-export function registerGenerativeUiScheme(): void {
-  if (schemesRegistered) return;
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: GENERATIVE_UI_PROTOCOL_SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: false,
-        corsEnabled: false,
-        stream: true,
-      },
-    },
-  ]);
-  schemesRegistered = true;
 }
 
 function utf8Response(

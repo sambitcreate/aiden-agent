@@ -1,4 +1,8 @@
+import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
+import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
+import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 // MCP connection manager. Connects to user-configured MCP servers (stdio / HTTP
@@ -59,7 +63,6 @@ import {
   MCP_DISCOVERY_DEADLINES,
   MCP_TOOL_CALL_TIMEOUT_MS,
   McpConnectionActivity,
-  McpToolListCache,
   mcpRequestDeadline,
   mcpServerDiscoveryBudgetMs,
   mergeMcpServerDiscovery,
@@ -113,6 +116,7 @@ function makeTransport(
   isCurrent: () => boolean = () => true,
   options: {
     forceNoRedirect?: boolean;
+    signal?: AbortSignal;
     onTerminalFailure?: () => void;
     registerCredentialRedactor?: (
       redactor: SubagentMcpCredentialRedactor,
@@ -134,6 +138,7 @@ function makeTransport(
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
   assertMcpPresetServer(server);
+  if (server.authProvider && options.forceNoRedirect) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
   const guardedFetch = options.forceNoRedirect
     ? createBoundedSubagentMcpFetch()
     : undefined;
@@ -151,13 +156,22 @@ function makeTransport(
     : undefined;
   return createMcpRemoteTransport({
     transport: server.transport,
+    signal: options.signal,
     serviceUrl: server.url,
     serviceHeaders: server.headers,
     isCurrent,
     authProvider,
-    fetch: guardedFetch,
+    fetch: server.authProvider ? mcpProviderAuthenticatedFetch(server, isCurrent) : guardedFetch,
     onTerminalFailure: options.onTerminalFailure,
   });
+}
+
+interface McpToolInfo {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
+  execution?: unknown;
 }
 
 function subagentMcpAbortReason(signal: AbortSignal): Error {
@@ -185,11 +199,18 @@ export async function withIsolatedSubagentMcpClient<T>(
     configurationLease,
     operation,
     dependencies: {
-      createClient: () =>
-        new Client(
+      createClient: () => {
+        const client = new Client(
           { name: "aiden-subagent-mcp-read", version: "1.0.0" },
           { capabilities: {} },
-        ) as unknown as IsolatedSubagentMcpSdkClient,
+        );
+        return {
+          connect: (transport, options) => client.connect(transport as Parameters<Client["connect"]>[0], options),
+          close: () => client.close(),
+          listTools: (params, options) => client.listTools(params, options),
+          callTool: (params, _schema, options) => callMcpTool(client, params, options),
+        } satisfies IsolatedSubagentMcpSdkClient;
+      },
       resolveAuth,
       resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
       makeTransport,
@@ -232,6 +253,7 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
   server: McpServer,
   signal: AbortSignal,
 ): Promise<readonly SubagentMcpRemoteTool[]> {
+  if (server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to Bots.");
   const lease = mcpConfigurationLeases.acquire(server.id);
   const operationSignal = AbortSignal.any([signal, lease.signal]);
   const isCurrent = () => {
@@ -253,10 +275,11 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
           botMcpRequestOptions(operationSignal),
         );
         isCurrent();
-        const { tools } = await client.listTools(
-          undefined,
-          botMcpRequestOptions(operationSignal),
-        );
+        const tools = await listMcpToolInventory({
+          signal: operationSignal,
+          assertCurrent: isCurrent,
+          listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, botMcpRequestOptions(pageSignal)),
+        });
         isCurrent();
         return tools.map(({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
           name,
@@ -274,13 +297,15 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
   );
 }
 
-type ResourceClient = Pick<Client, "listResources" | "listResourceTemplates" | "readResource">;
 
 class McpManager {
   private readonly clients = new GenerationBoundConnectionCache<Client>();
   private readonly statusClients =
     new GenerationBoundConnectionAttempts<Client>();
-  private readonly toolLists = new McpToolListCache();
+  private readonly toolInventories = createMcpToolInventoryCache<{
+    tools: McpToolInfo[];
+    guard: ReturnType<typeof createMcpToolCallGuard>;
+  }>();
   private readonly activity = new McpConnectionActivity();
   private readonly disconnecting = new Set<Promise<void>>();
   private idleSweep: ReturnType<typeof setInterval> | undefined;
@@ -300,7 +325,7 @@ class McpManager {
         // Register before connect: closure during initialization must also
         // prevent a dead client from being published to the cache.
         client.onclose = onClosed;
-        this.toolLists.attach(client);
+        this.toolInventories.watch(client);
         // The MCP SDK transports satisfy the client's transport interface.
         await client.connect(
           makeTransport(
@@ -439,12 +464,63 @@ class McpManager {
   async agentContextFor(
     server: McpServer,
     generation: number,
+    providerScope?: McpProviderExecutionScope,
   ): Promise<{ tools: AgentTool[]; instructions?: McpServerInstructionSnapshot }> {
     const lease = mcpConfigurationLeases.acquire(server.id);
-    const client = await this.ensureConnected(server, generation);
+    if (server.authProvider && !providerScope) throw new Error("Provider-authenticated MCP requires a live attended operation.");
+    const scoped = <R>(use: (client: Client, signal: AbortSignal) => Promise<R>, callerSignal?: AbortSignal): Promise<R> => withMcpProviderOperation({
+      scope: {
+        onInvalidated: providerScope!.onInvalidated,
+        signal: AbortSignal.any([providerScope!.signal, lease.signal, ...(callerSignal ? [callerSignal] : [])]),
+        isCurrent: () => { lease.assertCurrent(); return providerScope!.isCurrent(); },
+      },
+      create: () => new Client({ name: "aiden-agent-attended", version: "1.0.0" }, { capabilities: {} }),
+      connect: async (client, signal, isCurrent) => {
+        await client.connect(makeTransport(await resolveAuth(server, isCurrent), isCurrent, { signal }) as never, { signal });
+      },
+      use,
+      close: async (client) => client.close(),
+    });
+    const cachedClient = server.authProvider ? undefined : await this.ensureConnected(server, generation);
     lease.assertCurrent();
-    // Cached per connected client until the server announces a change.
-    const tools = await this.toolLists.list(client, MCP_DISCOVERY_DEADLINES.listMs);
+    const assertGeneration = () => {
+      if (this.connectionGeneration(server.id) !== generation) throw new Error("The MCP connection was superseded.");
+    };
+    const listTools = async (client: Client, assertCurrent: () => void, signal?: AbortSignal) => {
+      const tools = client.getServerCapabilities()?.tools ? await listMcpToolInventory({
+        signal,
+        assertCurrent,
+        listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, { signal: pageSignal }),
+      }) as McpToolInfo[] : [];
+      return { tools, guard: createMcpToolCallGuard(tools) };
+    };
+    const describe = (client: Client) => ({
+      resources: Boolean(client.getServerCapabilities()?.resources),
+      instructions: client.getInstructions(),
+    });
+    // A shared cached read is fenced by its connection generation only, so a
+    // caller's own revoked lease cannot fail other callers; each caller then
+    // stops waiting on its own lease and re-checks it below.
+    const metadata = cachedClient ? {
+      ...await this.toolInventories.load(cachedClient, () => listTools(cachedClient, assertGeneration), lease.signal),
+      ...describe(cachedClient),
+    } : await scoped(async (client, signal) => ({
+      ...await listTools(client, () => { lease.assertCurrent(); assertGeneration(); }, AbortSignal.any([lease.signal, signal])),
+      ...describe(client),
+    }));
+    assertGeneration();
+    const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ? {
+      callTool: (params, _schema, options) => this.withLiveClient(server, generation, cachedClient, (live) => callMcpTool(live, params, options)),
+      listResources: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.listResources(params, options)),
+      listResourceTemplates: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.listResourceTemplates(params, options)),
+      readResource: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.readResource(params, options)),
+    } : {
+      callTool: (params, _schema, options) => scoped((connection, signal) => callMcpTool(connection, params, { ...options, signal }), options?.signal),
+      listResources: (params, options) => scoped((connection, signal) => connection.listResources(params, { ...options, signal }), options?.signal),
+      listResourceTemplates: (params, options) => scoped((connection, signal) => connection.listResourceTemplates(params, { ...options, signal }), options?.signal),
+      readResource: (params, options) => scoped((connection, signal) => connection.readResource(params, { ...options, signal }), options?.signal),
+    };
+    const { tools, guard: callGuard } = metadata;
     lease.assertCurrent();
     const agentTools = tools.map((t): AgentTool => markToolOutputSource({
       name: mcpAgentToolName(server, t.name),
@@ -456,35 +532,37 @@ class McpManager {
         normalizeMcpToolInputSchema((t.inputSchema as object) ?? { type: "object", properties: {} }),
       ),
       execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
-        return executeMcpAgentTool(() =>
-          this.withLiveClient(server, generation, client, (live) =>
-            live.callTool(
-              {
-                name: t.name,
-                arguments: (args ?? {}) as Record<string, unknown>,
-              },
-              undefined,
-              {
-                signal,
-                timeout: MCP_TOOL_CALL_TIMEOUT_MS,
-                maxTotalTimeout: MCP_TOOL_CALL_TIMEOUT_MS,
-              },
-            ),
-          ),
-        );
+        return executeMcpAgentTool(async () => {
+          lease.assertCurrent();
+          signal?.throwIfAborted();
+          callGuard.assertCallable(t.name);
+          const result = await client.callTool(
+            {
+              name: t.name,
+              arguments: (args ?? {}) as Record<string, unknown>,
+            },
+            undefined,
+            { signal, timeout: MCP_TOOL_CALL_TIMEOUT_MS, maxTotalTimeout: MCP_TOOL_CALL_TIMEOUT_MS },
+          );
+          callGuard.validateResult(t.name, result);
+          return result;
+        });
       },
     }));
-    if (client.getServerCapabilities()?.resources) {
-      const live = <R,>(request: (client: Client) => Promise<R>) =>
-        this.withLiveClient(server, generation, client, request);
-      const resourceClient: ResourceClient = {
-        listResources: (...args) => live((c) => c.listResources(...args)),
-        listResourceTemplates: (...args) => live((c) => c.listResourceTemplates(...args)),
-        readResource: (...args) => live((c) => c.readResource(...args)),
-      };
-      agentTools.push(createMcpResourceTool(server, resourceClient, lease));
+    if (metadata.resources) {
+      agentTools.push(createMcpResourceTool(server, client, lease));
     }
-    return { tools: agentTools, instructions: snapshotMcpServerInstructions(server, agentTools, client.getInstructions()) };
+    const instructions = snapshotMcpServerInstructions(server, agentTools, metadata.instructions);
+    // One frozen namespace record per server: every tool references it, so the
+    // server's guidance is held and validated once rather than per tool.
+    const discovery = Object.freeze({
+      ...(server.description ? { description: server.description.slice(0, 1024) } : {}),
+      namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
+      label: server.name.slice(0, 64) || "MCP service",
+      ...(instructions ? { instructions: instructions.instructions } : {}),
+    });
+    for (const tool of agentTools) Object.assign(tool, { codemode: true, discovery });
+    return { tools: agentTools, instructions };
   }
 
   connectionGeneration(id: string): number {
@@ -505,9 +583,9 @@ export const mcpManager = new McpManager();
  */
 export async function collectMcpAgentTools(
   servers: McpServer[],
-  options: { strict?: boolean; onServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void } = {},
+  options: { strict?: boolean; allowProviderAuth?: boolean; providerScope?: McpProviderExecutionScope; onServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void } = {},
 ): Promise<AgentTool[]> {
-  const enabled = servers.filter((server) => server.enabled);
+  const enabled = admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true).filter((server) => server.enabled);
   const settled = await settleMcpServerDiscovery(
     enabled,
     (server) => {
@@ -515,7 +593,7 @@ export async function collectMcpAgentTools(
       return withConfiguredMcp(
         server.id,
         mcpRuntimeConnectionSnapshot(server),
-        () => mcpManager.agentContextFor(server, generation),
+        () => mcpManager.agentContextFor(server, generation, options.providerScope),
         () => true,
         () => {
           generation = mcpManager.connectionGeneration(server.id);

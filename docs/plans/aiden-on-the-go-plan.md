@@ -925,6 +925,19 @@ hook real notifications will consult: notification kinds are already
 classified blocking vs ambient, so a future push pipeline can reuse the same
 decision table server- and client-side.
 
+**Local run alerts and "Needs your answer" — 2026-10-05.** iOS posts one
+local alert per prompt id when a run first blocks on an approval or a question
+while the app is not active (Time Sensitive, fixed lock-screen copy, opens the
+instance-scoped `aiden-otg://chat` link). The Quiet Open Chat rule applies:
+an inactive overlay over the open chat stays silent. Completion and failure
+post one alert per stream that names the chat. Notification permission is
+requested once, after the first completed run, while the app is active. Both
+clients derive the question state on the phone from the pending
+approval/question snapshots (an approval takes precedence), so the Live
+Activity and the Android notification read "Needs your answer" without a
+Remote contract bump. The alerts are local-only until push pairing (E.2)
+lands. Details are in `.memory/ios-run-alerts.md`.
+
 ## Cold-open snappiness and streaming polish — 2026-09-24
 
 Chat open is already cache-first on both clients (exact cached transcript

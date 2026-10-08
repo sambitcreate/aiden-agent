@@ -1,3 +1,4 @@
+import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 // Built-in MCP provider catalog. Connectable plugins from the shared Codex
 // Plugin Directory (plus Aiden's Composio connector) become first-class
 // presets: the user connects with an API key (encrypted via secrets.ts) or a
@@ -81,7 +82,7 @@ export function getMcpPreset(presetId: string): McpPreset | undefined {
 
 /** DCR `client_name` for this server: preset override, otherwise Aiden Agent. */
 export function mcpOAuthClientNameForServer(
-  server: Pick<McpServer, "id" | "presetId">,
+  server: Pick<McpServer, "id" | "presetId" | "oauthClientName">,
 ): string {
   const preset =
     getMcpPresetForServerId(server.id) ??
@@ -89,7 +90,7 @@ export function mcpOAuthClientNameForServer(
   if (preset?.auth.kind === "oauth" && preset.auth.clientName?.trim()) {
     return preset.auth.clientName.trim();
   }
-  return DEFAULT_MCP_OAUTH_CLIENT_NAME;
+  return server.oauthClientName?.trim() || DEFAULT_MCP_OAUTH_CLIENT_NAME;
 }
 
 export function getMcpPresetForServerId(serverId: string): McpPreset | undefined {
@@ -112,9 +113,11 @@ export function createNoRedirectFetch(fetchImpl: typeof fetch = globalThis.fetch
  * endpoints, but credentials never cross the catalog's exact HTTPS origins.
  */
 export function assertMcpPresetServer(server: McpServer): McpPreset | undefined {
+  validateMcpServerMetadata(server);
   const idPreset = getMcpPresetForServerId(server.id);
   const declaredPreset = server.presetId ? getMcpPreset(server.presetId) : undefined;
   if (!idPreset && !server.presetId) return undefined;
+  if (server.authProvider !== undefined || server.authServerMetadataUrl !== undefined || server.oauthClientName !== undefined) throw new Error("OAuth overrides require a custom MCP server.");
   if (!idPreset || !declaredPreset || idPreset.id !== declaredPreset.id) {
     throw new Error("This MCP preset has an invalid identity.");
   }

@@ -24,6 +24,7 @@ import { hostPlatformCapabilities } from "../services/host-platform-capabilities
 import { subagentsEnabled } from "../services/subagents/feature-flag.js";
 import { geminiLiveEnabled } from "../services/gemini-live/feature-flag.js";
 import { devicesEnabled } from "../services/devices/feature-flag.js";
+import { studioCapabilities } from "../services/studio/feature-flags.js";
 
 // App handlers - these are the methods your app provides to the frontend
 export const appHandlers = {
@@ -50,6 +51,7 @@ export const appHandlers = {
         nativeShare: host.nativeShare,
         appleFoundationModels: host.appleFoundationModels,
         devices: devicesEnabled(),
+        ...studioCapabilities(),
       },
     };
   },

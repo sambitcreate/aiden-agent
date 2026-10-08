@@ -234,8 +234,8 @@ test("every Settings destination renders and a one-model local inventory stays u
   await providers.click();
   const lmStudioRow = page
     .getByText("LM Studio (local)", { exact: true })
-    .locator("xpath=ancestor::div[.//button[normalize-space()='Configure']][1]");
-  const configure = lmStudioRow.getByRole("button", { name: "Configure", exact: true });
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Manage']][1]");
+  const configure = lmStudioRow.getByRole("button", { name: "Manage", exact: true });
   await configure.click();
   const providerDialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
   await expect(

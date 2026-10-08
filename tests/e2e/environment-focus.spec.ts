@@ -35,7 +35,7 @@ for (const reducedMotion of [false, true]) {
         await expect(page.getByRole("menu")).toBeHidden();
         await expect(tools).toBeVisible();
         await expect(
-          tools.getByRole("tab", { name: index === 0 ? "Files" : "Review", exact: true }),
+          tools.getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name: index === 0 ? "Files" : "Changes", exact: true }),
         ).toBeFocused();
         await expect(page.locator("[data-environment-stacked]")).toHaveAttribute(
           "data-environment-stacked",
@@ -43,7 +43,7 @@ for (const reducedMotion of [false, true]) {
         );
         if (index > 0) {
           await expect(
-            tools.getByRole("tab", { name: index === 1 ? "Changes" : "Compare", exact: true }),
+            tools.locator("#environment-review-panel").getByRole("tab", { name: index === 1 ? "Changes" : "Compare", exact: true }),
           ).toHaveAttribute("aria-selected", "true");
         }
         if (width === 900) await expect(quickView).toBeHidden();

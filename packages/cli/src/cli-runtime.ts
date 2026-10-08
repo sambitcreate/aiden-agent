@@ -16,6 +16,9 @@ import { createAidenInlineExtensions } from "./extensions/index.ts";
 import { desktopSkillInjectionPaths } from "./skill-paths.ts";
 import { dispatchCommand } from "./commands.ts";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
+import { migrateCliAzureConfig } from "./azure-config-migration.ts";
+import { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
+import { validateMcpServer } from "./mcp.ts";
 import { shouldDefaultToFullscreenTui } from "./tui-default.ts";
 
 /**
@@ -74,6 +77,12 @@ function desktopSkillPaths(): string[] {
 
 export async function runCli(argv: string[], appDir: string): Promise<void> {
 	try {
+		migrateCliAzureConfig(getAgentDir());
+	migrateAidenMcpConfig(getAgentDir(), validateMcpServer);
+		if (argv[0] === "pi-mcp") {
+			await main(["mcp", ...argv.slice(1)]);
+			return;
+		}
 		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) process.exit(0);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error)); process.exit(1);

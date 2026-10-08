@@ -1,5 +1,7 @@
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
 // Splits Aiden's persisted configuration into a portable half and a
@@ -299,6 +301,7 @@ function isWorkspace(value: unknown): value is Workspace {
 
 export function isMcpServer(value: unknown): value is McpServer {
   if (!isRecord(value)) return false;
+  try { validateMcpServerMetadata(value); } catch { return false; }
   return (
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
@@ -388,6 +391,7 @@ function hasSensitiveProviderUrl(value: unknown): boolean {
 export function isPortableProvider(value: unknown): value is PortableProvider {
   if (!isRecord(value)) return false;
   const provider = value as Partial<PortableProvider>;
+  try { validateLocalClassifierPreference(provider); } catch { return false; }
   if (provider.customModelOptions !== undefined) {
     if (!isRecord(provider.customModelOptions)) return false;
     try {
@@ -671,6 +675,11 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
+  if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.compactionModelOverrides !== undefined) {
+    try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
+    catch { delete runtime.compactionModelOverrides; }
+  }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;

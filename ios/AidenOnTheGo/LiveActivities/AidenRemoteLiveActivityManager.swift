@@ -104,11 +104,7 @@ final class AidenRemoteLiveActivityManager {
             }
         case .waitingForApproval:
             await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
-                AgentRunActivityStateReducer.refreshedStatus(
-                    .waitingForApproval,
-                    activity: String(localized: "Waiting for approval"),
-                    state: $0
-                )
+                AgentRunActivityStateReducer.refreshedWaiting(state: $0)
             }
         case .done:
             await finish(instanceID: instanceID, streamID: streamID, status: .complete, message: String(localized: "Response complete"))
@@ -152,6 +148,12 @@ final class AidenRemoteLiveActivityManager {
     func approvalRequired(instanceID: String, streamID: String) async {
         await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
             AgentRunActivityStateReducer.waitingForApproval(state: $0)
+        }
+    }
+
+    func questionRequired(instanceID: String, streamID: String) async {
+        await update(instanceID: instanceID, streamID: streamID, urgency: .immediate) {
+            AgentRunActivityStateReducer.waitingForAnswer(state: $0)
         }
     }
 

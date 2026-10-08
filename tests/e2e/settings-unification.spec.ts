@@ -205,7 +205,7 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
   const tile = (name: string) => themes().getByRole("radio", { name, exact: true });
 
   await openAppearance();
-  await expect(themes().getByRole("radio")).toHaveCount(9);
+  await expect(themes().getByRole("radio")).toHaveCount(10);
   await expect(page.getByRole("radiogroup", { name: "Theme mode", exact: true }).getByRole("radio")).toHaveCount(3);
 
   await tile("Dusk").click();
@@ -244,7 +244,7 @@ test("theme tiles select a preset for both schemes, persist it, and reflow to th
       .getByRole("radio", { name: "System", exact: true })
       .locator("svg");
   await resizeWindow(1280);
-  await expect.poll(tileColumns).toBe(3);
+  await expect.poll(tileColumns).toBe(5);
   await expect(modeIcon()).toBeVisible();
   await resizeWindow(390);
   await expect.poll(tileColumns).toBe(2);
@@ -379,6 +379,33 @@ test("chat width setting resizes the transcript and composer together and persis
   await expect.poll(async () => (await widths())?.transcript).toBe(measured.Wide);
 });
 
+test("text fields rest on a fill and deepen it on focus without an accent edge", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Voice", exact: true }).click();
+  const field = page.getByRole("textbox", { name: "Heard as" });
+  await expect(field).toBeVisible();
+  const look = () => field.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      border: `${style.borderTopWidth} ${style.borderTopColor}`,
+      outline: style.outlineStyle,
+      shadow: style.boxShadow,
+    };
+  });
+  const rest = await look();
+  expect(rest.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(rest.border.startsWith("1px")).toBe(true);
+  await field.focus();
+  await expect.poll(async () => (await look()).background).not.toBe(rest.background);
+  const focused = await look();
+  expect(focused.border).toBe(rest.border);
+  expect(focused.outline).toBe("none");
+  expect(focused.shadow).toBe(rest.shadow);
+});
+
 test("all Settings pages fit narrow and wide windows; Telegram toggles stay on the right", async ({
   aiden,
 }) => {
@@ -451,5 +478,92 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
         }
       }
     }
+  }
+});
+
+
+test("model compaction budgets validate, survive relaunch and reset to defaults", async ({ aiden }) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const openMemory = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+  };
+  await openMemory();
+  await page.getByRole("combobox", { name: "Model for compaction budget" }).fill("fixture/exact-model");
+  await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("-1");
+  await page.getByRole("button", { name: "Save budget", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("whole numbers");
+  await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("8192");
+  await page.getByRole("spinbutton", { name: "Compaction recent tokens" }).fill("0");
+  const modelKey = page.getByRole("combobox", { name: "Model for compaction budget" });
+  await modelKey.fill("fixture/exact");
+  await modelKey.pressSequentially("-model");
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
+  await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
+  await page.getByRole("button", { name: "Save budget", exact: true }).click();
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toBeVisible();
+  await aiden.relaunch();
+  page = aiden.page;
+  await openMemory();
+  await page.getByRole("button", { name: "fixture/exact-model", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
+  await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
+  await page.getByRole("button", { name: "Reset model", exact: true }).click();
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("");
+  await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("");
+  await page.reload();
+  await openMemory();
+  await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
+});
+
+
+test("paid cache warming stays off until explicitly enabled and can be disabled after relaunch", async ({ aiden }) => {
+  let page = aiden.page;
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill("E2E Local User");
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await expect(onboarding.getByText(/optional prompt cache warming/u)).toContainText("off by default");
+  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+  await onboarding.getByRole("button", { name: /^Next/u }).click();
+  await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
+  await expect(onboarding).toBeHidden();
+  const openMemory = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+  };
+  await openMemory();
+  const toggle = () => page.getByRole("switch", { name: "Warm prompt caches during active chats" });
+  await expect(toggle()).not.toBeChecked();
+  await expect(page.getByText(/Optional paid one-token requests/u)).toBeVisible();
+  await toggle().click();
+  await expect(toggle()).toBeChecked();
+  await aiden.relaunch();
+  page = aiden.page;
+  await openMemory();
+  await expect(toggle()).toBeChecked();
+  await toggle().click();
+  await expect(toggle()).not.toBeChecked();
+  expect(aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions")).toHaveLength(0);
+});
+
+
+test("composer context usage visibility updates immediately from Appearance", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.locator("textarea").fill("Check composer context preference");
+  await page.locator("textarea").press("Enter");
+  const meter = page.getByRole("button", { name: /^Context usage,/ });
+  await expect(meter).toBeVisible();
+  for (const enabled of [false, true]) {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+    const preference = page.getByRole("switch", { name: "Show context usage in composer" });
+    await preference.click();
+    await expect(preference).toBeChecked({ checked: enabled });
+    await page.getByRole("button", { name: "Back to app" }).click();
+    if (enabled) await expect(meter).toBeVisible();
+    else await expect(meter).toHaveCount(0);
   }
 });

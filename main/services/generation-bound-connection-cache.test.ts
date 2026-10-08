@@ -351,6 +351,17 @@ test("real SDK server closure allows the next discovery to establish a fresh ses
   assert.equal(servers.length, 2);
 });
 
+
+test("settled Settings attempts revoke their transport predicate before asynchronous close", async () => {
+  const attempts = new GenerationBoundConnectionAttempts<object>();
+  let current!: () => boolean;
+  let checkedDuringClose = false;
+  await attempts.run("settings", attempts.generation("settings"), () => ({}), async (_value, isCurrent) => { current = isCurrent; },
+    async () => "status", async () => { checkedDuringClose = true; assert.equal(current(), false); });
+  assert.equal(checkedDuringClose, true);
+  assert.equal(current(), false);
+});
+
 test("idle close drops the connection but lets holders of the same generation reconnect", async () => {
   const cache = new GenerationBoundConnectionCache<{ id: number; closed: boolean }>();
   let created = 0;

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import sbtbiswas.AidenOnTheGo.models.AidenAttachmentReference
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -27,6 +28,16 @@ class AidenChatDraftStore(
         val generation: Long
     )
 
+    /**
+     * Write authority over one pairing's drafts, captured before an async
+     * request. [purge] retires it, so a request that settles after an unpair
+     * cannot recreate the removed pairing's draft or staged attachments.
+     */
+    data class PurgeAuthority(
+        val instanceId: String,
+        val generation: Long
+    )
+
     @Serializable
     private data class Envelope(
         val version: Int = 1,
@@ -39,6 +50,8 @@ class AidenChatDraftStore(
     private val maximumDraftScalars = 100_000
     private val maximumDraftBytes = 400_000
     private val generations = ConcurrentHashMap<String, Long>()
+    private val stagedAttachments = ConcurrentHashMap<String, List<AidenAttachmentReference>>()
+    private val purgeGenerations = ConcurrentHashMap<String, Long>()
 
     val root: File
 
@@ -102,7 +115,43 @@ class AidenChatDraftStore(
     }
 
     @Synchronized
+    fun purgeAuthority(instanceId: String): PurgeAuthority =
+        PurgeAuthority(instanceId, purgeGenerations[instanceId] ?: 0L)
+
+    /** False once [purge] ran for the authority's pairing after it was captured. */
+    @Synchronized
+    fun isCurrent(authority: PurgeAuthority): Boolean =
+        (purgeGenerations[authority.instanceId] ?: 0L) == authority.generation
+
+    /** Saves [text] as [chatId]'s draft unless [authority] was purged. */
+    @Synchronized
+    fun setDraft(chatId: String, text: String, authority: PurgeAuthority): Boolean {
+        if (!isCurrent(authority)) return false
+        return save(text, beginSession(authority.instanceId, chatId))
+    }
+
+    /**
+     * Hands server-staged attachments (an "Edit in fork" prefill) to the next
+     * composer that opens [chatId], unless [authority] was purged. They are
+     * only valid until their `expiresAt`, so they live in memory rather than
+     * on disk.
+     */
+    @Synchronized
+    fun stageAttachments(chatId: String, attachments: List<AidenAttachmentReference>, authority: PurgeAuthority): Boolean {
+        if (!isCurrent(authority)) return false
+        val key = sessionKey(authority.instanceId, chatId)
+        if (attachments.isEmpty()) stagedAttachments.remove(key) else stagedAttachments[key] = attachments
+        return true
+    }
+
+    /** Returns and forgets the attachments staged for [chatId]. */
+    @Synchronized
+    fun takeStagedAttachments(instanceId: String, chatId: String): List<AidenAttachmentReference> =
+        stagedAttachments.remove(sessionKey(instanceId, chatId)).orEmpty()
+
+    @Synchronized
     fun remove(instanceId: String, chatId: String) {
+        stagedAttachments.remove(sessionKey(instanceId, chatId))
         invalidate(instanceId, chatId)
         val file = fileURL(instanceId, chatId)
         if (file.exists()) file.delete()
@@ -110,12 +159,14 @@ class AidenChatDraftStore(
 
     @Synchronized
     fun purge(instanceId: String) {
+        purgeGenerations.compute(instanceId) { _, current -> (current ?: 0L) + 1L }
         val prefix = "$instanceId\u001f"
         for (key in generations.keys) {
             if (key.startsWith(prefix)) {
                 generations.compute(key) { _, current -> (current ?: 0L) + 1L }
             }
         }
+        stagedAttachments.keys.removeAll { it.startsWith(prefix) }
         val dir = instanceDirectory(instanceId)
         if (dir.exists()) dir.deleteRecursively()
         _drafts.value = emptyMap()

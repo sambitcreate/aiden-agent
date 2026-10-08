@@ -231,7 +231,7 @@ test("append reconciliation is surfaced across route remounts and chat creation 
   assert.match(root, /duration: Infinity/u);
   assert.match(layout, /appendReconciliationRequired \?/u);
   assert.match(layout, /\.catch\(\(error: unknown\)/u);
-  assert.match(sidebar, /disabled=\{!activeId \|\| appendReconciliationRequired\}/u);
+  assert.match(sidebar, /newAgentDisabled=\{!activeId \|\| appendReconciliationRequired\}/u);
   assert.match(sidebar, /Aiden could not create a chat/u);
   assert.match(sidebar, /list\.length === 0 && appendReconciliationRequired/u);
   assert.match(sidebar, /workspaceSwitchBlocked \|\| appendReconciliationRequired/u);
@@ -346,7 +346,7 @@ test("a revisited detached stream restores the responding window from its last t
   );
 });
 
-test("revisited generations expose Stop and queue/redirect without admitting a second turn early", () => {
+test("revisited generations expose Stop and queue/steer without admitting a second turn early", () => {
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
@@ -354,11 +354,6 @@ test("revisited generations expose Stop and queue/redirect without admitting a s
   assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
-  assert.match(pane, /onRedirect=\{draft \? undefined : redirectMessage\}/u);
-  assert.match(
-    pane,
-    /!\(canStopGeneration \|\| visibleDetachedProjection\) \|\|\s*isStoppingGeneration \|\|\s*stopRequestedRef\.current/u,
-  );
   // Stop closes busy admission synchronously, before React re-renders.
   assert.match(pane, /if \(handleStop\(\)\) stopRequestedRef\.current = true;/u);
   assert.match(pane, /stoppingGeneration=\{isStoppingGeneration\}/u);

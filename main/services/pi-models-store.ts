@@ -101,9 +101,21 @@ interface CatalogBackingStore extends ModelsStore {
 }
 
 export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): CatalogBackingStore {
+  async function migrateAzure() {
+    if (!(await store.load()).entries["azure-openai-responses"]) return;
+    await store.update((document) => {
+      const legacy = document.entries["azure-openai-responses"];
+      if (!legacy) return;
+      // Catalogs are disposable; a current Azure catalog wins in full. Custom
+      // endpoints live in the separate portable provider configuration.
+      document.entries.azure ??= { ...legacy, models: legacy.models.map((model) => ({ ...model, provider: "azure" })) };
+      delete document.entries["azure-openai-responses"];
+    });
+  }
   return {
     async read(providerId) {
       if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
+      if (providerId === "azure") await migrateAzure();
       const document = await store.load();
       const entry = document.entries[providerId];
       return entry ? clone(entry) : undefined;
@@ -119,6 +131,7 @@ export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): 
     },
 
     async delete(providerId, _options, receipt) {
+      if (providerId === "azure") await migrateAzure();
       if (receipt) receipt.state = "not-published";
       if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
       await store.update((document) => {

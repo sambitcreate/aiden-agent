@@ -2,7 +2,9 @@ package sbtbiswas.AidenOnTheGo.features.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentKind
@@ -33,6 +35,29 @@ class AidenImageCarouselTest {
         assertTrue(AidenAttachmentGalleryWindow.contains(11, 10, 20))
         assertFalse(AidenAttachmentGalleryWindow.contains(8, 10, 20))
         assertFalse(AidenAttachmentGalleryWindow.contains(-1, 0, 20))
+    }
+
+    @Test
+    fun deckCountPillShowsOneBasedPositionOnlyForMultiImageDecks() {
+        assertNull(AidenImageCountBadge.label(0, 0))
+        assertNull(AidenImageCountBadge.label(0, 1))
+        assertEquals("1 / 4", AidenImageCountBadge.label(0, 4))
+        assertEquals("4 / 4", AidenImageCountBadge.label(3, 4))
+        // A stale selection after attachments shrink never reads past the end.
+        assertEquals("2 / 2", AidenImageCountBadge.label(5, 2))
+        assertEquals("1 / 2", AidenImageCountBadge.label(-1, 2))
+    }
+
+    @Test
+    fun galleryPageIndicatorStretchesExactlyOneDotWithoutChangingRowWidth() {
+        val pages = 5
+        val totals = (0 until pages).map { selected ->
+            val widths = (0 until pages).map { AidenImageCountBadge.dotWidth(it, selected) }
+            assertEquals(1, widths.count { it > AidenImageCountBadge.DotSize })
+            assertEquals(AidenImageCountBadge.ActiveDotWidth, widths[selected])
+            widths.fold(0.dp) { sum, width -> sum + width }
+        }
+        assertEquals(1, totals.toSet().size)
     }
 
     @Test

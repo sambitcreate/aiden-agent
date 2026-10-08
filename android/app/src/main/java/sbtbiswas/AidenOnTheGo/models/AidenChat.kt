@@ -683,7 +683,9 @@ data class AidenChatSummary(
      */
     @SerialName("rowState") val rowStateWire: String? = null,
     /** True only when assistant output arrived after the chat was last viewed. */
-    val unread: Boolean = false
+    val unread: Boolean = false,
+    /** Fork lineage (revision 21); rows never carry the summary. */
+    val forkedFrom: AidenChatForkLineageRow? = null
 ) {
     val rowState: AidenChatRowState? get() = AidenChatRowState.fromWire(rowStateWire)
 
@@ -728,7 +730,8 @@ data class AidenChatSummary(
             createdAt = chat.createdAt,
             updatedAt = chat.updatedAt,
             revision = chat.revision,
-            activity = activity
+            activity = activity,
+            forkedFrom = chat.forkedFrom?.row
         )
     }
 }
@@ -773,7 +776,9 @@ data class AidenChat(
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) var updatedAt: Instant,
     var revision: String,
-    var titlePending: Boolean? = null
+    var titlePending: Boolean? = null,
+    /** Set when the chat was created by Fork (revision 21). */
+    val forkedFrom: AidenChatForkLineage? = null
 ) {
     val isBotChat: Boolean get() = botId != null
     val lastViewedMessageId: String? get() = messages.lastOrNull()?.id
@@ -804,6 +809,232 @@ data class AidenChat(
         fun regularWorkspaceChats(chats: List<AidenChat>): List<AidenChat> = chats.filter { !it.isBotChat }
     }
 }
+
+/**
+ * One page of `GET /chats/{chatId}/messages` (`chat-messages-window-v1`):
+ * messages oldest first, ending just before the requested cursor (or at the
+ * newest message), plus whether older visible messages exist. Since contract
+ * revision 23 (`chat-messages-window-metadata-v1`) a page also carries the
+ * chat metadata a whole-chat read returns, so a refresh from the newest page
+ * stays as authoritative for the title and model as `GET /chats/{chatId}`.
+ */
+@Serializable
+data class AidenChatMessagesWindow(
+    val chatId: String,
+    val revision: String,
+    val messages: List<AidenChatMessage>,
+    val hasOlder: Boolean,
+    val workspaceId: String? = null,
+    val botId: String? = null,
+    val title: String? = null,
+    val titlePending: Boolean? = null,
+    val providerId: String? = null,
+    val modelId: String? = null,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant? = null,
+    @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant? = null,
+    /** Fork lineage (revision 21), on a fork's pages as on its whole-chat read. */
+    val forkedFrom: AidenChatForkLineage? = null
+) {
+    init {
+        if (chatId.isEmpty() || chatId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            revision.isEmpty() || revision.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            messages.size > MAXIMUM_LIMIT ||
+            messages.map { it.id }.toSet().size != messages.size ||
+            !messages.all { it.isWireSafe }
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid messages window")
+        }
+        // Revision-23 metadata is all-or-nothing and held to the chat
+        // projection's rules: a partial set fails closed rather than leaving a
+        // refresh to mix the page's title with a stale model.
+        val hasAnyMetadata = listOf(workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt)
+            .any { it != null }
+        if (hasAnyMetadata) chat() ?: throw AidenRemoteContractException.InvalidJson("Invalid messages window metadata")
+    }
+
+    /**
+     * The chat this page describes, with the page's messages, or null when the
+     * page carries no metadata and only a whole-chat read can say it.
+     */
+    fun chat(): AidenChat? {
+        val workspaceId = workspaceId ?: return null
+        val title = title ?: return null
+        val createdAt = createdAt ?: return null
+        val updatedAt = updatedAt ?: return null
+        return AidenChat(
+            id = chatId,
+            workspaceId = workspaceId,
+            botId = botId,
+            title = title,
+            providerId = providerId,
+            modelId = modelId,
+            messages = messages,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            revision = revision,
+            titlePending = titlePending,
+            forkedFrom = forkedFrom
+        )
+    }
+
+    companion object {
+        const val DEFAULT_LIMIT = 50
+        const val MAXIMUM_LIMIT = 200
+    }
+}
+
+/**
+ * Client-side transcript windowing over `chat-messages-window-v1`. The chat
+ * screen holds the newest page plus any earlier pages the reader asked for;
+ * these rules decide how a fetched page combines with what is on screen.
+ */
+object AidenTranscriptWindowing {
+    const val PAGE_SIZE = AidenChatMessagesWindow.DEFAULT_LIMIT
+
+    data class Presentation(val messages: List<AidenChatMessage>, val hasOlder: Boolean)
+
+    /** Replace the transcript with the newest window, as on open or after a `revision_conflict`. */
+    fun latest(window: AidenChatMessagesWindow): Presentation = Presentation(window.messages, window.hasOlder)
+
+    /**
+     * Fold a refreshed newest window into the transcript on screen. When the
+     * window overlaps it, earlier pages the reader already loaded are kept in
+     * front of it; otherwise the window replaces the transcript.
+     */
+    fun mergingLatest(
+        window: AidenChatMessagesWindow,
+        current: List<AidenChatMessage>,
+        currentHasOlder: Boolean
+    ): Presentation {
+        val first = window.messages.firstOrNull() ?: return latest(window)
+        if (!window.hasOlder) return latest(window)
+        val overlap = current.indexOfFirst { it.id == first.id }
+        if (overlap <= 0) return latest(window)
+        val windowIds = window.messages.mapTo(HashSet()) { it.id }
+        val earlier = current.subList(0, overlap).filterNot { windowIds.contains(it.id) }
+        return Presentation(earlier + window.messages, currentHasOlder)
+    }
+
+    /** Put an earlier page in front of the transcript on screen. */
+    fun prepending(page: AidenChatMessagesWindow, current: List<AidenChatMessage>): Presentation {
+        val presentIds = current.mapTo(HashSet()) { it.id }
+        return Presentation(page.messages.filterNot { presentIds.contains(it.id) } + current, page.hasOlder)
+    }
+
+    /** The cursor for the next earlier page: the oldest message the Mac issued. */
+    fun earlierCursor(messages: List<AidenChatMessage>): String? =
+        messages.firstOrNull { !it.id.startsWith("local-") }?.id
+}
+
+@Serializable
+enum class AidenChatForkPosition(val wire: String) {
+    /** Everything through a settled assistant reply. */
+    @SerialName("after") AFTER("after"),
+    /** Everything before a user prompt, which comes back as `prefill`. */
+    @SerialName("before") BEFORE("before")
+}
+
+@Serializable
+enum class AidenChatForkSummaryState {
+    @SerialName("pending") PENDING,
+    @SerialName("ready") READY,
+    @SerialName("failed") FAILED
+}
+
+/** What happened in the source after the fork point, summarized for the fork. */
+@Serializable
+data class AidenChatForkSummary(
+    val state: AidenChatForkSummaryState,
+    val afterMessageId: String,
+    /** The focus the summary was asked for. */
+    val focus: String? = null,
+    val text: String? = null,
+    /** A short, safe phrase; provider errors stay on the Mac. */
+    val error: String? = null
+) {
+    init {
+        if (afterMessageId.length !in 1..160 || !AFTER_MESSAGE_ID.matches(afterMessageId) ||
+            (focus != null && focus.length !in 1..AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH) ||
+            (text != null && text.length !in 1..32_000) ||
+            (error != null && error.length !in 1..1_000)
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork summary")
+        }
+    }
+
+    /** A pending or failed summary holds new turns until it is ready, retried or skipped. */
+    val holdsTurns: Boolean get() = state != AidenChatForkSummaryState.READY
+
+    private companion object {
+        val AFTER_MESSAGE_ID = Regex("^[A-Za-z0-9_-]+$")
+    }
+}
+
+/** The chat and message a fork came from. The source may since have been deleted. */
+@Serializable
+data class AidenChatForkLineage(
+    val chatId: String,
+    val messageId: String,
+    val position: AidenChatForkPosition,
+    @Serializable(with = InstantIso8601Serializer::class) val at: Instant,
+    val summary: AidenChatForkSummary? = null
+) {
+    init {
+        if (!AidenChatForkLineageRow.IDENTIFIER.matches(chatId) || !AidenChatForkLineageRow.IDENTIFIER.matches(messageId)) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork lineage")
+        }
+    }
+
+    val row: AidenChatForkLineageRow
+        get() = AidenChatForkLineageRow(chatId = chatId, messageId = messageId, position = position, at = at)
+}
+
+/** Fork lineage on a chat summary row, which never carries the summary. */
+@Serializable
+data class AidenChatForkLineageRow(
+    val chatId: String,
+    val messageId: String,
+    val position: AidenChatForkPosition,
+    @Serializable(with = InstantIso8601Serializer::class) val at: Instant
+) {
+    init {
+        if (!IDENTIFIER.matches(chatId) || !IDENTIFIER.matches(messageId)) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork lineage")
+        }
+    }
+
+    internal companion object {
+        val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,128}$")
+    }
+}
+
+/** The prompt an "Edit in fork" returns, with its attachments restaged for this device. */
+@Serializable
+data class AidenChatForkPrefill(
+    val text: String,
+    val attachments: List<AidenAttachmentReference> = emptyList()
+) {
+    init {
+        if (text.length > AidenRemoteProtocol.MAX_TEXT_LENGTH || attachments.size > AidenRemoteProtocol.MAX_FORK_PREFILL_ATTACHMENTS) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork prefill")
+        }
+    }
+}
+
+@Serializable
+data class AidenChatForkResult(
+    val chat: AidenChat,
+    val prefill: AidenChatForkPrefill? = null
+) {
+    init {
+        if (chat.forkedFrom == null) {
+            throw AidenRemoteContractException.InvalidJson("Fork result chat has no lineage")
+        }
+    }
+}
+
+@Serializable
+data class AidenChatForkSummaryCancel(val cancelled: Boolean)
 
 @Serializable
 data class AidenModel(
@@ -993,11 +1224,12 @@ data class AidenStreamInputResult(
 
 /**
  * Remote Slice 2 busy-composer presentation rules (iOS parity:
- * AidenRunInputPresentation). A run input may only be offered while the
- * displayed stream is controllable, the server negotiated
- * `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
- * when the Mac durably committed the message; every other outcome keeps the
- * draft untouched so a busy→idle race can never become an implicit Send.
+ * AidenRunInputPresentation). The Queue/Steer control is shown while the
+ * displayed stream is controllable and the server negotiated
+ * `chat-run-input-v1`; it only submits when the composer also holds text.
+ * Drafts are consumed only when the Mac durably committed the message; every
+ * other outcome keeps the draft untouched so a busy→idle race can never
+ * become an implicit Send.
  */
 object AidenRunInputPresentation {
     data class Attempt(
@@ -1007,12 +1239,30 @@ object AidenRunInputPresentation {
         val text: String
     )
 
+    /** The mode the busy composer starts in, and returns to once a run ends. */
+    val defaultMode: AidenStreamInputMode = AidenStreamInputMode.QUEUE
+
+    /** Whether the busy composer shows the Queue/Steer control. It stays
+     * visible (dimmed) with an empty draft so a mode can be picked before
+     * typing. */
     fun offersRunInput(
         isStreaming: Boolean,
         canControl: Boolean,
-        supports: Boolean,
-        hasDraft: Boolean
-    ): Boolean = isStreaming && canControl && supports && hasDraft
+        supports: Boolean
+    ): Boolean = isStreaming && canControl && supports
+
+    /** Whether the offered control can submit right now. */
+    fun canSubmitRunInput(
+        offered: Boolean,
+        hasDraft: Boolean,
+        isSubmitting: Boolean,
+        isStopping: Boolean
+    ): Boolean = offered && hasDraft && !isSubmitting && !isStopping
+
+    /** The chosen mode is sticky for the life of a run and resets to
+     * [defaultMode] once the run is no longer streaming. */
+    fun stickyMode(current: AidenStreamInputMode, isStreaming: Boolean): AidenStreamInputMode =
+        if (isStreaming) current else defaultMode
 
     fun consumesDraft(result: AidenStreamInputResult): Boolean =
         result.status == AidenStreamInputStatus.ADMITTED || result.committed

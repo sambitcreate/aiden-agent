@@ -39,6 +39,7 @@ import {
   type GenerationThinkingLevel,
 } from "../../shared/generation-thinking";
 import { isModelHidden } from "../../shared/model-visibility";
+import { isAcpHarnessProvider } from "../../shared/acp-harness";
 
 export function TelegramSettings() {
   const qc = useQueryClient();
@@ -193,7 +194,7 @@ export function TelegramSettings() {
 
   // Providers that have at least one model and a key (or don't need one).
   const usableProviders = (providers.data ?? []).filter(
-    (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
+    (p) => p.models.length > 0 && (p.hasKey || !p.needsKey) && !isAcpHarnessProvider(p.id),
   );
 
   const visibleModelsForProvider = (provider: (typeof usableProviders)[number]) =>

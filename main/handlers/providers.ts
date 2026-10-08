@@ -1,5 +1,7 @@
-import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import { isCompactionEngine } from "../../renderer/shared/compaction.js";
+import { stopAllPiCacheWarmers } from "../services/pi-cache-warming.js";
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { customModelThinkingLevels, parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
+import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
@@ -174,11 +176,13 @@ function parseProvider(value: unknown): StoredProvider {
     defaultModel,
     needsKey: typeof p.needsKey === "boolean" ? p.needsKey : true,
     deployment,
+    llamaCppClassifierEnabled: p.llamaCppClassifierEnabled as boolean | undefined,
     isPreset: typeof p.isPreset === "boolean" ? p.isPreset : false,
     // Built-in status is derived exclusively from Pi's registry, never from
     // a renderer payload that could redirect native credentials.
     isBuiltin: false,
   };
+  validateLocalClassifierPreference(provider);
   if (provider.id === "custom:onboarding-tailscale") {
     assertOnboardingTailnetBaseUrl(provider.baseUrl);
   }
@@ -442,6 +446,15 @@ export function registerProviderHandlers(): void {
     },
   );
   ipcMain.handle(
+    "settings:setCompactionModelBudget",
+    async (_event, modelKeyValue: unknown, budgetValue: unknown) => {
+      if (typeof modelKeyValue !== "string") throw new Error("Choose an exact provider/model for the compaction budget.");
+      if (budgetValue === null || budgetValue === undefined) return configStore.setCompactionModelBudget(modelKeyValue, undefined);
+      const parsed = parseCompactionModelOverrides({ [modelKeyValue]: budgetValue });
+      return configStore.setCompactionModelBudget(modelKeyValue, parsed[modelKeyValue]);
+    },
+  );
+  ipcMain.handle(
     "settings:setAnthropicThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
       const selection = parseAnthropicThinkingSelection(modelIdValue, levelValue);
@@ -456,8 +469,13 @@ export function registerProviderHandlers(): void {
       if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
         throw new Error("Invalid provider thinking selection.");
       }
-      const metadata = providerRegistry.builtinProvider(providerId)?.modelMetadata?.[modelId];
-      if (!metadata?.thinkingLevels?.includes(levelValue)) {
+      const builtin = providerRegistry.builtinProvider(providerId);
+      const custom = builtin ? undefined : await configStore.getProvider(providerId);
+      const levels = builtin?.modelMetadata?.[modelId]?.thinkingLevels ??
+        (custom?.kind === "openai" && custom.models.includes(modelId)
+          ? customModelThinkingLevels(custom.modelMetadata?.[modelId]?.overrides)
+          : undefined);
+      if (!levels?.includes(levelValue)) {
         throw new Error("This thinking level is not supported by the selected model.");
       }
       return configStore.setProviderThinkingLevel(providerId, modelId, levelValue);
@@ -533,6 +551,11 @@ export function registerProviderHandlers(): void {
       if (!isCompactionEngine(p.compactionEngine)) throw new Error("Invalid compaction engine.");
       next.compactionEngine = p.compactionEngine;
     }
+    if (p.compactionModelOverrides !== undefined) next.compactionModelOverrides = parseCompactionModelOverrides(p.compactionModelOverrides);
+    if (p.cacheWarmingEnabled !== undefined) {
+      if (typeof p.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      next.cacheWarmingEnabled = p.cacheWarmingEnabled;
+    }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
@@ -551,6 +574,7 @@ export function registerProviderHandlers(): void {
     const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
+    if (next.cacheWarmingEnabled === false) stopAllPiCacheWarmers();
     if (next.localVoiceIdleUnloadMinutes !== undefined) {
       const { reconfigureParakeetIdleUnload } = await import("../services/parakeet.js");
       void reconfigureParakeetIdleUnload();

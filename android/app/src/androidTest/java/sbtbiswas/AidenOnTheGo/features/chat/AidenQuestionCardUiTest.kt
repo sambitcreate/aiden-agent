@@ -5,7 +5,9 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
@@ -118,6 +120,30 @@ class AidenQuestionCardUiTest {
         compose.onNodeWithText("Large").performClick()
         compose.onNodeWithText("Large").assertIsOn()
         compose.onNodeWithText("Small").assertIsOff()
+    }
+
+    @Test
+    fun questionCardCustomAnswerOverridesTheChoiceGroup() {
+        var submitted: AidenQuestionRespondRequest? = null
+        compose.setContent {
+            AidenTheme {
+                AidenQuestionCard(prompt = prompt(), enabled = true, onSubmit = { submitted = it })
+            }
+        }
+
+        compose.onNodeWithText("Small").performClick()
+        compose.onNodeWithContentDescription("Type something. Shows a field for a custom answer").performClick()
+        compose.onNodeWithContentDescription("Custom answer").performTextInput("Medium")
+        compose.onNodeWithText("Submit").performClick()
+        compose.runOnIdle {
+            assertEquals(
+                AidenQuestionRespondRequest(
+                    cancelled = false,
+                    answers = listOf(AidenQuestionAnswer.Custom(0, "Medium"))
+                ),
+                submitted
+            )
+        }
     }
 
     @Test

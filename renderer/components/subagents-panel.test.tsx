@@ -40,8 +40,8 @@ import {
 } from "../lib/subagent-panel-state.js";
 import {
   SubagentChips,
-  SubagentOrb,
-  subagentOrbState,
+  SubagentMark,
+  subagentActivityMark,
   subagentStatusLabel,
 } from "./subagent-chips.js";
 import { SubagentOwnerFocusBoundary } from "./subagent-owner-focus-boundary.js";
@@ -461,7 +461,7 @@ function renderApprovalCard(details: unknown, prompt: Partial<ApprovalPrompt> = 
   return { markup, buttons };
 }
 
-test("subagent chips are accessible buttons with live or frozen ThinkingOrbs", () => {
+test("subagent chips are accessible buttons with live or frozen activity marks", () => {
   const runs = [
     run("active", { label: "Active scout" }),
     run("done", {
@@ -484,8 +484,8 @@ test("subagent chips are accessible buttons with live or frozen ThinkingOrbs", (
   assert.match(markup, /aria-label="Open Finished reviewer\. Status: Finished\."/u);
   assert.match(markup, /data-subagent-chip-run-id="active"/u);
   assert.match(markup, /data-subagent-chip-run-id="done"/u);
-  assert.match(markup, /data-subagent-orb-state="active"/u);
-  assert.match(markup, /data-subagent-orb-state="terminal"/u);
+  assert.match(markup, /data-subagent-mark-state="active"/u);
+  assert.match(markup, /data-subagent-mark-state="terminal"/u);
   assert.match(markup, />Reading component boundaries</u);
   assert.match(markup, />Finished</u);
   assert.doesNotMatch(markup, /role="status"/u);
@@ -517,7 +517,7 @@ test("archived chips use embedded terminal metadata without loading snapshots", 
   assert.match(markup, /aria-label="Open Saved reviewer\. Status: Failed\."/u);
   assert.match(markup, />Saved reviewer</u);
   assert.match(markup, />Failed</u);
-  assert.match(markup, /data-subagent-orb-state="terminal"/u);
+  assert.match(markup, /data-subagent-mark-state="terminal"/u);
 });
 
 test("streaming chips render ordered live snapshots before a message reference exists", () => {
@@ -587,6 +587,55 @@ test("a waiting child shows its pending question in chips, roster, detail, and l
     subagentSnapshotLiveSummary([{ ...asking, updatedAt: 9_000 }, generic]),
     /^2 active subagents: 2 needs attention; 0 finished\. Latest active update: Fixture cleaner, Needs attention: Should I delete the generated fixtures in tests\/tmp\?\.$/u,
   );
+});
+
+test("chips, roster, and detail show each child's recorded model and effort only when known", () => {
+  const chosen = v2Run({
+    runId: "chosen",
+    label: "Cheap scout",
+    providerId: "anthropic",
+    modelId: "claude-haiku",
+    thinkingLevel: "xhigh",
+    modelSelection: "requested",
+  });
+  const inherited = v2Run({
+    runId: "inherited",
+    label: "Parent-model scout",
+    providerId: "openai",
+    modelId: "gpt-main",
+    thinkingLevel: "high",
+    modelSelection: "inherited",
+  });
+  const legacy = v2Run({ runId: "legacy", label: "Older scout", modelId: "legacy-model" });
+
+  const chips = renderToStaticMarkup(
+    <SubagentChips runs={[chosen, inherited, legacy]} onOpen={() => undefined} />,
+  );
+  assert.match(
+    chips,
+    /aria-label="Open Cheap scout\. Status: Reading component boundaries\. Model anthropic\/claude-haiku, effort extra high\."/u,
+  );
+  assert.match(chips, /aria-label="Open Parent-model scout\. Status: Reading component boundaries\. Model openai\/gpt-main, effort high\."/u);
+  assert.match(chips, /aria-label="Open Older scout\. Status: Reading component boundaries\."/u);
+
+  const roster = renderToStaticMarkup(
+    <SubagentRoster
+      runs={[view(chosen), view(inherited), view(legacy)]}
+      selectedRunId="chosen"
+      onSelect={() => undefined}
+    />,
+  );
+  assert.match(roster, /aria-label="Cheap scout, scout, Working, Model anthropic\/claude-haiku, effort extra high"/u);
+  assert.match(roster, /data-subagent-model="chosen"[^>]*>anthropic\/claude-haiku · Extra high</u);
+  // Inherited and legacy rows keep their compact layout; only a child-specific choice adds a line.
+  assert.equal((roster.match(/data-subagent-model=/gu) ?? []).length, 1);
+  assert.match(roster, /aria-label="Older scout, scout, Working"/u);
+
+  const chosenDetail = renderToStaticMarkup(<SubagentDetail run={chosen} />);
+  assert.match(chosenDetail, /Model: anthropic\/claude-haiku · Effort Extra high · Chosen by the agent/u);
+  const legacyDetail = renderToStaticMarkup(<SubagentDetail run={legacy} />);
+  assert.match(legacyDetail, /Model: legacy-model</u);
+  assert.doesNotMatch(legacyDetail, /Effort/u);
 });
 
 test("V2 detail exposes context but gates controls on production callbacks", () => {
@@ -1177,32 +1226,36 @@ test("mounted mutation approval exposes VoiceOver relationships and starts focus
   }
 });
 
-test("subagents reuse Aiden's activity orb states and freeze terminal motion", () => {
+test("subagents reuse Aiden's activity marks and freeze terminal motion", () => {
   const markup = renderToStaticMarkup(
-    <SubagentOrb
+    <SubagentMark
       role="planner"
       state="running"
       activity="Reading a workspace file"
       size={64}
-      className="summary-orb"
+      className="summary-mark"
     />,
   );
 
-  assert.equal(subagentOrbState("queued", "reviewer"), "shaping");
-  assert.equal(subagentOrbState("running", "reviewer", "Searching workspace text"), "searching");
-  assert.equal(subagentOrbState("running", "scout", "Reviewing workspace context"), "solving");
-  assert.equal(subagentOrbState("running", "scout", "Writing a bounded report"), "composing");
-  assert.equal(subagentOrbState("running", "planner"), "solving");
-  assert.match(markup, /data-subagent-orb-state="active"/u);
-  assert.match(markup, /data-aiden-orb-state="searching"/u);
-  assert.match(markup, /summary-orb/u);
+  assert.equal(subagentActivityMark("queued", "reviewer"), "bounce");
+  assert.equal(subagentActivityMark("needs_attention", "scout", "Which file?"), "glance");
+  assert.equal(subagentActivityMark("running", "reviewer", "Searching workspace text"), "scan-grid");
+  assert.equal(subagentActivityMark("running", "scout", "Reviewing workspace context"), "tri-step");
+  assert.equal(subagentActivityMark("running", "scout", "Writing a bounded report"), "compose");
+  assert.equal(subagentActivityMark("running", "planner"), "tri-step");
+  assert.equal(subagentActivityMark("running", "reviewer"), "quad-shuffle");
+  assert.match(markup, /data-subagent-mark-state="active"/u);
+  assert.match(markup, /data-aiden-mark="scan-grid"/u);
+  assert.doesNotMatch(markup, /data-paused/u);
+  assert.match(markup, /summary-mark/u);
   assert.match(markup, /width:64px/u);
 
   const terminal = renderToStaticMarkup(
-    <SubagentOrb role="reviewer" state="completed" activity="Writing a bounded report" size={20} />,
+    <SubagentMark role="reviewer" state="completed" activity="Writing a bounded report" size={20} />,
   );
-  assert.match(terminal, /data-subagent-orb-state="terminal"/u);
-  assert.match(terminal, /data-aiden-orb-state="composing"/u);
+  assert.match(terminal, /data-subagent-mark-state="terminal"/u);
+  assert.match(terminal, /data-aiden-mark="compose"/u);
+  assert.match(terminal, /data-paused=""/u);
 });
 
 test("the roster separates active and terminal runs without color-only status", () => {
@@ -2789,7 +2842,6 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(detailSource, /subagentMilestoneAggregate\(run\)/u);
   assert.match(detailSource, /run\.milestones\.map/u);
   assert.match(detailSource, /Model:/u);
-  assert.match(detailSource, /run\.modelId/u);
   assert.match(detailSource, /Copy task preview for/u);
   assert.match(detailSource, /Copy result from/u);
   assert.match(detailSource, /data-subagent-projection-notice="true"/u);

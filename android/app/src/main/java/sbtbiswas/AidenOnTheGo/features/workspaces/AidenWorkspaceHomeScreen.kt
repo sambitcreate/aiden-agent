@@ -1,11 +1,22 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.BottomSheetDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,26 +33,30 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AddComment
-import androidx.compose.material.icons.outlined.ArrowForwardIos
+import androidx.compose.material.icons.automirrored.outlined.ArrowForwardIos
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DataUsage
+import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.FolderSpecial
-import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,16 +86,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
+import sbtbiswas.AidenOnTheGo.features.remote.AidenProductTopBar
+import sbtbiswas.AidenOnTheGo.features.remote.AidenProductTopBarAction
+import sbtbiswas.AidenOnTheGo.features.remote.AidenProductTopBarHeight
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledTasksScreen
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
@@ -90,10 +118,30 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
+import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
+import androidx.annotation.StringRes
+import androidx.compose.ui.res.pluralStringResource
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
 private const val AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT = 20
@@ -156,6 +204,7 @@ private fun AidenWorkspaceHome(
     onNavigateToChat: (String) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val client by coordinator.client.collectAsStateWithLifecycle()
@@ -208,6 +257,7 @@ private fun AidenWorkspaceHome(
     }
     var showSidebarOrganizationMenu by remember { mutableStateOf(false) }
     val usageSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val reduceMotion = aidenReduceMotion()
 
     val archivedIds = coordinator.activeInstanceId?.let { archivedByInstance[it] }.orEmpty()
     val activeWorkspaces = remember(workspaces, archivedIds) {
@@ -227,10 +277,12 @@ private fun AidenWorkspaceHome(
         viewModel.hydrate(workspaces)
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.load()
     }
+    // Coming back to the app rereads stale data underneath what is already shown.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.revalidate() }
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
             if (
-                snackbarHostState.showSnackbar(it, actionLabel = "Retry") ==
+                snackbarHostState.showSnackbar(it, actionLabel = resources.getString(R.string.action_retry)) ==
                 SnackbarResult.ActionPerformed
             ) {
                 viewModel.refresh(workspaces)
@@ -267,11 +319,11 @@ private fun AidenWorkspaceHome(
         fullyRevealedWorkspaceIds = fullyRevealedWorkspaceIds.filter(validIds::contains)
     }
 
-    fun createChat(workspace: AidenWorkspace, status: String = "Opening chat…") {
+    fun createChat(workspace: AidenWorkspace, status: String = resources.getString(R.string.workspace_home_opening_chat)) {
         if (chatCreationBlocked) {
             scope.launch {
                 snackbarHostState.showSnackbar(
-                    chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                    chatLoadErrorMessage ?: resources.getString(R.string.workspace_home_chats_still_loading)
                 )
             }
             return
@@ -284,7 +336,7 @@ private fun AidenWorkspaceHome(
                 viewModel.accept(chat)
                 onNavigateToChat(chat.id)
             } catch (error: Exception) {
-                snackbarHostState.showSnackbar(error.message ?: "Aiden couldn't create the chat.")
+                snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_home_create_chat_failed))
             } finally {
                 creationStatus = null
             }
@@ -292,6 +344,21 @@ private fun AidenWorkspaceHome(
     }
 
     Scaffold(
+        topBar = {
+            AidenWorkspaceHomeHeader(
+                isSearching = isSearching,
+                searchQuery = searchQuery,
+                connectionState = connectionState,
+                onSearchQueryChanged = { searchQuery = it },
+                onBeginSearch = { isSearching = true },
+                onEndSearch = {
+                    searchQuery = ""
+                    isSearching = false
+                },
+                productSwitcher = productSwitcher,
+                onOpenSettings = onOpenSettings
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             AnimatedVisibility(
@@ -299,14 +366,15 @@ private fun AidenWorkspaceHome(
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
+                val newChatDescription = stringResource(R.string.workspace_home_new_chat_cd)
                 FloatingActionButton(
                     onClick = {
                         if (connectionState == AidenConnectionState.CONNECTED) showNewChatChoices = true
                     },
                     containerColor = palette.accent,
-                    contentColor = Color.White,
+                    contentColor = palette.onAccent,
                     shape = CircleShape,
-                    modifier = Modifier.semantics { contentDescription = "New Workspace Chat" }
+                    modifier = Modifier.semantics { contentDescription = newChatDescription }
                 ) {
                     Icon(Icons.Outlined.Add, contentDescription = null)
                 }
@@ -315,31 +383,16 @@ private fun AidenWorkspaceHome(
         containerColor = palette.canvas,
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0)
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        Box(Modifier.fillMaxSize().padding(padding).aidenReadableWidth()) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 104.dp)
             ) {
-                item {
-                    AidenWorkspaceHomeHeader(
-                        isSearching = isSearching,
-                        searchQuery = searchQuery,
-                        onSearchQueryChanged = { searchQuery = it },
-                        onBeginSearch = { isSearching = true },
-                        onEndSearch = {
-                            searchQuery = ""
-                            isSearching = false
-                        },
-                        productSwitcher = productSwitcher,
-                        onOpenSettings = onOpenSettings
-                    )
-                }
-
                 if (connectionState != AidenConnectionState.CONNECTED) {
                     item {
                         Surface(
                             color = palette.raised,
-                            shape = RoundedCornerShape(18.dp),
+                            shape = MaterialTheme.shapes.large,
                             modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 6.dp)
                         ) {
                             Row(
@@ -349,12 +402,12 @@ private fun AidenWorkspaceHome(
                                 Icon(Icons.Outlined.WifiOff, null, tint = palette.secondary, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(10.dp))
                                 Text(
-                                    if (connectionState == AidenConnectionState.CONNECTING) "Connecting to Aiden Agent…" else "Offline — showing saved chats",
+                                    if (connectionState == AidenConnectionState.CONNECTING) stringResource(R.string.workspace_home_connecting) else stringResource(R.string.workspace_home_offline),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = palette.secondary,
                                     modifier = Modifier.weight(1f)
                                 )
-                                TextButton(onClick = coordinator::refreshClient) { Text("Retry") }
+                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = coordinator::refreshClient) { Text(stringResource(R.string.action_retry)) }
                             }
                         }
                     }
@@ -362,17 +415,23 @@ private fun AidenWorkspaceHome(
 
                 if (!isSearching) {
                     item {
-                        Column(modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)) {
+                        AidenConnectedColumn(
+                            modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
+                        ) {
                             AidenWorkspaceNavigationRow(
+                                index = 0,
+                                count = 3,
                                 icon = Icons.Outlined.CalendarMonth,
-                                title = "Scheduled Tasks",
+                                title = stringResource(R.string.workspace_home_scheduled_tasks),
                                 enabled = canReadSchedules &&
                                         (connectionState == AidenConnectionState.CONNECTED || scheduledTasks.isNotEmpty()),
                                 onClick = { showScheduledTasks = true }
                             )
                             AidenWorkspaceNavigationRow(
+                                index = 1,
+                                count = 3,
                                 icon = Icons.Outlined.DataUsage,
-                                title = "Usage",
+                                title = stringResource(R.string.workspace_home_usage),
                                 enabled = connectionState == AidenConnectionState.CONNECTED || usage != null,
                                 onClick = {
                                     if (usage != null) showUsage = true
@@ -380,15 +439,17 @@ private fun AidenWorkspaceHome(
                                         viewModel.load(force = true)
                                         scope.launch {
                                             snackbarHostState.showSnackbar(
-                                                usageErrorMessage ?: "Loading Usage from your paired desktop…"
+                                                usageErrorMessage ?: resources.getString(R.string.workspace_home_usage_loading)
                                             )
                                         }
                                     }
                                 }
                             )
                             AidenWorkspaceNavigationRow(
+                                index = 2,
+                                count = 3,
                                 icon = Icons.Outlined.FolderOpen,
-                                title = "Manage Workspaces",
+                                title = stringResource(R.string.workspace_home_manage),
                                 showsChevron = false,
                                 onClick = onOpenDirectory
                             )
@@ -403,101 +464,101 @@ private fun AidenWorkspaceHome(
                             .fillMaxWidth()
                             .padding(horizontal = AidenUi.ScreenGutter, vertical = 12.dp)
                     ) {
-                        Text(
-                            if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                "Workspaces"
-                            } else {
-                                "Recents"
+                        AnimatedContent(
+                            targetState = sidebarOrganization,
+                            transitionSpec = {
+                                fadeIn(AidenMotion.nonSpatial(reduceMotion)) togetherWith
+                                    fadeOut(AidenMotion.nonSpatial(reduceMotion))
                             },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.foreground,
+                            label = "SidebarOrganizationTitle",
                             modifier = Modifier.weight(1f)
-                        )
-                        Box {
-                            IconButton(onClick = { showSidebarOrganizationMenu = true }) {
-                                Icon(Icons.Outlined.MoreVert, "Organize sidebar", tint = palette.secondary)
-                            }
-                            DropdownMenu(
-                                expanded = showSidebarOrganizationMenu,
-                                onDismissRequest = { showSidebarOrganizationMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("By workspace") },
-                                    leadingIcon = {
-                                        if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                            Text("✓", color = palette.accent)
-                                        }
-                                    },
-                                    onClick = {
-                                        sidebarOrganizationRaw =
-                                            AidenWorkspaceSidebarOrganization.WORKSPACE.name
-                                        activeInstanceId?.let {
-                                            navigationStore.setWorkspaceSidebarOrganization(
-                                                it,
-                                                AidenWorkspaceSidebarOrganization.WORKSPACE
-                                            )
-                                        }
-                                        showSidebarOrganizationMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Recent only") },
-                                    leadingIcon = {
-                                        if (sidebarOrganization == AidenWorkspaceSidebarOrganization.RECENT) {
-                                            Text("✓", color = palette.accent)
-                                        }
-                                    },
-                                    onClick = {
-                                        sidebarOrganizationRaw =
-                                            AidenWorkspaceSidebarOrganization.RECENT.name
-                                        activeInstanceId?.let {
-                                            navigationStore.setWorkspaceSidebarOrganization(
-                                                it,
-                                                AidenWorkspaceSidebarOrganization.RECENT
-                                            )
-                                        }
-                                        showSidebarOrganizationMenu = false
-                                    }
-                                )
-                            }
+                        ) { organization ->
+                            Text(
+                                if (organization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
+                                    stringResource(R.string.workspace_directory_title)
+                                } else {
+                                    stringResource(R.string.workspace_home_recents)
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.foreground
+                            )
                         }
+                        AidenSidebarOrganizationMenu(
+                            selected = sidebarOrganization,
+                            expanded = showSidebarOrganizationMenu,
+                            onExpandedChange = { showSidebarOrganizationMenu = it },
+                            onSelect = { organization ->
+                                sidebarOrganizationRaw = organization.name
+                                activeInstanceId?.let {
+                                    navigationStore.setWorkspaceSidebarOrganization(it, organization)
+                                }
+                                showSidebarOrganizationMenu = false
+                            }
+                        )
                     }
                 }
 
-                if (chatListUnavailable) {
+                val projectionIsEmpty = if (
+                    sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
+                ) {
+                    sidebarProjection.sections.isEmpty()
+                } else {
+                    sidebarProjection.recents.isEmpty()
+                }
+                val listPresentation = aidenWorkspaceHomeListPresentation(
+                    projectionIsEmpty = projectionIsEmpty,
+                    isSearching = isSearching,
+                    isLoading = isLoading,
+                    connectionState = connectionState,
+                    hasCompletedWorkspaceRefresh = hasCompletedWorkspaceRefresh,
+                    chatListLoadState = chatListLoadState
+                )
+                if (listPresentation == AidenReadPresentation.FAILED) {
                     item {
                         AidenWorkspaceChatLoadErrorState(
-                            message = chatLoadErrorMessage ?: "Reconnect and try again.",
+                            message = chatLoadErrorMessage ?: stringResource(R.string.workspace_chats_reconnect),
                             onRetry = { viewModel.refresh(workspaces) },
                             modifier = Modifier.padding(top = 32.dp)
                         )
                     }
-                } else {
-                    val projectionIsEmpty = if (
-                        sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
-                    ) {
-                        sidebarProjection.sections.isEmpty()
-                    } else {
-                        sidebarProjection.recents.isEmpty()
+                } else if (listPresentation == AidenReadPresentation.SKELETON) {
+                    item(key = "workspace-home-skeleton") {
+                        // Chat rows are text-only, inset to line up with the real rows.
+                        AidenSkeletonList(
+                            count = 6,
+                            leading = false,
+                            loadingDescription = stringResource(R.string.workspace_chats_loading),
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
                     }
-                    if (projectionIsEmpty && !isLoading) {
+                } else {
+                    // Saved chats stay on screen when a refresh fails; the error sits above them.
+                    if (chatListUnavailable && !projectionIsEmpty) {
+                        item(key = "chat-refresh-error") {
+                            AidenWorkspaceInlineRefreshError(
+                                message = chatLoadErrorMessage ?: stringResource(R.string.workspace_home_refresh_failed),
+                                onRetry = { viewModel.refresh(workspaces) }
+                            )
+                        }
+                    }
+                    if (listPresentation == AidenReadPresentation.EMPTY) {
                         item {
                             AidenEmptyState(
                                 icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.FolderOpen,
                                 title = if (isSearching) {
-                                    "No Matches"
+                                    stringResource(R.string.workspace_home_empty_search_title)
                                 } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                    "No Workspaces Yet"
+                                    stringResource(R.string.workspace_home_empty_workspaces_title)
                                 } else {
-                                    "No Chats Yet"
+                                    stringResource(R.string.workspace_home_empty_chats_title)
                                 },
                                 body = if (isSearching) {
-                                    "Try a different search term."
+                                    stringResource(R.string.workspace_home_empty_search_body)
                                 } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                    "Add a workspace to begin."
+                                    stringResource(R.string.workspace_home_empty_workspaces_body)
                                 } else {
-                                    "Start a new Workspace chat to begin."
+                                    stringResource(R.string.workspace_home_empty_chats_body)
                                 },
                                 modifier = Modifier.padding(top = if (isSearching) 80.dp else 32.dp)
                             )
@@ -559,19 +620,13 @@ private fun AidenWorkspaceHome(
                                         modifier = Modifier.padding(bottom = 4.dp)
                                     )
                                 }
-                                TextButton(
-                                    onClick = viewModel::loadMoreChats,
-                                    enabled = !isLoadingMoreChats
-                                ) {
-                                    if (isLoadingMoreChats) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            strokeWidth = 2.dp,
-                                            color = palette.accent
-                                        )
-                                        Spacer(Modifier.width(8.dp))
+                                if (isLoadingMoreChats) {
+                                    // The next page arrives as rows, so it is previewed as rows.
+                                    AidenSkeletonList(count = 2, leading = false, loadingDescription = stringResource(R.string.workspace_home_loading_more))
+                                } else {
+                                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = viewModel::loadMoreChats) {
+                                        Text(if (chatPaginationErrorMessage == null) stringResource(R.string.workspace_home_load_more) else stringResource(R.string.action_retry))
                                     }
-                                    Text(if (chatPaginationErrorMessage == null) "Load more chats" else "Retry")
                                 }
                             }
                         }
@@ -579,17 +634,10 @@ private fun AidenWorkspaceHome(
                 }
             }
 
-            if (isLoading && chats.isEmpty()) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center).size(28.dp),
-                    strokeWidth = 2.dp,
-                    color = palette.accent
-                )
-            }
             creationStatus?.let { status ->
                 Surface(
                     color = palette.raised,
-                    shape = RoundedCornerShape(22.dp),
+                    shape = MaterialTheme.shapes.large,
                     shadowElevation = 4.dp,
                     modifier = Modifier.align(Alignment.Center)
                 ) {
@@ -597,9 +645,13 @@ private fun AidenWorkspaceHome(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        AidenActivityDot()
                         Spacer(Modifier.width(12.dp))
-                        Text(status, color = palette.foreground)
+                        Text(
+                            status,
+                            color = palette.foreground,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        )
                     }
                 }
             }
@@ -609,8 +661,9 @@ private fun AidenWorkspaceHome(
     if (showScheduledTasks) {
         ModalBottomSheet(
             onDismissRequest = { showScheduledTasks = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            shape = BottomSheetDefaults.ExpandedShape,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
@@ -627,7 +680,7 @@ private fun AidenWorkspaceHome(
         ModalBottomSheet(
             onDismissRequest = { showUsage = false },
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            shape = BottomSheetDefaults.ExpandedShape,
             sheetState = usageSheetState,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
@@ -643,28 +696,28 @@ private fun AidenWorkspaceHome(
         ModalBottomSheet(
             onDismissRequest = { showNewChatChoices = false },
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            shape = BottomSheetDefaults.ExpandedShape
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
             ) {
-                Text("New Workspace Chat", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.workspace_home_new_chat_cd), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
                 AidenNewChatChoice(
-                    "Existing Workspace",
-                    "Choose a workspace and open a new chat",
+                    stringResource(R.string.workspace_home_choice_existing),
+                    stringResource(R.string.workspace_home_choice_existing_detail),
                     Icons.Outlined.FolderOpen,
                     enabled = activeWorkspaces.isNotEmpty()
                 ) {
                     showNewChatChoices = false
                     showExistingWorkspacePicker = true
                 }
-                AidenNewChatChoice("New Workspace", "Create a reusable workspace and its first chat", Icons.Outlined.AddComment) {
+                AidenNewChatChoice(stringResource(R.string.workspace_menu_new), stringResource(R.string.workspace_home_choice_new_detail), Icons.Outlined.AddComment) {
                     showNewChatChoices = false
                     workspaceName = ""
                     showNewWorkspaceDialog = true
                 }
-                AidenNewChatChoice("Managed Scratch Workspace", "Create an isolated scratch workspace and chat", Icons.Outlined.FolderSpecial) {
+                AidenNewChatChoice(stringResource(R.string.workspace_home_choice_scratch), stringResource(R.string.workspace_home_choice_scratch_detail), Icons.Outlined.FolderSpecial) {
                     showNewChatChoices = false
                     showScratchConfirmation = true
                 }
@@ -675,27 +728,40 @@ private fun AidenWorkspaceHome(
     if (showExistingWorkspacePicker) {
         AlertDialog(
             onDismissRequest = { showExistingWorkspacePicker = false },
-            title = { Text("Existing Workspace") },
+            title = { Text(stringResource(R.string.workspace_home_choice_existing)) },
             text = {
-                Column {
-                    activeWorkspaces.forEach { workspace ->
-                        Surface(
+                AidenConnectedColumn(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    activeWorkspaces.forEachIndexed { index, workspace ->
+                        AidenGroupCard(
+                            index = index,
+                            count = activeWorkspaces.size,
                             onClick = {
                                 showExistingWorkspacePicker = false
                                 createChat(workspace)
                             },
-                            color = Color.Transparent,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                         ) {
-                            Text(workspace.name, modifier = Modifier.padding(horizontal = 10.dp, vertical = 14.dp))
+                            Icon(
+                                Icons.Outlined.FolderOpen,
+                                contentDescription = null,
+                                tint = palette.accent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                workspace.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { showExistingWorkspacePicker = false }) { Text("Cancel") } },
-            containerColor = palette.canvas
+            dismissButton = { AidenDialogDismissButton(onClick = { showExistingWorkspacePicker = false }) },
+            shape = AidenShape.Dialog,
+            containerColor = palette.raised
         )
     }
     if (showNewWorkspaceDialog) {
@@ -707,7 +773,7 @@ private fun AidenWorkspaceHome(
                 if (chatCreationBlocked) {
                     scope.launch {
                         snackbarHostState.showSnackbar(
-                            chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                            chatLoadErrorMessage ?: resources.getString(R.string.workspace_home_chats_still_loading)
                         )
                     }
                     return@AidenWorkspaceNameDialog
@@ -715,14 +781,14 @@ private fun AidenWorkspaceHome(
                 val name = workspaceName.trim()
                 if (name.isEmpty()) return@AidenWorkspaceNameDialog
                 showNewWorkspaceDialog = false
-                creationStatus = "Creating workspace…"
+                creationStatus = resources.getString(R.string.workspace_home_creating_workspace)
                 scope.launch {
                     try {
                         val workspace = coordinator.createWorkspace(AidenWorkspaceCreate.Folderless(name = name))
-                        createChat(workspace, "Opening chat…")
+                        createChat(workspace, resources.getString(R.string.workspace_home_opening_chat))
                     } catch (error: Exception) {
                         creationStatus = null
-                        snackbarHostState.showSnackbar(error.message ?: "Aiden couldn't create the workspace.")
+                        snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_create_failed))
                     }
                 }
             }
@@ -731,36 +797,37 @@ private fun AidenWorkspaceHome(
     if (showScratchConfirmation) {
         AlertDialog(
             onDismissRequest = { showScratchConfirmation = false },
-            title = { Text("Managed Scratch Workspace") },
-            text = { Text("Create an isolated managed workspace and open its first chat?") },
+            title = { Text(stringResource(R.string.workspace_home_choice_scratch)) },
+            text = { Text(stringResource(R.string.workspace_home_scratch_body)) },
             confirmButton = {
-                Button(
+                AidenDialogConfirmButton(
+                    text = stringResource(R.string.action_create),
                     onClick = {
                         if (chatCreationBlocked) {
                             scope.launch {
                                 snackbarHostState.showSnackbar(
-                                    chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                                    chatLoadErrorMessage ?: resources.getString(R.string.workspace_home_chats_still_loading)
                                 )
                             }
-                            return@Button
+                            return@AidenDialogConfirmButton
                         }
                         showScratchConfirmation = false
-                        creationStatus = "Preparing scratch workspace…"
+                        creationStatus = resources.getString(R.string.workspace_home_preparing_scratch)
                         scope.launch {
                             try {
                                 val workspace = coordinator.createWorkspace(AidenWorkspaceCreate.Scratch())
-                                createChat(workspace, "Opening chat…")
+                                createChat(workspace, resources.getString(R.string.workspace_home_opening_chat))
                             } catch (error: Exception) {
                                 creationStatus = null
-                                snackbarHostState.showSnackbar(error.message ?: "Aiden couldn't create the scratch workspace.")
+                                snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_home_create_scratch_failed))
                             }
                         }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                ) { Text("Create") }
+                    }
+                )
             },
-            dismissButton = { TextButton(onClick = { showScratchConfirmation = false }) { Text("Cancel") } },
-            containerColor = palette.canvas
+            dismissButton = { AidenDialogDismissButton(onClick = { showScratchConfirmation = false }) },
+            shape = AidenShape.Dialog,
+            containerColor = palette.raised
         )
     }
 }
@@ -773,12 +840,67 @@ internal fun AidenWorkspaceChatLoadErrorState(
 ) {
     AidenEmptyState(
         icon = Icons.Outlined.WifiOff,
-        title = "Chats Couldn't Load",
+        title = stringResource(R.string.workspace_home_chats_load_failed_title),
         body = message,
         modifier = modifier.semantics { error(message) },
         action = {
-            Button(onClick = onRetry) { Text("Try Again") }
+            Button(onClick = onRetry) { Text(stringResource(R.string.action_try_again)) }
         }
+    )
+}
+
+/** A compact refresh failure shown above saved rows instead of replacing them. */
+@Composable
+internal fun AidenWorkspaceInlineRefreshError(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = AidenUi.ScreenGutter, vertical = 4.dp)
+            .semantics { error(message) }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
+        ) {
+            Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onRetry) { Text(stringResource(R.string.action_retry), color = palette.accent) }
+        }
+    }
+}
+
+/**
+ * The Workspace home list shows saved rows whenever it has any, placeholders only while
+ * a first read is pending, and the empty or error state once reads have settled.
+ */
+internal fun aidenWorkspaceHomeListPresentation(
+    projectionIsEmpty: Boolean,
+    isSearching: Boolean,
+    isLoading: Boolean,
+    connectionState: AidenConnectionState,
+    hasCompletedWorkspaceRefresh: Boolean,
+    chatListLoadState: AidenChatListLoadState
+): AidenReadPresentation {
+    // A search that matches nothing is an answer, not a pending read.
+    if (isSearching) return if (projectionIsEmpty) AidenReadPresentation.EMPTY else AidenReadPresentation.CONTENT
+    val readsSettled = when (connectionState) {
+        AidenConnectionState.OFFLINE, AidenConnectionState.NEEDS_PAIRING -> true
+        AidenConnectionState.CONNECTING -> false
+        AidenConnectionState.CONNECTED -> hasCompletedWorkspaceRefresh &&
+            chatListLoadState != AidenChatListLoadState.UNRESOLVED
+    }
+    return AidenReadPresentation.of(
+        hasContent = !projectionIsEmpty,
+        isFetching = isLoading,
+        hasSettled = readsSettled,
+        failed = chatListLoadState == AidenChatListLoadState.FAILED
     )
 }
 
@@ -786,6 +908,7 @@ internal fun AidenWorkspaceChatLoadErrorState(
 private fun AidenWorkspaceHomeHeader(
     isSearching: Boolean,
     searchQuery: String,
+    connectionState: AidenConnectionState,
     onSearchQueryChanged: (String) -> Unit,
     onBeginSearch: () -> Unit,
     onEndSearch: () -> Unit,
@@ -793,42 +916,186 @@ private fun AidenWorkspaceHomeHeader(
     onOpenSettings: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp)
-    ) {
-        if (!isSearching) {
-            Box(modifier = Modifier.size(68.dp), contentAlignment = Alignment.CenterStart) { productSwitcher() }
-            Spacer(Modifier.weight(1f))
-            Surface(color = palette.raised, shape = RoundedCornerShape(28.dp), shadowElevation = 2.dp) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onBeginSearch, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Outlined.Search, "Search Workspace chats")
-                    }
-                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Outlined.Person, "Profile and settings", tint = palette.accent)
-                    }
-                }
+    val reduceMotion = aidenReduceMotion()
+    val trailingEdge = if (LocalLayoutDirection.current == LayoutDirection.Rtl) 0f else 1f
+    AnimatedContent(
+        targetState = isSearching,
+        transitionSpec = {
+            val origin = TransformOrigin(trailingEdge, 0.5f)
+            (fadeIn(AidenMotion.nonSpatial(reduceMotion)) +
+                scaleIn(AidenMotion.spatial(reduceMotion), initialScale = 0.92f, transformOrigin = origin)) togetherWith
+                (fadeOut(AidenMotion.nonSpatial(reduceMotion)) +
+                    scaleOut(AidenMotion.spatial(reduceMotion), targetScale = 0.96f, transformOrigin = origin)) using
+                SizeTransform(clip = false) { _, _ -> AidenMotion.spatial(reduceMotion) }
+        },
+        contentAlignment = Alignment.CenterEnd,
+        label = "WorkspaceHeaderSearchMorph",
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.canvas)
+    ) { searching ->
+        if (!searching) {
+            AidenProductTopBar(
+                title = stringResource(R.string.workspace_directory_title),
+                connectionState = connectionState,
+                productSwitcher = productSwitcher
+            ) {
+                AidenProductTopBarAction(
+                    icon = Icons.Outlined.Search,
+                    contentDescription = stringResource(R.string.workspace_home_search_cd),
+                    onClick = onBeginSearch
+                )
+                AidenProductTopBarAction(
+                    icon = Icons.Outlined.Person,
+                    contentDescription = stringResource(R.string.workspace_home_profile_cd),
+                    onClick = onOpenSettings,
+                    tint = palette.accent
+                )
             }
         } else {
-            Surface(
-                color = palette.raised,
-                shape = RoundedCornerShape(28.dp),
-                modifier = Modifier.fillMaxWidth().height(54.dp)
+            AidenWorkspaceSearchField(
+                query = searchQuery,
+                onQueryChanged = onSearchQueryChanged,
+                onClose = onEndSearch
+            )
+        }
+    }
+}
+
+@Composable
+private fun AidenWorkspaceSearchField(
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val focusRequester = remember { FocusRequester() }
+    var focused by remember { mutableStateOf(false) }
+    val fill by animateColorAsState(
+        targetValue = if (focused) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "WorkspaceSearchFill"
+    )
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(AidenProductTopBarHeight)
+            .padding(horizontal = 12.dp)
+    ) {
+        Surface(
+            color = fill,
+            shape = CircleShape,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 16.dp, end = 4.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 14.dp)) {
-                    Icon(Icons.Outlined.Search, null, tint = palette.secondary)
-                    Spacer(Modifier.width(10.dp))
-                    BasicTextField(
-                        value = searchQuery,
-                        onValueChange = onSearchQueryChanged,
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground),
-                        cursorBrush = SolidColor(palette.accent),
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = onEndSearch) { Icon(Icons.Outlined.Close, "Close search") }
-                }
+                Icon(Icons.Outlined.Search, null, tint = palette.secondary)
+                Spacer(Modifier.width(10.dp))
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChanged,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground),
+                    cursorBrush = SolidColor(palette.accent),
+                    decorationBox = { innerTextField ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (query.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.workspace_home_search_placeholder),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = palette.secondary
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { focused = it.isFocused }
+                )
+                IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, stringResource(R.string.workspace_home_close_search)) }
+            }
+        }
+    }
+}
+
+@get:StringRes
+private val AidenWorkspaceSidebarOrganization.menuTitle: Int
+    get() = when (this) {
+        AidenWorkspaceSidebarOrganization.WORKSPACE -> R.string.workspace_home_organize_by_workspace
+        AidenWorkspaceSidebarOrganization.RECENT -> R.string.workspace_home_organize_recent
+    }
+
+private val AidenWorkspaceSidebarOrganization.icon: ImageVector
+    get() = when (this) {
+        AidenWorkspaceSidebarOrganization.WORKSPACE -> Icons.Outlined.FolderCopy
+        AidenWorkspaceSidebarOrganization.RECENT -> Icons.Outlined.History
+    }
+
+@Composable
+private fun AidenSidebarOrganizationMenu(
+    selected: AidenWorkspaceSidebarOrganization,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelect: (AidenWorkspaceSidebarOrganization) -> Unit
+) {
+    val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val organizeDescription = stringResource(R.string.workspace_home_organize_cd)
+    val interaction = remember { MutableInteractionSource() }
+    Box {
+        IconButton(
+            onClick = { onExpandedChange(true) },
+            interactionSource = interaction,
+            modifier = Modifier
+                .tactilePress(interaction, targetScale = 0.9f)
+                .semantics { contentDescription = organizeDescription }
+        ) {
+            AnimatedContent(
+                targetState = selected,
+                transitionSpec = {
+                    (fadeIn(AidenMotion.nonSpatial(reduceMotion)) +
+                        scaleIn(AidenMotion.spatial(reduceMotion), initialScale = 0.6f)) togetherWith
+                        (fadeOut(AidenMotion.nonSpatial(reduceMotion)) +
+                            scaleOut(AidenMotion.spatial(reduceMotion), targetScale = 0.6f))
+                },
+                label = "SidebarOrganizationIcon"
+            ) { organization ->
+                Icon(organization.icon, contentDescription = null, tint = palette.secondary)
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+            shape = AidenShape.Snackbar,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+        ) {
+            AidenWorkspaceSidebarOrganization.entries.forEach { organization ->
+                val isSelected = organization == selected
+                DropdownMenuItem(
+                    text = { Text(stringResource(organization.menuTitle)) },
+                    leadingIcon = {
+                        Icon(
+                            organization.icon,
+                            contentDescription = null,
+                            tint = if (isSelected) palette.accent else palette.secondary
+                        )
+                    },
+                    trailingIcon = {
+                        if (isSelected) {
+                            Icon(Icons.Outlined.Check, contentDescription = stringResource(R.string.state_selected), tint = palette.accent)
+                        }
+                    },
+                    onClick = { onSelect(organization) }
+                )
             }
         }
     }
@@ -836,33 +1103,47 @@ private fun AidenWorkspaceHomeHeader(
 
 @Composable
 private fun AidenWorkspaceNavigationRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    index: Int,
+    count: Int,
+    icon: ImageVector,
     title: String,
     enabled: Boolean = true,
     showsChevron: Boolean = true,
     onClick: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    Surface(
+    AidenGroupCard(
+        index = index,
+        count = count,
         onClick = onClick,
         enabled = enabled,
-        color = Color.Transparent,
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp)) {
-            Icon(icon, null, tint = if (enabled) palette.accent else palette.secondary.copy(alpha = .45f), modifier = Modifier.size(24.dp))
-            Spacer(Modifier.width(16.dp))
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = if (enabled) palette.foreground else palette.secondary,
-                modifier = Modifier.weight(1f)
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(36.dp)
+                .background(
+                    if (enabled) palette.accent.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    AidenShape.Button
+                )
+        ) {
+            Icon(
+                icon,
+                null,
+                tint = if (enabled) palette.accent else palette.secondary.copy(alpha = .45f),
+                modifier = Modifier.size(20.dp)
             )
-            if (showsChevron) {
-                Icon(Icons.Outlined.ArrowForwardIos, null, tint = palette.secondary, modifier = Modifier.size(14.dp))
-            }
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (enabled) palette.foreground else palette.secondary,
+            modifier = Modifier.weight(1f)
+        )
+        if (showsChevron) {
+            Icon(Icons.AutoMirrored.Outlined.ArrowForwardIos, null, tint = palette.secondary, modifier = Modifier.size(14.dp))
         }
     }
 }
@@ -879,35 +1160,46 @@ internal fun AidenWorkspaceSidebarSectionRow(
     onRevealAllChats: () -> Unit = {}
 ) {
     val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 0f else if (rtl) 90f else -90f,
+        animationSpec = AidenMotion.spatial(reduceMotion),
+        label = "WorkspaceDisclosureChevron"
+    )
     val visibleChats = if (revealsAllChats) {
         section.chats
     } else {
         section.chats.take(AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT)
     }
     val remainingChatCount = section.chats.size - visibleChats.size
+    val disclosureState = stringResource(if (expanded) R.string.state_expanded else R.string.state_collapsed)
     Column(Modifier.fillMaxWidth()) {
         Surface(
             onClick = onToggle,
             color = Color.Transparent,
-            shape = RoundedCornerShape(18.dp),
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 1.dp)
                 .testTag("workspace_disclosure_${section.workspace.id}")
                 .semantics {
-                    stateDescription = if (expanded) "Expanded" else "Collapsed"
+                    stateDescription = disclosureState
                 }
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp)
             ) {
-                Text(
-                    if (expanded) "⌄" else "›",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = palette.secondary,
-                    modifier = Modifier.width(18.dp)
+                Icon(
+                    Icons.Outlined.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = palette.secondary,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .graphicsLayer { rotationZ = chevronRotation }
                 )
+                Spacer(Modifier.width(4.dp))
                 Icon(
                     Icons.Outlined.FolderOpen,
                     contentDescription = null,
@@ -925,71 +1217,85 @@ internal fun AidenWorkspaceSidebarSectionRow(
                     modifier = Modifier.weight(1f)
                 )
                 if (section.chats.isNotEmpty()) {
-                    Text(
-                        section.chats.size.toString(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = palette.secondary
-                    )
-                }
-            }
-        }
-
-        if (expanded) {
-            visibleChats.forEach { chat ->
-                key(chat.id) {
-                    AidenWorkspaceChatRow(
-                        chat = chat,
-                        workspaceName = section.workspace.name,
-                        showsWorkspaceName = false,
-                        indented = true,
-                        onClick = { onNavigateToChat(chat.id) }
-                    )
-                }
-            }
-            if (section.chats.isEmpty()) {
-                Surface(
-                    onClick = onCreateChat,
-                    enabled = canCreateChat,
-                    color = Color.Transparent,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = CircleShape
                     ) {
-                        Icon(
-                            Icons.Outlined.AddComment,
-                            contentDescription = null,
-                            tint = palette.secondary,
-                            modifier = Modifier.size(19.dp)
-                        )
-                        Spacer(Modifier.width(10.dp))
                         Text(
-                            "New chat",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = palette.secondary
+                            section.chats.size.toString(),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.secondary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
                 }
             }
-            if (remainingChatCount > 0) {
-                Surface(
-                    onClick = onRevealAllChats,
-                    color = Color.Transparent,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
-                ) {
-                    Text(
-                        "Show $remainingChatCount more",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = palette.secondary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
-                    )
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(AidenMotion.spatial(reduceMotion)) + fadeIn(AidenMotion.nonSpatial(reduceMotion)),
+            exit = shrinkVertically(AidenMotion.spatial(reduceMotion)) + fadeOut(AidenMotion.nonSpatial(reduceMotion))
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                visibleChats.forEach { chat ->
+                    key(chat.id) {
+                        AidenWorkspaceChatRow(
+                            chat = chat,
+                            workspaceName = section.workspace.name,
+                            showsWorkspaceName = false,
+                            indented = true,
+                            onClick = { onNavigateToChat(chat.id) }
+                        )
+                    }
+                }
+                if (section.chats.isEmpty()) {
+                    Surface(
+                        onClick = onCreateChat,
+                        enabled = canCreateChat,
+                        color = Color.Transparent,
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.AddComment,
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(19.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                stringResource(R.string.workspace_home_new_chat),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = palette.secondary
+                            )
+                        }
+                    }
+                }
+                if (remainingChatCount > 0) {
+                    Surface(
+                        onClick = onRevealAllChats,
+                        color = Color.Transparent,
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
+                    ) {
+                        Text(
+                            pluralStringResource(R.plurals.workspace_home_show_more, remainingChatCount, remainingChatCount),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = palette.secondary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1008,7 +1314,7 @@ private fun AidenWorkspaceChatRow(
     Surface(
         onClick = onClick,
         color = Color.Transparent,
-        shape = RoundedCornerShape(18.dp),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
             .padding(
@@ -1022,9 +1328,17 @@ private fun AidenWorkspaceChatRow(
             verticalAlignment = Alignment.Top,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
         ) {
+            if (chat.forkedFrom != null) {
+                Icon(
+                    Icons.AutoMirrored.Filled.CallSplit,
+                    contentDescription = stringResource(R.string.workspace_home_forked_chat_cd),
+                    tint = palette.secondary,
+                    modifier = Modifier.padding(top = 3.dp, end = 6.dp).size(16.dp)
+                )
+            }
             Column(Modifier.weight(1f)) {
                 Text(
-                    chat.title.ifBlank { "New Chat" },
+                    chat.title.ifBlank { stringResource(R.string.workspace_new_chat) },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
                     color = palette.foreground,
@@ -1059,7 +1373,7 @@ private fun AidenNewChatChoice(
     onClick: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp)) {
             Icon(icon, null, tint = if (enabled) palette.foreground else palette.secondary.copy(alpha = .45f))
             Spacer(Modifier.width(14.dp))
@@ -1079,23 +1393,33 @@ private fun AidenWorkspaceNameDialog(
     onCreate: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    var focused by remember { mutableStateOf(false) }
+    val fieldColor by animateColorAsState(
+        targetValue = if (focused) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "WorkspaceNameFieldFill"
+    )
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New Workspace") },
+        title = { Text(stringResource(R.string.workspace_menu_new)) },
         text = {
-            Surface(color = palette.raised, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().height(54.dp)) {
+            Surface(color = fieldColor, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().height(54.dp)) {
                 BasicTextField(
                     value = name,
                     onValueChange = onNameChanged,
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground),
                     cursorBrush = SolidColor(palette.accent),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = 16.dp)
+                        .onFocusChanged { focused = it.isFocused }
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onCreate, enabled = name.trim().isNotEmpty()) { Text("Create") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        containerColor = palette.canvas
+        confirmButton = { AidenDialogConfirmButton(text = stringResource(R.string.action_create), onClick = onCreate, enabled = name.trim().isNotEmpty()) },
+        dismissButton = { AidenDialogDismissButton(onClick = onDismiss) },
+        shape = AidenShape.Dialog,
+        containerColor = palette.raised
     )
 }

@@ -1,0 +1,3 @@
+# Pi 1.0 plan status correction
+
+PR302 review found that the plan header/index and remaining-acceptance checkpoint still listed custom MCP authorization-server metadata overrides as unfinished. Reconciled them with the implemented settings field, saved server configuration, bounded metadata loader/public SDK discovery-state integration and focused tests. The provider/MCP OAuth progress item is complete for PR302; model-operation, warming and integrated acceptance lanes remain active at that branch. Downstream branches retain their more advanced feature and acceptance status. Documentation only; relative links and branch-specific status checked, no hosted retries.

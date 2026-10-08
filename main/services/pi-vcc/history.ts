@@ -1,6 +1,7 @@
 import { VccError } from "./errors.js";
 import { createHash } from "node:crypto";
-import type { AgentMessage, CompactionPreparation } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { CompactionPreparation } from "../pi-legacy-harness.js";
 import type { Message } from "@earendil-works/pi-ai";
 import { sanitizeCredentialText } from "../../../renderer/shared/subagent-safe-text.js";
 import type { PiSessionEntry } from "../pi-session-port.js";

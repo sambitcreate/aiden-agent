@@ -21,6 +21,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { patchPiOAuthBranding } from "../../../scripts/patch-pi-oauth-branding.mjs";
 import { vendorGenerativeUiLibraries } from "../../../scripts/vendor-generative-ui-libs.mjs";
 
 const pkgDir = dirname(fileURLToPath(import.meta.url)) + "/..";
@@ -46,6 +47,7 @@ const piAiPkg = [
 if (piAiPkg === undefined) {
 	throw new Error("Could not locate @earendil-works/pi-ai. Run npm install in packages/cli first.");
 }
+await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
@@ -362,6 +364,8 @@ mkdirSync(appDir, { recursive: true });
 // instead of once per worker.
 const lazyChunkDir = "chunks";
 const lazyEntryPoints = {
+	meta: join(piAiPkg, "dist", "auth", "oauth", "meta.js"),
+	"openai-chatgpt": join(piAiPkg, "dist", "auth", "oauth", "openai-chatgpt.js"),
 	anthropic: join(piAiPkg, "dist", "auth", "oauth", "anthropic.js"),
 	"bedrock-converse-stream": join(piAiPkg, "dist", "api", "bedrock-converse-stream.js"),
 	"github-copilot": join(piAiPkg, "dist", "auth", "oauth", "github-copilot.js"),
@@ -390,9 +394,21 @@ const mainResult = await build({
 	splitting: true,
 });
 
+// Pi 1.0.3 snapshots this worker into a data: URL so running sessions survive
+// an update. It must be self-contained and cannot use createRequire(import.meta.url).
+const codemodeWorkerResult = await build({
+  ...commonBuildOptions(),
+  banner: {},
+  entryPoints: [join(piAgentPkg, "dist", "extensions", "codemode", "worker.js")],
+  outfile: join(appDir, lazyChunkDir, "codemode-worker.js"),
+  splitting: false,
+});
+validateExternalImports([codemodeWorkerResult.metafile]);
+
 // Every output that carries one of the resolving modules must sit in the
 // lazy entries' directory, or a variable import resolves to a missing file.
 for (const resolver of [
+	"pi-coding-agent/dist/config.js",
 	"pi-ai/dist/api/bedrock-converse-stream.lazy.js",
 	"pi-ai/dist/auth/oauth/load.js",
 	"pi-coding-agent/dist/utils/image-resize.js",

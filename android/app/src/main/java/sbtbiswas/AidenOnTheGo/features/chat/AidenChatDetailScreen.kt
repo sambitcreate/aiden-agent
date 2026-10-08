@@ -27,6 +27,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -70,22 +75,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenIsCommittedDestination
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenShowsUpNavigation
+import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbSize
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbState
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.ThinkingOrb
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import sbtbiswas.AidenOnTheGo.features.shared.aidenModelDisplayLabel
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.aidenActivityMarkForTool
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import sbtbiswas.AidenOnTheGo.ui.theme.exponentialVerticalScrim
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.io.File
 import kotlin.math.abs
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 enum class MessageClusterPosition {
     SINGLE, FIRST, MIDDLE, LAST
@@ -100,10 +116,13 @@ fun AidenChatDetailScreen(
     draftStore: AidenChatDraftStore,
     voiceInputStore: AidenVoiceInputStore,
     liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
+    networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     startVoiceOnOpen: Boolean = false,
+    onNavigateToChat: (String) -> Unit = {},
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -118,7 +137,8 @@ fun AidenChatDetailScreen(
             coordinator,
             chatCache,
             draftStore,
-            liveNotificationManager
+            liveNotificationManager,
+            networkAvailability
         )
     )
 
@@ -131,6 +151,7 @@ fun AidenChatDetailScreen(
     val pendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
     val isStopping by viewModel.isStopping.collectAsStateWithLifecycle()
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
+    val runInputMode by viewModel.runInputMode.collectAsStateWithLifecycle()
     val runInputReceipt by viewModel.runInputReceipt.collectAsStateWithLifecycle()
     val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsStateWithLifecycle()
     val pendingQuestion by viewModel.pendingQuestion.collectAsStateWithLifecycle()
@@ -146,6 +167,9 @@ fun AidenChatDetailScreen(
     val selectedThinkingLevel by viewModel.selectedThinkingLevel.collectAsStateWithLifecycle()
     val composerSuggestions by viewModel.composerSuggestions.collectAsStateWithLifecycle()
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
+    val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
+    val isLoadingEarlierMessages by viewModel.isLoadingEarlierMessages.collectAsStateWithLifecycle()
+    val isLoadingTranscript by viewModel.isLoading.collectAsStateWithLifecycle()
     val voiceInputMode by voiceInputStore.mode.collectAsStateWithLifecycle()
     val taskProgress by viewModel.taskProgress.collectAsStateWithLifecycle()
     val currentAgentRoster by viewModel.agentRoster.collectAsStateWithLifecycle()
@@ -158,6 +182,20 @@ fun AidenChatDetailScreen(
     val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
     val canReadTaskProgress = viewModel.canReadTaskProgress
     val canReadAgentRoster = viewModel.canReadAgentRoster
+    val isForking by viewModel.isForking.collectAsStateWithLifecycle()
+    val forkNavigation by viewModel.forkNavigation.collectAsStateWithLifecycle()
+    val forkSource by viewModel.forkSource.collectAsStateWithLifecycle()
+    val isUpdatingForkSummary by viewModel.isUpdatingForkSummary.collectAsStateWithLifecycle()
+    var forkWithSummaryMessageId by remember(chatId) { mutableStateOf<String?>(null) }
+    val currentOnNavigateToChat by rememberUpdatedState(onNavigateToChat)
+
+    // A created fork opens in place of the menu that asked for it.
+    LaunchedEffect(forkNavigation) {
+        val forkId = forkNavigation ?: return@LaunchedEffect
+        forkWithSummaryMessageId = null
+        viewModel.consumeForkNavigation(forkId)
+        currentOnNavigateToChat(forkId)
+    }
 
     val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
     var followLatest by remember(listState) {
@@ -181,9 +219,7 @@ fun AidenChatDetailScreen(
     var pendingVoiceStart by remember { mutableStateOf(false) }
     var requestedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     var progressSheet by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedAgent by remember { mutableStateOf<AidenChatAgent?>(null) }
     var selectTextFor by remember { mutableStateOf<String?>(null) }
-    var showRedirectConfirm by remember { mutableStateOf(false) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
     val currentChat by rememberUpdatedState(chat)
@@ -209,12 +245,16 @@ fun AidenChatDetailScreen(
         }
     }
 
+    // Foreground means resumed and committed: a chat revealed under a predictive-back
+    // gesture must not be marked read or have its notification quieted until the pop lands.
+    val isCommittedDestination = LocalAidenIsCommittedDestination.current
+    val committed by rememberUpdatedState(isCommittedDestination)
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> viewModel.startProgressObservation()
                 Lifecycle.Event.ON_STOP -> viewModel.stopProgressObservation()
-                Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(true)
+                Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(committed)
                 Lifecycle.Event.ON_PAUSE -> {
                     viewModel.setChatForegrounded(false)
                     viewModel.flushDraft()
@@ -226,9 +266,6 @@ fun AidenChatDetailScreen(
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             viewModel.startProgressObservation()
         }
-        viewModel.setChatForegrounded(
-            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        )
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.setChatForegrounded(false)
@@ -236,11 +273,15 @@ fun AidenChatDetailScreen(
             viewModel.flushDraft()
         }
     }
+    LaunchedEffect(viewModel, isCommittedDestination) {
+        viewModel.setChatForegrounded(
+            isCommittedDestination && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        )
+    }
 
     LaunchedEffect(serverInfo) {
         viewModel.reconcileProgressAccess()
         if (progressSheet == "tasks" && !viewModel.canReadTaskProgress) progressSheet = null
-        if (progressSheet == "agents" && !viewModel.canReadAgentRoster) progressSheet = null
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
             (viewModel.canReadTaskProgress || viewModel.canReadAgentRoster)
         ) {
@@ -325,11 +366,6 @@ fun AidenChatDetailScreen(
         }
     }
 
-    // The destructive confirm must not outlive the run it would interrupt.
-    LaunchedEffect(isStreaming) {
-        if (!isStreaming) showRedirectConfirm = false
-    }
-
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(10),
         onResult = preparePickedUris
@@ -407,33 +443,53 @@ fun AidenChatDetailScreen(
                 title = {
                     Column {
                         Text(
-                            text = chat?.title?.ifEmpty { "Chat" } ?: "Chat",
+                            text = chat?.title?.ifEmpty { stringResource(R.string.chat_title_fallback) } ?: stringResource(R.string.chat_title_fallback),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
-                        chat?.modelId?.let { model ->
-                            Text(
-                                text = model,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.secondary,
-                                maxLines = 1
-                            )
+                        // Workspace chats show the model the next turn will use; Bot
+                        // chats keep their Bot-owned model.
+                        val subtitleProviderId = if (chat?.isBotChat == true) chat?.providerId else selectedProviderId ?: chat?.providerId
+                        val subtitleModelId = if (chat?.isBotChat == true) chat?.modelId else selectedModelId ?: chat?.modelId
+                        subtitleModelId?.let { modelId ->
+                            val providers = modelCatalog?.providers.orEmpty()
+                            val provider = providers.firstOrNull { it.id == subtitleProviderId }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (subtitleProviderId != null) {
+                                    AidenProviderIcon(
+                                        providerId = subtitleProviderId,
+                                        providerLabel = provider?.label ?: subtitleProviderId,
+                                        modelId = modelId,
+                                        artwork = provider?.artwork,
+                                        size = 14.dp,
+                                        modifier = Modifier.clearAndSetSemantics {}
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(
+                                    text = aidenModelDisplayLabel(providers, subtitleProviderId, modelId),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = palette.secondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                    if (LocalAidenShowsUpNavigation.current) IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
                     if (isStreaming) {
                         IconButton(
                             onClick = { viewModel.cancelTurn() },
-                            enabled = viewModel.canControlCurrentRun && !isStopping
+                            enabled = viewModel.canStopCurrentRun && !isStopping
                         ) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
+                            Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.action_stop), tint = palette.danger)
                         }
                     }
                 },
@@ -452,13 +508,14 @@ fun AidenChatDetailScreen(
                     // Insets consumption contributes only the IME delta beyond the
                     // navigation bar and keeps the whole composer above the keyboard.
                     .imePadding()
+                    .aidenReadableWidth()
                     .zIndex(1f)
             ) {
                 // Pending Approval Banner
                 AnimatedVisibility(
                     visible = pendingApproval != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
                 ) {
                     pendingApproval?.let { approval ->
                         val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
@@ -467,9 +524,9 @@ fun AidenChatDetailScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp)),
+                                .shadow(elevation = 8.dp, shape = MaterialTheme.shapes.extraLarge),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(16.dp)
+                            shape = MaterialTheme.shapes.extraLarge
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -496,77 +553,32 @@ fun AidenChatDetailScreen(
                                 if (!approval.canRespond) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "This paired device can review approvals but cannot respond.",
+                                        text = stringResource(R.string.chat_approval_review_only),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
                                 } else if (isAutomation && !approval.hasRequiredWriteCapability) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Schedule write access is required to approve this task.",
+                                        text = stringResource(R.string.chat_approval_schedule_write_required),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
                                 } else if (requiresDesktopConfirmation) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.",
+                                        text = stringResource(R.string.chat_approval_confirm_on_desktop),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
                                 }
                                 if (approval.canRespond) {
                                     Spacer(modifier = Modifier.height(10.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        Button(
-                                            onClick = { viewModel.respondToApproval(AidenApprovalDecision.DENY, approval.id) },
-                                            enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Text(if (isAutomation) "Cancel" else "Deny", fontWeight = FontWeight.SemiBold)
-                                        }
-                                        val broaderScopes = approval.scopes.filter { it != AidenApprovalScope.ONCE }
-                                        if (approval.canAllow && broaderScopes.isNotEmpty()) {
-                                            var scopeMenuOpen by remember(approval.id) { mutableStateOf(false) }
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Box {
-                                                IconButton(
-                                                    onClick = { scopeMenuOpen = true },
-                                                    enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping
-                                                ) {
-                                                    Icon(Icons.Default.MoreVert, contentDescription = "More allow options")
-                                                }
-                                                DropdownMenu(
-                                                    expanded = scopeMenuOpen,
-                                                    onDismissRequest = { scopeMenuOpen = false }
-                                                ) {
-                                                    broaderScopes.forEach { scope ->
-                                                        DropdownMenuItem(
-                                                            text = { Text(AidenApprovalPresentation.scopeTitle(scope)) },
-                                                            onClick = {
-                                                                scopeMenuOpen = false
-                                                                viewModel.respondToApproval(AidenApprovalDecision.ALLOW, approval.id, scope)
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if (approval.canAllow) {
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Button(
-                                                onClick = { viewModel.respondToApproval(AidenApprovalDecision.ALLOW, approval.id) },
-                                                enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
-                                                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                                shape = RoundedCornerShape(10.dp)
-                                            ) {
-                                                Text(if (isAutomation) "Approve task" else "Allow once", color = Color.White, fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                    }
+                                    AidenApprovalActions(
+                                        approval = approval,
+                                        enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
+                                        onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) }
+                                    )
                                 }
                             }
                         }
@@ -576,8 +588,8 @@ fun AidenChatDetailScreen(
                 // Pending Question Banner
                 AnimatedVisibility(
                     visible = pendingQuestion != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
                 ) {
                     pendingQuestion?.let { question ->
                         key(question.id) {
@@ -596,8 +608,8 @@ fun AidenChatDetailScreen(
                 // Error Banner
                 AnimatedVisibility(
                     visible = presentedError != null || readAloud.error != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = aidenBannerEnter(reduceMotion),
+                    exit = aidenBannerExit(reduceMotion)
                 ) {
                     (presentedError ?: readAloud.error)?.let { err ->
                         Card(
@@ -605,7 +617,7 @@ fun AidenChatDetailScreen(
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 4.dp),
                             colors = CardDefaults.cardColors(containerColor = palette.danger.copy(alpha = 0.12f)),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -617,6 +629,44 @@ fun AidenChatDetailScreen(
                             }
                         }
                     }
+                }
+
+                // Keeps the last live values while collapsing so the pill never empties mid-exit.
+                AidenComposerReveal(
+                    value = readAloud.activeMessageId?.let {
+                        AidenReadAloudMiniPlayerState(
+                            phase = readAloud.phase,
+                            label = readAloud.progressLabel,
+                            progressRatio = readAloud.progressRatio,
+                            totalSegments = readAloud.totalSegments
+                        )
+                    }
+                ) { state ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AidenReadAloudMiniPlayer(
+                            phase = state.phase,
+                            label = state.label,
+                            progressRatio = state.progressRatio,
+                            totalSegments = state.totalSegments,
+                            onStop = { readAloud.stop() }
+                        )
+                    }
+                }
+
+                if (viewModel.isHeldByForkSummary && (draft.isNotBlank() || pendingAttachments.isNotEmpty())) {
+                    Text(
+                        text = AidenChatForkErrors.SUMMARY_HOLD_MESSAGE,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
                 }
 
                 if (canReadTaskProgress || canReadAgentRoster) {
@@ -642,14 +692,15 @@ fun AidenChatDetailScreen(
                         viewModel.send()
                     },
                     onStop = { viewModel.cancelTurn() },
-                    canStop = viewModel.canControlCurrentRun && !isStopping,
+                    canStop = viewModel.canStopCurrentRun && !isStopping,
                     canSend = viewModel.canSend && !hasActiveStream &&
                         preparingAttachmentBatches == 0 && !isUploadingAttachment,
                     isStreaming = isStreaming,
                     showsRunInputOptions = viewModel.showsRunInputOptions,
                     canSubmitRunInput = viewModel.canSubmitRunInput,
                     onSubmitRunInput = { mode -> viewModel.submitRunInput(mode) },
-                    onRedirectRequest = { showRedirectConfirm = true },
+                    runInputMode = runInputMode,
+                    onRunInputModeChange = { mode -> viewModel.setRunInputMode(mode) },
                     runInputReceipt = runInputReceipt,
                     selectedSkill = selectedSkill,
                     onClearSkill = { viewModel.clearSelectedSkill() },
@@ -676,16 +727,13 @@ fun AidenChatDetailScreen(
                         }
                     },
                     pendingAttachments = pendingAttachments.map {
-                        if (it.kind == AidenAttachmentKind.IMAGE) {
-                            AidenAttachmentUpload.Image(name = it.name, mimeType = it.mimeType, data = "")
-                        } else {
-                            AidenAttachmentUpload.Text(name = it.name, mimeType = it.mimeType, text = "")
-                        }
+                        AidenComposerPendingAttachment(
+                            id = it.id,
+                            name = it.name,
+                            isImage = it.kind == AidenAttachmentKind.IMAGE
+                        )
                     },
-                    onRemoveAttachment = { att ->
-                        val target = pendingAttachments.firstOrNull { it.name == att.name }
-                        if (target != null) viewModel.removePendingAttachment(target.id)
-                    },
+                    onRemoveAttachment = { att -> viewModel.removePendingAttachment(att.id) },
                     onAddImage = {
                         dismissComposerKeyboard()
                         imagePickerLauncher.launch(
@@ -718,7 +766,23 @@ fun AidenChatDetailScreen(
                     onSelectModel = if (chat == null || chat?.isBotChat == true) null else { provider, model, level ->
                         viewModel.selectModel(provider.id, model.id, level)
                     },
-                    placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
+                    defaultModelRoute = modelCatalog?.defaults?.let { defaults ->
+                        val providerId = defaults["providerId"]
+                        val modelId = defaults["modelId"]
+                        if (providerId != null && modelId != null) AidenModelRoute(providerId, modelId) else null
+                    },
+                    // Recents change only on an explicit pick, which also moves the selection.
+                    recentModelRoutes = remember(selectedProviderId, selectedModelId) {
+                        coordinator.installationStore.activeInstallation?.instanceId
+                            ?.let { coordinator.modelPreferenceStore.recentRoutes(it) }
+                            .orEmpty()
+                            .mapNotNull { recent ->
+                                val providerId = recent.providerId ?: return@mapNotNull null
+                                val modelId = recent.modelId ?: return@mapNotNull null
+                                AidenModelRoute(providerId, modelId)
+                            }
+                    },
+                    placeholder = if (chat?.isBotChat == true) stringResource(R.string.chat_composer_placeholder_bot, chat?.title ?: stringResource(R.string.bot_profile_bot_fallback)) else stringResource(R.string.chat_composer_placeholder),
                     isReadOnly = false,
                     voiceErrorMessage = voiceInput.errorMessage,
                     modifier = Modifier.fillMaxWidth()
@@ -739,6 +803,12 @@ fun AidenChatDetailScreen(
         val onAskAboutMessage: ((String) -> Unit)? = if (viewModel.isReadOnlyPresentation) null else
             remember(viewModel) { { text: String -> viewModel.askAbout(text); Unit } }
         val onSelectMessageText = remember { { text: String -> selectTextFor = text } }
+        val canForkMessages = viewModel.canFork && !isForking
+        val canForkMessagesWithSummary = canForkMessages && viewModel.canForkWithSummary
+        val forkLineage = chat?.forkedFrom
+        val forkSummary = forkLineage?.summary
+        val forkSummaryAnchored = forkSummary != null &&
+            rawMessages.any { it.id == forkSummary.afterMessageId }
         val onOpenMessageUrl = remember(uriHandler, isBotChat) {
             { url: String ->
                 if (!isBotChat && AidenWorkspaceFileLink.path(url) != null) workspaceFileReference = url
@@ -747,10 +817,32 @@ fun AidenChatDetailScreen(
                 }
             }
         }
+        val forkSummaryCard: @Composable () -> Unit = {
+            forkSummary?.let { summary ->
+                AidenForkSummaryCard(
+                    summary = summary,
+                    palette = palette,
+                    busy = isUpdatingForkSummary,
+                    canManage = viewModel.canManageForkSummary,
+                    onCancel = viewModel::cancelForkSummary,
+                    onRetry = viewModel::retryForkSummary,
+                    onSkip = viewModel::skipForkSummary,
+                    body = { text ->
+                        RichFormattedMessage(
+                            text = text,
+                            palette = palette,
+                            onCopy = onCopyMessage,
+                            onOpenUrl = onOpenMessageUrl
+                        )
+                    }
+                )
+            }
+        }
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .aidenReadableWidth()
                 // Keep the transcript beneath the floating composer. The list's
                 // own bottom inset still makes the latest message fully reachable.
                 .padding(top = padding.calculateTopPadding())
@@ -764,9 +856,15 @@ fun AidenChatDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(
                     top = 16.dp,
-                    bottom = padding.calculateBottomPadding() + 12.dp
+                    bottom = padding.calculateBottomPadding() + 16.dp
                 )
             ) {
+                // Only a chat with nothing saved previews its transcript; a saved one renders
+                // at once and refreshes underneath.
+                if (chat == null && isLoadingTranscript) {
+                    item(key = "transcript_skeleton") { AidenTranscriptSkeleton() }
+                }
+
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
                 if (isStreaming) {
                     item(key = "live_stream") {
@@ -776,6 +874,8 @@ fun AidenChatDetailScreen(
                         val reasoning by viewModel.reasoning.collectAsStateWithLifecycle()
                         val tools by viewModel.tools.collectAsStateWithLifecycle()
                         val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
+                        val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
+                        val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
                         ActiveStreamingCard(
                             liveText = liveText,
                             reasoning = reasoning,
@@ -783,7 +883,9 @@ fun AidenChatDetailScreen(
                             activityTimeline = activityTimeline,
                             isBotChat = isBotChat,
                             palette = palette,
-                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages)
+                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
+                            isWaitingForNetwork = isWaitingForNetwork,
+                            pendingApprovalToolName = livePendingApproval?.toolName
                         )
                     }
                 }
@@ -794,7 +896,25 @@ fun AidenChatDetailScreen(
                 ) { index, message ->
                     val pos = calculateClusterPosition(index, reversedMessages)
                     val isLastInCluster = pos == MessageClusterPosition.LAST || pos == MessageClusterPosition.SINGLE
+                    val forkActions = remember(message.id, rawMessages, canForkMessages, canForkMessagesWithSummary) {
+                        if (!canForkMessages) return@remember null
+                        val actions = AidenMessageForkActions(
+                            onForkFromHere = if (AidenChatForkEligibility.canForkFrom(rawMessages, message.id)) {
+                                { viewModel.fork(message.id, AidenChatForkPosition.AFTER) }
+                            } else null,
+                            onForkWithSummary = if (canForkMessagesWithSummary &&
+                                AidenChatForkEligibility.canForkWithSummary(rawMessages, message.id)
+                            ) {
+                                { forkWithSummaryMessageId = message.id }
+                            } else null,
+                            onEditInFork = if (AidenChatForkEligibility.canEditInFork(rawMessages, message.id)) {
+                                { viewModel.fork(message.id, AidenChatForkPosition.BEFORE) }
+                            } else null
+                        )
+                        actions.takeUnless { it.isEmpty }
+                    }
 
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (message.role == AidenChatRole.USER) {
                         UserMessageRow(
                             message = message,
@@ -805,7 +925,8 @@ fun AidenChatDetailScreen(
                             onCopy = onCopyMessage,
                             onShare = onShareMessage,
                             onSelectText = onSelectMessageText,
-                            onAskAbout = onAskAboutMessage
+                            onAskAbout = onAskAboutMessage,
+                            forkActions = forkActions
                         )
                     } else {
                         val readAloudEligible = !isStreaming &&
@@ -829,10 +950,69 @@ fun AidenChatDetailScreen(
                             onAskAbout = onAskAboutMessage,
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
-                            onOpenUrl = onOpenMessageUrl
+                            onOpenUrl = onOpenMessageUrl,
+                            forkActions = forkActions
+                        )
+                    }
+                    // The summary stands where the copied conversation ends.
+                    if (forkSummaryAnchored && forkSummary?.afterMessageId == message.id) {
+                        forkSummaryCard()
+                    }
+                    }
+                }
+
+                // The top of the reversed transcript: where this fork came from.
+                if (forkLineage != null) {
+                    item(key = "fork_lineage") {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AidenForkLineageRow(
+                                source = forkSource ?: AidenChatForkSource.Resolving(forkLineage.chatId),
+                                palette = palette,
+                                onOpenSource = onNavigateToChat
+                            )
+                            if (!forkSummaryAnchored) forkSummaryCard()
+                        }
+                    }
+                }
+
+                // Last in reverse layout, so it sits above the oldest message.
+                // Earlier pages join the end of the list, leaving the anchored
+                // rows and the reader's position where they were.
+                if (hasOlderMessages) {
+                    item(key = "load_earlier_messages") {
+                        AidenLoadEarlierMessages(
+                            isLoading = isLoadingEarlierMessages,
+                            onClick = {
+                                followLatest = false
+                                viewModel.loadEarlierMessages()
+                            }
                         )
                     }
                 }
+            }
+
+            // Content fades into the canvas beneath the top app bar and behind the
+            // floating composer instead of ending on a hard edge.
+            Spacer(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(16.dp)
+                    .exponentialVerticalScrim(palette.canvas, startYPercentage = 1f, endYPercentage = 0f)
+            )
+            Column(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                        .exponentialVerticalScrim(palette.canvas)
+                )
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(padding.calculateBottomPadding())
+                        .background(palette.canvas)
+                )
             }
 
             // Jump to Bottom Floating Capsule Button
@@ -858,42 +1038,30 @@ fun AidenChatDetailScreen(
             ?.let { progress ->
                 AidenTaskProgressSheet(progress = progress, onDismiss = { progressSheet = null })
             }
-        "agents" -> {
-            // The sheet stays reachable for an unavailable current roster so
-            // retained earlier turns remain inspectable, and for retained
-            // history when no current roster was ever accepted.
-            val selected = selectedAgentRoster ?: currentAgentRoster
-                ?: agentRosterHistory.firstOrNull()
-            if (canReadAgentRoster && selected != null) {
-                AidenAgentRosterSheet(
-                    currentRoster = currentAgentRoster ?: selected,
-                    selectedRoster = selected,
-                    history = agentRosterHistory,
-                    onSelectTurn = { turnId ->
-                        viewModel.selectAgentRosterTurn(turnId)
-                    },
-                    onAgentClick = { agent -> selectedAgent = agent },
-                    onDismiss = { progressSheet = null }
-                )
-            }
-        }
     }
-    selectedAgent?.let { opened ->
-        // Follow the live current-turn roster so a confirmed stop (or any other
-        // update) replaces the snapshot the sheet was opened with.
-        val agent = currentAgentRoster?.agents?.firstOrNull { it.agentId == opened.agentId } ?: opened
-        val isStopping = agent.agentId in interruptingAgentIds
-        AidenAgentDetailSheet(
-            agent = agent,
-            stopControl = when {
-                isStopping -> AidenAgentStopControl.STOPPING
+    // Keep the restoration owner mounted before negotiation/roster hydration.
+    // It withholds agent content until read access is authoritatively granted.
+    val selected = selectedAgentRoster ?: currentAgentRoster ?: agentRosterHistory.firstOrNull()
+    AidenAgentRosterSheet(
+        requested = progressSheet == "agents",
+        canRead = if (serverInfo == null) null else canReadAgentRoster,
+        chatId = chatId,
+        currentRoster = currentAgentRoster ?: selected,
+        selectedRoster = selected,
+        history = agentRosterHistory,
+        onSelectTurn = { viewModel.selectAgentRosterTurn(it) },
+        instanceId = coordinator.activeInstanceId,
+        deviceId = coordinator.installationStore.activeInstallation?.deviceId,
+        stopControl = { agent ->
+            when {
+                agent.agentId in interruptingAgentIds -> AidenAgentStopControl.STOPPING
                 viewModel.canInterrupt(agent) -> AidenAgentStopControl.AVAILABLE
                 else -> AidenAgentStopControl.HIDDEN
-            },
-            onStop = { viewModel.interruptAgent(agent) },
-            onDismiss = { selectedAgent = null }
-        )
-    }
+            }
+        },
+        onStop = { viewModel.interruptAgent(it) },
+        onDismiss = { progressSheet = null }
+    )
     selectTextFor?.let { text ->
         AidenSelectTextDialog(
             text = text,
@@ -903,35 +1071,34 @@ fun AidenChatDetailScreen(
         )
     }
 
-    if (showRedirectConfirm) {
-        AlertDialog(
-            onDismissRequest = { showRedirectConfirm = false },
-            title = { Text("Redirect this run?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "Stop this run and send your message as a new request.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.secondary
+    forkWithSummaryMessageId?.let { messageId ->
+        AidenForkSummaryDialog(
+            palette = palette,
+            busy = isForking,
+            onDismiss = { forkWithSummaryMessageId = null },
+            onConfirm = { focus ->
+                forkWithSummaryMessageId = null
+                viewModel.fork(
+                    messageId = messageId,
+                    position = AidenChatForkPosition.AFTER,
+                    withSummary = true,
+                    summaryFocus = focus
                 )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showRedirectConfirm = false
-                        viewModel.redirectRun()
-                    }
-                ) {
-                    Text("Stop and send", color = palette.danger)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRedirectConfirm = false }) {
-                    Text("Cancel")
-                }
             }
         )
     }
+
 }
+
+private fun aidenBannerEnter(reduceMotion: Boolean): EnterTransition =
+    expandVertically(AidenMotion.spatial(reduceMotion), expandFrom = Alignment.Bottom) +
+        slideInVertically(AidenMotion.spatial(reduceMotion)) { it / 3 } +
+        fadeIn(AidenMotion.nonSpatial(reduceMotion))
+
+private fun aidenBannerExit(reduceMotion: Boolean): ExitTransition =
+    shrinkVertically(AidenMotion.spatial(reduceMotion), shrinkTowards = Alignment.Bottom) +
+        slideOutVertically(AidenMotion.spatial(reduceMotion)) { it / 3 } +
+        fadeOut(AidenMotion.nonSpatial(reduceMotion))
 
 private fun calculateClusterPosition(
     index: Int,
@@ -962,7 +1129,8 @@ private fun UserMessageRow(
     onCopy: (String) -> Unit,
     onShare: (String) -> Unit,
     onSelectText: (String) -> Unit,
-    onAskAbout: ((String) -> Unit)?
+    onAskAbout: ((String) -> Unit)?,
+    forkActions: AidenMessageForkActions? = null
 ) {
     val shape = when (position) {
         MessageClusterPosition.SINGLE -> RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
@@ -987,7 +1155,8 @@ private fun UserMessageRow(
                     onCopy = { onCopy(message.text) },
                     onShare = { onShare(message.text) },
                     onSelectText = { onSelectText(message.text) },
-                    onAskAbout = onAskAbout?.let { ask -> { ask(message.text) } }
+                    onAskAbout = onAskAbout?.let { ask -> { ask(message.text) } },
+                    forkActions = forkActions
                 ) {
                     Surface(
                         color = palette.accent,
@@ -999,7 +1168,7 @@ private fun UserMessageRow(
                                 Text(
                                     text = message.text,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.White
+                                    color = palette.onAccent
                                 )
                             }
                             fallbackAttachments.forEach { att ->
@@ -1008,14 +1177,14 @@ private fun UserMessageRow(
                                     Icon(
                                         Icons.Default.Attachment,
                                         contentDescription = null,
-                                        tint = Color.White,
+                                        tint = palette.onAccent,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = att.name,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = Color.White,
+                                        color = palette.onAccent,
                                         maxLines = 1
                                     )
                                 }
@@ -1056,7 +1225,8 @@ private fun AssistantMessageRow(
     onAskAbout: ((String) -> Unit)?,
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
-    onOpenUrl: (String) -> Unit
+    onOpenUrl: (String) -> Unit,
+    forkActions: AidenMessageForkActions? = null
 ) {
     val projection = if (isBotChat) {
         AidenBotReplyProjection.resolve(message.text, message.timeline, isActive = false)
@@ -1077,7 +1247,8 @@ private fun AssistantMessageRow(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
                 onSelectText = { onSelectText(displayText) },
-                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } },
+                forkActions = forkActions
             ) {
                 AidenChronologicalTranscript(
                     rows = chronologicalRows,
@@ -1109,7 +1280,7 @@ private fun AssistantMessageRow(
         if (progressText.isNotEmpty()) {
             var showProgress by remember { mutableStateOf(false) }
             Text(
-                text = if (showProgress) "Hide progress" else "Show progress",
+                text = if (showProgress) stringResource(R.string.chat_progress_hide) else stringResource(R.string.chat_progress_show),
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.accent,
                 modifier = Modifier
@@ -1119,7 +1290,7 @@ private fun AssistantMessageRow(
             if (showProgress) {
                 Surface(
                     color = palette.raised.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                 ) {
                     Text(
@@ -1138,7 +1309,8 @@ private fun AssistantMessageRow(
                 onCopy = { onCopy(displayText) },
                 onShare = { onShare(displayText) },
                 onSelectText = { onSelectText(displayText) },
-                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } }
+                onAskAbout = onAskAbout?.let { ask -> { ask(displayText) } },
+                forkActions = forkActions
             ) {
                 Surface(
                     color = Color.Transparent,
@@ -1169,7 +1341,7 @@ private fun AssistantMessageRow(
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1195,7 +1367,7 @@ private fun AssistantMessageRow(
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Text(
@@ -1205,7 +1377,7 @@ private fun AssistantMessageRow(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Can't view on this device. View in Aiden Agent.",
+                        text = stringResource(R.string.chat_artifact_unsupported),
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary,
                     )
@@ -1226,14 +1398,16 @@ private fun AssistantMessageRow(
 }
 
 @Composable
-private fun ActiveStreamingCard(
+internal fun ActiveStreamingCard(
     liveText: String,
     reasoning: String,
     tools: List<AidenLiveTool>,
     activityTimeline: AidenGenerationTimeline?,
     isBotChat: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
-    liveStart: java.time.Instant? = null
+    liveStart: java.time.Instant? = null,
+    isWaitingForNetwork: Boolean = false,
+    pendingApprovalToolName: String? = null
 ) {
     val reasoningActive = reasoning.isNotEmpty() && (
         AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
@@ -1246,7 +1420,7 @@ private fun ActiveStreamingCard(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
     ) {
@@ -1290,7 +1464,7 @@ private fun ActiveStreamingCard(
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
                     color = palette.canvas.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -1309,7 +1483,16 @@ private fun ActiveStreamingCard(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (tool in tools) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX16)
+                            AidenActivityMark(
+                                mark = aidenActivityMarkForTool(
+                                    toolName = tool.name,
+                                    awaitingApproval = tool.status == null && tool.name == pendingApprovalToolName
+                                ),
+                                size = 16.dp,
+                                // Finished tools freeze, as terminal marks do on desktop.
+                                active = tool.status == null,
+                                color = palette.foreground
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = tool.name,
@@ -1326,7 +1509,7 @@ private fun ActiveStreamingCard(
             if (visualizingLabel != null) {
                 Surface(
                     color = palette.raised,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     AidenActivityShimmerLabel(
@@ -1357,18 +1540,52 @@ private fun ActiveStreamingCard(
                     )
                     AidenStreamingCursor(palette = palette)
                 }
-            } else if (reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
+            }
+            if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
+                    AidenActivityMark(
+                        mark = AidenActivityMarkKind.TRI_STEP,
+                        size = 20.dp,
+                        color = palette.foreground
+                    )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Aiden is working...",
+                        text = stringResource(R.string.chat_working),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = palette.secondary
                     )
                 }
             }
+            }
+            // Chronological and fallback transcripts both show the pause,
+            // after whatever content the run already produced.
+            if (isWaitingForNetwork) {
+                if (!chronologicalRows.isNullOrEmpty() || liveText.isNotEmpty() || reasoning.isNotEmpty() || tools.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                // A paused run, not an error: neutral copy and icon, no banner.
+                val waitingDescription = stringResource(R.string.chat_waiting_network_cd)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.semantics(mergeDescendants = true) {
+                        contentDescription = waitingDescription
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.WifiOff,
+                        contentDescription = null,
+                        tint = palette.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = stringResource(R.string.chat_waiting_network),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.secondary
+                    )
+                }
             }
         }
     }
@@ -1411,7 +1628,7 @@ private fun AidenChronologicalTranscript(
                         )
                     }
                     AidenChronologicalRow.Kind.TOOL -> {
-                        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+                        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
                             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                                 row.steps.forEach { step ->
                                     AidenActivityShimmerLabel(
@@ -1437,9 +1654,9 @@ private fun AidenChronologicalReasoningCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     if (row.text.isBlank()) {
-        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
             AidenActivityShimmerLabel(
-                label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thinking",
+                label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thinking),
                 active = active,
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.secondary,
@@ -1456,29 +1673,42 @@ private fun AidenChronologicalReasoningCard(
             if (!userControlled) expanded = false
         }
     }
-    Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+    val reduceMotion = aidenReduceMotion()
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = AidenMotion.spatial(reduceMotion),
+        label = "reasoning_chevron"
+    )
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().clickable {
+                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) {
                     userControlled = true
                     expanded = !expanded
                 }
             ) {
                 AidenActivityShimmerLabel(
-                    label = if (active) "Thinking" else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thought",
+                    label = if (active) stringResource(R.string.chat_reasoning_thinking) else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thought),
                     active = active,
                     style = MaterialTheme.typography.labelMedium,
                     color = palette.secondary,
                     modifier = Modifier.weight(1f)
                 )
                 Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse reasoning" else "Expand reasoning",
-                    tint = palette.secondary
+                    imageVector = Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) stringResource(R.string.chat_reasoning_collapse) else stringResource(R.string.chat_reasoning_expand),
+                    tint = palette.secondary,
+                    modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
                 )
             }
-            if (expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(AidenMotion.spatial(reduceMotion), expandFrom = Alignment.Top) +
+                    fadeIn(AidenMotion.nonSpatial(reduceMotion)),
+                exit = shrinkVertically(AidenMotion.spatial(reduceMotion), shrinkTowards = Alignment.Top) +
+                    fadeOut(AidenMotion.nonSpatial(reduceMotion))
+            ) {
                 Text(
                     text = row.text,
                     style = MaterialTheme.typography.bodySmall,
@@ -1542,7 +1772,7 @@ private fun AidenTimelineCollapsibleCard(
 
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         modifier = Modifier
             .fillMaxWidth()
             .animateContentSize(AidenMotion.spatialExpressiveSpring<IntSize>())
@@ -1574,7 +1804,7 @@ private fun AidenTimelineCollapsibleCard(
                 if (allowsDisclosure) {
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        contentDescription = if (isExpanded) stringResource(R.string.action_collapse) else stringResource(R.string.action_expand),
                         tint = palette.secondary,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1603,14 +1833,14 @@ private fun AidenTimelineCollapsibleCard(
                                 modifier = Modifier.weight(1f)
                             )
                             step.producedFile?.let { file ->
-                                Text("File ${file.operation} · ${file.relativePath.substringAfterLast('/')}",
+                                Text(stringResource(R.string.chat_timeline_file, file.operation, file.relativePath.substringAfterLast('/')),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.foreground, maxLines = 1)
                             }
                             step.lineChanges?.let { lines ->
                                 Surface(
                                     color = palette.canvas,
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = MaterialTheme.shapes.extraSmall,
                                     modifier = Modifier.padding(start = 4.dp)
                                 ) {
                                     Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {

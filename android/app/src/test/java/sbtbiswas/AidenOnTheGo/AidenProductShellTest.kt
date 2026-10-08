@@ -13,6 +13,7 @@ import sbtbiswas.AidenOnTheGo.features.workspaces.projectAidenWorkspaceSidebar
 import sbtbiswas.AidenOnTheGo.features.workspaces.regularNewestFirst
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsHomeContentState
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotsHomeContentState
+import sbtbiswas.AidenOnTheGo.features.remote.aidenProductAreaLayerTransform
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -67,6 +68,44 @@ class AidenProductShellTest {
 
         store.activateSelectedArea("mac_1", botsAvailable = true)
         assertEquals(AidenProductArea.BOTS, store.activeArea.value)
+    }
+
+    @Test
+    fun testAreaSwitchSlidesInAreaOrder() {
+        val bots = AidenProductArea.BOTS.ordinal
+        val workspaces = AidenProductArea.WORKSPACES.ordinal
+
+        val restingOnBots = aidenProductAreaLayerTransform(bots, bots.toFloat())
+        assertEquals(0f, restingOnBots.offsetFraction, 0f)
+        assertEquals(1f, restingOnBots.alpha, 0f)
+        assertEquals(0f, aidenProductAreaLayerTransform(workspaces, bots.toFloat()).alpha, 0f)
+
+        // Halfway from Bots to Workspaces: Bots leaves toward the leading edge while
+        // Workspaces arrives from the trailing edge, and the two cross-fade evenly.
+        val midway = (bots + workspaces) / 2f
+        val leaving = aidenProductAreaLayerTransform(bots, midway)
+        val arriving = aidenProductAreaLayerTransform(workspaces, midway)
+        assertTrue(leaving.offsetFraction < 0f)
+        assertTrue(arriving.offsetFraction > 0f)
+        assertEquals(-leaving.offsetFraction, arriving.offsetFraction, 1e-6f)
+        assertEquals(0.5f, leaving.alpha, 1e-6f)
+        assertEquals(0.5f, arriving.alpha, 1e-6f)
+    }
+
+    @Test
+    fun testAreaSwitchSpringOvershootKeepsLayersInBounds() {
+        val bots = AidenProductArea.BOTS.ordinal
+        val overshoot = AidenProductArea.WORKSPACES.ordinal + 0.08f
+
+        val hidden = aidenProductAreaLayerTransform(bots, overshoot)
+        assertEquals(0f, hidden.alpha, 0f)
+        assertEquals(
+            aidenProductAreaLayerTransform(bots, AidenProductArea.WORKSPACES.ordinal.toFloat()).offsetFraction,
+            hidden.offsetFraction,
+            0f
+        )
+        val active = aidenProductAreaLayerTransform(AidenProductArea.WORKSPACES.ordinal, overshoot)
+        assertTrue(active.alpha in 0f..1f)
     }
 
     @Test

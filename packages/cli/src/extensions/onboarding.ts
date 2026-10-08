@@ -9,6 +9,7 @@ export const CLI_FEATURE_TOUR = [
   "Chats: /search finds sessions; /export-aiden and aiden import move portable conversations.",
   "Workspace access: /workspace chooses full, ask or none. Headless jobs cannot answer approval prompts.",
   "Tools: advisor, memory, web search, MCP, delegated tasks and standalone HTML artifacts share this session.",
+  "Codemode: enable +codemode in defaultTools to batch tools, generate images or classify data. Every nested tool still follows workspace access. /mcp configures native servers; /aiden-mcp manages existing Aiden servers.",
   "Automation: aiden serve runs schedules, Bots and configured Telegram. Each Bot has separate Full or Custom access.",
   "Remote: aiden serve --remote enables authenticated HTTPS and event streams for paired phones. Pairing, approved folders and Tailscale are controlled locally.",
   "Speech: aiden speech explicitly installs and runs local transcription models. No model download runs during setup.",
@@ -31,7 +32,7 @@ export function createOnboardingExtension(agentDir: string): InlineExtension {
       if (!choice || choice === "Set up later") { atomicJson(file, onboardingProgressState("deferred", ready)); return; }
       const workspace = await workspaceCommand(agentDir, ["add", ctx.cwd]) as { id: string };
       await workspaceCommand(agentDir, ["access", workspace.id, choice.startsWith("Allow") ? "full" : choice.startsWith("Disable") ? "none" : "ask"]);
-      const theme = await ctx.ui.select("Appearance", ["dark", "light", "slate-dark", "slate-light", "berry-dark", "berry-light", "moss-dark", "moss-light"]);
+      const theme = await ctx.ui.select("Appearance", ["dark", "light", "slate-dark", "slate-light", "berry-dark", "berry-light", "moss-dark", "moss-light", "system"]);
       if (theme) { ctx.ui.setTheme(theme); await new JsonStore<Record<string, unknown>>(join(agentDir, "settings.json"), {}).update((settings) => { settings.theme = theme; }); }
       const available = ctx.modelRegistry.getAvailable();
       const selection = await ctx.ui.select("Choose a configured model, or connect a provider with aiden auth login", [...available.map((model) => `${model.provider}/${model.id}`), "Connect a provider later"]);

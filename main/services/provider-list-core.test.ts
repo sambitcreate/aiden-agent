@@ -110,8 +110,8 @@ test("filters reserved stored collisions and rejects generic credential manageme
   assert.doesNotThrow(() => assertMutableProviderId("custom-provider"));
 });
 
-test("uses the concise OpenCode Zen product name", () => {
-  assert.equal(providerDisplayLabel("opencode-go", "OpenCode Zen Go"), "OpenCode Zen");
+test("distinguishes OpenCode Go from OpenCode Zen", () => {
+  assert.equal(providerDisplayLabel("opencode-go", "OpenCode Zen Go"), "OpenCode Go");
   assert.equal(providerDisplayLabel("opencode", "OpenCode Zen"), "OpenCode Zen");
   assert.equal(providerDisplayLabel("openai", "OpenAI"), "OpenAI");
 });

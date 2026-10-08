@@ -1,3 +1,4 @@
+import { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, type AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -15,6 +16,8 @@ import {
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
+  AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
+  AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
@@ -29,6 +32,9 @@ import {
   AIDEN_REMOTE_CHAT_SKILLS_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE,
+  AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE,
+  AIDEN_REMOTE_CHAT_FORK_FEATURE,
+  AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
@@ -159,7 +165,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -216,6 +222,7 @@ export interface AidenRemoteRouterDependencies {
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+  providers?: Pick<AidenRemoteProviderService, "create">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
@@ -327,6 +334,7 @@ export type AidenRemoteRouteLabel =
   | "workspaceFile"
   | "workspaceGit"
   | "scheduledTasks"
+  | "providers"
   | "memorySettings"
   | "usage"
   | "readAloud"
@@ -335,6 +343,8 @@ export type AidenRemoteRouteLabel =
   | "chatSummaries"
   | "chat"
   | "chatMove"
+  | "chatFork"
+  | "chatForkSummary"
   | "chatRead"
   | "chatTasks"
   | "chatAgents"
@@ -403,6 +413,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/scheduled-tasks/:id/:action",
     "/scheduled-tasks/:id",
   ],
+  providers: ["/providers"],
   memorySettings: ["/memory/settings"],
   usage: ["/usage"],
   readAloud: ["/read-aloud", "/chats/:id/read-aloud", "/chats/:id/read-aloud/stop", "/chats/:id/read-aloud/audio/:jobId/:segment/:offset"],
@@ -411,6 +422,8 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatSummaries: ["/chat-summaries"],
   chat: ["/chats/:id"],
   chatMove: ["/chats/:id/move"],
+  chatFork: ["/chats/:id/fork"],
+  chatForkSummary: ["/chats/:id/fork-summary/:action"],
   chatRead: ["/chats/:id/read"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
@@ -735,7 +748,8 @@ function negotiatedDeviceCapabilities(
         device.acceptsProgressCapabilities === true) &&
       (capability !== "simulators:control" &&
         !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability) ||
-        device.type === "mac" || device.type === "linux"),
+        device.type === "mac" || device.type === "linux" ||
+        (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)),
     ),
   );
 }
@@ -1267,6 +1281,23 @@ function isDesktopDevice(device: Pick<AidenRemoteRouterAuthenticatedDevice, "typ
   return device.type === "mac" || device.type === "linux";
 }
 
+/**
+ * A phone's run grants never widen what it may already do in a chat (contract
+ * revision 24): each run route also requires the phone's own per-chat grant.
+ * Desktops keep the host-wide authority their run grant carries.
+ */
+function requirePhoneRunGrant(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  capability: AidenRemoteCapability,
+): void {
+  if (isDesktopDevice(device) || device.capabilities.has(capability)) return;
+  throw new AidenRemoteServiceError(
+    "capability_denied",
+    "This device does not have access to that Aiden capability.",
+    403,
+  );
+}
+
 /** `/health` takes no query, or exactly `detail=host` for the desktop descriptor. */
 function healthDetailQuery(query: string): boolean {
   if (!query) return false;
@@ -1362,6 +1393,12 @@ function advertisedServerCapabilities(
       : []),
     ...(isDesktopDevice(device) && device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_HOST_CAPABILITIES.filter((capability) =>
+          hostCapabilitySupported(dependencies, capability),
+        )
+      : []),
+    // Phones are offered only the phone-scoped run subset (contract revision 24).
+    ...(!isDesktopDevice(device)
+      ? AIDEN_REMOTE_PHONE_RUN_CAPABILITIES.filter((capability) =>
           hostCapabilitySupported(dependencies, capability),
         )
       : []),
@@ -1633,6 +1670,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: [
+            ...(dependencies.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
             ...(dependencies.readAloud ? [REMOTE_TTS_FEATURE] : []),
             ...(dependencies.chats?.listSummaries
               ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE]
@@ -1659,7 +1697,13 @@ export function createAidenRemoteRequestHandler(
               ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE]
               : []),
             ...(dependencies.chats?.messagesWindow
-              ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE]
+              ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE, AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE]
+              : []),
+            ...(dependencies.chats?.fork && dependencies.chats.supportsForks === true
+              ? [AIDEN_REMOTE_CHAT_FORK_FEATURE]
+              : []),
+            ...(dependencies.chats?.fork && dependencies.chats.supportsForkSummaries === true
+              ? [AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE]
               : []),
             // Host-wide features are announced to desktops only.
             ...(isDesktopDevice(device) && hostCapabilitySupported(dependencies, "host:events")
@@ -1670,6 +1714,10 @@ export function createAidenRemoteRequestHandler(
               : []),
             ...(isDesktopDevice(device) && dependencies.pairingRequests
               ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE]
+              : []),
+            // Phones get only the phone-scoped run subset (contract revision 24).
+            ...(!isDesktopDevice(device) && hostCapabilitySupported(dependencies, "runs:observe")
+              ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE]
               : []),
           ],
           serverTime: new Date(dependencies.now()).toISOString(),
@@ -1736,8 +1784,12 @@ export function createAidenRemoteRequestHandler(
             }
             if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
           } else if ((AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Refuse non-desktops first so they never learn whether host control exists.
-            if (!isDesktopDevice(device)) {
+            // Refuse non-desktops first so they never learn whether host control
+            // exists; phones may hold only the phone-scoped run subset.
+            if (
+              !isDesktopDevice(device) &&
+              !(AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)
+            ) {
               throw new AidenRemoteServiceError(
                 "capability_denied",
                 "Only paired desktops may observe or control this host's runs.",
@@ -2615,6 +2667,23 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      if (path === "/providers" && request.method === "POST") {
+        requireNoQuery(query);
+        route = "providers";
+        const device = await authenticate(request, dependencies.devices, "workspace:manage");
+        requireDeviceCapabilities(device, ["server:read"]);
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.providers) throw new AidenRemoteServiceError("not_found", "Provider creation requires an updated desktop app.", 404);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        const body = await readJsonBody(request);
+        const release = dependencies.devices.acquireDeviceAuthorization(device.id, true);
+        try {
+          writeJson(response, 201, await dependencies.providers.create(device.id, key, body, () => {
+            try { admitDevice(device.id)(); return true; } catch { return false; }
+          }));
+        } finally { release(); }
+        return;
+      }
       if (path === "/models" && request.method === "GET") {
         requireNoQuery(query);
         route = "models";
@@ -2833,6 +2902,56 @@ export function createAidenRemoteRequestHandler(
           200,
           await runChatMutation(dependencies.chats, device, moveMatch[1]!, "chat", () =>
             dependencies.chats!.move(device.id, moveMatch[1]!, revision, key, body)),
+        );
+        return;
+      }
+      const forkMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/fork$/u.exec(path);
+      if (forkMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatFork";
+        const body = await readJsonBody(request, 4_096);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.fork || chats.supportsForks !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          201,
+          await runChatMutation(chats, device, forkMatch[1]!, "chat", () =>
+            chats.fork!(device.id, forkMatch[1]!, revision, key, body)),
+        );
+        return;
+      }
+      const forkSummaryMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/fork-summary\/(retry|skip|cancel)$/u.exec(path);
+      if (forkSummaryMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatForkSummary";
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (
+          !chats?.retryForkSummary ||
+          !chats.skipForkSummary ||
+          !chats.cancelForkSummary ||
+          chats.supportsForkSummaries !== true
+        ) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const chatId = forkSummaryMatch[1]!;
+        const action = forkSummaryMatch[2] as "retry" | "skip" | "cancel";
+        writeJson(
+          response,
+          200,
+          await runChatMutation<unknown>(chats, device, chatId, "chat", () =>
+            action === "retry"
+              ? chats.retryForkSummary!(chatId)
+              : action === "skip"
+                ? chats.skipForkSummary!(chatId)
+                : chats.cancelForkSummary!(chatId)),
         );
         return;
       }
@@ -3262,6 +3381,7 @@ export function createAidenRemoteRequestHandler(
         const after = streamAfter(request, query);
         const device = await authenticate(request, dependencies.devices, "runs:observe");
         deviceIdSuffix = device.id.slice(-8);
+        requirePhoneRunGrant(device, "chat:read");
         if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
         if (after !== 0) {
           // A cursor names a run; resume it through /runs/{runId}/events.
@@ -3282,6 +3402,7 @@ export function createAidenRemoteRequestHandler(
         const after = streamAfter(request, query);
         const device = await authenticate(request, dependencies.devices, "runs:observe");
         deviceIdSuffix = device.id.slice(-8);
+        requirePhoneRunGrant(device, "chat:read");
         if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
         const chatId = dependencies.hostRuns.chatIdForRun(runEventsMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
@@ -3305,6 +3426,14 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "runs:control");
         deviceIdSuffix = device.id.slice(-8);
+        requirePhoneRunGrant(
+          device,
+          route === "runApprovalRespond"
+            ? "approval:respond"
+            : route === "runQuestionRespond"
+              ? "questions:respond"
+              : "chat:write",
+        );
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         const hostRuns = dependencies.hostRuns;
         const chats = dependencies.chats;
@@ -3337,6 +3466,7 @@ export function createAidenRemoteRequestHandler(
               body,
               key,
               access("approval"),
+              { phoneScoped: !isDesktopDevice(device), capabilities: device.capabilities },
             ),
           );
         } else {

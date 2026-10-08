@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { parseParams } from "./chat-params.js";
 import { parseChatCancelOrigin } from "../services/chat-cancel.js";
+import { ChatTurnAdmission } from "../services/chat-turn-admission.js";
+import { subagentsAllowedForGeneration } from "../services/subagents/eligibility.js";
+import type { llmClient } from "../services/llm-client.js";
 import {
   MAX_CHAT_ID_CHARS,
   MAX_MODEL_ID_CHARS,
@@ -11,6 +17,80 @@ import {
 } from "../../renderer/shared/chat-message-contract.js";
 
 const base = { chatId: "c1", providerId: "p", model: "m" };
+
+test("registered chat:start forwards foreground delegation and the appended turn to generation", async () => {
+  type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
+  const handlers = new Map<string, Handler>();
+  const admission = new ChatTurnAdmission();
+  const owner = {
+    id: 7, documentId: "renderer-document-1", isDestroyed: () => false,
+    send() {}, onInvalidated: () => () => {},
+  };
+  const event = { sender: "owning-renderer" };
+  const lease = admission.tryBegin("c1", "appended-turn-1", owner.documentId, false);
+  assert.ok(lease);
+  lease.settleAsyncWork();
+  let starts = 0;
+  let titles = 0;
+  const start: typeof llmClient.start = async (streamId, params, generationOwner, options) => {
+    starts++;
+    assert.equal(streamId, "stream-1");
+    assert.equal(generationOwner, owner);
+    assert.ok(options, "chat:start must pass main-owned execution options");
+    assert.equal(subagentsAllowedForGeneration({
+      assistantMode: false,
+      allowSubagents: options.allowSubagents,
+      usageSource: options.usageSource,
+      workspaceId: params.workspaceId,
+      folderPath: "/workspace",
+      permission: "ask",
+    }), true);
+    assert.equal(admission.handoff(params.chatId, options.turnId!, generationOwner.documentId, () => {}), true);
+    assert.ok(options.onTurnAccepted, "accepted turn must be acknowledged to the renderer");
+    options.onTurnAccepted();
+    return true;
+  };
+  const mocks: Record<string, unknown> = {
+    "../platform.js": { ipcMain: { handle: (name: string, handler: Handler) => handlers.set(name, handler) } },
+    "../services/llm-client.js": { llmClient: { start } },
+    "../services/chat-generation-owner.js": { chatGenerationOwner: (received: unknown) => { assert.equal(received, event); return owner; } },
+    "../services/chat-title.js": { chatTitleService: { startForFirstTurn: () => { titles++; } } },
+    "../services/config-store.js": { configStore: { setSettings: async () => {} } },
+    "../services/gemini-live/service-main.js": { geminiLiveService: {} },
+    "../services/tool-approval-rules-main.js": { toolApprovalRules: {} },
+  };
+  // Bundle the real handler and pure helpers; replace only Electron/service ports.
+  // No source rewriting, network, profile reads, or model calls are involved.
+  const bundle = await build({
+    entryPoints: [fileURLToPath(new URL("./chat.ts", import.meta.url))],
+    bundle: true, write: false, platform: "node", format: "cjs", external: Object.keys(mocks),
+  });
+  const module = { exports: {} as typeof import("./chat.js") };
+  const require = createRequire(import.meta.url);
+  new Function("require", "module", "exports", bundle.outputFiles[0]!.text)(
+    (name: string) => {
+      if (name.startsWith("node:")) return require(name);
+      assert.ok(name in mocks, `Unexpected dependency: ${name}`);
+      return mocks[name];
+    },
+    module, module.exports,
+  );
+  module.exports.registerChatGenerationHandlers();
+  const handler = handlers.get("chat:start");
+  assert.ok(handler);
+  try {
+    assert.deepEqual(await handler(event, "stream-1", { ...base, workspaceId: "workspace-1" }, "appended-turn-1"), {
+      streamId: "stream-1", accepted: true, started: true,
+    });
+    assert.equal(admission.isAdmitted("c1"), false);
+    assert.equal(starts, 1);
+    assert.equal(titles, 1);
+    await assert.rejects(handler(event, "stream-1", base, undefined), /Invalid chat message turn identifier/u);
+    assert.equal(starts, 1);
+  } finally {
+    lease.release();
+  }
+});
 
 test("chat cancellation accepts only explicit lifecycle detach or user Stop origins", () => {
   assert.equal(parseChatCancelOrigin("lifecycle"), "lifecycle");

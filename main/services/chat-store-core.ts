@@ -19,6 +19,7 @@ import {
   canReplaceGeneratedChatTitle,
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
+import { chatSurface, parseChatOwnerV1, type ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
 import {
   FORK_SUMMARY_HOLD_MESSAGE,
@@ -43,6 +44,7 @@ import {
   projectVisibleChatMetadata,
 } from "./visible-chat-projection.js";
 import { MAX_VISIBLE_COPY_MESSAGES } from "../../renderer/shared/chat-copy-contract.js";
+import { ChatForkError } from "./chat-fork-error.js";
 import { jsonStringBytesBounded } from "./json-representation.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
@@ -374,6 +376,8 @@ export function createChatStore(
           meta.botId.length <= 160 &&
           meta.botId.normalize("NFKC") === meta.botId &&
           SAFE_CHAT_ID.test(meta.botId))) &&
+      (meta.owner === undefined ||
+        (parseChatOwnerV1(meta.owner) !== undefined && meta.botId === undefined)) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
       (meta.model === undefined || typeof meta.model === "string") &&
       (meta.preview === undefined ||
@@ -930,6 +934,7 @@ export function createChatStore(
       title: chat.title,
       workspaceId: chat.workspaceId ?? DEFAULT_WORKSPACE_ID,
       ...(chat.botId ? { botId: chat.botId } : {}),
+      ...(chat.owner ? { owner: chat.owner } : {}),
       providerId: chat.providerId,
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
@@ -1072,8 +1077,12 @@ export function createChatStore(
       }));
     },
 
+    /** Chats that may appear in chat listings: ordinary and Assistant chats, never Bot or feature-owned. */
     async listRegular(workspaceId?: string): Promise<ChatMeta[]> {
-      return (await this.list(workspaceId)).filter((chat) => chat.botId === undefined);
+      return (await this.list(workspaceId)).filter((chat) => {
+        const surface = chatSurface(chat);
+        return surface === "regular" || surface === "assistant";
+      });
     },
 
     /** Transcript-free metadata read for bounded Remote summary pages. */
@@ -1176,6 +1185,7 @@ export function createChatStore(
       title?: string;
       workspaceId?: string;
       botId?: string;
+      owner?: ChatOwnerV1;
       providerId?: string;
       model?: string;
       /** Main-owned Bot greeting copied once into the new durable conversation. */
@@ -1185,6 +1195,10 @@ export function createChatStore(
       const id = input.id ?? newId();
       return shared([id], true, async () => {
         input.assertCurrent?.();
+        const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
+        if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
+          throw new Error("Invalid chat owner.");
+        }
         if (
           input.initialAssistantMessage !== undefined &&
           !isBoundedBotText(input.initialAssistantMessage, 2_000)
@@ -1198,6 +1212,7 @@ export function createChatStore(
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
           ...(input.botId ? { botId: input.botId } : {}),
+          ...(owner ? { owner } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
           createdAt: now,
@@ -1230,6 +1245,8 @@ export function createChatStore(
       /** Start the fork with a pending summary of the source after the cut. */
       forkSummary?: { instructions?: string };
       assertCurrent?: () => void;
+      /** Check the source under the copy lock, for example against a client's revision. */
+      assertSource?: (source: Chat) => void;
       /**
        * Prepare dependent durable records before this chat becomes visible.
        * `sourceMessageIds[i]` is the source message copied into `chat.messages[i]`.
@@ -1243,7 +1260,14 @@ export function createChatStore(
       return shared([input.sourceChatId, newChatId], true, async () => {
         input.assertCurrent?.();
         const source = await readChat(input.sourceChatId, "owner");
-        if (!source) throw new Error(`Chat ${input.sourceChatId} not found`);
+        if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
+        if (source.owner !== undefined) {
+          throw new ChatForkError(
+            "ineligible",
+            "This chat belongs to another Aiden feature and cannot be copied.",
+          );
+        }
+        input.assertSource?.(source);
         if (
           input.expectedWorkspaceId !== undefined &&
           (source.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
@@ -1266,14 +1290,24 @@ export function createChatStore(
             (message) => message.id === cut.messageId && message.role === "assistant",
           );
           if (throughIndex < 0) {
-            throw new Error("Choose a completed assistant turn to fork from.");
+            throw new ChatForkError(
+              source.messages.some((message) => message.id === cut.messageId)
+                ? "ineligible"
+                : "message_not_found",
+              "Choose a completed assistant turn to fork from.",
+            );
           }
         } else if (cut?.position === "before") {
           const userIndex = source.messages.findIndex(
             (message) => message.id === cut.messageId && message.role === "user",
           );
           if (userIndex < 0) {
-            throw new Error("Choose one of your messages to edit in a fork.");
+            throw new ChatForkError(
+              source.messages.some((message) => message.id === cut.messageId)
+                ? "ineligible"
+                : "message_not_found",
+              "Choose one of your messages to edit in a fork.",
+            );
           }
           throughIndex = userIndex - 1;
         }
@@ -1286,7 +1320,8 @@ export function createChatStore(
             }
           }
           if (!hasVisibleUser) {
-            throw new Error(
+            throw new ChatForkError(
+              "ineligible",
               cut.position === "before"
                 ? "Nothing comes before the first message to fork."
                 : "The selected turn has no user message to copy.",
@@ -1295,10 +1330,10 @@ export function createChatStore(
         }
 
         if (input.forkSummary && (!input.forkAt || source.botId)) {
-          throw new Error("Only a fork can carry a summary.");
+          throw new ChatForkError("ineligible", "Only a fork can carry a summary.");
         }
         if (input.forkSummary && throughIndex >= source.messages.length - 1) {
-          throw new Error("Nothing happened after this point to summarize.");
+          throw new ChatForkError("ineligible", "Nothing happened after this point to summarize.");
         }
 
         const copiedMessages: ChatMessage[] = [];
@@ -1308,11 +1343,11 @@ export function createChatStore(
           if (value === undefined) return;
           const remaining = MAX_VISIBLE_COPY_BYTES - chargedBytes;
           if (value.length > remaining) {
-            throw new Error("This chat is too large to copy safely.");
+            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
           chargedBytes += jsonStringBytesBounded(value, remaining);
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
-            throw new Error("This chat is too large to copy safely.");
+            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
         };
         const metadata = projectVisibleChatMetadata(source);
@@ -1343,7 +1378,7 @@ export function createChatStore(
           const message = projectVisibleChatMessage(sourceMessage);
           if (!message) continue;
           if (copiedMessages.length >= MAX_VISIBLE_COPY_MESSAGES) {
-            throw new Error("This chat has too many messages to copy safely.");
+            throw new ChatForkError("too_large", "This chat has too many messages to copy safely.");
           }
           chargedBytes += 512;
           charge(message.content);
@@ -1364,7 +1399,7 @@ export function createChatStore(
             charge(artifact.mediaId);
           }
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
-            throw new Error("This chat is too large to copy safely.");
+            throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
           sourceMessageIds.push(message.id);
           copiedMessages.push({
@@ -1587,11 +1622,16 @@ export function createChatStore(
         autoTitle?: boolean;
         expectedWorkspaceId?: string;
         isCurrent?: () => boolean;
+        /** Renderer-authored appends refuse feature-owned (Design Studio) conversations. */
+        rejectFeatureOwned?: boolean;
       },
     ): Promise<Chat> {
       return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
+        if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
+          throw new Error("This conversation belongs to another Aiden feature and cannot be written from chat.");
+        }
         if (meta?.isCurrent && !meta.isCurrent()) {
           throw new Error("The renderer document is no longer active.");
         }

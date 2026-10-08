@@ -17,6 +17,7 @@ import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
   chatMessageQueue,
+  committedRunInputNotice,
   steerQueuedMessage,
   steerRejectionMessage,
   withCommittedRunInput,
@@ -70,6 +71,7 @@ import { ariaKeyShortcut } from "../shared/keybindings";
 import type { ToolApprovalScope } from "../shared/tool-approval-scope";
 import { isModelHidden } from "../shared/model-visibility";
 import { ThinkingControl } from "../components/thinking-control";
+import { APPEARANCE_CHANGE_EVENT, readCachedAppearance } from "../lib/appearance-runtime";
 import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
@@ -156,6 +158,7 @@ import {
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
 import { normalizeProviderThinkingLevel } from "../shared/provider-thinking";
+import { customModelThinkingLevels } from "../shared/custom-model-options";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -188,6 +191,7 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -237,7 +241,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ? "Side questions are not available in Bot chats."
       : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID
         ? "Side questions are not available in Assistant chats."
-        : undefined;
+        : isAcpHarnessProvider(chat.data?.providerId ?? "")
+          ? "Side questions are not available with agent-backed models."
+          : undefined;
   const detachedGenerationDraining = React.useSyncExternalStore(
     subscribeDetachedLifecycleStreams,
     () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
@@ -359,6 +365,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Composer context meter: the runtime's next-request projection, refreshed
   // on the ambient triggers (open, model change, settle, draft typing) and
   // pushed live during a generation via chat:context-pressure.
+  const showComposerContextUsage = React.useSyncExternalStore(
+    React.useCallback((listener: () => void) => { window.addEventListener(APPEARANCE_CHANGE_EVENT, listener); return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, listener); }, []),
+    () => readCachedAppearance()?.showComposerContextUsage ?? true,
+    () => true,
+  );
   const [contextPressure, setContextPressure] = React.useState<ChatContextPressureV1 | null>(null);
   const [contextCompactPending, setContextCompactPending] = React.useState(false);
   const [contextCompactedFlash, setContextCompactedFlash] = React.useState(false);
@@ -460,11 +471,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     storedAnthropicThinkingLevel,
   );
   const providerThinkingLevels = React.useMemo<GenerationThinkingLevel[]>(() => {
+    if (selectedProvider?.kind === "openai") {
+      const custom = customModelThinkingLevels(thinkingMetadata?.overrides);
+      if (custom) return custom;
+    }
     const declared = thinkingMetadata?.thinkingLevels;
     return declared?.filter(isGenerationThinkingLevel) ?? [];
-  }, [thinkingMetadata?.thinkingLevels]);
+  }, [selectedProvider?.kind, thinkingMetadata?.overrides, thinkingMetadata?.thinkingLevels]);
   const providerThinkingSupported =
-    selectedProvider?.isBuiltin === true &&
+    (selectedProvider?.isBuiltin === true ||
+      (selectedProvider?.kind === "openai" &&
+        customModelThinkingLevels(thinkingMetadata?.overrides) !== undefined)) &&
     providerId !== GOOGLE_PROVIDER_ID &&
     providerId !== OPENAI_CODEX_PROVIDER_ID &&
     providerId !== ANTHROPIC_PROVIDER_ID &&
@@ -1084,6 +1101,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (!effectiveWorkspaceId) return;
     return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
   }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
+
+  React.useEffect(() => {
+    environmentPanel.setContextDetails(!draft && chat.data ? {
+      chat: chat.data,
+      providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
+      modelLabel: model ?? "Unavailable",
+      pressure: contextPressure,
+      compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
+    } : null);
+    return () => environmentPanel.setContextDetails(null);
+  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
@@ -1787,7 +1815,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (receipt.committed) {
         // Main already saved it; resolving consumes the draft so it is not resent.
-        toast.info("The response ended first, so your guidance was saved to the conversation.");
+        toast.info(committedRunInputNotice(receipt.reason));
       } else {
         throw new Error(steerRejectionMessage(receipt.reason));
       }
@@ -1815,7 +1843,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
       } else if (outcome.kind === "committed") {
-        toast.info("The response ended first, so the message was saved to the conversation.");
+        toast.info(committedRunInputNotice(outcome.reason));
       } else if (outcome.kind === "rejected") {
         toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
       } else if (outcome.kind === "unknown") {
@@ -1825,30 +1853,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [admitSteer, isStoppingGeneration, messageQueue, visibleDetachedProjection],
-  );
-
-  const redirectMessage = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
-      if (!text.trim() || attachments.length > 0 || skillInvocation) {
-        throw new Error("Redirect requires text without attachments or a skill.");
-      }
-      if (
-        !(canStopGeneration || visibleDetachedProjection) ||
-        isStoppingGeneration ||
-        stopRequestedRef.current
-      ) {
-        throw new Error("The current response has ended. Send your message normally.");
-      }
-      const replacement = {
-        id: createChatTurnId(), text, attachments: [] as Attachment[],
-      };
-      messageQueue.replaceWith(replacement, () => {
-        const stopping = handleStop();
-        if (stopping) stopRequestedRef.current = true;
-        return stopping;
-      });
-    },
-    [canStopGeneration, handleStop, isStoppingGeneration, messageQueue, visibleDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -2380,7 +2384,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     !streamComplete && !visibleDetachedProjection;
   const timelineActivity = visualizingLive &&
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
-      ? { phase: "visualizing" as const, label: "Visualizing", orbState: "working" as const }
+      ? { phase: "visualizing" as const, label: "Visualizing", mark: "scan-grid" as const }
       : agentActivity;
   const chronologicalLiveRows = assistantPresentationRows(
     displayedStreamingText ?? "",
@@ -2558,7 +2562,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               workspaceId={effectiveWorkspace?.id}
               folderPath={effectiveWorkspace?.folderPath}
             />
-            <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+            <EnvironmentPanelToggle />
             <QuickViewToggle disabled={!effectiveWorkspace} />
             <Button
               iconOnly
@@ -2687,7 +2691,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
                 onSteer={draft ? undefined : steerMessage}
-                onRedirect={draft ? undefined : redirectMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={
@@ -2872,7 +2875,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       providerLabel={selectedProvider?.label ?? "Model"}
                       level={providerThinkingLevel}
                       levels={providerThinkingLevels}
-                      canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                      canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
+                        ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
@@ -2886,8 +2890,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : undefined
                 }
                 contextMeter={
-                  draft ? undefined : (
+                  draft || !showComposerContextUsage ? undefined : (
                     <ContextMeter
+                      onViewDetails={() => environmentPanel.showTools("context")}
                       pressure={contextPressure}
                       compacting={
                         contextCompactPending ||

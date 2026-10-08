@@ -1,35 +1,55 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.activity.compose.BackHandler
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
-import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.toModelPickerProvider
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.LocalResources
+import androidx.annotation.StringRes
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 enum class AidenBotEditorDefaultAccess {
     RECOMMENDED,
@@ -339,6 +359,7 @@ fun AidenBotEditorScreen(
     onBotSaved: (String) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
 
@@ -392,7 +413,7 @@ fun AidenBotEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isCreating) "New Bot" else "Edit Bot", fontWeight = FontWeight.Bold) },
+                title = { Text(if (isCreating) stringResource(R.string.bot_editor_new_title) else stringResource(R.string.bot_editor_edit_title), fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (isDirty) {
@@ -401,11 +422,11 @@ fun AidenBotEditorScreen(
                             onNavigateBack()
                         }
                     }) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = palette.foreground)
                     }
                 },
                 actions = {
-                    TextButton(
+                    TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
                         onClick = {
                             val curDraft = draft ?: return@TextButton
                             val curCat = catalog ?: return@TextButton
@@ -439,7 +460,7 @@ fun AidenBotEditorScreen(
                                         onBotSaved(currentBot.id)
                                     }
                                 } catch (e: Exception) {
-                                    saveError = e.message ?: "Failed to save Bot"
+                                    saveError = e.message ?: resources.getString(R.string.bot_editor_save_failed)
                                 } finally {
                                     isSaving = false
                                 }
@@ -447,7 +468,7 @@ fun AidenBotEditorScreen(
                         },
                         enabled = draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true && !isSaving
                     ) {
-                        Text(if (isSaving) "Saving…" else "Save", color = if (draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true) palette.accent else palette.secondary, fontWeight = FontWeight.Bold)
+                        Text(if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save), color = if (draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true) palette.accent else palette.secondary, fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.canvas, titleContentColor = palette.foreground)
@@ -458,11 +479,21 @@ fun AidenBotEditorScreen(
         val currentDraft = draft
         val currentCat = catalog
 
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = palette.accent)
+        if (currentDraft == null || currentCat == null) {
+            if (!isLoading && saveError != null) {
+                AidenEmptyState(
+                    icon = Icons.Default.CloudOff,
+                    title = if (isCreating) stringResource(R.string.bot_editor_cannot_start) else stringResource(R.string.bot_editor_cannot_load),
+                    body = saveError ?: "",
+                    modifier = Modifier.fillMaxSize().padding(padding)
+                )
+            } else {
+                AidenBotFormSkeleton(
+                    loadingDescription = if (isCreating) stringResource(R.string.bot_editor_loading_options) else stringResource(R.string.bot_profile_loading),
+                    modifier = Modifier.padding(padding)
+                )
             }
-        } else if (currentDraft != null && currentCat != null) {
+        } else {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -476,20 +507,20 @@ fun AidenBotEditorScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = MaterialTheme.shapes.large
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Identity", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_editor_identity), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
 
                         TextField(
 
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.name,
                             onValueChange = { draft = currentDraft.copy(name = it.take(80)) },
-                            label = { Text("Name") },
-                            placeholder = { Text("e.g. Python Pro, Code Reviewer") },
+                            label = { Text(stringResource(R.string.bot_editor_name)) },
+                            placeholder = { Text(stringResource(R.string.bot_editor_name_placeholder)) },
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -498,10 +529,10 @@ fun AidenBotEditorScreen(
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.purpose,
                             onValueChange = { draft = currentDraft.copy(purpose = it.take(280)) },
-                            label = { Text("Purpose (Optional)") },
-                            placeholder = { Text("Briefly describe what this bot does") },
+                            label = { Text(stringResource(R.string.bot_editor_purpose)) },
+                            placeholder = { Text(stringResource(R.string.bot_editor_purpose_placeholder)) },
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -510,11 +541,11 @@ fun AidenBotEditorScreen(
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.openingGreeting,
                             onValueChange = { draft = currentDraft.copy(openingGreeting = it.take(2000)) },
-                            label = { Text("Opening Greeting (Optional)") },
-                            placeholder = { Text("First message sent when starting a chat") },
+                            label = { Text(stringResource(R.string.bot_editor_greeting)) },
+                            placeholder = { Text(stringResource(R.string.bot_editor_greeting_placeholder)) },
                             minLines = 2,
                             maxLines = 4,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -523,10 +554,10 @@ fun AidenBotEditorScreen(
                             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                             value = currentDraft.instructions,
                             onValueChange = { draft = currentDraft.copy(instructions = it.take(32000)) },
-                            label = { Text("Instructions") },
-                            placeholder = { Text("System instructions and behavior rules...") },
+                            label = { Text(stringResource(R.string.bot_profile_instructions)) },
+                            placeholder = { Text(stringResource(R.string.bot_editor_instructions_placeholder)) },
                             minLines = 4,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -536,20 +567,20 @@ fun AidenBotEditorScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = MaterialTheme.shapes.large
                 ) {
                     Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text("Avatar Studio", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary, modifier = Modifier.align(Alignment.Start))
+                        Text(stringResource(R.string.bot_editor_avatar_studio), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary, modifier = Modifier.align(Alignment.Start))
 
                         AidenBotSemanticAvatarView(
                             avatar = AidenBotSemanticAvatar.Recipe(currentDraft.avatar),
-                            name = currentDraft.name.ifEmpty { "Bot" },
+                            name = currentDraft.name.ifEmpty { stringResource(R.string.bot_profile_bot_fallback) },
                             size = 84.dp
                         )
 
                         // Shape selector
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            Text("Shape", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                            Text(stringResource(R.string.bot_editor_avatar_shape), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                                 items(AidenBotAvatarShape.values()) { shape ->
                                     FilterChip(
@@ -564,17 +595,18 @@ fun AidenBotEditorScreen(
 
                         // Color selector
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            Text("Color", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                            Text(stringResource(R.string.bot_editor_avatar_color), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .padding(vertical = 4.dp)
+                                    .selectableGroup()
+                            ) {
                                 items(AidenBotAvatarColor.values()) { col ->
-                                    val grad = AidenBotAvatarColors.getGradient(col)
-                                    Box(
-                                        modifier = Modifier
-                                            .size(34.dp)
-                                            .clip(CircleShape)
-                                            .background(grad.first())
-                                            .clickable { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(color = col)) }
-                                            .then(if (currentDraft.avatar.color == col) Modifier.padding(3.dp) else Modifier)
+                                    AidenBotColorSwatch(
+                                        color = col,
+                                        selected = currentDraft.avatar.color == col,
+                                        onClick = { draft = currentDraft.copy(avatar = currentDraft.avatar.copy(color = col)) }
                                     )
                                 }
                             }
@@ -582,7 +614,7 @@ fun AidenBotEditorScreen(
 
                         // Eyes selector
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            Text("Eyes", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                            Text(stringResource(R.string.bot_editor_avatar_eyes), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                                 items(AidenBotAvatarEyes.values()) { eyes ->
                                     FilterChip(
@@ -597,7 +629,7 @@ fun AidenBotEditorScreen(
 
                         // Accessory selector
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            Text("Accessory", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                            Text(stringResource(R.string.bot_editor_avatar_accessory), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                                 items(AidenBotAvatarDetail.entries) { detail ->
                                     FilterChip(
@@ -616,19 +648,19 @@ fun AidenBotEditorScreen(
                             AidenBotGeneratedAvatarLifecycleView(
                                 model = model,
                                 semanticAvatar = AidenBotSemanticAvatar.Recipe(currentDraft.avatar),
-                                botName = currentDraft.name.ifEmpty { "Bot" }
+                                botName = currentDraft.name.ifEmpty { stringResource(R.string.bot_profile_bot_fallback) }
                             )
                         }
 
                         OutlinedButton(
                             border = null,
                             onClick = { showImagePlaygroundSheet = true },
-                            shape = RoundedCornerShape(10.dp),
+                            shape = MaterialTheme.shapes.small,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Create with Image Studio")
+                            Text(stringResource(R.string.bot_editor_image_studio))
                         }
                     }
                 }
@@ -637,69 +669,34 @@ fun AidenBotEditorScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = palette.raised),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = MaterialTheme.shapes.large
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text("Access Mode", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_editor_access_mode), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            FilterChip(
-                                border = null,
-                                selected = currentDraft.usesFullAccess,
-                                onClick = { draft = currentDraft.copy(usesFullAccess = true) },
-                                label = { Text("Full Access") },
-                                modifier = Modifier.weight(1f)
-                            )
-                            FilterChip(
-                                border = null,
-                                selected = !currentDraft.usesFullAccess,
-                                onClick = { draft = currentDraft.copy(usesFullAccess = false) },
-                                label = { Text("Custom Access") },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+                        AidenBotEditorAccessModeSelector(
+                            usesFullAccess = currentDraft.usesFullAccess,
+                            onUsesFullAccessChange = { draft = currentDraft.copy(usesFullAccess = it) }
+                        )
 
                         // AI Provider and Model picker
-                        Text("AI Provider & Model", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                        currentCat.providers.forEach { provider ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                AidenProviderIcon(providerId = provider.id, providerLabel = provider.label, size = 20.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(provider.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                            }
-                            provider.models.forEach { model ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            draft = currentDraft.copy(
-                                                customAccess = currentDraft.customAccess.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            )
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    RadioButton(
-                                        selected = currentDraft.customAccess.providerID == provider.id && currentDraft.customAccess.modelID == model.id,
-                                        onClick = {
-                                            draft = currentDraft.copy(
-                                                customAccess = currentDraft.customAccess.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            )
-                                        },
-                                        colors = RadioButtonDefaults.colors(selectedColor = palette.accent)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(model.label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                                }
-                            }
+                        Text(stringResource(R.string.bot_editor_provider_model), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                        val pickerProviders = remember(currentCat.providers) {
+                            currentCat.providers.map { it.toModelPickerProvider() }
                         }
+                        AidenModelPickerField(
+                            title = stringResource(R.string.model_picker_bot_title),
+                            providers = pickerProviders,
+                            selection = AidenModelRoute(currentDraft.customAccess.providerID, currentDraft.customAccess.modelID),
+                            onSelect = { entry ->
+                                draft = currentDraft.copy(
+                                    customAccess = currentDraft.customAccess.copy(
+                                        providerID = entry.provider.id,
+                                        modelID = entry.model.id
+                                    )
+                                )
+                            }
+                        )
 
                         // Detailed custom switches if in custom mode
                         AnimatedVisibility(visible = !currentDraft.usesFullAccess) {
@@ -707,7 +704,7 @@ fun AidenBotEditorScreen(
                                 Divider(color = palette.canvas)
 
                                 // File scopes
-                                Text("Desktop File Scopes", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                                Text(stringResource(R.string.bot_editor_file_scopes), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                                 currentCat.fileScopes.forEach { scopeItem ->
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -740,7 +737,7 @@ fun AidenBotEditorScreen(
 
                                 // Shell
                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                    Text("Terminal Execution", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground, modifier = Modifier.weight(1f))
+                                    Text(stringResource(R.string.bot_editor_terminal), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground, modifier = Modifier.weight(1f))
                                     Switch(
                                         checked = currentDraft.customAccess.shellEnabled,
                                         onCheckedChange = { draft = currentDraft.copy(customAccess = currentDraft.customAccess.copy(shellEnabled = it)) },
@@ -751,7 +748,7 @@ fun AidenBotEditorScreen(
 
                                 // Connections
                                 if (currentCat.connections.isNotEmpty()) {
-                                    Text("MCP Connections", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                                    Text(stringResource(R.string.bot_editor_mcp_connections), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
                                     currentCat.connections.forEach { conn ->
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -797,10 +794,11 @@ fun AidenBotEditorScreen(
     if (showImagePlaygroundSheet) {
         ModalBottomSheet(
             onDismissRequest = { showImagePlaygroundSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas
         ) {
             AidenBotImagePlaygroundSheet(
-                botName = draft?.name ?: "Bot",
+                botName = draft?.name ?: stringResource(R.string.bot_profile_bot_fallback),
                 botPurpose = draft?.purpose ?: "",
                 onDismiss = { showImagePlaygroundSheet = false },
                 onImageSelected = { bytes ->
@@ -816,24 +814,82 @@ fun AidenBotEditorScreen(
     if (isConfirmingDiscard) {
         AlertDialog(
             onDismissRequest = { isConfirmingDiscard = false },
-            title = { Text("Discard changes?") },
-            text = { Text("You have unsaved changes to this Bot. If you leave now, your changes will be discarded.") },
+            title = { Text(stringResource(R.string.bot_editor_discard_title)) },
+            text = { Text(stringResource(R.string.bot_editor_discard_body)) },
             confirmButton = {
-                TextButton(
+                AidenDialogConfirmButton(
+                    text = stringResource(R.string.action_discard),
+                    destructive = true,
                     onClick = {
                         isConfirmingDiscard = false
                         onNavigateBack()
                     }
-                ) {
-                    Text("Discard", color = palette.danger, fontWeight = FontWeight.Bold)
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { isConfirmingDiscard = false }) {
-                    Text("Cancel", color = palette.secondary)
-                }
+                AidenDialogDismissButton(onClick = { isConfirmingDiscard = false })
             },
+            shape = AidenShape.Dialog,
             containerColor = palette.raised
         )
+    }
+}
+
+enum class AidenBotEditorAccessMode(@StringRes val label: Int) {
+    FULL(R.string.bot_editor_access_full),
+    CUSTOM(R.string.bot_editor_access_custom)
+}
+
+/** Connected segmented choice between Full Access and Custom Access. */
+@Composable
+fun AidenBotEditorAccessModeSelector(
+    usesFullAccess: Boolean,
+    onUsesFullAccessChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val labels = AidenBotEditorAccessMode.entries.associateWith { stringResource(it.label) }
+    AidenSegmentedPillRow(
+        options = AidenBotEditorAccessMode.entries,
+        selected = if (usesFullAccess) AidenBotEditorAccessMode.FULL else AidenBotEditorAccessMode.CUSTOM,
+        onSelect = { onUsesFullAccessChange(it == AidenBotEditorAccessMode.FULL) },
+        label = { labels.getValue(it) },
+        modifier = modifier
+    )
+}
+
+fun aidenBotAvatarColorLabel(color: AidenBotAvatarColor): String =
+    color.name.lowercase().replaceFirstChar { it.uppercase() }
+
+/**
+ * Avatar colour swatch: a radio choice whose selection is a checkmark on the fill plus
+ * selected semantics, never a decorative ring.
+ */
+@Composable
+fun AidenBotColorSwatch(
+    color: AidenBotAvatarColor,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interaction = remember { MutableInteractionSource() }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(34.dp)
+            .tactilePress(interaction)
+            .clip(CircleShape)
+            .background(AidenBotAvatarColors.getGradient(color).first())
+            .selectable(
+                selected = selected,
+                interactionSource = interaction,
+                indication = ripple(),
+                role = Role.RadioButton,
+                onClick = onClick
+            )
+            .semantics { contentDescription = aidenBotAvatarColorLabel(color) }
+    ) {
+        if (selected) {
+            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        }
     }
 }

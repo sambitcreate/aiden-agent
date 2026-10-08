@@ -14,7 +14,7 @@ import { assistantLiveApi } from "../../lib/ipc";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { useComputerUseStatus, useSettings, useShortcuts } from "../../lib/queries";
 import type { AssistantLiveSnapshot } from "../../shared/assistant-live";
-import { AidenLiveOrb } from "../assistant/aiden-live-orb";
+import { AidenLiveMark } from "../assistant/aiden-live-mark";
 import { Badge, Button, Callout, Field, FieldSet, Text } from "../ui";
 
 function StateBadge({ ready, checking = false }: { ready: boolean; checking?: boolean }) {
@@ -66,7 +66,7 @@ export function AidenLiveSettings(): React.ReactElement {
       <Callout className="mb-4">
         <div className="flex items-center gap-3">
           <span className="block size-14 shrink-0">
-            <AidenLiveOrb state={liveReady ? "ready" : "unavailable"} />
+            <AidenLiveMark state={liveReady ? "ready" : "unavailable"} />
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-2">

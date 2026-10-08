@@ -2,7 +2,7 @@
 // "chat:delta" / "chat:done" / "chat:error" broadcasts (see llm-client).
 
 import { ipcMain, logger } from "../platform.js";
-import { startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
+import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
@@ -43,14 +43,12 @@ export function registerChatGenerationHandlers(): void {
         const started = await startGenerationAndMaybeTitle(
           {
             start: (streamId, params) =>
-              llmClient.start(streamId, params, owner, {
-                allowSubagents: true,
-                usageSource: "chat",
-                turnId: messageTurnId,
-                onTurnAccepted: () => {
-                  accepted = true;
-                },
-              }),
+              llmClient.start(
+                streamId,
+                params,
+                owner,
+                desktopChatExecutionOptions(messageTurnId, () => { accepted = true; }),
+              ),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
             rememberSelection: (providerId, model) => {
               void configStore

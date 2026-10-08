@@ -1,5 +1,12 @@
+import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
+import { reconcilePendingProviderCredentialRotation, saveProviderWithCredentialRotation } from "./provider-credential-rotation.js";
+import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
+import { secrets } from "./secrets.js";
 import { ttsService } from "./tts/service-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
+import { chatForkService } from "./chat-fork-service-main.js";
+import { forkSummaryService } from "./fork-summary-service-main.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import os from "node:os";
 import path from "node:path";
@@ -413,6 +420,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         botFiles?: AidenRemoteBotFileService;
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
+        providers: AidenRemoteProviderService;
         memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
@@ -625,6 +633,21 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             readMarkers: {
               snapshot: () => chatReadMarkers.snapshot(),
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
+            },
+            forks: {
+              service: chatForkService,
+              admitWorkspace: (workspaceId) => {
+                const admission = workspaceMutationGate.admit(workspaceId);
+                return {
+                  isAborted: () => admission.signal.aborted,
+                  release: () => admission.release(),
+                };
+              },
+              summaries: {
+                retry: (chatId) => forkSummaryService.retry(chatId),
+                skip: (chatId) => forkSummaryService.skip(chatId),
+                cancel: (chatId) => forkSummaryService.cancel(chatId),
+              },
             },
           });
           activeChats = chats;
@@ -906,6 +929,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "chats:metadata-updated",
             "chats:activity-changed",
             "chats:read-markers-changed",
+            "chats:fork-summary-changed",
             "workspaces:changed",
             "bots:changed",
           ]);
@@ -920,6 +944,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           detachHostFeed = () => {
             for (const detach of detachers) detach();
           };
+          const providers = new AidenRemoteProviderService({
+            get: (id) => configStore.getProvider(id),
+            save: saveProviderWithCredentialRotation,
+            recoverCredential: async (provider) => {
+              await reconcilePendingProviderCredentialRotation();
+              return Boolean(await secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider))));
+            },
+            changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
+          });
           const memorySettings = new AidenRemoteMemorySettingsService(configStore);
           const speech = new AidenRemoteSpeechService();
           activeReadAloud?.close();
@@ -935,6 +968,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             files,
             git,
             schedules,
+            providers,
             memorySettings,
             usage: usageStore,
             speech,

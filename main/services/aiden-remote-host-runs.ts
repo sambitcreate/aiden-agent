@@ -5,6 +5,10 @@ import {
 } from "../../renderer/shared/tool-approval-scope.js";
 import type { ChatRunInputAdmissionResult } from "../../renderer/shared/chat-run-input.js";
 import {
+  ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
+  ASSISTANT_AUTOMATION_TOOL_NAME,
+} from "../../renderer/shared/assistant.js";
+import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
   type AidenRemoteErrorCode,
@@ -120,6 +124,17 @@ export type AidenRemoteHostRunRegistry = Pick<
 export interface AidenRemoteHostRunDevice {
   id: string;
   capabilities: ReadonlySet<AidenRemoteCapability>;
+  /**
+   * Paired device type. A phone (anything but `mac`/`linux`) holding the
+   * phone-scoped run subset (contract revision 24) always receives the phone
+   * projection, whatever grants it holds.
+   */
+  type?: string;
+}
+
+/** Phones never receive host-only approval facts (contract revision 24). */
+export function isPhoneRunDevice(device: { type?: string }): boolean {
+  return device.type !== undefined && device.type !== "mac" && device.type !== "linux";
 }
 
 /** Chat-access check supplied by the router, run inside the idempotent action. */
@@ -161,14 +176,47 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
  * observers keep the mobile summary projection; controllers get the details
  * they need to decide.
  */
+type RunProjection = "full" | "observer" | "phone";
+
 function projectPayload(
   type: string,
   payload: Record<string, unknown>,
-  fullDetails: boolean,
+  projection: RunProjection,
 ): Record<string, unknown> {
-  if (type !== "approval_required" || fullDetails) return payload;
-  const { details: _details, detailsOmitted: _omitted, ...summary } = payload;
-  return summary;
+  if (type !== "approval_required" || projection === "full") return payload;
+  const { details: _details, detailsOmitted: _omitted, scopes, ...summary } = payload;
+  if (projection === "observer") return scopes === undefined ? summary : { ...summary, scopes };
+  // The phone projection matches the phone's own stream approvals: a summary,
+  // whether it may allow from the phone, and allow scopes only when it may.
+  const canAllow = phoneMayAllow(payload);
+  return {
+    ...summary,
+    canAllow,
+    ...(canAllow && scopes !== undefined ? { scopes } : {}),
+  };
+}
+
+/**
+ * Same policy as phone-owned stream approvals: an approval carrying host-only
+ * details (anything but a scheduled-task summary), or whose details were too
+ * large to journal, can be denied from a phone but allowed only on the host.
+ */
+function phoneMayAllow(payload: Record<string, unknown>): boolean {
+  if (payload.detailsOmitted === true) return false;
+  const details = ownRecord(payload.details);
+  return details === undefined || details.kind === "scheduled-task";
+}
+
+/**
+ * The extra device grant allowing this approval needs, matching the phone's
+ * own stream approvals: creating or editing an automation needs
+ * `schedule:write` on top of `approval:respond`.
+ */
+function approvalAllowCapability(payload: Record<string, unknown>): AidenRemoteCapability | undefined {
+  return payload.toolName === ASSISTANT_AUTOMATION_TOOL_NAME ||
+    payload.toolName === ASSISTANT_AUTOMATION_EDIT_TOOL_NAME
+    ? "schedule:write"
+    : undefined;
 }
 
 /**
@@ -286,7 +334,11 @@ export class AidenRemoteHostRunService {
     if (after > initial.lastSequence) {
       throw new AidenRemoteServiceError("invalid_request", "The run cursor is ahead of Aiden.", 400);
     }
-    const fullDetails = device.capabilities.has("runs:control");
+    const projection: RunProjection = isPhoneRunDevice(device)
+      ? "phone"
+      : device.capabilities.has("runs:control")
+        ? "full"
+        : "observer";
     let cursor = after;
     let endedSent = false;
     let unsubscribe: () => void = () => {};
@@ -312,7 +364,7 @@ export class AidenRemoteHostRunService {
           pendingQuestionIds: read.summary.pendingQuestionIds,
           approvals: read.prompts
             .filter((prompt) => prompt.type === "approval_required")
-            .map((prompt) => projectPayload(prompt.type, prompt.payload, fullDetails)),
+            .map((prompt) => projectPayload(prompt.type, prompt.payload, projection)),
           questions: read.prompts
             .filter((prompt) => prompt.type === "question_required")
             .map((prompt) => prompt.payload),
@@ -322,7 +374,7 @@ export class AidenRemoteHostRunService {
         return { frames };
       }
       for (const event of read.events) {
-        frames.push(this.eventFrame(event, read.summary.chatId, fullDetails));
+        frames.push(this.eventFrame(event, read.summary.chatId, projection));
         cursor = event.sequence;
       }
       if (
@@ -395,6 +447,11 @@ export class AidenRemoteHostRunService {
     body: unknown,
     key: string,
     access: AidenRemoteRunChatAccess,
+    options: {
+      phoneScoped?: boolean;
+      /** The phone's grants; a phone-scoped allow must hold any extra grant the tool needs. */
+      capabilities?: ReadonlySet<AidenRemoteCapability>;
+    } = {},
   ): Promise<AidenRemoteRunApprovalResult> {
     const { decision, scope } = parseRunApproval(body);
     return this.control(
@@ -409,7 +466,24 @@ export class AidenRemoteHostRunService {
         const summary = this.promptRun(runId, approvalId);
         return access(summary.chatId, async () => {
           const prompt = this.options.registry.pendingPrompt(approvalId);
-          if (prompt && decision === "allow") requireInformedAllow(prompt.payload, scope);
+          if (prompt && decision === "allow") {
+            if (options.phoneScoped === true && !phoneMayAllow(prompt.payload)) {
+              throw new AidenRemoteServiceError(
+                "capability_denied",
+                "This approval can only be allowed from the Aiden desktop app.",
+                403,
+              );
+            }
+            const needed = approvalAllowCapability(prompt.payload);
+            if (options.phoneScoped === true && needed && options.capabilities?.has(needed) !== true) {
+              throw new AidenRemoteServiceError(
+                "capability_denied",
+                "This device does not have access to that Aiden capability.",
+                403,
+              );
+            }
+            requireInformedAllow(prompt.payload, scope);
+          }
           if (
             summary.pendingApprovalIds.includes(approvalId) &&
             this.options.controls.approve({ runId, chatId: summary.chatId, approvalId, decision, scope })
@@ -621,13 +695,13 @@ export class AidenRemoteHostRunService {
     );
   }
 
-  private eventFrame(event: HostRunEvent, chatId: string, fullDetails: boolean): string {
+  private eventFrame(event: HostRunEvent, chatId: string, projection: RunProjection): string {
     const type = event.type === "run_started" ? "run.started" : event.type;
     const payload = event.type === "run_started"
       ? { runId: event.runId, chatId, origin: event.payload.origin }
       : event.type === "snapshot"
         ? { runId: event.runId, chatId, reason: "reset", nextSequence: event.sequence + 1 }
-        : projectPayload(event.type, event.payload, fullDetails);
+        : projectPayload(event.type, event.payload, projection);
     const wire: AidenRemoteRunEvent = {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
       streamId: event.runId,

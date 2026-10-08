@@ -1,7 +1,8 @@
+import { configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "../pi-vcc/recall.js";
-import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
+import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
-import { convertToLlm } from "@earendil-works/pi-agent-core";
+import { convertToLlm } from "../pi-legacy-harness.js";
 import type {
   AgentMessage,
   AgentTool,
@@ -44,6 +45,7 @@ export interface SubagentRuntimeAuthority {
 
 export interface SubagentChildSpec {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
   authority: SubagentRuntimeAuthority;
   runId?: string;
   groupId: string;
@@ -200,7 +202,10 @@ export class SubagentRuntimeRegistry {
     const { childId, sessionId } = childIdentity(spec.groupId, spec.childId);
     if (this.children.has(childId)) throw new Error("Subagent child identity was reused.");
     let entry!: RegisteredSubagentChild;
+    const budget = resolveCompactionModelBudget(spec.compactionModelOverrides, spec.runtime.model, spec.compactionEngine);
+    const inputReserveTokens = configuredCompactionReserveTokens(spec.compactionModelOverrides, spec.runtime.model, spec.compactionEngine);
     const contextOptions = {
+      compactionReserveTokens: inputReserveTokens,
       contextWindow: spec.runtime.model.contextWindow,
       systemPrompt: spec.systemPrompt,
       tools: spec.tools,
@@ -218,6 +223,7 @@ export class SubagentRuntimeRegistry {
       }) ?? spec.runtime;
     const compactionOptions = {
       engine: spec.compactionEngine,
+      settings: budget,
       models: createPiCompactionModels(childRuntime, (message) =>
         this.recordCompactionUsage?.(message, spec.runtime),
       ),
@@ -252,6 +258,7 @@ export class SubagentRuntimeRegistry {
         session: sessionPromise,
         initialMessages: spec.initialMessages,
         compaction: compactionOptions,
+        compactionReserveTokens: inputReserveTokens,
         ...(this.appendSessionMessages ? { appendMessages: this.appendSessionMessages } : {}),
         signal: cancellation.signal,
         ...(this.effectStore

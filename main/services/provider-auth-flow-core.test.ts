@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
+import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createProviderLoginDeviceId } from "./provider-login-identity.js";
 
 import {
   ProviderAuthFlowCoordinator,
@@ -19,6 +23,47 @@ const FLOW_A = "11111111-1111-4111-8111-111111111111";
 const FLOW_B = "22222222-2222-4222-8222-222222222222";
 const PROMPT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PROMPT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+test("provider login identity is lazy, private, stable across restarts and unique per installation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-login-identity-"));
+  try {
+    const file = join(root, "installation-a", "identity");
+    const getId = createProviderLoginDeviceId(() => file);
+    assert.deepEqual(await readdir(root), []);
+    const id = getId();
+    assert.match(id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u);
+    assert.equal(getId(), id);
+    assert.equal(createProviderLoginDeviceId(() => file)(), id);
+    assert.equal(await readFile(file, "utf8"), `${id}\n`);
+    if (process.platform !== "win32") assert.equal((await stat(file)).mode & 0o777, 0o600);
+    assert.deepEqual(await readdir(join(root, "installation-a")), ["identity"]);
+    assert.notEqual(createProviderLoginDeviceId(() => join(root, "installation-b", "identity"))(), id);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("provider login refuses corrupt, oversized and redirected identities without replacing them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-login-identity-invalid-"));
+  try {
+    const file = join(root, "identity");
+    for (const invalid of ["broken", "x".repeat(129)]) {
+      await writeFile(file, invalid);
+      assert.throws(createProviderLoginDeviceId(() => file), /Invalid provider login identity/u);
+      assert.equal(await readFile(file, "utf8"), invalid);
+    }
+    if (process.platform !== "win32") {
+      await rm(file);
+      const target = join(root, "outside");
+      await writeFile(target, FLOW_A);
+      await symlink(target, file);
+      assert.throws(createProviderLoginDeviceId(() => file));
+      assert.equal(await readFile(target, "utf8"), FLOW_A);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 interface SentMessage {
   channel: string;

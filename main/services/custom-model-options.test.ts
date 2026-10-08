@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseCustomModelOptions,
+  customModelThinkingLevels,
   prepareCustomModelToolContext,
   mergeDiscoveredModelMetadata,
   assertCustomModelImageLimit,
@@ -269,4 +270,94 @@ test("disabled tools skip deferred browser discovery without altering context", 
   assert.deepEqual(await prepareCustomModelToolContext(context, prepare, { toolCall: true }), { tools: ["browser"] });
   assert.equal(calls, 1);
   assert.equal(await prepareCustomModelToolContext(context, undefined, undefined), context);
+});
+
+test("per-thinking-level sampling survives portable storage and reaches the provider request", async () => {
+  const { normalizeContext } = await import("@earendil-works/pi-ai");
+  const { buildModel } = await import("./model-runtime-core.js");
+  const { streamSimple: streamSimpleOpenAICompletions } = await import("@earendil-works/pi-ai/api/openai-completions");
+  const options = parseCustomModelOptions({ reasoning: true, samplingParamsByThinkingLevel: { off: { temperature: 0.2 }, high: { temperature: 0.7, top_p: 0.9 } } })!;
+  const configured = { ...provider, modelMetadata: { "custom-model": { source: "provider" as const, overrides: options } } };
+  const { intent } = splitStoredProvider(configured);
+  const restored = composeStoredProvider(intent, undefined);
+  const model = { ...buildModel(restored, "custom-model", resolveProviderRuntimeLimits({}, restored, "custom-model")), api: "openai-completions" as const };
+  for (const reasoning of ["off", "high"] as const) {
+    let payload: Record<string, unknown> | undefined;
+    const result = streamSimpleOpenAICompletions(model, normalizeContext({ messages: [{ role: "user", content: "sampling fixture", timestamp: 0 }] }), {
+      reasoning: reasoning === "off" ? undefined : reasoning, apiKey: "synthetic", maxRetries: 0,
+      fetch: async (_url, init) => {
+        payload = JSON.parse(String(init?.body));
+        return new Response('data: {"id":"fixture","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
+      },
+    });
+    await result.result();
+    assert.equal(payload?.temperature, reasoning === "high" ? 0.7 : 0.2);
+    assert.equal(payload?.top_p, reasoning === "high" ? 0.9 : undefined);
+    assert.equal(payload?.model, "custom-model");
+  }
+  assert.throws(() => parseCustomModelOptions({ samplingParamsByThinkingLevel: { high: { messages: [] } } }), /sampling parameter/);
+  assert.throws(() => parseCustomModelOptions({ samplingParamsByThinkingLevel: { imaginary: { temperature: 0.5 } } }), /thinking level/);
+});
+
+
+test("effort presets validate portable intent and expose only supported levels", () => {
+  const options = parseCustomModelOptions({ reasoning: true, effortControl: "glm" });
+  assert.deepEqual(customModelThinkingLevels(options), ["off", "low", "high", "max"]);
+  assert.deepEqual(customModelThinkingLevels({ reasoning: true, effortControl: "openai" }), ["off", "low", "medium", "high"]);
+  assert.equal(customModelThinkingLevels({ reasoning: false, effortControl: "glm" }), undefined);
+  assert.equal(customModelThinkingLevels({ reasoning: true }), undefined);
+  assert.equal(customModelThinkingLevels({ effortControl: "glm" }), undefined);
+  for (const effortControl of [null, false, "unknown", {}, ["glm"]]) {
+    assert.throws(() => parseCustomModelOptions({ effortControl }), /Invalid effort control format/);
+  }
+  const configured = { ...provider, modelMetadata: { "custom-model": {
+    source: "provider" as const, overrides: options,
+  } } };
+  const split = splitStoredProvider(configured);
+  const restored = composeStoredProvider(split.intent, split.cache);
+  assert.equal(restored.modelMetadata?.["custom-model"].overrides?.effortControl, "glm");
+  const refreshed = mergeDiscoveredModelMetadata({ "custom-model": { source: "provider" as const } }, restored.modelMetadata!);
+  assert.equal(refreshed["custom-model"].overrides?.effortControl, "glm");
+  const reset = composeStoredProvider({ ...split.intent, customModelOptions: {} }, split.cache);
+  assert.equal(customModelThinkingLevels(reset.modelMetadata?.["custom-model"].overrides), undefined);
+});
+
+test("remote custom models expose the configured effort ladder and remembered choice", async () => {
+  const configured = { ...provider, modelMetadata: { "custom-model": {
+    source: "provider" as const, overrides: { reasoning: true, effortControl: "glm" as const },
+  } } };
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [configured],
+    getSettings: async () => ({ providerThinkingByModel: { [provider.id]: { "custom-model": "max" as const } } }),
+  });
+  const model = (await service.list()).providers[0].models[0];
+  assert.deepEqual(model.thinkingLevels, ["off", "low", "high", "max"]);
+  assert.equal(model.defaultThinkingLevel, "max");
+  assert.equal(model.thinkingCanDisable, true);
+  assert.deepEqual((await service.resolve(provider.id, "custom-model")).thinkingLevels, ["off", "low", "high", "max"]);
+  configured.modelMetadata["custom-model"].overrides.reasoning = false;
+  assert.equal((await service.list()).providers[0].models[0].thinkingLevels, undefined);
+});
+
+
+test("explicit per-model effort subsets survive storage and discovery without adding unselected levels", async () => {
+  const options = parseCustomModelOptions({ reasoning: true, effortControl: "openai", effortLevels: ["max", "medium", "xhigh"] });
+  assert.deepEqual(options?.effortLevels, ["medium", "xhigh", "max"]);
+  assert.deepEqual(customModelThinkingLevels(options), ["medium", "xhigh", "max"]);
+  const configured = { ...provider, modelMetadata: { "custom-model": { source: "provider" as const, overrides: options } } };
+  const split = splitStoredProvider(configured);
+  const restored = composeStoredProvider(split.intent, split.cache);
+  const refreshed = mergeDiscoveredModelMetadata({ "custom-model": { source: "provider" as const } }, restored.modelMetadata!);
+  assert.deepEqual(refreshed["custom-model"].overrides?.effortLevels, ["medium", "xhigh", "max"]);
+  const service = new AidenRemoteModelService({ listProviders: async () => [{ ...restored, hasKey: false }], getSettings: async () => ({}) });
+  const model = (await service.list()).providers[0].models[0];
+  assert.deepEqual(model.thinkingLevels, ["medium", "xhigh", "max"]);
+  assert.equal(model.thinkingCanDisable, false);
+  restored.modelMetadata!["custom-model"].overrides!.effortLevels = [];
+  restored.modelMetadata!["custom-model"].thinkingLevels = ["off", "high"];
+  assert.equal((await service.list()).providers[0].models[0].thinkingLevels, undefined);
+  assert.equal(customModelThinkingLevels({ reasoning: true, effortControl: "glm", effortLevels: [] }), undefined);
+  for (const effortLevels of [null, "high", ["minimal"], ["unknown"], ["high", "high"], [1]]) {
+    assert.throws(() => parseCustomModelOptions({ effortLevels }), /Invalid supported effort levels/);
+  }
 });

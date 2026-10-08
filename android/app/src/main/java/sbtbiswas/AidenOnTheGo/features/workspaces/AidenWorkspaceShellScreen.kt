@@ -1,16 +1,23 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,19 +26,47 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
+import sbtbiswas.AidenOnTheGo.persistence.AidenReadSnapshotKeys
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
-import java.util.UUID
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenShapes
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
+
+/** Corner radius of Aiden's squircle floating actions. */
+private val AidenFabShape = AidenShapes.large
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,6 +81,7 @@ fun AidenWorkspaceDirectoryScreen(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
+    val resources = LocalResources.current
     val client = coordinator.client.collectAsStateWithLifecycle().value
     val allWorkspaces by coordinator.workspaces.collectAsStateWithLifecycle()
     val archiveStore = coordinator.archiveStore
@@ -53,11 +89,22 @@ fun AidenWorkspaceDirectoryScreen(
     val activeInstanceId = coordinator.activeInstanceId
 
     var searchQuery by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableStateOf(0) } // 0: Active, 1: Archived
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Active, 1: Archived
     var selectedWorkspace by remember { mutableStateOf<AidenWorkspace?>(null) }
     BackHandler(enabled = isActive && selectedWorkspace != null) { selectedWorkspace = null }
-    var workspaceChats by remember { mutableStateOf<List<AidenChat>>(emptyList()) }
+    // The selected Workspace's chats render from its saved listing while they refresh.
+    var workspaceChats by remember { mutableStateOf<List<AidenWorkspaceChatListing>?>(null) }
+    var workspaceChatsOwner by remember { mutableStateOf<String?>(null) }
     var isLoadingChats by remember { mutableStateOf(false) }
+    var chatsLoadFailed by remember { mutableStateOf(false) }
+    var chatsReloadToken by remember { mutableIntStateOf(0) }
+    var isCreatingChat by remember { mutableStateOf(false) }
+    var isCreatingWorkspace by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    // Renames show at once and roll back on failure. Removals are destructive and the
+    // desktop can refuse them, so their rows only show a pending state until it answers.
+    var pendingNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var pendingRemovalIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     // Dialog & Sheet States
     var showCreateMenu by remember { mutableStateOf(false) }
@@ -79,52 +126,147 @@ fun AidenWorkspaceDirectoryScreen(
     var showNewAgentChoices by remember { mutableStateOf(false) }
 
     val instanceArchivedSet = activeInstanceId?.let { archivedIDs[it] } ?: emptySet()
+    val displayedWorkspaces = remember(allWorkspaces, pendingNames) {
+        aidenWorkspacesWithPendingNames(allWorkspaces, pendingNames)
+    }
 
-    val activeWorkspaces = remember(allWorkspaces, instanceArchivedSet, searchQuery) {
-        allWorkspaces
+    val activeWorkspaces = remember(displayedWorkspaces, instanceArchivedSet, searchQuery) {
+        displayedWorkspaces
             .filter { !instanceArchivedSet.contains(it.id) }
             .filter { searchQuery.isEmpty() || it.name.contains(searchQuery, ignoreCase = true) }
     }
 
-    val archivedWorkspaces = remember(allWorkspaces, instanceArchivedSet, searchQuery) {
-        allWorkspaces
+    val archivedWorkspaces = remember(displayedWorkspaces, instanceArchivedSet, searchQuery) {
+        displayedWorkspaces
             .filter { instanceArchivedSet.contains(it.id) }
             .filter { searchQuery.isEmpty() || it.name.contains(searchQuery, ignoreCase = true) }
     }
 
-    LaunchedEffect(selectedWorkspace, client) {
-        val ws = selectedWorkspace
-        if (ws != null && client != null) {
-            isLoadingChats = true
+    LaunchedEffect(selectedWorkspace?.id, client, activeInstanceId, chatsReloadToken) {
+        val ws = selectedWorkspace ?: run {
+            workspaceChats = null
+            workspaceChatsOwner = null
+            return@LaunchedEffect
+        }
+        val instanceId = activeInstanceId
+        val key = AidenReadSnapshotKeys.workspaceChats(ws.id)
+        // A retry keeps what is shown; a different Workspace starts from its own saved listing.
+        if (workspaceChatsOwner != ws.id || workspaceChats == null) {
+            workspaceChats = instanceId?.let {
+                coordinator.readSnapshotCache.load(it, key, AidenWorkspaceChatListing.listSerializer)
+            }
+            workspaceChatsOwner = ws.id
+        }
+        chatsLoadFailed = false
+        val activeClient = client ?: return@LaunchedEffect
+        isLoadingChats = true
+        try {
+            val fresh = AidenWorkspaceChatListing.of(AidenChat.regularWorkspaceChats(activeClient.chats(ws.id)))
+            if (coordinator.client.value === activeClient && coordinator.activeInstanceId == instanceId) {
+                workspaceChats = fresh
+                instanceId?.let { coordinator.readSnapshotCache.store(it, key, fresh, AidenWorkspaceChatListing.listSerializer) }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Saved chats stay on screen; only an empty screen turns into the error state.
+            chatsLoadFailed = true
+        } finally {
+            isLoadingChats = false
+        }
+    }
+
+    fun startChat(workspace: AidenWorkspace) {
+        val activeClient = client ?: return
+        if (isCreatingChat) return
+        isCreatingChat = true
+        scope.launch {
             try {
-                workspaceChats = AidenChat.regularWorkspaceChats(client.chats(ws.id))
-            } catch (_: Exception) {} finally {
-                isLoadingChats = false
+                val chat = activeClient.createChat(workspace.id)
+                onNavigateToChat(chat.id)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_start_chat_failed))
+            } finally {
+                isCreatingChat = false
+            }
+        }
+    }
+
+    fun createWorkspace(create: AidenWorkspaceCreate) {
+        if (isCreatingWorkspace) return
+        isCreatingWorkspace = true
+        scope.launch {
+            try {
+                coordinator.createWorkspace(create)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_create_failed))
+            } finally {
+                isCreatingWorkspace = false
+            }
+        }
+    }
+
+    fun renameWorkspace(target: AidenWorkspace, newName: String) {
+        pendingNames = pendingNames + (target.id to newName)
+        scope.launch {
+            try {
+                coordinator.updateWorkspace(target, name = newName)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_rename_failed, target.name))
+            } finally {
+                // Success already put the server's Workspace in the list; failure rolls back.
+                pendingNames = pendingNames - target.id
+            }
+        }
+    }
+
+    fun removeWorkspace(target: AidenWorkspace, managedWorktree: Boolean) {
+        if (target.id in pendingRemovalIds) return
+        pendingRemovalIds = pendingRemovalIds + target.id
+        scope.launch {
+            try {
+                if (managedWorktree) coordinator.removeManagedWorktree(target) else coordinator.removeWorkspace(target)
+                if (selectedWorkspace?.id == target.id) selectedWorkspace = null
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                snackbarHostState.showSnackbar(
+                    error.message ?: if (managedWorktree) resources.getString(R.string.workspace_delete_worktree_failed) else resources.getString(R.string.workspace_remove_failed, target.name)
+                )
+            } finally {
+                pendingRemovalIds = pendingRemovalIds - target.id
             }
         }
     }
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             if (selectedWorkspace != null) {
+                val fabInteraction = remember { MutableInteractionSource() }
                 FloatingActionButton(
                     onClick = {
                         val currentWs = selectedWorkspace ?: return@FloatingActionButton
-                        scope.launch {
-                            if (client != null) {
-                                try {
-                                    val chat = client.createChat(currentWs.id)
-                                    onNavigateToChat(chat.id)
-                                } catch (_: Exception) {}
-                            }
-                        }
+                        startChat(currentWs)
                     },
                     containerColor = palette.accent,
-                    contentColor = Color.White,
-                    shape = CircleShape
+                    contentColor = palette.onAccent,
+                    shape = AidenFabShape,
+                    interactionSource = fabInteraction,
+                    modifier = Modifier.tactilePress(fabInteraction)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "New Chat")
+                    if (isCreatingChat) {
+                        AidenActivityDot(color = palette.onAccent, size = 10.dp, contentDescription = stringResource(R.string.workspace_opening_new_chat))
+                    } else {
+                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.workspace_new_chat))
+                    }
                 }
             }
         },
@@ -135,9 +277,12 @@ fun AidenWorkspaceDirectoryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .aidenReadableWidth()
         ) {
             // If a workspace is currently selected, show Workspace Detail view
-            val activeWs = selectedWorkspace
+            val activeWs = selectedWorkspace?.let { selected ->
+                displayedWorkspaces.firstOrNull { it.id == selected.id } ?: selected
+            }
             if (activeWs != null) {
                 // Detail Header
                 Row(
@@ -147,7 +292,7 @@ fun AidenWorkspaceDirectoryScreen(
                         .padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
                 ) {
                     IconButton(onClick = { selectedWorkspace = null }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to Workspaces", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.workspace_back_to_workspaces), tint = palette.foreground)
                     }
                     Spacer(modifier = Modifier.width(4.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -161,7 +306,7 @@ fun AidenWorkspaceDirectoryScreen(
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Permission: ${activeWs.permission.title}",
+                                text = stringResource(R.string.workspace_permission_label, activeWs.permission.title),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = palette.secondary
                             )
@@ -181,145 +326,28 @@ fun AidenWorkspaceDirectoryScreen(
                             showSettingsSheet = true
                         }
                     ) {
-                        Icon(Icons.Default.Settings, contentDescription = "Workspace Settings", tint = palette.foreground)
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.workspace_settings), tint = palette.foreground)
                     }
                 }
 
-                // Quick action buttons: Files & Git Review
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { onNavigateToFiles(activeWs.id) },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Files", color = palette.foreground, fontWeight = FontWeight.SemiBold)
-                    }
+                AidenWorkspaceQuickActions(
+                    uncommitted = activeWs.git?.uncommitted ?: 0,
+                    onFiles = { onNavigateToFiles(activeWs.id) },
+                    onGitReview = { onNavigateToGit(activeWs.id) },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
 
-                    Button(
-                        onClick = { onNavigateToGit(activeWs.id) },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.Commit, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Git Review", color = palette.foreground, fontWeight = FontWeight.SemiBold)
-                        activeWs.git?.uncommitted?.let { uncommitted ->
-                            if (uncommitted > 0) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    color = palette.accent,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(18.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = if (uncommitted > 99) "99+" else uncommitted.toString(),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.White,
-                                            fontSize = 9.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                HorizontalDivider(color = palette.raised, modifier = Modifier.padding(vertical = 4.dp))
 
-                Divider(color = palette.raised, modifier = Modifier.padding(vertical = 4.dp))
-
-                // Chats List for Workspace
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    if (workspaceChats.isEmpty() && !isLoadingChats) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(40.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        imageVector = Icons.Default.ChatBubbleOutline,
-                                        contentDescription = null,
-                                        tint = palette.secondary,
-                                        modifier = Modifier.size(48.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Text(
-                                        text = "No chats in this workspace yet",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = palette.secondary
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Button(
-                                        onClick = {
-                                            scope.launch {
-                                                if (client != null) {
-                                                    try {
-                                                        val chat = client.createChat(activeWs.id)
-                                                        onNavigateToChat(chat.id)
-                                                    } catch (_: Exception) {}
-                                                }
-                                            }
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Text("Start a Chat", color = Color.White)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    items(workspaceChats) { chat ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { onNavigateToChat(chat.id) },
-                            color = Color.Transparent,
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = AidenUi.RowVerticalPadding)
-                            ) {
-                                Icon(Icons.Default.Chat, contentDescription = null, tint = palette.accent)
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = chat.title.ifEmpty { "New Chat" },
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = palette.foreground,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "${chat.messages.size} messages",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                }
-                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.secondary)
-                            }
-                        }
-                    }
-                }
+                AidenWorkspaceChatList(
+                    chats = workspaceChats,
+                    isRefreshing = isLoadingChats,
+                    loadFailed = chatsLoadFailed,
+                    canStartChat = client != null && !isCreatingChat,
+                    onOpenChat = onNavigateToChat,
+                    onStartChat = { startChat(activeWs) },
+                    onRetry = { chatsReloadToken += 1 }
+                )
             } else {
                 // Workspace Directory View
                 Row(
@@ -329,10 +357,10 @@ fun AidenWorkspaceDirectoryScreen(
                         .padding(horizontal = 12.dp, vertical = 2.dp)
                 ) {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to Workspace home", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.workspace_back_to_home), tint = palette.foreground)
                     }
                     Text(
-                        text = "Workspaces",
+                        text = stringResource(R.string.workspace_directory_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = palette.foreground,
@@ -349,7 +377,7 @@ fun AidenWorkspaceDirectoryScreen(
                 ) {
                     // Search Glass Capsule
                     Surface(
-                    shape = RoundedCornerShape(27.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
                     color = palette.raised.copy(alpha = 0.94f),
                     shadowElevation = 3.dp,
                         modifier = Modifier
@@ -362,7 +390,7 @@ fun AidenWorkspaceDirectoryScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Search,
-                                contentDescription = "Search",
+                                contentDescription = stringResource(R.string.action_search),
                                 tint = palette.foreground,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -373,7 +401,7 @@ fun AidenWorkspaceDirectoryScreen(
                             ) {
                                 if (searchQuery.isEmpty()) {
                                     Text(
-                                        text = "Search workspaces...",
+                                        text = stringResource(R.string.workspace_search_placeholder),
                                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
                                         color = palette.secondary.copy(alpha = 0.7f)
                                     )
@@ -397,7 +425,7 @@ fun AidenWorkspaceDirectoryScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
-                                        contentDescription = "Clear search",
+                                        contentDescription = stringResource(R.string.action_clear_search),
                                         tint = palette.secondary,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -408,26 +436,36 @@ fun AidenWorkspaceDirectoryScreen(
 
                     // 54dp Floating Action Button with Dropdown
                     Box {
+                        val addInteraction = remember { MutableInteractionSource() }
                         Surface(
-                            shape = CircleShape,
+                            onClick = { showCreateMenu = true },
+                            enabled = !isCreatingWorkspace,
+                            shape = AidenFabShape,
                             color = palette.accent,
+                            contentColor = palette.onAccent,
                             shadowElevation = 3.dp,
+                            interactionSource = addInteraction,
                             modifier = Modifier
                                 .size(54.dp)
+                                .tactilePress(addInteraction)
+                                .semantics { role = Role.Button }
                         ) {
-                            IconButton(
-                                onClick = { showCreateMenu = true },
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = "Add Workspace", tint = Color.White, modifier = Modifier.size(22.dp))
+                            Box(contentAlignment = Alignment.Center) {
+                                if (isCreatingWorkspace) {
+                                    AidenActivityDot(color = palette.onAccent, size = 10.dp, contentDescription = stringResource(R.string.workspace_creating))
+                                } else {
+                                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.workspace_add), tint = palette.onAccent, modifier = Modifier.size(22.dp))
+                                }
                             }
                         }
                         DropdownMenu(
                             expanded = showCreateMenu,
-                            onDismissRequest = { showCreateMenu = false }
+                            onDismissRequest = { showCreateMenu = false },
+                            shape = AidenShape.Snackbar,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                         ) {
                             DropdownMenuItem(
-                                text = { Text("New Workspace") },
+                                text = { Text(stringResource(R.string.workspace_menu_new)) },
                                 leadingIcon = { Icon(Icons.Default.CreateNewFolder, contentDescription = null) },
                                 onClick = {
                                     showCreateMenu = false
@@ -436,7 +474,7 @@ fun AidenWorkspaceDirectoryScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("New Managed Scratch") },
+                                text = { Text(stringResource(R.string.workspace_menu_new_scratch)) },
                                 leadingIcon = { Icon(Icons.Default.FolderSpecial, contentDescription = null) },
                                 onClick = {
                                     showCreateMenu = false
@@ -444,7 +482,7 @@ fun AidenWorkspaceDirectoryScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Add Desktop Folder...") },
+                                text = { Text(stringResource(R.string.workspace_menu_add_folder)) },
                                 leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
                                 onClick = {
                                     showCreateMenu = false
@@ -456,243 +494,209 @@ fun AidenWorkspaceDirectoryScreen(
                 }
 
                 // Filter Segmented Pill (Active vs Archived)
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .padding(horizontal = AidenUi.ScreenGutter, vertical = 4.dp)
-                        .fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(4.dp)
-                    ) {
-                        // Active Tab
-                        Surface(
-                            onClick = { selectedTab = 0 },
-                            color = if (selectedTab == 0) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = "Active (${activeWorkspaces.size})",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (selectedTab == 0) palette.accent else palette.secondary
-                                )
-                            }
-                        }
-
-                        // Archived Tab
-                        Surface(
-                            onClick = { selectedTab = 1 },
-                            color = if (selectedTab == 1) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = "Archived (${archivedWorkspaces.size})",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (selectedTab == 1) palette.accent else palette.secondary
-                                )
-                            }
-                        }
-                    }
-                }
+                val activeTabLabel = stringResource(R.string.workspace_tab_active, activeWorkspaces.size)
+                val archivedTabLabel = stringResource(R.string.workspace_tab_archived, archivedWorkspaces.size)
+                AidenSegmentedPillRow(
+                    options = listOf(0, 1),
+                    selected = selectedTab,
+                    onSelect = { selectedTab = it },
+                    label = { tab ->
+                        if (tab == 0) activeTabLabel else archivedTabLabel
+                    },
+                    role = Role.Tab,
+                    modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 4.dp)
+                )
 
                 val currentList = if (selectedTab == 0) activeWorkspaces else archivedWorkspaces
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
                 ) {
                     if (currentList.isEmpty()) {
                         item {
                             AidenEmptyState(
                                 icon = if (selectedTab == 0) Icons.Default.FolderOpen else Icons.Default.Archive,
-                                title = if (selectedTab == 0) "No active workspaces" else "No archived workspaces",
+                                title = if (selectedTab == 0) stringResource(R.string.workspace_empty_active_title) else stringResource(R.string.workspace_empty_archived_title),
                                 body = if (selectedTab == 0)
-                                    "Create a workspace or add an approved folder from your desktop."
+                                    stringResource(R.string.workspace_empty_active_body)
                                 else
-                                    "Workspaces archived on this device will appear here."
+                                    stringResource(R.string.workspace_empty_archived_body)
                             )
                         }
                     }
 
-                    items(currentList) { ws ->
+                    itemsIndexed(currentList, key = { _, ws -> ws.id }) { index, ws ->
                         var showRowMenu by remember { mutableStateOf(false) }
+                        val isRemoving = ws.id in pendingRemovalIds
 
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { selectedWorkspace = ws },
-                            color = Color.Transparent,
-                            shape = RoundedCornerShape(14.dp)
+                        AidenGroupCard(
+                            index = index,
+                            count = currentList.size,
+                            onClick = { if (!isRemoving) selectedWorkspace = ws },
+                            contentPadding = PaddingValues(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = AidenUi.RowVerticalPadding)
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(
+                                        if (ws.isManagedWorktree) palette.accent.copy(alpha = 0.15f)
+                                        else palette.secondary.copy(alpha = 0.12f)
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(
-                                            if (ws.isManagedWorktree) palette.accent.copy(alpha = 0.15f)
-                                            else palette.secondary.copy(alpha = 0.12f)
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (ws.isManagedWorktree) Icons.Default.AccountTree
-                                        else if (ws.git?.isRepo == true) Icons.Default.Commit
-                                        else Icons.Default.Folder,
-                                        contentDescription = null,
-                                        tint = if (ws.isManagedWorktree) palette.accent else palette.foreground
+                                Icon(
+                                    imageVector = if (ws.isManagedWorktree) Icons.Default.AccountTree
+                                    else if (ws.git?.isRepo == true) Icons.Default.Commit
+                                    else Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = if (ws.isManagedWorktree) palette.accent else palette.foreground
+                                )
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = ws.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.foreground,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                }
-
-                                Spacer(modifier = Modifier.width(12.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = ws.name,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.foreground,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (ws.isManagedWorktree) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Surface(
-                                                color = palette.accent.copy(alpha = 0.15f),
-                                                shape = RoundedCornerShape(4.dp)
-                                            ) {
-                                                Text(
-                                                    text = "Worktree",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = palette.accent,
-                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                )
-                                            }
+                                    if (ws.isManagedWorktree) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            color = palette.accent.copy(alpha = 0.15f),
+                                            shape = MaterialTheme.shapes.extraSmall
+                                        ) {
+                                            Text(
+                                                text = stringResource(R.string.workspace_worktree_badge),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = palette.accent,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
                                         }
                                     }
+                                }
 
-                                    Spacer(modifier = Modifier.height(2.dp))
+                                Spacer(modifier = Modifier.height(2.dp))
 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (isRemoving) {
+                                        AidenActivityDot(color = palette.secondary, size = 6.dp)
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = ws.permission.title,
+                                            text = if (ws.isManagedWorktree) stringResource(R.string.workspace_deleting) else stringResource(R.string.workspace_removing),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = palette.secondary
                                         )
-                                        if (ws.branchName != null) {
+                                        Text(" • ", color = palette.secondary)
+                                    }
+                                    Text(
+                                        text = ws.permission.title,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.secondary
+                                    )
+                                    if (ws.branchName != null) {
+                                        Text(" • ", color = palette.secondary)
+                                        Text(
+                                            text = ws.branchName,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = palette.accent,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    ws.git?.uncommitted?.let { uncommitted ->
+                                        if (uncommitted > 0) {
                                             Text(" • ", color = palette.secondary)
                                             Text(
-                                                text = ws.branchName,
+                                                text = pluralStringResource(R.plurals.workspace_uncommitted_count, uncommitted, uncommitted),
                                                 style = MaterialTheme.typography.bodySmall,
-                                                color = palette.accent,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
+                                                color = palette.warning
                                             )
-                                        }
-                                        ws.git?.uncommitted?.let { uncommitted ->
-                                            if (uncommitted > 0) {
-                                                Text(" • ", color = palette.secondary)
-                                                Text(
-                                                    text = "+$uncommitted uncommitted",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = palette.warning
-                                                )
-                                            }
                                         }
                                     }
                                 }
+                            }
 
-                                Box {
-                                    IconButton(onClick = { showRowMenu = true }) {
-                                        Icon(Icons.Default.MoreVert, contentDescription = "More actions", tint = palette.secondary)
-                                    }
-                                    DropdownMenu(
-                                        expanded = showRowMenu,
-                                        onDismissRequest = { showRowMenu = false }
-                                    ) {
+                            Box {
+                                IconButton(onClick = { showRowMenu = true }, enabled = !isRemoving) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.action_more_actions), tint = palette.secondary)
+                                }
+                                DropdownMenu(
+                                    expanded = showRowMenu,
+                                    onDismissRequest = { showRowMenu = false },
+                                    shape = AidenShape.Snackbar,
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.action_rename)) },
+                                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                        onClick = {
+                                            showRowMenu = false
+                                            workspaceToRename = ws
+                                            renameInput = ws.name
+                                            showRenameDialog = true
+                                        }
+                                    )
+                                    if (selectedTab == 0) {
                                         DropdownMenuItem(
-                                            text = { Text("Rename") },
-                                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                            text = { Text(stringResource(R.string.workspace_menu_archive)) },
+                                            leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null) },
                                             onClick = {
                                                 showRowMenu = false
-                                                workspaceToRename = ws
-                                                renameInput = ws.name
-                                                showRenameDialog = true
+                                                workspaceToArchive = ws
+                                                if (!archiveStore.hasAcknowledgedDeviceOnlyArchive.value) {
+                                                    showArchiveDisclosureDialog = true
+                                                } else {
+                                                    archiveStore.archive(ws.id, activeInstanceId)
+                                                }
                                             }
                                         )
-                                        if (selectedTab == 0) {
-                                            DropdownMenuItem(
-                                                text = { Text("Archive on this device") },
-                                                leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null) },
-                                                onClick = {
-                                                    showRowMenu = false
-                                                    workspaceToArchive = ws
-                                                    if (!archiveStore.hasAcknowledgedDeviceOnlyArchive.value) {
-                                                        showArchiveDisclosureDialog = true
-                                                    } else {
-                                                        archiveStore.archive(ws.id, activeInstanceId)
-                                                    }
-                                                }
-                                            )
-                                        } else {
-                                            DropdownMenuItem(
-                                                text = { Text("Unarchive") },
-                                                leadingIcon = { Icon(Icons.Default.Unarchive, contentDescription = null) },
-                                                onClick = {
-                                                    showRowMenu = false
-                                                    archiveStore.unarchive(ws.id, activeInstanceId)
-                                                }
-                                            )
-                                        }
+                                    } else {
                                         DropdownMenuItem(
-                                            text = { Text("Workspace Settings") },
-                                            leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                            text = { Text(stringResource(R.string.workspace_menu_unarchive)) },
+                                            leadingIcon = { Icon(Icons.Default.Unarchive, contentDescription = null) },
                                             onClick = {
                                                 showRowMenu = false
-                                                workspaceToEditSettings = ws
-                                                showSettingsSheet = true
-                                            }
-                                        )
-                                        Divider()
-                                        if (ws.isManagedWorktree) {
-                                            DropdownMenuItem(
-                                                text = { Text("Delete Managed Worktree", color = palette.danger) },
-                                                leadingIcon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = palette.danger) },
-                                                onClick = {
-                                                    showRowMenu = false
-                                                    worktreeToDelete = ws
-                                                    showDeleteWorktreeDialog = true
-                                                }
-                                            )
-                                        }
-                                        DropdownMenuItem(
-                                            text = { Text("Remove from Aiden", color = palette.danger) },
-                                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
-                                            onClick = {
-                                                showRowMenu = false
-                                                workspaceToRemove = ws
-                                                showRemoveDialog = true
+                                                archiveStore.unarchive(ws.id, activeInstanceId)
                                             }
                                         )
                                     }
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.workspace_settings)) },
+                                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                        onClick = {
+                                            showRowMenu = false
+                                            workspaceToEditSettings = ws
+                                            showSettingsSheet = true
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                    if (ws.isManagedWorktree) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.workspace_menu_delete_worktree), color = palette.danger) },
+                                            leadingIcon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = palette.danger) },
+                                            onClick = {
+                                                showRowMenu = false
+                                                worktreeToDelete = ws
+                                                showDeleteWorktreeDialog = true
+                                            }
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.workspace_menu_remove), color = palette.danger) },
+                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
+                                        onClick = {
+                                            showRowMenu = false
+                                            workspaceToRemove = ws
+                                            showRemoveDialog = true
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -706,221 +710,132 @@ fun AidenWorkspaceDirectoryScreen(
 
     // New Workspace Dialog
     if (showNewWorkspaceDialog) {
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = stringResource(R.string.workspace_menu_new),
             onDismissRequest = { showNewWorkspaceDialog = false },
-            title = { Text("New Workspace", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text("Enter a name for the new folderless workspace:")
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextField(
-                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                        value = newWorkspaceName,
-                        onValueChange = { newWorkspaceName = it },
-                        placeholder = { Text("Workspace name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val name = newWorkspaceName.trim()
-                        if (name.isNotEmpty()) {
-                            showNewWorkspaceDialog = false
-                            scope.launch {
-                                try {
-                                    coordinator.createWorkspace(AidenWorkspaceCreate.Folderless(name = name))
-                                } catch (_: Exception) {}
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                ) {
-                    Text("Create", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showNewWorkspaceDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
+            confirmText = stringResource(R.string.action_create),
+            onConfirm = {
+                val name = newWorkspaceName.trim()
+                if (name.isNotEmpty()) {
+                    showNewWorkspaceDialog = false
+                    createWorkspace(AidenWorkspaceCreate.Folderless(name = name))
                 }
             }
-        )
+        ) {
+            Column {
+                Text(stringResource(R.string.workspace_new_dialog_body))
+                Spacer(modifier = Modifier.height(8.dp))
+                TextField(
+                    colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
+                    value = newWorkspaceName,
+                    onValueChange = { newWorkspaceName = it },
+                    placeholder = { Text(stringResource(R.string.workspace_name_placeholder)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 
     // New Scratch Workspace Confirm Dialog
     if (showScratchConfirmDialog) {
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = stringResource(R.string.workspace_scratch_dialog_title),
             onDismissRequest = { showScratchConfirmDialog = false },
-            title = { Text("Create Managed Scratch?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Aiden will create an isolated scratch workspace in an ephemeral location on your paired desktop.")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showScratchConfirmDialog = false
-                        scope.launch {
-                            try {
-                                coordinator.createWorkspace(AidenWorkspaceCreate.Scratch())
-                            } catch (_: Exception) {}
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                ) {
-                    Text("Create Scratch", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showScratchConfirmDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
-                }
+            confirmText = stringResource(R.string.workspace_scratch_dialog_confirm),
+            onConfirm = {
+                showScratchConfirmDialog = false
+                createWorkspace(AidenWorkspaceCreate.Scratch())
             }
-        )
+        ) {
+            Text(stringResource(R.string.workspace_scratch_dialog_body))
+        }
     }
 
     // Rename Dialog
     if (showRenameDialog && workspaceToRename != null) {
         val target = workspaceToRename!!
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = stringResource(R.string.workspace_rename_dialog_title),
             onDismissRequest = { showRenameDialog = false },
-            title = { Text("Rename Workspace", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    TextField(
-                        colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
-                        value = renameInput,
-                        onValueChange = { renameInput = it },
-                        label = { Text("Workspace Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val newName = renameInput.trim()
-                        if (newName.isNotEmpty()) {
-                            showRenameDialog = false
-                            scope.launch {
-                                try {
-                                    coordinator.updateWorkspace(target, name = newName)
-                                } catch (_: Exception) {}
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                ) {
-                    Text("Save", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
+            confirmText = stringResource(R.string.action_save),
+            onConfirm = {
+                val newName = renameInput.trim()
+                if (newName.isNotEmpty()) {
+                    showRenameDialog = false
+                    if (newName != target.name) renameWorkspace(target, newName)
                 }
             }
-        )
+        ) {
+            Column {
+                TextField(
+                    colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
+                    value = renameInput,
+                    onValueChange = { renameInput = it },
+                    label = { Text(stringResource(R.string.workspace_name_label)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 
     // Archive on Device Disclosure Dialog
     if (showArchiveDisclosureDialog && workspaceToArchive != null) {
         val target = workspaceToArchive!!
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = stringResource(R.string.workspace_archive_dialog_title),
             onDismissRequest = { showArchiveDisclosureDialog = false },
-            title = { Text("Archive on this Device", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Archiving a workspace hides it only on this device. Your paired desktop, files, and other devices remain completely unaffected.")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        archiveStore.acknowledgeDeviceOnlyArchive()
-                        archiveStore.archive(target.id, activeInstanceId)
-                        showArchiveDisclosureDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent)
-                ) {
-                    Text("Got it, Archive", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showArchiveDisclosureDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
-                }
+            confirmText = stringResource(R.string.workspace_archive_dialog_confirm),
+            onConfirm = {
+                archiveStore.acknowledgeDeviceOnlyArchive()
+                archiveStore.archive(target.id, activeInstanceId)
+                showArchiveDisclosureDialog = false
             }
-        )
+        ) {
+            Text(stringResource(R.string.workspace_archive_dialog_body))
+        }
     }
 
     // Remove Workspace Confirm Dialog
     if (showRemoveDialog && workspaceToRemove != null) {
         val target = workspaceToRemove!!
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = stringResource(R.string.workspace_remove_dialog_title),
             onDismissRequest = { showRemoveDialog = false },
-            title = { Text("Remove Workspace?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Are you sure you want to remove \"${target.name}\" from Aiden? Local files on your paired desktop are preserved.")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showRemoveDialog = false
-                        scope.launch {
-                            try {
-                                coordinator.removeWorkspace(target)
-                            } catch (_: Exception) {}
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.danger)
-                ) {
-                    Text("Remove", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRemoveDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
-                }
+            confirmText = stringResource(R.string.action_remove),
+            destructive = true,
+            onConfirm = {
+                showRemoveDialog = false
+                removeWorkspace(target, managedWorktree = false)
             }
-        )
+        ) {
+            Text(stringResource(R.string.workspace_remove_dialog_body, target.name))
+        }
     }
 
     // Delete Managed Worktree Confirm Dialog
     if (showDeleteWorktreeDialog && worktreeToDelete != null) {
         val target = worktreeToDelete!!
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = stringResource(R.string.workspace_delete_worktree_dialog_title),
             onDismissRequest = { showDeleteWorktreeDialog = false },
-            title = { Text("Delete Managed Worktree?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("This will permanently remove the managed worktree folder and git worktree on your paired desktop.")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showDeleteWorktreeDialog = false
-                        scope.launch {
-                            try {
-                                coordinator.removeManagedWorktree(target)
-                            } catch (_: Exception) {}
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.danger)
-                ) {
-                    Text("Delete Worktree", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteWorktreeDialog = false }) {
-                    Text("Cancel", color = palette.foreground)
-                }
+            confirmText = stringResource(R.string.workspace_delete_worktree_dialog_confirm),
+            destructive = true,
+            onConfirm = {
+                showDeleteWorktreeDialog = false
+                removeWorkspace(target, managedWorktree = true)
             }
-        )
+        ) {
+            Text(stringResource(R.string.workspace_delete_worktree_dialog_body))
+        }
     }
 
     // Folder Browser Sheet
     if (showFolderBrowserSheet) {
         ModalBottomSheet(
             onDismissRequest = { showFolderBrowserSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
@@ -940,17 +855,17 @@ fun AidenWorkspaceDirectoryScreen(
     if (showSettingsSheet && workspaceToEditSettings != null) {
         ModalBottomSheet(
             onDismissRequest = { showSettingsSheet = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas
         ) {
+            val settingsTarget = workspaceToEditSettings!!
             AidenWorkspaceSettingsSheet(
-                workspace = workspaceToEditSettings!!,
+                workspace = settingsTarget,
                 coordinator = coordinator,
                 onDismiss = { showSettingsSheet = false },
-                onDeleted = {
+                onRemove = {
                     showSettingsSheet = false
-                    if (selectedWorkspace?.id == workspaceToEditSettings?.id) {
-                        selectedWorkspace = null
-                    }
+                    removeWorkspace(settingsTarget, managedWorktree = settingsTarget.isManagedWorktree)
                 }
             )
         }
@@ -965,6 +880,7 @@ fun AidenFolderBrowserSheet(
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
+    val resources = LocalResources.current
     val client = coordinator.client.collectAsStateWithLifecycle().value
 
     var roots by remember { mutableStateOf<List<AidenBrowserRoot>>(emptyList()) }
@@ -973,6 +889,7 @@ fun AidenFolderBrowserSheet(
     var currentCursor by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var isAdding by remember { mutableStateOf(false) }
+    var addError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(client) {
         if (client != null) {
@@ -1018,50 +935,36 @@ fun AidenFolderBrowserSheet(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = "Browse Desktop Folders",
+                text = stringResource(R.string.workspace_folders_title),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = palette.foreground,
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = palette.foreground)
             }
         }
 
         // Breadcrumbs
         val page = currentPage
         if (page != null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-            ) {
-                Text(
-                    text = "Roots",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.accent,
-                    modifier = Modifier.clickable {
+            AidenFolderBreadcrumbs(
+                crumbs = aidenFolderCrumbs(page.breadcrumbs),
+                onSelect = { crumb ->
+                    val location = crumb.location
+                    if (location == null) {
                         currentPage = null
                         currentLocation = null
+                    } else {
+                        loadLocation(location)
                     }
-                )
-                page.breadcrumbs.forEach { bc ->
-                    Text(" / ", color = palette.secondary, style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        text = bc.label,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.accent,
-                        modifier = Modifier.clickable {
-                            loadLocation(bc.location)
-                        }
-                    )
-                }
-            }
+                },
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
         }
 
-        Divider(color = palette.raised, modifier = Modifier.padding(vertical = 4.dp))
+        HorizontalDivider(color = palette.raised, modifier = Modifier.padding(vertical = 4.dp))
 
         // Content
         if (page == null) {
@@ -1069,33 +972,30 @@ fun AidenFolderBrowserSheet(
             LazyColumn(
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .fillMaxWidth()
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
             ) {
-                items(roots) { root ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { loadLocation(root.location) },
-                        colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(8.dp)
+                if (roots.isEmpty() && isLoading) {
+                    item(key = "roots-skeleton") {
+                        AidenSkeletonList(count = 3, supporting = false, loadingDescription = stringResource(R.string.workspace_folders_loading))
+                    }
+                }
+                itemsIndexed(roots, key = { _, root -> root.id }) { index, root ->
+                    AidenGroupCard(
+                        index = index,
+                        count = roots.size,
+                        onClick = { loadLocation(root.location) },
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(12.dp)
-                        ) {
-                            Icon(Icons.Default.Folder, contentDescription = null, tint = palette.accent)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = root.label,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = palette.foreground,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.secondary)
-                        }
+                        Icon(Icons.Default.Folder, contentDescription = null, tint = palette.accent)
+                        Text(
+                            text = root.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.foreground,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.secondary)
                     }
                 }
             }
@@ -1104,32 +1004,24 @@ fun AidenFolderBrowserSheet(
             LazyColumn(
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .fillMaxWidth()
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
             ) {
-                items(page.entries) { entry ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 3.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { loadLocation(entry.location) },
-                        colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(8.dp)
+                itemsIndexed(page.entries, key = { _, entry -> entry.id }) { index, entry ->
+                    AidenGroupCard(
+                        index = index,
+                        count = page.entries.size,
+                        onClick = { loadLocation(entry.location) },
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(10.dp)
-                        ) {
-                            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = palette.accent)
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = entry.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = palette.foreground,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.secondary)
-                        }
+                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = palette.accent)
+                        Text(
+                            text = entry.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = palette.foreground,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.secondary)
                     }
                 }
 
@@ -1138,19 +1030,16 @@ fun AidenFolderBrowserSheet(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(8.dp),
+                                .padding(top = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            TextButton(
+                            AidenTonalButton(
+                                text = stringResource(R.string.action_load_more),
                                 onClick = {
                                     val loc = currentLocation
-                                    if (loc != null && page.nextCursor != null) {
-                                        loadLocation(loc, page.nextCursor, append = true)
-                                    }
+                                    if (loc != null) loadLocation(loc, page.nextCursor, append = true)
                                 }
-                            ) {
-                                Text("Load More", color = palette.accent)
-                            }
+                            )
                         }
                     }
                 }
@@ -1161,10 +1050,12 @@ fun AidenFolderBrowserSheet(
             // Add This Folder Button
             val loc = currentLocation
             if (loc != null) {
+                val addInteraction = remember { MutableInteractionSource() }
                 Button(
                     onClick = {
                         if (client != null && !isAdding) {
                             isAdding = true
+                            addError = null
                             scope.launch {
                                 try {
                                     val sel = client.createWorkspaceSelection(loc)
@@ -1175,22 +1066,45 @@ fun AidenFolderBrowserSheet(
                                         )
                                     )
                                     onFolderAdded()
-                                } catch (_: Exception) {} finally {
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    addError = error.message ?: resources.getString(R.string.workspace_folder_add_failed)
+                                } finally {
                                     isAdding = false
                                 }
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.accent,
+                        contentColor = palette.onAccent,
+                        disabledContainerColor = palette.accent.copy(alpha = 0.6f),
+                        disabledContentColor = palette.onAccent
+                    ),
+                    shape = AidenShape.Button,
+                    interactionSource = addInteraction,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .tactilePress(addInteraction),
                     enabled = !isAdding
                 ) {
-                    if (isAdding) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp))
-                    } else {
-                        Text("Add This Folder as Workspace", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
+                    // An in-place pending label: adding creates a Workspace on the desktop.
+                    Text(
+                        if (isAdding) stringResource(R.string.workspace_folder_adding) else stringResource(R.string.workspace_folder_add),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                addError?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.danger,
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .semantics { liveRegion = LiveRegionMode.Polite }
+                    )
                 }
             }
         }
@@ -1202,7 +1116,7 @@ fun AidenWorkspaceSettingsSheet(
     workspace: AidenWorkspace,
     coordinator: AidenRemoteCoordinator,
     onDismiss: () -> Unit,
-    onDeleted: () -> Unit
+    onRemove: () -> Unit
 ) {
     val palette = AidenTheme.palette
     val scope = rememberCoroutineScope()
@@ -1210,6 +1124,8 @@ fun AidenWorkspaceSettingsSheet(
     var selectedPermission by remember { mutableStateOf(workspace.permission) }
     var memoryEnabled by remember { mutableStateOf(workspace.memoryEnabled) }
     var isSaving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val resources = LocalResources.current
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     Column(
@@ -1222,14 +1138,14 @@ fun AidenWorkspaceSettingsSheet(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = "Workspace Settings",
+                text = stringResource(R.string.workspace_settings),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = palette.foreground,
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = palette.foreground)
             }
         }
 
@@ -1240,7 +1156,7 @@ fun AidenWorkspaceSettingsSheet(
             colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
             value = nameInput,
             onValueChange = { nameInput = it },
-            label = { Text("Workspace Name") },
+            label = { Text(stringResource(R.string.workspace_name_label)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -1249,72 +1165,37 @@ fun AidenWorkspaceSettingsSheet(
 
         // Permission Switcher
         Text(
-            text = "Permission Level",
+            text = stringResource(R.string.workspace_permission_level),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = palette.foreground
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        AidenWorkspacePermission.values().forEach { perm ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { selectedPermission = perm },
-                colors = CardDefaults.cardColors(
-                    containerColor = if (selectedPermission == perm) palette.accent.copy(alpha = 0.15f) else palette.raised
-                ),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(12.dp)
-                ) {
-                    RadioButton(
-                        selected = selectedPermission == perm,
-                        onClick = { selectedPermission = perm },
-                        colors = RadioButtonDefaults.colors(selectedColor = palette.accent)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = perm.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = palette.foreground
-                        )
-                        Text(
-                            text = perm.detail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.secondary
-                        )
-                    }
-                }
-            }
-        }
+        AidenWorkspacePermissionGroup(
+            selected = selectedPermission,
+            onSelect = { selectedPermission = it }
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Surface(color = palette.raised, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("Use memory", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
-                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your Mac.", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                }
-                Switch(checked = memoryEnabled, onCheckedChange = { memoryEnabled = it })
-            }
-        }
+        AidenWorkspaceMemoryRow(
+            checked = memoryEnabled,
+            onCheckedChange = { memoryEnabled = it }
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
         // Save Button
-        Button(
+        // Permission and memory are access policy the desktop can refuse, so the sheet
+        // waits for its answer with an in-place pending label instead of guessing.
+        AidenPrimaryButton(
+            text = if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.workspace_save_changes),
             onClick = {
                 val newName = nameInput.trim()
                 if (newName.isNotEmpty() && !isSaving) {
                     isSaving = true
+                    saveError = null
                     scope.launch {
                         try {
                             coordinator.updateWorkspace(
@@ -1324,74 +1205,372 @@ fun AidenWorkspaceSettingsSheet(
                                 memoryEnabled = memoryEnabled
                             )
                             onDismiss()
-                        } catch (_: Exception) {} finally {
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            saveError = error.message ?: resources.getString(R.string.workspace_settings_save_failed)
+                        } finally {
                             isSaving = false
                         }
                     }
                 }
             },
-            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSaving
-        ) {
-            Text("Save Changes", color = Color.White, fontWeight = FontWeight.Bold)
+            enabled = !isSaving,
+            modifier = Modifier.fillMaxWidth()
+        )
+        saveError?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.danger,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        Divider(color = palette.raised)
+        HorizontalDivider(color = palette.raised)
         Spacer(modifier = Modifier.height(12.dp))
 
         // Destructive Actions
-        TextButton(
+        AidenTonalButton(
+            text = if (workspace.isManagedWorktree) stringResource(R.string.workspace_menu_delete_worktree) else stringResource(R.string.workspace_remove),
             onClick = { showDeleteConfirm = true },
-            colors = ButtonDefaults.textButtonColors(contentColor = palette.danger),
+            destructive = true,
+            leadingIcon = Icons.Default.Delete,
             modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (workspace.isManagedWorktree) "Delete Managed Worktree" else "Remove Workspace",
-                fontWeight = FontWeight.Bold
-            )
-        }
+        )
     }
 
     if (showDeleteConfirm) {
-        AlertDialog(
+        AidenWorkspaceAlertDialog(
+            title = if (workspace.isManagedWorktree) stringResource(R.string.workspace_delete_worktree_short_title) else stringResource(R.string.workspace_remove_dialog_title),
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text(if (workspace.isManagedWorktree) "Delete Worktree?" else "Remove Workspace?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    if (workspace.isManagedWorktree) "This will permanently remove the managed worktree folder and git worktree on your paired desktop."
-                    else "Are you sure you want to remove \"${workspace.name}\" from Aiden? Local files on your paired desktop are preserved."
+            confirmText = if (workspace.isManagedWorktree) stringResource(R.string.action_delete) else stringResource(R.string.action_remove),
+            destructive = true,
+            onConfirm = {
+                showDeleteConfirm = false
+                onRemove()
+            }
+        ) {
+            Text(
+                if (workspace.isManagedWorktree) stringResource(R.string.workspace_delete_worktree_dialog_body)
+                else stringResource(R.string.workspace_remove_dialog_body, workspace.name)
+            )
+        }
+    }
+}
+
+/** The slice of a Workspace chat its row shows, small enough to keep per Workspace. */
+@Serializable
+internal data class AidenWorkspaceChatListing(
+    val id: String,
+    val title: String,
+    val messageCount: Int
+) {
+    companion object {
+        val listSerializer = ListSerializer(serializer())
+
+        fun of(chats: List<AidenChat>): List<AidenWorkspaceChatListing> =
+            chats.map { AidenWorkspaceChatListing(it.id, it.title, it.messages.size) }
+    }
+}
+
+/** Shows each pending rename over the server's list until the desktop answers. */
+internal fun aidenWorkspacesWithPendingNames(
+    workspaces: List<AidenWorkspace>,
+    pendingNames: Map<String, String>
+): List<AidenWorkspace> =
+    if (pendingNames.isEmpty()) workspaces
+    else workspaces.map { workspace -> pendingNames[workspace.id]?.let { workspace.copy(name = it) } ?: workspace }
+
+/**
+ * A Workspace's chats. A saved listing renders at once and stays while it refreshes;
+ * [chats] is null only when nothing is saved, which shows placeholders on a first read
+ * and the error state if that read fails.
+ */
+@Composable
+internal fun AidenWorkspaceChatList(
+    chats: List<AidenWorkspaceChatListing>?,
+    isRefreshing: Boolean,
+    loadFailed: Boolean,
+    canStartChat: Boolean,
+    onOpenChat: (String) -> Unit,
+    onStartChat: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    val presentation = AidenReadPresentation.of(
+        hasContent = chats != null,
+        isFetching = isRefreshing,
+        hasSettled = true,
+        failed = loadFailed
+    )
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
+    ) {
+        when (presentation) {
+            AidenReadPresentation.SKELETON -> item(key = "workspace-chats-skeleton") {
+                AidenSkeletonList(count = 5, loadingDescription = stringResource(R.string.workspace_chats_loading))
+            }
+            AidenReadPresentation.FAILED -> item(key = "workspace-chats-error") {
+                AidenWorkspaceChatLoadErrorState(
+                    message = stringResource(R.string.workspace_chats_reconnect),
+                    onRetry = onRetry,
+                    modifier = Modifier.padding(top = 32.dp)
                 )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showDeleteConfirm = false
-                        scope.launch {
-                            try {
-                                if (workspace.isManagedWorktree) {
-                                    coordinator.removeManagedWorktree(workspace)
-                                } else {
-                                    coordinator.removeWorkspace(workspace)
-                                }
-                                onDeleted()
-                            } catch (_: Exception) {}
+            }
+            AidenReadPresentation.EMPTY, AidenReadPresentation.CONTENT -> {
+                val listing = chats.orEmpty()
+                if (listing.isEmpty()) {
+                    item(key = "workspace-chats-empty") {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ChatBubbleOutline,
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = stringResource(R.string.workspace_chats_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = palette.secondary
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            AidenPrimaryButton(text = stringResource(R.string.workspace_start_chat), onClick = onStartChat, enabled = canStartChat)
                         }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.danger)
-                ) {
-                    Text(if (workspace.isManagedWorktree) "Delete" else "Remove", color = Color.White)
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text("Cancel", color = palette.foreground)
+                itemsIndexed(listing, key = { _, chat -> chat.id }) { index, chat ->
+                    AidenGroupCard(
+                        index = index,
+                        count = listing.size,
+                        onClick = { onOpenChat(chat.id) },
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, tint = palette.accent)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = chat.title.ifEmpty { stringResource(R.string.workspace_new_chat) },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.foreground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = pluralStringResource(R.plurals.workspace_message_count, chat.messageCount, chat.messageCount),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.secondary
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.secondary)
+                    }
                 }
             }
+        }
+    }
+}
+
+/** Connected Files / Git Review action pair shown above a workspace's chats. */
+@Composable
+internal fun AidenWorkspaceQuickActions(
+    uncommitted: Int,
+    onFiles: () -> Unit,
+    onGitReview: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
+    ) {
+        AidenConnectedActionSegment(
+            index = 0,
+            count = 2,
+            label = stringResource(R.string.workspace_action_files),
+            icon = Icons.Default.FolderOpen,
+            onClick = onFiles,
+            modifier = Modifier.weight(1f)
         )
+        AidenConnectedActionSegment(
+            index = 1,
+            count = 2,
+            label = stringResource(R.string.workspace_action_git_review),
+            icon = Icons.Default.Commit,
+            onClick = onGitReview,
+            modifier = Modifier.weight(1f),
+            trailing = if (uncommitted > 0) {
+                {
+                    Surface(color = palette.accent.copy(alpha = 0.14f), shape = CircleShape) {
+                        Text(
+                            text = if (uncommitted > 99) "99+" else uncommitted.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.accent,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            } else {
+                null
+            }
+        )
+    }
+}
+
+/**
+ * Horizontally scrollable breadcrumb pills for the desktop folder browser. The trail keeps
+ * its newest crumb in view, scrolling instantly when motion is reduced.
+ */
+@Composable
+internal fun AidenFolderBreadcrumbs(
+    crumbs: List<AidenFolderCrumb>,
+    onSelect: (AidenFolderCrumb) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val listState = rememberLazyListState()
+    LaunchedEffect(crumbs.size, crumbs.lastOrNull()?.location) {
+        if (crumbs.isEmpty()) return@LaunchedEffect
+        if (reduceMotion) listState.scrollToItem(crumbs.lastIndex) else listState.animateScrollToItem(crumbs.lastIndex)
+    }
+    LazyRow(
+        state = listState,
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        itemsIndexed(crumbs, key = { index, crumb -> crumb.location ?: "roots-$index" }) { index, crumb ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (index > 0) {
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = palette.secondary,
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp)
+                            .size(16.dp)
+                    )
+                }
+                val interaction = remember { MutableInteractionSource() }
+                Surface(
+                    onClick = { onSelect(crumb) },
+                    shape = CircleShape,
+                    color = if (crumb.isCurrent) palette.accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    interactionSource = interaction,
+                    modifier = Modifier
+                        .tactilePress(interaction)
+                        .semantics { role = Role.Button }
+                ) {
+                    Text(
+                        text = crumb.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (crumb.isCurrent) palette.accent else palette.foreground,
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Connected permission choices. Each card is a radio option: selection is carried by the
+ * radio control and a tonal fill, never a border.
+ */
+@Composable
+internal fun AidenWorkspacePermissionGroup(
+    selected: AidenWorkspacePermission,
+    onSelect: (AidenWorkspacePermission) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    val options = AidenWorkspacePermission.entries
+    AidenConnectedColumn(modifier = modifier.selectableGroup()) {
+        options.forEachIndexed { index, permission ->
+            val isSelected = permission == selected
+            AidenGroupCard(
+                index = index,
+                count = options.size,
+                selected = isSelected,
+                onClick = { onSelect(permission) },
+                role = Role.RadioButton,
+                modifier = Modifier.semantics { this.selected = isSelected },
+                contentPadding = PaddingValues(start = 8.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)
+            ) {
+                RadioButton(
+                    selected = isSelected,
+                    onClick = null,
+                    colors = RadioButtonDefaults.colors(selectedColor = palette.accent)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = permission.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.foreground
+                    )
+                    Text(
+                        text = permission.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Memory toggle card led by the SD-card memory icon. The whole card acts as the switch. */
+@Composable
+internal fun AidenWorkspaceMemoryRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    Surface(
+        color = palette.raised,
+        shape = RoundedCornerShape(AidenShape.GroupOuter),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(AidenShape.GroupOuter))
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(palette.accent.copy(alpha = 0.12f))
+            ) {
+                Icon(Icons.Default.SdStorage, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.workspace_use_memory), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+                Text(stringResource(R.string.workspace_use_memory_body), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+            }
+            Switch(checked = checked, onCheckedChange = null)
+        }
     }
 }

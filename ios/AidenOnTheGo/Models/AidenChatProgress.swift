@@ -83,6 +83,92 @@ enum AidenProgressPresentation {
     }
 }
 
+/// Public roster navigation only: never resolves a private child transcript.
+/// Scope is persisted alongside the path so restored IDs cannot cross turns,
+/// installations, or a replacement pairing of the same installation.
+struct AidenAgentNavigationScope: Equatable, Codable {
+    let instanceId: String
+    let deviceId: String
+    let chatId: String
+    let epoch: String
+    let turnId: String?
+}
+
+struct AidenAgentNavigation: Equatable, Codable {
+    private(set) var scope: AidenAgentNavigationScope
+    private(set) var path: [String] = []
+
+    init(scope: AidenAgentNavigationScope) {
+        self.scope = scope
+    }
+
+    /// Rebuild the canonical ancestor chain for every entry point, including
+    /// a child selected directly from the flat roster. A malformed cycle is
+    /// inspectable as a single detail rather than an invented parent stack.
+    static func ancestorPath(for agentId: String, in agents: [AidenRemoteChatAgent]) -> [String] {
+        let byId = Dictionary(agents.map { ($0.agentId, $0) }, uniquingKeysWith: { first, _ in first })
+        guard byId[agentId] != nil else { return [] }
+        var result: [String] = []
+        var visited = Set<String>()
+        var cursor: String? = agentId
+        while let id = cursor, let agent = byId[id] {
+            guard visited.insert(id).inserted else { return [agentId] }
+            result.append(id)
+            cursor = agent.parentAgentId
+        }
+        // Keep the requested detail and its nearest ancestors; bound the
+        // native stack independently of any server depth claim.
+        return Array(result.prefix(16).reversed())
+    }
+
+    /// Reconcile the displayed roster; unrelated live turns must not reset history.
+    static func reconciledPath(_ path: [String], from previous: AidenRemoteChatAgentRoster?,
+                               to roster: AidenRemoteChatAgentRoster?) -> [String] {
+        guard let previous, let roster,
+              previous.chatId == roster.chatId, previous.epoch == roster.epoch,
+              previous.turnId == roster.turnId else { return [] }
+        let ids = Set(roster.agents.map(\.agentId))
+        let surviving = path.prefix { ids.contains($0) }
+        return surviving.last.map { ancestorPath(for: $0, in: roster.agents) } ?? []
+    }
+
+    static func children(of agentId: String, in agents: [AidenRemoteChatAgent]) -> [AidenRemoteChatAgent] {
+        guard agents.contains(where: { $0.agentId == agentId }) else { return [] }
+        return agents.filter { $0.parentAgentId == agentId && $0.agentId != agentId }
+    }
+
+    mutating func open(_ agentId: String, in agents: [AidenRemoteChatAgent]) {
+        let next = Self.ancestorPath(for: agentId, in: agents)
+        guard !next.isEmpty else { return }
+        path = next
+    }
+
+    /// Returns false at the roster, where the sheet owner should dismiss.
+    @discardableResult
+    mutating func back() -> Bool {
+        guard !path.isEmpty else { return false }
+        path.removeLast()
+        return true
+    }
+
+    mutating func reconcile(scope nextScope: AidenAgentNavigationScope, agents: [AidenRemoteChatAgent]) {
+        guard scope == nextScope else {
+            scope = nextScope
+            path = []
+            return
+        }
+        // A vanished intermediate detail removes its descendants from this
+        // stack even when they still appear elsewhere in the latest roster.
+        let ids = Set(agents.map(\.agentId))
+        let survivingPrefix = path.prefix { ids.contains($0) }
+        guard let target = survivingPrefix.last else {
+            path = []
+            return
+        }
+        path = Self.ancestorPath(for: target, in: agents)
+    }
+}
+
 struct AidenChatProgressControls: View {
     @Environment(\.aidenPalette) private var palette
 
@@ -258,10 +344,11 @@ struct AidenChatProgressSheet: View {
     let kind: AidenProgressSheet
     let model: AidenChatViewModel
     @State private var selectedTurnId: String?
+    @State private var agentPath: [String] = []
     @State private var isScrolledAwayFromTaskLatest = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $agentPath) {
             Group {
                 switch kind {
                 case .tasks:
@@ -277,6 +364,18 @@ struct AidenChatProgressSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+        .onChange(of: model.agentRoster(for: selectedTurnId)) { previous, roster in
+            agentPath = AidenAgentNavigation.reconciledPath(agentPath, from: previous, to: roster)
+        }
+        .onChange(of: model.agentNavigationConnectionIdentity) { _, _ in
+            agentPath = []
+            if kind == .agents { dismiss() }
+        }
+        .onChange(of: model.agentRoster?.epoch) { _, _ in agentPath = [] }
+        .onChange(of: model.chat.id) { _, _ in agentPath = [] }
+        .onChange(of: model.canReadAgentRoster) { _, readable in
+            if !readable { agentPath = []; if kind == .agents { dismiss() } }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -397,6 +496,7 @@ struct AidenChatProgressSheet: View {
                     Picker("Turn", selection: Binding(
                         get: { selectedTurnId ?? model.currentAgentTurnId ?? "" },
                         set: { value in
+                            agentPath = []
                             selectedTurnId = value.isEmpty ? nil : value
                             if !value.isEmpty {
                                 Task { await model.loadAgentRoster(turnId: value) }
@@ -418,7 +518,9 @@ struct AidenChatProgressSheet: View {
                         ForEach(AidenProgressPresentation.agentGroups(roster), id: \.title) { group in
                             Section(group.title) {
                                 ForEach(group.agents) { agent in
-                                    NavigationLink(value: agent.agentId) {
+                                    Button {
+                                        agentPath = AidenAgentNavigation.ancestorPath(for: agent.agentId, in: roster.agents)
+                                    } label: {
                                         AidenAgentRosterRow(agent: agent)
                                     }
                                 }
@@ -428,7 +530,9 @@ struct AidenChatProgressSheet: View {
                     .listStyle(.insetGrouped)
                     .navigationDestination(for: String.self) { agentId in
                         if let agent = roster.agents.first(where: { $0.agentId == agentId }) {
-                            AidenAgentDetailView(model: model, agent: agent)
+                            AidenAgentDetailView(model: model, agent: agent, agents: roster.agents) { id in
+                                agentPath = AidenAgentNavigation.ancestorPath(for: id, in: roster.agents)
+                            }
                         } else {
                             AidenProgressUnavailableView(text: "This agent is no longer in the selected roster.")
                         }
@@ -575,22 +679,33 @@ private struct AidenAgentRosterRow: View {
 private struct AidenAgentDetailView: View {
     @Environment(\.aidenPalette) private var palette
     let model: AidenChatViewModel
-    let initialAgent: AidenRemoteChatAgent
+    let agent: AidenRemoteChatAgent
+    let agents: [AidenRemoteChatAgent]
+    let openAgent: (String) -> Void
     @State private var confirmsStop = false
-
-    init(model: AidenChatViewModel, agent: AidenRemoteChatAgent) {
-        self.model = model
-        self.initialAgent = agent
-    }
-
-    /// Follow the live current-turn roster so a confirmed stop (or any other
-    /// update) replaces the snapshot the row was opened with.
-    private var agent: AidenRemoteChatAgent {
-        model.agentRoster?.agents.first { $0.agentId == initialAgent.agentId } ?? initialAgent
-    }
 
     var body: some View {
         List {
+            if let parent = agents.first(where: { $0.agentId == agent.parentAgentId }) {
+                Section {
+                    Button { openAgent(parent.agentId) } label: {
+                        Label("Started by \(parent.label)", systemImage: "arrow.turn.up.left")
+                    }
+                    .accessibilityLabel(Text("Open parent agent \(parent.label)"))
+                }
+            }
+            let children = AidenAgentNavigation.children(of: agent.agentId, in: agents)
+            if !children.isEmpty {
+                Section("Sub-agents") {
+                    ForEach(children) { child in
+                        Button { openAgent(child.agentId) } label: {
+                            AidenAgentRosterRow(agent: child)
+                        }
+                        .accessibilityHint(Text("Sub-agent of \(agent.label)"))
+                    }
+                }
+            }
+
             if model.canInterrupt(agent) || model.interruptingAgentIds.contains(agent.agentId) {
                 Section {
                     Button(role: .destructive) {

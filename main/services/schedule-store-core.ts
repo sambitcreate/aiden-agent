@@ -14,6 +14,7 @@ import type {
   ScheduledTaskInput,
 } from "./types.js";
 import { validateScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
+import { acpHarnessUnavailableReason } from "../../renderer/shared/acp-harness.js";
 
 const RUNS_PER_TASK = 50;
 const STORED_OUTPUT_LIMIT = 64 * 1024;
@@ -126,6 +127,8 @@ function normalizeInput(
   const prompt = input.mode === "llm" ? cleanOptional(input.prompt, 32 * 1024) : undefined;
   const script = input.mode === "script" ? validateScriptName(input.script ?? "") : undefined;
   if (input.mode === "llm" && !prompt) throw new Error("LLM tasks require a prompt.");
+  const harnessReason = input.mode === "llm" ? acpHarnessUnavailableReason(input.providerId) : undefined;
+  if (harnessReason) throw new Error(harnessReason);
   if (prompt) assertSafeScheduledPrompt(prompt);
   if (
     input.permission !== undefined &&

@@ -46,7 +46,7 @@ Remove Kanban, Hermes projects/profiles/personalities, Hermes Skills/Memory/Insi
 - Local-network production transport is HTTPS. QR pairing pins the Aiden installation's stable P-256 SPKI SHA-256 fingerprint. Plain HTTP is development-build-only.
 - Pairing secrets are high entropy, short lived, single use, rate limited, and never logged. The reviewed manual path uses a uniformly random 100-bit Crockford code only as a local HKDF input for authenticated decryption of the existing certificate-pinned trust envelope; lower-entropy human-sized codes still require a reviewed PAKE/SAS or explicit fingerprint confirmation.
 - Device credentials are random, stored as digests on the desktop and in Keychain on iOS, capability scoped, revocable, and never placed in URLs, App Group data, App Intents, logs, or Live Activities.
-- DTOs are allowlists. Absolute paths, provider/MCP credentials, raw diagnostics, Git admin paths/tokens, schedule runtime internals, and private agent history never cross the API.
+- DTOs are allowlists. Absolute paths, stored provider/MCP credentials, raw diagnostics, Git admin paths/tokens, schedule runtime internals, and private agent history never appear in API responses. Providers settings may submit a new write-only provider key through the authenticated pinned Mac connection using the feature-gated, foreground-only creation endpoint; the Mac encrypts it and never returns it.
 - Task and agent progress DTOs remain read-only and separately authorized from the parent transcript. The app keeps only a bounded local roster history, refetches a selected public turn by opaque ID, and fences snapshots by projection epoch and revision. A progress reconnect starts at a fresh snapshot with no inherited SSE cursor.
 - Directory and file handles are opaque server-side capabilities bound to instance, device, workspace/root identity, policy revision, expiry, and snapshot. The client never submits a free-form desktop path.
 - Workspace selection consumption and workspace creation are atomic and idempotent. Filesystem identity and canonical root membership are revalidated immediately before mutation.
@@ -164,6 +164,6 @@ Preserve the imported Hermex upstream MIT license, copyright, and third-party no
 The user's desktop-configured Gemini Read Aloud request supersedes older
 on-device-only/server-TTS exclusions specifically for `tts-v1`. See
 `docs/aiden-remote-api-v1.md` (repository root) for the normative endpoint and
-ownership rules. No mobile setup mutations, arbitrary transcripts, direct Google
-requests or provider credentials are permitted. Legacy servers fail closed with
+ownership rules. No mobile speech setup mutations, arbitrary transcripts, direct Google
+requests or speech-provider credentials are permitted. Legacy servers fail closed with
 update/setup guidance; there is no silent alternate-model or on-device fallback.

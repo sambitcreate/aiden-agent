@@ -45,6 +45,15 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    const val CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1"
+    const val CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1"
+    const val CHAT_FORK_FEATURE = "chat-fork-v1"
+    const val CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1"
+    const val MAX_FORK_SUMMARY_FOCUS_LENGTH = 1_000
+    const val MAX_FORK_PREFILL_ATTACHMENTS = 10
+    /** Contract revision 24: phones may observe and control runs started on
+     * the Mac, in Telegram or by the scheduler. */
+    const val PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 4
@@ -206,6 +215,8 @@ sealed class AidenBotPrivateResponseScope {
     data class Root(val root: String) : AidenBotPrivateResponseScope()
     object ChatProjection : AidenBotPrivateResponseScope()
     object ChatSummaryProjection : AidenBotPrivateResponseScope()
+    /** A `GET /chats/{id}/messages` page: the chat message projection, Bot-classified by its revision-23 `botId`. */
+    object MessagesWindowProjection : AidenBotPrivateResponseScope()
     /** Progress has its own strict DTO parser; this scope only applies the generic wire-key guard. */
     object ChatProgressProjection : AidenBotPrivateResponseScope()
     object SharedFixture : AidenBotPrivateResponseScope()
@@ -274,6 +285,13 @@ object AidenBotPrivateResponseValidator {
                 // Chat projections may contain additive public fields, but never
                 // receive the Bot identity exceptions for instructions/greetings.
                 validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false)
+            }
+            is AidenBotPrivateResponseScope.MessagesWindowProjection -> {
+                // A window page carries the same message projection as a chat
+                // read, so it is held to the same rules, including the Bot
+                // classification its revision-23 metadata names.
+                val botChat = (element as? kotlinx.serialization.json.JsonObject)?.containsKey("botId") == true
+                validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false, regularChat = !botChat)
             }
             is AidenBotPrivateResponseScope.ChatSummaryProjection -> {
                 rejectExplicitNullCursor(element)
@@ -442,6 +460,10 @@ data class AidenRemoteCapability(val rawValue: String) {
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
         val SKILLS_INVOKE = AidenRemoteCapability("skills:invoke")
+        /** Contract revision 24: phone-scoped observation of foreign runs. */
+        val RUNS_OBSERVE = AidenRemoteCapability("runs:observe")
+        /** Contract revision 24: Stop, approvals and questions on foreign runs. */
+        val RUNS_CONTROL = AidenRemoteCapability("runs:control")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -452,6 +474,16 @@ data class AidenRemoteCapability(val rawValue: String) {
         )
 
         val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE)
+
+        /** The phone-scoped run subset. It is never granted at pairing; a
+         * phone can only negotiate it behind `phone-run-control-v1`. */
+        val PHONE_RUNS = listOf(RUNS_OBSERVE, RUNS_CONTROL)
+
+        /** Every grant `POST /device/capabilities` may add. */
+        val NEGOTIABLE = PROGRESS + PHONE_RUNS
+
+        /** The pairing vocabulary plus the negotiable run subset. */
+        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS
     }
 }
 

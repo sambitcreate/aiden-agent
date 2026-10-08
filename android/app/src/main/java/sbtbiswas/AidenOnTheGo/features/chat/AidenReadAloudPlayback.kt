@@ -11,6 +11,8 @@ import android.media.AudioManager
 import android.media.MediaDataSource
 import android.media.MediaPlayer
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.*
@@ -20,6 +22,54 @@ import java.io.ByteArrayOutputStream
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+enum class AidenReadAloudPhase { IDLE, PREPARING, GENERATING, PLAYING }
+
+/** Pure presentation of Read Aloud progress for the mini player. */
+object AidenReadAloudProgress {
+    /** Beyond this many segments the bar renders as one continuous track. */
+    const val MAXIMUM_VISIBLE_SEGMENTS = 24
+
+    /**
+     * Generation progress while the desktop synthesizes, then playback position across
+     * all segments once audio starts. Always within 0..1.
+     */
+    fun ratio(
+        phase: AidenReadAloudPhase,
+        readySegments: Int,
+        totalSegments: Int,
+        playingSegment: Int,
+        segmentFraction: Float
+    ): Float {
+        if (totalSegments <= 0) return 0f
+        val value = when (phase) {
+            AidenReadAloudPhase.IDLE, AidenReadAloudPhase.PREPARING -> 0f
+            AidenReadAloudPhase.GENERATING -> readySegments.toFloat() / totalSegments
+            AidenReadAloudPhase.PLAYING ->
+                (playingSegment.coerceIn(0, totalSegments - 1) + segmentFraction.coerceIn(0f, 1f)) / totalSegments
+        }
+        return value.coerceIn(0f, 1f)
+    }
+
+    fun visibleSegments(totalSegments: Int): Int =
+        if (totalSegments in 1..MAXIMUM_VISIBLE_SEGMENTS) totalSegments else 1
+
+    /** How full segment [index] of [segmentCount] is for an overall [ratio]. */
+    fun segmentFill(index: Int, segmentCount: Int, ratio: Float): Float =
+        if (segmentCount <= 0) 0f else (ratio.coerceIn(0f, 1f) * segmentCount - index).coerceIn(0f, 1f)
+
+    fun label(phase: AidenReadAloudPhase, readySegments: Int, totalSegments: Int, playingSegment: Int): String =
+        when (phase) {
+            AidenReadAloudPhase.IDLE -> ""
+            AidenReadAloudPhase.PREPARING -> "Preparing audio"
+            AidenReadAloudPhase.GENERATING ->
+                if (totalSegments > 1) "Generating audio · ${readySegments.coerceIn(0, totalSegments)} of $totalSegments"
+                else "Generating audio"
+            AidenReadAloudPhase.PLAYING ->
+                if (totalSegments > 1) "Reading aloud · ${playingSegment.coerceIn(0, totalSegments - 1) + 1} of $totalSegments"
+                else "Reading aloud"
+        }
+}
 
 /** In-memory, one-segment native player. The paired desktop owns synthesis and replay. */
 class AidenReadAloudPlayback(
@@ -31,6 +81,15 @@ class AidenReadAloudPlayback(
 ) {
     var activeMessageId by mutableStateOf<String?>(null); private set
     var error by mutableStateOf<String?>(null); private set
+    var phase by mutableStateOf(AidenReadAloudPhase.IDLE); private set
+    var readySegments by mutableIntStateOf(0); private set
+    var totalSegments by mutableIntStateOf(0); private set
+    var playingSegment by mutableIntStateOf(0); private set
+    private var segmentFraction by mutableFloatStateOf(0f)
+    val progressRatio: Float
+        get() = AidenReadAloudProgress.ratio(phase, readySegments, totalSegments, playingSegment, segmentFraction)
+    val progressLabel: String
+        get() = AidenReadAloudProgress.label(phase, readySegments, totalSegments, playingSegment)
     private var epoch = 0L
     private var task: Job? = null
     private var player: MediaPlayer? = null
@@ -50,6 +109,8 @@ class AidenReadAloudPlayback(
         task?.cancel(); task = null
         player?.release(); player = null
         activeMessageId = null
+        phase = AidenReadAloudPhase.IDLE
+        readySegments = 0; totalSegments = 0; playingSegment = 0; segmentFraction = 0f
         focus?.let { audioManager.abandonAudioFocusRequest(it) }; focus = null
         if (noisyRegistered) { appContext.unregisterReceiver(noisy); noisyRegistered = false }
         val id = requestId; requestId = null
@@ -68,6 +129,7 @@ class AidenReadAloudPlayback(
         val token = epoch
         val id = UUID.randomUUID().toString()
         requestId = id; activeMessageId = messageId; error = null
+        phase = AidenReadAloudPhase.PREPARING
         task = scope.launch {
             fun checkCurrent() { if (!isActive || epoch != token || !current()) throw CancellationException() }
             try {
@@ -89,6 +151,8 @@ class AidenReadAloudPlayback(
                 checkCurrent()
                 val jobId = job.jobId
                 var stalledPolls = 0
+                phase = AidenReadAloudPhase.GENERATING
+                totalSegments = job.totalSegments; readySegments = job.readySegments
                 while (job.phase != "completed") {
                     check(job.isValid && job.chatId == chatId && job.jobId == jobId && job.phase !in setOf("failed", "cancelled") && stalledPolls < AidenReadAloudJob.MAXIMUM_STALLED_POLLS) {
                         job.error?.message ?: "This soundbite is unavailable. Generation will not retry automatically."
@@ -100,6 +164,7 @@ class AidenReadAloudPlayback(
                     val next = update.job ?: throw IllegalStateException("This soundbite is no longer available.")
                     stalledPolls = AidenReadAloudJob.nextStalledPollCount(job.readySegments, next.readySegments, stalledPolls)
                     job = next
+                    totalSegments = job.totalSegments; readySegments = job.readySegments
                 }
                 check(job.isValid && job.chatId == chatId && job.jobId == jobId && job.readySegments == job.totalSegments) { "Invalid Read Aloud completion." }
                 var totalBytes = 0
@@ -131,9 +196,13 @@ class AidenReadAloudPlayback(
                     }
                     checkCurrent()
                     audio.start()
+                    phase = AidenReadAloudPhase.PLAYING
+                    playingSegment = segment; segmentFraction = 0f
+                    val duration = runCatching { audio.duration }.getOrDefault(0)
                     var ticks = 0
                     while (audio.isPlaying) {
                         delay(200); checkCurrent(); ticks++
+                        if (duration > 0) segmentFraction = runCatching { audio.currentPosition.toFloat() / duration }.getOrDefault(segmentFraction)
                         if (ticks % 10 == 0) {
                             val update = api.readAloudStatus(chatId)
                             checkCurrent()

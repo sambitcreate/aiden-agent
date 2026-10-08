@@ -167,7 +167,7 @@ export function ProviderModelVisibility({
             placeholder="Search models"
             aria-label={`Search ${provider.label} models`}
           />
-          <div className="max-h-72 overflow-y-auto rounded-card border border-separator">
+          <div className="max-h-72 overflow-y-auto rounded-card bg-well">
             {filtered.length > 0 ? (
               filtered.map((entry, index) => {
                 const visible = !isModelHidden(hidden, provider.id, entry.model);

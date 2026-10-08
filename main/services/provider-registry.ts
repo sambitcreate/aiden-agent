@@ -7,6 +7,7 @@ import type {
   CredentialStore,
   Model,
   Models,
+  MutableModels,
   Provider as PiProvider,
   ProviderStreams,
 } from "@earendil-works/pi-ai";
@@ -34,6 +35,21 @@ import {
 import { piModelMetadataFor } from "./pi-model-metadata.js";
 import { withBotProviderInventoryMutation } from "./bot-runtime-inventory-publication.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
+import { app } from "../platform.js";
+import { join } from "node:path";
+import { createProviderLoginDeviceId } from "./provider-login-identity.js";
+import { ANTIGRAVITY_PROVIDER_ID } from "./antigravity/models.js";
+import { antigravityEnabled, antigravityProvider, antigravityService } from "./antigravity/index.js";
+
+/** Desktop-only ACP harness providers (they need Electron paths and process supervision). */
+function registerDesktopHarnessProviders(models: MutableModels): MutableModels {
+  if (antigravityEnabled()) models.setProvider(antigravityProvider());
+  return models;
+}
+
+const getProviderLoginDeviceId = createProviderLoginDeviceId(
+  () => join(app.getPath("userData"), "provider-login-device-id"),
+);
 
 /** IDs used by Aiden before Pi became the provider authority. */
 const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
@@ -198,7 +214,7 @@ export class ProviderRegistry {
         auth.login!({
           ...interaction,
           signal: interaction.signal ?? new AbortController().signal,
-        }),
+        }, { getDeviceId: getProviderLoginDeviceId }),
       commitCredential: async (credential: unknown) => {
         await this.credentials.modify(providerId, async () => credential as Credential);
         // Credential setup is an explicit network action. Publish this
@@ -208,8 +224,24 @@ export class ProviderRegistry {
         const warning = catalogRefreshWarning(errors);
         return warning ? { warning } : undefined;
       },
-      logout: () => this.credentials.delete(providerId),
+      logout: () => this.deleteCredential(providerId),
     };
+  }
+
+  /**
+   * Remove Pi's credential. ACP harness providers keep their real sign-in in
+   * the agent's own profile, which is cleared too.
+   */
+  private async deleteCredential(providerId: string): Promise<void> {
+    try {
+      if (providerId === ANTIGRAVITY_PROVIDER_ID && antigravityEnabled()) {
+        await antigravityService().signOut();
+      }
+    } finally {
+      // Pi's marker always goes, so a failed agent sign-out cannot leave the
+      // provider looking signed in.
+      await this.credentials.delete(providerId);
+    }
   }
 
   /** Credential removal is independent of which interactive setup method a provider offers. */
@@ -230,7 +262,7 @@ export class ProviderRegistry {
     return {
       snapshot: async () =>
         (await this.listBuiltinProviders()).find((item) => item.id === providerId),
-      logout: () => this.credentials.delete(providerId),
+      logout: () => this.deleteCredential(providerId),
       committedFallback: () => ({ id: providerId, hasKey: null, canLogout: false }),
     };
   }
@@ -432,7 +464,7 @@ export class ProviderRegistry {
 }
 
 export const providerRegistry = new ProviderRegistry(
-  registerAidenBuiltinProviders(
+  registerDesktopHarnessProviders(registerAidenBuiltinProviders(
     (() => {
       const models = createModels({ credentials: piCredentialStore, modelsStore: piModelsStore });
       for (const provider of builtinProviders()) {
@@ -447,6 +479,6 @@ export const providerRegistry = new ProviderRegistry(
       }
       return models;
     })(),
-  ),
+  )),
   piCredentialStore,
 );

@@ -1,3 +1,4 @@
+import type { McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import type { McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
 // Assembles the pi agent tool set for a generation: Web Search + Agent Skills +
 // MCP server tools, based on current settings. Empty when nothing is enabled.
@@ -61,6 +62,9 @@ export interface ToolContext {
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
   allowMcpTools?: boolean;
+  /** Explicit host admission for attended desktop workspace provider credentials. */
+  allowMcpProviderAuth?: boolean;
+  mcpProviderScope?: McpProviderExecutionScope;
   /** Exact configured server identities approved for this unattended generation. */
   mcpServerIds?: readonly string[];
   /** Exact connection fingerprints approved for this unattended generation. */
@@ -113,6 +117,8 @@ async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
   if (ctx.mcpServerBindings) assertScheduledMcpServerBindings(servers, ctx.mcpServerBindings);
   return collectMcpAgentTools(servers, {
     strict: ctx.mcpServerIds !== undefined,
+    allowProviderAuth: ctx.allowMcpProviderAuth === true,
+    providerScope: ctx.mcpProviderScope,
     onServerInstructions: ctx.onMcpServerInstructions,
   });
 }
