@@ -49,6 +49,10 @@ const VERBS: Record<string, VerbPair> = {
   browser_wait_for: { active: "Waiting for page", complete: "Waited for page" },
   browser_recording_start: { active: "Starting browser recording", complete: "Started browser recording" },
   browser_recording_stop: { active: "Stopping browser recording", complete: "Stopped browser recording" },
+  device_list: { active: "Listing simulators", complete: "Listed simulators" },
+  device_open: { active: "Opening simulator", complete: "Opened simulator" },
+  device_screenshot: { active: "Taking simulator screenshot", complete: "Took simulator screenshot" },
+  device_close: { active: "Closing simulator", complete: "Closed simulator" },
   vcc_recall: { active: "Recalling chat history", complete: "Recalled chat history" },
   compact_context: { active: "Compacting context", complete: "Compacted context" },
 };

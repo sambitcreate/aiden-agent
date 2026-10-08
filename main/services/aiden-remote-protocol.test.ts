@@ -2163,6 +2163,12 @@ test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG 
   const mobile = (copy: Record<string, unknown>) => record(copy.mobileSimulators, "mobileSimulators");
   assert.throws(
     mutate((copy) => {
+      delete (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[2]!.platform;
+    }),
+    /missing platform/u,
+  );
+  assert.throws(
+    mutate((copy) => {
       record(mobile(copy).listing, "listing").chatDeviceIds = ["NOT-LISTED"];
     }),
     /chatDeviceIds must name listed devices/u,

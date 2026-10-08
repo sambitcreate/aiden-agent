@@ -5767,7 +5767,9 @@ function parseMobileSimulatorListing(value: unknown, label: string): Record<stri
     const id = requiredString(device, "id");
     if (!MOBILE_SIMULATOR_DEVICE_ID.test(id)) throw new Error(`${label} device ${index} id is invalid.`);
     assertBoundedString(device, "name", 256);
-    assertBoundedString(device, "platform", 32);
+    if (device.platform !== "ios" && device.platform !== "android") {
+      throw new Error(`${label} device ${index} platform must be ios or android.`);
+    }
     assertBoundedString(device, "version", 64);
     assertBoundedString(device, "kind", 32);
     if (typeof device.booted !== "boolean") throw new Error(`${label} device ${index} booted must be boolean.`);

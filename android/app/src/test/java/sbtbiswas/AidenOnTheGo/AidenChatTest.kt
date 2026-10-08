@@ -2231,7 +2231,11 @@ class AidenChatTest {
             "browser_evaluate" to "Evaluated page",
             "browser_wait_for" to "Waited for page",
             "browser_recording_start" to "Started browser recording",
-            "browser_recording_stop" to "Stopped browser recording"
+            "browser_recording_stop" to "Stopped browser recording",
+            "device_list" to "Listed simulators",
+            "device_open" to "Opened simulator",
+            "device_screenshot" to "Took simulator screenshot",
+            "device_close" to "Closed simulator"
         )
         for ((name, expected) in browserLabels) {
             val browserStep = AidenAgentStep(

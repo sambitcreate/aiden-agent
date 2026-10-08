@@ -133,7 +133,7 @@ labels recorded usage. Appearance can hide the meter without hiding the tool.
 | State | User sees | Interaction contract |
 |---|---|---|
 | Closed | Conversation uses the full workbench width; separate Environment and Quick View toolbar controls remain available. | Each surface has an independent open bit. `⌘⇧E` and `/environment` open the New tab tool launcher or hide the panel; `/quick-view` toggles Quick View without changing Environment. |
-| Summary opening / closing | The compact card fades from 4px above and `.98` scale over `180ms`. | It does not resize, dim, or make the conversation inert. Motion is removed under Reduce Motion. |
+| Summary opening / closing | The compact card fades from 4px above and `.98` scale over `180ms`. | It does not dim or make the conversation inert. On a narrower window the centered column moves left only as far as the card needs (narrowing only at the left edge, never below 560px) so the card docks beside it; with less room the card floats over the chat. Motion is removed under Reduce Motion. |
 | Quick View open | A rounded top-right card shows working changes, local execution, the active branch, commit/push, compare, and current-chat subagents. | The dedicated two-row list control toggles this card. The adjacent panel control opens or closes Environment independently. `Changes` deep-links into Review without clearing Quick View. |
 | Quick View + Environment | Both surfaces remain visibly open side by side when the measured workbench has room. | Invoking either surface brings it forward without closing the other. Opening the app sidebar recomputes placement from the remaining workbench width. On smaller layouts, the foreground surface is shown while the background surface is automatically hidden and inert; its open state and mounted tool state are preserved. |
 | Expanded work surface opening / closing | The right edge expands or retracts over the relaxed `300ms` panel timing. | Width, opacity, and geometry move together; the transition is flattened under Reduce Motion. |
@@ -234,7 +234,7 @@ Core easing curves:
 
 | Motion | Shipped treatment | Aiden adaptation |
 |---|---|---|
-| Panel open/close | `flex-grow` and `max-width` over `300ms`; transitions are disabled during drag. | Keep Aiden's `300ms` motion for expanded Review/Subagents/Files only; Quick View uses the compact-popover motion and never changes conversation width. |
+| Panel open/close | `flex-grow` and `max-width` over `300ms`; transitions are disabled during drag. | Keep Aiden's `300ms` motion for expanded Review/Subagents/Files only; Quick View uses the compact-popover motion and only shifts the conversation column when it docks beside it on narrower windows. |
 | Compact popover | Fade plus `translateY(-4px)` and `scale(.98)` to rest over `150ms`. | Use for menus and small contextual surfaces. It is quieter than a large zoom. |
 | Model dropdown | Fade and `scale(.98 → 1)` over `320ms` with a short delay. | Reserve this slightly slower entrance for the model picker only; normal menus should stay near `150–200ms`. |
 | Centered content swap | Enter over `260ms` from 8px lower and `.98` scale; exit over `180ms` with a smaller movement. | A good asymmetric pattern for major mode/content changes, but unnecessary for routine settings navigation. |

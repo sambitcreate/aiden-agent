@@ -8,6 +8,13 @@
 // - MJPEG serves a small portrait JPEG every 200ms.
 // - The per-device input socket pushes a screen config, logs every packet, and
 //   closes the first connection after its first touch so the client must reconnect.
+// - The per-device `ax` route answers a small accessibility tree, and the event
+//   log feed seeds two entries over SSE, for the device power features spec.
+// - Android (serve-emu): `/api/devices` lists one running foldable emulator. Its
+//   `/vendor/serve-emu/ws` socket sends a real one-frame H.264 keyframe behind a
+//   SEMU header every 200ms and logs every JSON gesture. `/api/fold` folds it:
+//   the socket announces a `video-session` restart and switches to a landscape
+//   frame, as a real foldable's outer display would.
 //
 // Every request is appended as a JSON line to AIDEN_E2E_FAKE_HUB_LOG.
 import { Buffer } from "node:buffer";
@@ -26,6 +33,23 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAC4AAABkCAIAAAB2GJVqAAAAV0lEQVR4nO3OQREAAAQAMHFEFFEsKRyP3S3AIqufiPOBioqKiorKORUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFZUdA6N/RjiLn5tkAAAAAElFTkSuQmCC",
   "base64",
 );
+// Baseline H.264 keyframes (SPS, PPS, IDR) of a flat colour: 128x256 unfolded, 256x128 folded.
+const UNFOLDED_FRAME = Buffer.from(
+  "AAAAAWdCwB7cICGwEQAAAwABAAADADIPFi+AAAAAAWjODyyAAAABZYiEBLxGKAAItscAATVo4AAkrycnJycnJyddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddeA",
+  "base64",
+);
+const FOLDED_FRAME = Buffer.from(
+  "AAAAAWdCwB7cEBGwEQAAAwABAAADADIPFi+AAAAAAWjODyyAAAABZYiEBLxGKAAI08cAAQRI4AAorScnJycnJycnJycnJycnJ11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111114A=",
+  "base64",
+);
+const EMULATOR = {
+  id: "emulator-5554",
+  name: "Pixel_Fold_E2E",
+  version: "Android 15.0",
+  platform: "android",
+  booted: true,
+  physical: false,
+};
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const TAG_SCREEN_CONFIG = 0x82;
 const MSG_TOUCH = 0x03;
@@ -39,6 +63,28 @@ if (!Number.isInteger(port) || port <= 0 || !logPath) {
 
 const log = (entry) => appendFileSync(logPath, `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
 let inputConnections = 0;
+let folded = false;
+const emuSockets = new Set();
+
+/** One access unit behind serve-emu's 16-byte SEMU header: magic, version 1, key flag, u64 pts. */
+function semu(annexB, pts) {
+  const header = Buffer.alloc(16);
+  header.writeUInt32BE(0x53454d55, 0);
+  header[4] = 1;
+  header[5] = 1;
+  header.writeBigUInt64BE(BigInt(pts), 8);
+  return Buffer.concat([header, annexB]);
+}
+
+function readBody(request) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+  });
+}
+
+const foldState = () => ({ supported: true, posture: folded ? "closed" : "opened", hingeAngle: folded ? 0 : 180 });
 
 function requestEntry(kind, request) {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -65,10 +111,53 @@ const server = createServer((request, response) => {
     request.resume();
     return json(response, { ok: true });
   }
+  if (entry.path === "/api/devices") return json(response, { simulators: [], emulators: [EMULATOR], errors: [] });
+  if (entry.path === "/vendor/serve-emu/api/screenshot") {
+    response.writeHead(200, { "content-type": "image/png" });
+    return response.end(PNG);
+  }
+  if (entry.path === "/vendor/serve-emu/api/fold") {
+    if (request.method === "GET") return json(response, { ok: true, fold: foldState() });
+    void readBody(request).then((text) => {
+      const posture = JSON.parse(text || "{}").posture;
+      log({ kind: "fold", posture });
+      folded = posture === "closed";
+      // Folding moves the stream to the other display: serve-emu restarts its encoder at the new size.
+      for (const send of emuSockets) send.restart();
+      json(response, { ok: true, fold: foldState() });
+    });
+    return;
+  }
   if (request.method === "POST" && entry.path === "/vendor/serve-sim/api/screenshot") {
     request.resume();
     response.writeHead(200, { "content-type": "image/png" });
     return response.end(PNG);
+  }
+  // serve-sim's accessibility tree: the root application plus one button and one label.
+  if (request.method === "GET" && /^\/vendor\/serve-sim\/helper\/[A-Za-z0-9-]+\/ax$/u.test(entry.path)) {
+    return json(response, [
+      {
+        type: "Application",
+        AXLabel: "Settings",
+        frame: { x: 0, y: 0, width: 400, height: 800 },
+        children: [
+          { type: "Button", AXLabel: "General", AXUniqueId: "general", frame: { x: 40, y: 200, width: 320, height: 40 } },
+          { type: "StaticText", AXLabel: "Wi-Fi", frame: { x: 40, y: 320, width: 120, height: 30 } },
+        ],
+      },
+    ]);
+  }
+  // serve-sim's event log: a seeded history, then the stream stays open like the real feed.
+  if (request.method === "GET" && entry.path === "/vendor/serve-sim/api/event-log/events") {
+    response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    const events = [
+      { id: 1, timestamp: "2026-10-08T09:41:00.000Z", kind: "button", summary: "Button home" },
+      { id: 2, timestamp: "2026-10-08T09:41:02.000Z", kind: "touch", summary: "Touch begin 0.50,0.50" },
+    ];
+    response.write(`: connected\n\ndata: ${JSON.stringify({ events })}\n\n`);
+    const timer = setInterval(() => response.write(": keep-alive\n\n"), 1_000);
+    response.once("close", () => clearInterval(timer));
+    return;
   }
   if (entry.path.endsWith("/stream.avcc")) {
     // Tag 1 is the decoder description; profile 0xff is not a real H.264 profile.
@@ -132,6 +221,10 @@ server.on("upgrade", (request, socket) => {
   const key = request.headers["sec-websocket-key"];
   // Like the real hub: WebSocket routes match the exact path, and the device rides in `?device=`.
   const device = new URLSearchParams(entry.query).get("device");
+  if (entry.path === "/vendor/serve-emu/ws" && device === EMULATOR.id && typeof key === "string") {
+    acceptEmuSocket(entry, key, socket);
+    return;
+  }
   if (entry.path !== "/vendor/serve-sim/helper/ws" || !device || typeof key !== "string") {
     socket.destroy();
     return;
@@ -179,6 +272,55 @@ server.on("upgrade", (request, socket) => {
   });
   socket.on("error", () => undefined);
 });
+
+/** serve-emu's one socket: SEMU-framed video down, JSON gestures (text frames) up. */
+function acceptEmuSocket(entry, key, socket) {
+  const connection = ++inputConnections;
+  log({ ...entry, connection });
+  const accept = createHash("sha1").update(key + WS_GUID).digest("base64");
+  socket.write(
+    `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+  );
+  let pts = 0;
+  const sendFrame = () => {
+    pts += 33_333;
+    socket.write(frame(0x2, semu(folded ? FOLDED_FRAME : UNFOLDED_FRAME, pts)));
+  };
+  const timer = setInterval(sendFrame, 200);
+  const handle = {
+    restart() {
+      socket.write(frame(0x1, Buffer.from(JSON.stringify({ type: "video-session" }))));
+    },
+  };
+  emuSockets.add(handle);
+  sendFrame();
+  let pending = Buffer.alloc(0);
+  socket.on("data", (chunk) => {
+    const { frames, rest } = readFrames(Buffer.concat([pending, chunk]));
+    pending = rest;
+    for (const { opcode, payload } of frames) {
+      if (opcode === 0x8) {
+        socket.end(frame(0x8, Buffer.alloc(0)));
+        return;
+      }
+      if (opcode !== 0x1) continue;
+      let body = null;
+      try {
+        body = JSON.parse(payload.toString("utf8"));
+      } catch {
+        // Logged without a body.
+      }
+      log({ kind: "ws-message", platform: "android", connection, body });
+      if (body?.type === "reset-video") sendFrame();
+    }
+  });
+  const close = () => {
+    clearInterval(timer);
+    emuSockets.delete(handle);
+  };
+  socket.on("close", close);
+  socket.on("error", close);
+}
 
 server.listen(port, "127.0.0.1");
 process.on("SIGTERM", () => process.exit(0));

@@ -19,6 +19,12 @@ const CHANNELS = [
   "devices:toolchain",
   "devices:prune-tools",
   "devices:remove-tools",
+  "devices:start-host",
+  "devices:update-tool",
+  "devices:inspect-tools",
+  "devices:ssh-save",
+  "devices:ssh-remove",
+  "devices:ssh-test",
 ];
 
 const STATE: DeviceServiceState = {
@@ -36,7 +42,7 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
   const calls: unknown[][] = [];
   const sent: unknown[][] = [];
   let stateListener: ((state: DeviceServiceState) => void) | null = null;
-  let revealListener: ((chatId: string) => void) | null = null;
+  let revealListener: ((chatId: string, target?: { hostId: string; deviceId: string }) => void) | null = null;
   let serviceBuilt = 0;
   const invalidators: Array<() => void> = [];
   const owner: RendererDocumentOwner = {
@@ -70,11 +76,17 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
     toolchain: record("toolchain", { tools: [] }),
     pruneTools: record("pruneTools", { tools: [] }),
     removeTools: record("removeTools"),
+    startHost: record("startHost"),
+    updateTool: record("updateTool"),
+    inspectTools: record("inspectTools"),
+    saveSshHost: record("saveSshHost"),
+    removeSshHost: record("removeSshHost"),
+    testSshHost: record("testSshHost", { status: "local" }),
     onState: (listener: (state: DeviceServiceState) => void) => {
       stateListener = listener;
       return () => undefined;
     },
-    onReveal: (listener: (chatId: string) => void) => {
+    onReveal: (listener: (chatId: string, target?: { hostId: string; deviceId: string }) => void) => {
       revealListener = listener;
       return () => undefined;
     },
@@ -100,7 +112,7 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
     sent,
     serviceBuilt: () => serviceBuilt,
     emit: (state: DeviceServiceState) => stateListener?.(state),
-    reveal: (chatId: string) => revealListener?.(chatId),
+    reveal: (chatId: string, target?: { hostId: string; deviceId: string }) => revealListener?.(chatId, target),
     invalidate: () => invalidators.forEach((listener) => listener()),
   };
 }
@@ -129,6 +141,8 @@ test("inputs are validated and user opens are always attributed to the user", as
   await assert.rejects(ipc.invoke("devices:open", null), /Invalid simulator request/u);
   await assert.rejects(ipc.invoke("devices:open", { chatId: "c", deviceId: "../etc" }), /valid simulator/u);
   await assert.rejects(ipc.invoke("devices:open", { chatId: "", deviceId: "ABC" }), /valid chat/u);
+  // A leading dash could be read as an adb flag.
+  await assert.rejects(ipc.invoke("devices:open", { chatId: "c", deviceId: "-s" }), /valid simulator/u);
   await assert.rejects(
     ipc.invoke("devices:close", { chatId: "c", hostId: "local", deviceId: "ABC", shutdown: "yes" }),
     /Invalid simulator request/u,
@@ -140,12 +154,15 @@ test("inputs are validated and user opens are always attributed to the user", as
   await ipc.invoke("devices:consent", "mobileSharing", true);
   await ipc.invoke("devices:open", { chatId: "chat-1", deviceId: "ABC-123", openedBy: "agent" });
   await ipc.invoke("devices:close", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123" });
+  // An Android AVD is opened by name before it has an emulator serial.
+  await ipc.invoke("devices:open", { chatId: "chat-1", deviceId: "Pixel_9_API_35" });
   assert.deepEqual(ipc.calls, [
     ["grantConsent", "streaming"],
     ["revokeConsent", "agentAccess"],
     ["grantConsent", "mobileSharing"],
     ["open", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123", openedBy: "user" }],
     ["close", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123", shutdown: false }],
+    ["open", { chatId: "chat-1", hostId: "local", deviceId: "Pixel_9_API_35", openedBy: "user" }],
   ]);
 });
 
@@ -158,10 +175,13 @@ test("state changes reach subscribed documents until they are invalidated", asyn
   assert.equal(ipc.sent[0]![0], "devices:state");
   ipc.reveal("chat-1");
   assert.deepEqual(ipc.sent[1], ["devices:reveal", { chatId: "chat-1" }]);
+  // An agent's device_open names the device, so the renderer floats or selects exactly that one.
+  ipc.reveal("chat-1", { hostId: "local", deviceId: "ABC-123" });
+  assert.deepEqual(ipc.sent[2], ["devices:reveal", { chatId: "chat-1", hostId: "local", deviceId: "ABC-123" }]);
   ipc.invalidate();
   ipc.emit({ ...STATE, hostStatus: "ready" });
   ipc.reveal("chat-1");
-  assert.equal(ipc.sent.length, 2);
+  assert.equal(ipc.sent.length, 3);
 });
 
 test("actions are parsed fail-closed and screenshots return plain bytes", async () => {
@@ -188,5 +208,34 @@ test("actions are parsed fail-closed and screenshots return plain bytes", async 
     ["action", { hostId: "local", deviceId: "ABC", type: "setAppearance", value: "dark" }],
     ["settings", { hostId: "local", deviceId: "ABC" }],
     ["screenshot", { hostId: "local", deviceId: "ABC" }],
+  ]);
+});
+
+test("SSH host and tool-version channels refuse malformed input before the service runs", async () => {
+  const ipc = harness({ enabled: true });
+  const host = { id: "ssh-abc123", label: "Mac mini", target: "me@mini.local", port: 2222 };
+  await assert.rejects(ipc.invoke("devices:start-host", "../local"), /valid device host/u);
+  await assert.rejects(ipc.invoke("devices:update-tool", { hostId: "local", tool: "npm" }), /Unknown simulator helper/u);
+  await assert.rejects(ipc.invoke("devices:update-tool", null), /Invalid simulator request/u);
+  // A target that starts with a dash would become an ssh option, so it never reaches the service.
+  await assert.rejects(ipc.invoke("devices:ssh-save", { ...host, target: "-oProxyCommand=sh" }), /SSH host's details/u);
+  await assert.rejects(ipc.invoke("devices:ssh-save", { ...host, id: "local" }), /SSH host's details/u);
+  await assert.rejects(ipc.invoke("devices:ssh-test", { ...host, port: 70000 }), /SSH host's details/u);
+  await assert.rejects(ipc.invoke("devices:ssh-remove", "has space"), /valid device host/u);
+  assert.deepEqual(ipc.calls, []);
+
+  await ipc.invoke("devices:start-host", "local");
+  await ipc.invoke("devices:update-tool", { hostId: "ssh-abc123", tool: "agent", extra: true });
+  await ipc.invoke("devices:inspect-tools");
+  await ipc.invoke("devices:ssh-save", { ...host, extra: "dropped" });
+  assert.deepEqual(await ipc.invoke("devices:ssh-test", host), { status: "local" });
+  await ipc.invoke("devices:ssh-remove", "ssh-abc123");
+  assert.deepEqual(ipc.calls, [
+    ["startHost", "local"],
+    ["updateTool", { hostId: "ssh-abc123", tool: "agent" }],
+    ["inspectTools"],
+    ["saveSshHost", host],
+    ["testSshHost", host],
+    ["removeSshHost", "ssh-abc123"],
   ]);
 });

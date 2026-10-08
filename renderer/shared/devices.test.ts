@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  deviceActionSupported,
   parseDeviceActionInput,
   parseDeviceServiceState,
   parseDeviceSettings,
@@ -49,7 +50,7 @@ test("device service state parses a complete snapshot", () => {
 
 test("device service state fails closed on unknown platforms, statuses, and shapes", () => {
   const device = state().devices[0];
-  assert.equal(parseDeviceServiceState(state({ devices: [{ ...device, platform: "android" }] })), null);
+  assert.equal(parseDeviceServiceState(state({ devices: [{ ...device, platform: "watchos" }] })), null);
   assert.equal(parseDeviceServiceState(state({ devices: [{ ...device, kind: "watch" }] })), null);
   assert.equal(parseDeviceServiceState(state({ hostStatus: "booting" })), null);
   assert.equal(parseDeviceServiceState(state({ hostStatuses: { local: { status: "?" } } })), null);
@@ -119,7 +120,11 @@ test("device actions fail closed on bad targets, values, URLs, and app ids", () 
     { ...actionTarget, type: "setAppearance", value: "sepia" },
     { ...actionTarget, type: "setTextSize", value: "huge" },
     { ...actionTarget, type: "setIncreaseContrast", value: true },
-    { ...actionTarget, type: "setToggle", setting: "networkEnabled", value: true },
+    { ...actionTarget, type: "setToggle", setting: "wifi", value: true },
+    { ...actionTarget, type: "setOrientation", value: "sideways" },
+    { hostId: "local", deviceId: "-s", type: "clearLocation" },
+    { hostId: "local", deviceId: ".hidden", type: "clearLocation" },
+    { ...actionTarget, type: "launchApp", appId: "_x.y" },
     { ...actionTarget, type: "setToggle", setting: "reduceMotion", value: "yes" },
     { ...actionTarget, type: "setLiquidGlass", value: "frosted" },
     { ...actionTarget, type: "setColorFilter", value: "sepia" },
@@ -171,4 +176,74 @@ test("the Aiden On The Go sharing consent reads as off when absent and fails clo
     parseDeviceServiceState(state({ consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: "yes" } })),
     null,
   );
+});
+
+test("Android emulators and per-platform availability cross the boundary", () => {
+  const emulator = {
+    hostId: "local",
+    id: "emulator-5554",
+    name: "Pixel_9_API_35",
+    platform: "android",
+    version: "Android 15.0",
+    booted: true,
+    kind: "other",
+  };
+  const avd = { ...emulator, id: "Pixel_Fold_API_35", name: "Pixel_Fold_API_35", booted: false };
+  const platforms = [
+    { platform: "ios", available: true },
+    { platform: "android", available: false, reason: "Android SDK not found." },
+  ];
+  const parsed = parseDeviceServiceState(
+    state({
+      devices: [emulator, avd],
+      hosts: [{ id: "local", kind: "local", name: "This Mac", status: "ready", platforms }],
+    }),
+  );
+  assert.deepEqual(parsed?.devices.map((device) => [device.id, device.platform]), [
+    ["emulator-5554", "android"],
+    ["Pixel_Fold_API_35", "android"],
+  ]);
+  assert.deepEqual(parsed?.hosts[0]?.platforms, platforms);
+  const host = { id: "local", kind: "local", name: "This Mac", status: "ready" };
+  assert.equal(parseDeviceServiceState(state({ hosts: [{ ...host, platforms: [{ platform: "web", available: true }] }] })), null);
+  assert.equal(parseDeviceServiceState(state({ hosts: [{ ...host, platforms: [{ platform: "ios", available: "yes" }] }] })), null);
+  assert.equal(parseDeviceServiceState(state({ hosts: [{ ...host, platforms: {} }] })), null);
+});
+
+test("Android actions parse with AVD names, serials, and package names", () => {
+  const serial = { hostId: "local", deviceId: "emulator-5554" };
+  for (const action of [
+    { type: "setOrientation", value: "landscape_left" },
+    { type: "setToggle", setting: "networkEnabled", value: false },
+    { type: "launchApp", appId: "com.example.my_app" },
+  ]) {
+    assert.deepEqual(parseDeviceActionInput({ ...serial, ...action }), { ...serial, ...action });
+  }
+  assert.deepEqual(parseDeviceActionInput({ hostId: "local", deviceId: "Pixel_9_API_35.1", type: "clearLocation" }), {
+    hostId: "local",
+    deviceId: "Pixel_9_API_35.1",
+    type: "clearLocation",
+  });
+});
+
+test("each platform offers only the actions it can run", () => {
+  assert.equal(deviceActionSupported("android", { type: "setOrientation" }), true);
+  assert.equal(deviceActionSupported("ios", { type: "setOrientation" }), false);
+  assert.equal(deviceActionSupported("android", { type: "sendPush" }), false);
+  assert.equal(deviceActionSupported("android", { type: "setLiquidGlass" }), false);
+  assert.equal(deviceActionSupported("android", { type: "setToggle", setting: "networkEnabled" }), true);
+  assert.equal(deviceActionSupported("android", { type: "setToggle", setting: "voiceOver" }), false);
+  assert.equal(deviceActionSupported("ios", { type: "setToggle", setting: "networkEnabled" }), false);
+  assert.equal(deviceActionSupported("android", { type: "setPermission", permission: "camera" }), true);
+  assert.equal(deviceActionSupported("android", { type: "setPermission", permission: "faceid" }), false);
+  assert.equal(deviceActionSupported("ios", { type: "setPermission", permission: "faceid" }), true);
+});
+
+test("Android settings carry the network switch and the focused package", () => {
+  assert.deepEqual(parseDeviceSettings({ networkEnabled: false, foregroundApp: "com.android.settings" }), {
+    networkEnabled: false,
+    foregroundApp: "com.android.settings",
+  });
+  assert.equal(parseDeviceSettings({ networkEnabled: "off" }), null);
+  assert.equal(parseDeviceSettings({ foregroundApp: "rm -rf /" }), null);
 });

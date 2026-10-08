@@ -98,3 +98,7 @@ Port these when SSH is scheduled:
 - `sshDeviceScript.ts` has probe, start, agent-start, stop-agent, and stop modes, uses a symlink lock, and installs to `~/.t3/device/tools/name@version`.
 - `localSshDeviceHost.ts` parses `ssh -G` to detect a host that is actually this Mac.
 - Required constraints: use the system `ssh` with `BatchMode=yes` and store no keys or passwords.
+
+### As built (2026-10-08)
+
+SSH device hosts are ported from T3 `a6ec88f7` (`ssh-device-host.ts`, `ssh-device-script.ts`, `local-ssh-target.ts`, Settings → Simulator → SSH hosts). They differ from T3 in four ways: health is not polled, reconnects are bounded, every remote install needs per-host approval, and the agent daemon gets its own tunnel. See `docs/devices.md` and `.memory/devices-ssh-hosts-toolchain.md`.

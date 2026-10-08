@@ -480,6 +480,10 @@ object AidenAgentActivityPresentation {
         "browser_wait_for" to Pair("Waiting for page", "Waited for page"),
         "browser_recording_start" to Pair("Starting browser recording", "Started browser recording"),
         "browser_recording_stop" to Pair("Stopping browser recording", "Stopped browser recording"),
+        "device_list" to Pair("Listing simulators", "Listed simulators"),
+        "device_open" to Pair("Opening simulator", "Opened simulator"),
+        "device_screenshot" to Pair("Taking simulator screenshot", "Took simulator screenshot"),
+        "device_close" to Pair("Closing simulator", "Closed simulator"),
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
         "compact_context" to Pair("Compacting context", "Compacted context")
     )

@@ -9,7 +9,13 @@
  * A host adds an agent-device daemon endpoint only after agent access is
  * granted.
  */
-import type { DeviceHostKind, DevicePlatform } from "../../../renderer/shared/devices.js";
+import type {
+  DeviceHostKind,
+  DevicePlatform,
+  DevicePlatformAvailability,
+} from "../../../renderer/shared/devices.js";
+
+export type { DevicePlatformAvailability };
 
 export interface DeviceHubEndpoint {
   /** Loopback origin of expo-device-hub, e.g. `http://127.0.0.1:52011`. Never sent to the renderer. */
@@ -47,7 +53,10 @@ export interface DeviceHostReady {
   nodePath: string;
   hub: DeviceHubEndpoint;
   helpers: DeviceHostHelpers;
-  /** Runs a host command (`xcrun` or a helper) where the devices live. Spawn failures return code 127. */
+  /**
+   * Runs a host command (`xcrun`, `adb`, `emulator`, or a helper) where the
+   * devices live. The Android SDK's tools are on its PATH. Spawn failures return code 127.
+   */
   run(
     command: string,
     args: readonly string[],
@@ -57,12 +66,6 @@ export interface DeviceHostReady {
 
 export interface DeviceHostAgentReady extends DeviceHostReady {
   agentDevice: AgentDeviceEndpoint;
-}
-
-export interface DevicePlatformAvailability {
-  platform: DevicePlatform;
-  available: boolean;
-  reason?: string;
 }
 
 export type DeviceHostPhase = "installing" | "starting";
@@ -80,7 +83,8 @@ export type DeviceHostHealth = "ready" | "restarting" | "failed";
 export interface DeviceHost {
   id: string;
   kind: DeviceHostKind;
-  platformAvailability(): Promise<DevicePlatformAvailability>;
+  /** Whether this host can run a platform, and a user-readable reason when it cannot. */
+  platformAvailability(platform: DevicePlatform): Promise<DevicePlatformAvailability>;
   /** Whether the pinned hub is installed, so a start can proceed without contacting npm. */
   hubInstalled(): Promise<boolean>;
   /** Whether the pinned agent-device is installed, so agent tools never reach npm. */
@@ -99,6 +103,13 @@ export interface DeviceHost {
   current(): DeviceHostReady | null;
   /** Reports supervised hub restarts so the service can update the tab. */
   onHealth(listener: (health: DeviceHostHealth, detail?: string) => void): () => void;
+  /**
+   * Installs one pinned helper without starting it. Only an explicit Update,
+   * or a Start the user approved for an outdated install, calls this.
+   */
+  installTool?(tool: "hub" | "agent"): Promise<void>;
+  /** The helper versions running right now, without touching the disk or the network. */
+  runningToolVersions?(): { hub: string | null; agent: string | null };
   /** Stops only agent-device. Manual viewing through the hub stays available. */
   stopAgent(): Promise<void>;
   /** Stops helpers. Simulators keep running; the user owns those. */
