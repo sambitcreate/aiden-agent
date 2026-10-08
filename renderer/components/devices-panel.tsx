@@ -4,9 +4,12 @@ import { Button, Switch, Text, toast } from "./ui";
 import { DeviceViewer } from "./device-viewer";
 import { devicesApi } from "../lib/ipc";
 import {
+  DEVICE_PLATFORM_LABELS,
   DEVICE_SETUP_NOTICE,
   LOCAL_DEVICE_HOST_ID,
   type DeviceHostInfo,
+  type DevicePlatform,
+  type DevicePlatformAvailability,
   type DeviceServiceState,
   type DeviceSession,
   type DeviceSummary,
@@ -162,6 +165,82 @@ function DeviceRows({
   );
 }
 
+const PLATFORM_TITLES: Record<DevicePlatform, string> = {
+  ios: "iOS Simulators",
+  android: "Android Emulators",
+};
+
+const PLATFORM_EMPTY: Record<DevicePlatform, string> = {
+  ios: "No iOS simulators found. Add one in Xcode under Window → Devices and Simulators.",
+  android: "No Android emulators found. Create one in Android Studio's Device Manager.",
+};
+
+/**
+ * One host's devices, one section per platform. A platform the host cannot
+ * run says why (missing Xcode, no Android SDK) instead of listing nothing.
+ * A host that did not report its platforms keeps the plain list.
+ */
+function PlatformSections({
+  host,
+  devices,
+  chatId,
+  pending,
+  onOpen,
+}: {
+  host: DeviceHostInfo;
+  devices: DeviceSummary[];
+  chatId?: string;
+  pending: string | null;
+  onOpen(device: DeviceSummary): void;
+}) {
+  const platforms: DevicePlatformAvailability[] =
+    host.platforms ??
+    (["ios", "android"] as const)
+      .filter((platform) => devices.some((device) => device.platform === platform))
+      .map((platform) => ({ platform, available: true }));
+  if (platforms.length === 0) {
+    return (
+      <Text variant="small" color="secondary" className="devices-list-note">
+        {host.kind === "local" ? PLATFORM_EMPTY.ios : `No simulators or emulators found on ${host.name}.`}
+      </Text>
+    );
+  }
+  const sectionId = (platform: DevicePlatform) => `devices-${host.id.replace(/[^A-Za-z0-9_-]/gu, "-")}-${platform}`;
+  return (
+    <>
+      {platforms.map((availability) => {
+        const listed = devices.filter((device) => device.platform === availability.platform);
+        const label = DEVICE_PLATFORM_LABELS[availability.platform];
+        return (
+          <section
+            key={availability.platform}
+            aria-labelledby={sectionId(availability.platform)}
+            className="devices-platform-group"
+          >
+            <Text
+              id={sectionId(availability.platform)}
+              variant="small-strong"
+              color="secondary"
+              className="devices-platform-title"
+            >
+              {PLATFORM_TITLES[availability.platform]}
+            </Text>
+            {listed.length > 0 ? (
+              <DeviceRows devices={listed} chatId={chatId} pending={pending} onOpen={onOpen} />
+            ) : (
+              <Text variant="small" color="secondary" className="devices-list-note">
+                {availability.available
+                  ? PLATFORM_EMPTY[availability.platform]
+                  : (availability.reason ?? `${label} devices are unavailable on ${host.kind === "local" ? "this Mac" : host.name}.`)}
+              </Text>
+            )}
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
 function HostGroup({
   host,
   devices,
@@ -197,12 +276,8 @@ function HostGroup({
         <Text variant="small" color="secondary" className="devices-list-note">
           {note}
         </Text>
-      ) : devices.length === 0 ? (
-        <Text variant="small" color="secondary" className="devices-list-note">
-          No iOS simulators found on {host.kind === "local" ? "this Mac" : host.name}.
-        </Text>
       ) : (
-        <DeviceRows devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
+        <PlatformSections host={host} devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
       )}
     </section>
   );
@@ -227,17 +302,18 @@ function DeviceList({
 }) {
   // A lone Mac keeps the flat list; paired Macs add one group per host, this Mac first.
   const grouped = hosts.some((host) => host.kind === "peer");
+  const local = hosts.find((host) => host.id === LOCAL_DEVICE_HOST_ID);
   return (
     <section aria-labelledby="devices-list-title" className="devices-list">
       <header className="devices-list-header">
         <Text id="devices-list-title" variant="small-strong" color="secondary">
-          iOS Simulators
+          Simulators and emulators
         </Text>
         <Button
           variant="transparent"
           size="small"
           aria-label="Refresh simulators"
-          title="Refresh simulators on this Mac and paired Macs"
+          title="Refresh simulators and emulators on this Mac and paired Macs"
           disabled={pending !== null}
           onClick={onRefresh}
         >
@@ -261,13 +337,9 @@ function DeviceList({
             onRefreshPeers={onRefreshPeers}
           />
         ))
-      ) : devices.length === 0 ? (
-        <Text variant="small" color="secondary" className="devices-list-note">
-          No iOS simulators found. Add one in Xcode under Window → Devices and Simulators.
-        </Text>
-      ) : (
-        <DeviceRows devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
-      )}
+      ) : local ? (
+        <PlatformSections host={local} devices={devices} chatId={chatId} pending={pending} onOpen={onOpen} />
+      ) : null}
     </section>
   );
 }
@@ -308,7 +380,7 @@ export function DevicesPanelView({
   }
   if (!state) {
     return (
-      <Empty icon={spinner} title="iOS Simulator">
+      <Empty icon={spinner} title="Simulators">
         <p role="status">Checking simulator setup…</p>
       </Empty>
     );
@@ -328,9 +400,10 @@ export function DevicesPanelView({
     case "disabled":
     case "needs-consent":
       return (
-        <Empty icon={<Smartphone aria-hidden />} title="iOS Simulator">
+        <Empty icon={<Smartphone aria-hidden />} title="Simulators">
           <p className={explain}>
-            Watch and control Xcode simulators here, and let Aiden drive them while you watch.
+            Watch and control iOS Simulators from Xcode and Android Emulators from Android Studio here, and let
+            Aiden drive them while you watch.
           </p>
           <p className={explain}>{detail ?? DEVICE_SETUP_NOTICE}</p>
           {errorLine}
@@ -357,7 +430,7 @@ export function DevicesPanelView({
       );
     case "stopped":
       return (
-        <Empty icon={<Smartphone aria-hidden />} title="iOS Simulator">
+        <Empty icon={<Smartphone aria-hidden />} title="Simulators">
           <p className={explain}>The simulator helpers are installed but not running.</p>
           {errorLine}
           <Button variant="muted" size="small" disabled={pending !== null} onClick={onStart}>
@@ -399,7 +472,7 @@ export function DevicesPanelView({
           <ConsentRow
             id="devices-agent-access"
             label="Let Aiden use simulators"
-            description="In chats, Aiden can open a simulator on this Mac and tap, type, and install apps with agent-device while you watch. Turning this on installs agent-device from npm."
+            description="In chats, Aiden can open a simulator or emulator on this Mac and tap, type, and install apps with agent-device while you watch. Turning this on installs agent-device from npm."
             pendingKey="agent"
             granted={state.consent.agentAccess}
             pending={pending}
@@ -410,7 +483,7 @@ export function DevicesPanelView({
             <ConsentRow
               id="devices-peer-sharing"
               label="Share with paired Macs"
-              description="Paired Macs you allowed to control simulators can watch and control this Mac's simulators while Aiden is open. Turning this off disconnects them."
+              description="Paired Macs you allowed to control simulators can watch and control this Mac's simulators and emulators while Aiden is open. Turning this off disconnects them."
               pendingKey="peerSharing"
               granted={state.consent.peerSharing}
               pending={pending}
