@@ -37,7 +37,6 @@ import { registerBtwHandlers } from "./btw.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { registerDesignHandlers } from "./design/register.js";
-import { designStudioEnabled } from "../services/studio/feature-flags.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 
@@ -85,7 +84,8 @@ export function registerHandlers(): void {
   registerBtwHandlers();
   registerTtsHandlers();
   registerDeviceHandlers();
-  if (designStudioEnabled()) registerDesignHandlers();
+  // A no-op unless the designStudio capability is on.
+  registerDesignHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

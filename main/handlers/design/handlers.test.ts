@@ -15,8 +15,8 @@ import type { ChatGenerationOwner } from "../../services/chat-generation-owner.j
 import type { DesignRunStartInput } from "../../services/design/run-service.js";
 import { DesignProjectStore } from "../../services/design/store.js";
 import { DesignStoreError } from "../../services/design/store-core.js";
-import { registerDesignProjectHandlers } from "./projects.js";
-import { registerDesignRunHandlers } from "./run.js";
+import { designStudioEnabled } from "../../services/studio/feature-flags.js";
+import { registerDesignStudioHandlers } from "./registration.js";
 
 type Listener = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 const activeEvent = { document: "active" } as unknown as IpcMainInvokeEvent;
@@ -72,26 +72,29 @@ async function fixture(t: TestContext) {
   };
   const runs: DesignRunStartInput[] = [];
   let runFailure: Error | undefined;
-  registerDesignProjectHandlers(ipc, { store, assertOwner });
-  registerDesignRunHandlers(ipc, {
+  const enabled = designStudioEnabled({ AIDEN_EXPERIMENTAL_DESIGN_STUDIO: "1" });
+  registerDesignStudioHandlers(enabled, ipc, () => ({
+    projects: { store, assertOwner },
     runs: {
-      start: async (input) => {
-        if (runFailure) throw runFailure;
-        runs.push(input);
-        return { accepted: true, runId: "run-1" };
+      runs: {
+        start: async (input) => {
+          if (runFailure) throw runFailure;
+          runs.push(input);
+          return { accepted: true, runId: "run-1" };
+        },
       },
+      generationOwner: (event) => {
+        assertOwner(event);
+        return owner;
+      },
+      assertOwner,
+      preview: async ({ projectId, revisionId }) => ({
+        src: `aiden-genui://preview/${"b".repeat(64)}`,
+        title: `${projectId}:${revisionId}`,
+      }),
+      readSource: (projectId, revisionId) => store.readRevision(projectId, revisionId),
     },
-    generationOwner: (event) => {
-      assertOwner(event);
-      return owner;
-    },
-    assertOwner,
-    preview: async ({ projectId, revisionId }) => ({
-      src: `aiden-genui://preview/${"b".repeat(64)}`,
-      title: `${projectId}:${revisionId}`,
-    }),
-    readSource: (projectId, revisionId) => store.readRevision(projectId, revisionId),
-  });
+  }));
   const invoke = async (channel: string, event: IpcMainInvokeEvent, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`No handler for ${channel}`);
@@ -109,6 +112,19 @@ async function fixture(t: TestContext) {
     },
   };
 }
+
+test("with Design Studio off no channel is registered and no dependency is built", () => {
+  const registered: string[] = [];
+  for (const environment of [{}, { AIDEN_EXPERIMENTAL_DESIGN_STUDIO: "0" }, { AIDEN_EXPERIMENTAL_CREATE_IMAGES: "1" }]) {
+    const built = registerDesignStudioHandlers(
+      designStudioEnabled(environment),
+      { handle: (channel: string) => void registered.push(channel) },
+      () => assert.fail("Design dependencies are built only with the flag on"),
+    );
+    assert.equal(built, false);
+  }
+  assert.deepEqual(registered, []);
+});
 
 test("Design IPC registers ten channels under one prefix", async (t) => {
   const f = await fixture(t);
