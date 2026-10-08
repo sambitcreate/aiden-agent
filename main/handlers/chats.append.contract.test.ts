@@ -9,6 +9,9 @@ import {
 } from "../../renderer/shared/chat-message-contract.js";
 
 const source = fs.readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
+// The append handler lives beside chats.ts so it can be invoked in tests.
+const mutationSource = fs.readFileSync(new URL("./chat-renderer-mutations.ts", import.meta.url), "utf8");
+const appendHandlerSource = mutationSource.slice(mutationSource.indexOf("appendMessage:"));
 const applicationServiceSource = fs.readFileSync(
   new URL("../services/chat-application-service.ts", import.meta.url),
   "utf8",
@@ -34,10 +37,7 @@ test("indeterminate appends fence create and append for the renderer document", 
     source.indexOf('"chats:create"'),
     source.indexOf('"chats:rename"'),
   );
-  const append = source.slice(
-    source.indexOf('"chats:appendMessage"'),
-    source.indexOf('"chats:abandonTurn"'),
-  );
+  const append = appendHandlerSource;
   assert.match(create, /requiresAppendReconciliation\(owner\.documentId\)/u);
   assert.match(append, /requiresAppendReconciliation\(owner\.documentId\)/u);
   assert.match(
@@ -62,9 +62,7 @@ test("indeterminate appends fence create and append for the renderer document", 
 });
 
 test("renderer appends reserve bounded payload capacity before their first persistence await", () => {
-  const start = source.indexOf('"chats:appendMessage"');
-  const end = source.indexOf('"chats:abandonTurn"', start);
-  const handler = source.slice(start, end);
+  const handler = appendHandlerSource;
   const parseEnvelope = handler.indexOf("parseChatAppend(id, message, meta)");
   const reserve = handler.indexOf("turn.reserveAppendPayload(");
   const firstStoreAwait = handler.indexOf("await chatStore.get(chatId)");

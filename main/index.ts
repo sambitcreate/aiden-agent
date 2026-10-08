@@ -98,7 +98,9 @@ import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { createImagesEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { createImagesEnabled, designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { designProjectStore, designRunService } from "./services/design/main.js";
+import { startDesignStudio } from "./services/design/startup-core.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
@@ -431,6 +433,20 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       terminalService.flushHistory(),
       // Bounded so a wedged queue cannot hold quit; a store that was never
       // opened (flags off) resolves at once.
+      // Run settlements record their end through the project store, so they drain
+      // first and in-flight store writes after them. Bounded so a wedged write
+      // cannot hold quit; with the flag off both have nothing to drain.
+      Promise.race([
+        designRunService
+          .drain()
+          .then(() => designProjectStore.drain())
+          .then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+      ])
+        .then((drained) => {
+          if (!drained) logger.warn("design", "Design work did not settle within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("design", "Design work did not settle cleanly.", error)),
       (async () => {
         // Image runs record their end (and close the run ledger) before the asset store closes.
         // Bounded like the other stores; a ledger that was never opened (flag off) resolves at once.
@@ -1907,6 +1923,16 @@ if (!ownsSingleInstanceLock) {
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
+      });
+      await startDesignStudio({
+        enabled: designStudioEnabled(),
+        store: designProjectStore,
+        onError: (error) =>
+          logger.warn(
+            "design",
+            "Design projects could not be restored; Design Studio will report a storage error.",
+            error,
+          ),
       });
       if (displayImageArtifactAvailability.available) {
         try {

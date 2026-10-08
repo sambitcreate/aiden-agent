@@ -2,6 +2,20 @@
 // persistence and background title generation.
 
 import type { Attachment, ChatMessage } from "./types.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+
+/**
+ * Renderer-initiated renames refuse feature-owned (Design Studio) chats: the
+ * owning feature alone changes their title.
+ */
+export function assertRenameAllowedFromChat(
+  chat: Parameters<typeof chatSurface>[0],
+  options: { rejectFeatureOwned?: boolean },
+): void {
+  if (options.rejectFeatureOwned && chatSurface(chat) === "feature") {
+    throw new Error("This conversation belongs to another Aiden feature and cannot be changed from chat.");
+  }
+}
 
 export const DEFAULT_CHAT_TITLE = "New agent";
 /** Prior default kept replaceable so existing untitled chats still auto-rename. */

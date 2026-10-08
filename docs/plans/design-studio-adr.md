@@ -64,8 +64,8 @@ interface DesignProjectManifestV1 {
   - A crash after the append but before the run record leaves an orphan user message, which the context builder ignores.
   - The reverse order cannot happen.
 - **Restart recovery.** `designProjectStore.initialize()` runs in the `main/index.ts` reconcile chain, next to `generativeUiArtifactStore.initialize()` and before `openProcessStartupIpcAdmission()`. It:
-  1. Moves runs from `running` to `interrupted`. Their accepted drafts are kept and stay visible, with an "Interrupted · Keep / Discard / Retry missing" banner.
-  2. Never resubmits a run automatically. Retry is an explicit new run whose output cap is the number of missing directions.
+  1. Moves runs from `running` to `partial` (`endReason: "interrupted"`), or to `interrupted` when nothing was accepted. Accepted drafts are published and stay visible, with an "Incomplete k/N · Resume · Discard" banner.
+  2. Never resubmits a run automatically. Resume is an explicit new turn for the missing directions: `designProjects:run` with `resumeRunId`, whose output cap is the number of missing directions.
   3. Resumes any `deleting` cascade.
   4. Garbage-collects unreferenced revision files.
 - **Perf lane.** Opening and saving a project with 200 revisions takes under 200 ms of store time. A mutation writes only the manifest and never rewrites HTML.
@@ -118,10 +118,10 @@ Archiving a direction set hides it but does **not** free quota. Deleting a Scree
 | Accepted artifacts = N (Explore N, Refine 1). This ends before Pi spends a summary request. | `complete` |
 | Render calls ≥ 2N, counting rejected and invalid calls | `partial` |
 | Provider turns ≥ N + 2 | `partial` |
-| The model stopped with text only and fewer than N accepted (Pi ends naturally) | `partial` (offers Retry missing) |
+| The model stopped with text only and fewer than N accepted (Pi ends naturally) | `partial` (offers Resume) |
 
 - The tool also rejects any call past N (with `terminate: true`) and allows same-title replacement at most N times.
-- On user cancel, the host shows a Keep / Discard sheet. Keep publishes the partial drafts; Discard deletes them under the project gate.
+- On user cancel, the accepted drafts are published as a `partial` run and show the Incomplete banner (Resume · Discard). There is no Keep sheet. Discard is `settleRun`: under the project gate it archives the incomplete direction set. Its published directions stay, nothing is deleted and no quota is freed.
 
 **Bounded context builder.** This lives in `main/services/design/design-context-core.ts` (pure, Electron-free) and is applied through the extension's `transformContext`.
 1. Every historical `render_artifact` `html` argument is replaced with `[design revision <revId> omitted]`, matched through `revision.toolCallId`.
@@ -137,7 +137,7 @@ Archiving a direction set hides it but does **not** free quota. Deleting a Scree
 
 ## 5. Renderer architecture (`renderer/design/`, lazy, CSS imported only by the route)
 
-**Composer reuse without ChatPane.** No hook exists today for sending and streaming a turn outside ChatPane: ChatPane and `useAssistantChat` (874 lines, unused outside its tests) each call `startGeneration` (`renderer/lib/ipc.ts`). DS-1 makes one refactor in `ipc.ts`: it extracts the subscription half of `startGeneration` into `subscribeGenerationStream(streamId, callbacks)` in `renderer/lib/generation-stream.ts`. `startGeneration` keeps calling it, so ChatPane's behavior is unchanged and covered by `ipc-stream.test.ts`. `useDesignRun` then subscribes first and invokes `designProjects:run` second, so no opening tokens are dropped, and cancels through the existing `chat:cancel`.
+**Composer reuse without ChatPane.** No hook exists today for sending and streaming a turn outside ChatPane: ChatPane and `useAssistantChat` (874 lines, unused outside its tests) each call `startGeneration` (`renderer/lib/ipc.ts`). DS-1 makes one refactor in `ipc.ts`: it extracts the subscription half of `startGeneration` into `subscribeGenerationStream(streamId, scope, callbacks)` in `renderer/lib/generation-stream.ts`. `startGeneration` keeps calling it, so ChatPane's behavior is unchanged and covered by `ipc-stream.test.ts`. `useDesignRun` then subscribes first and invokes `designProjects:run` second, so no opening tokens are dropped, and cancels through the existing `chat:cancel`.
 
 `Composer` (`renderer/components/composer.tsx`) is already reused standalone by `RemoteChatView`. Design passes:
 - `chatId = project.chatId` (the draft key);
@@ -155,7 +155,7 @@ The only Composer change is an optional `contextChips?: ReactNode` slot, covered
 | `canvas/design-canvas.tsx`, `screen-node.tsx`, `direction-set-group.tsx` | Built on `<StudioCanvas>`; Choose / Archive actions on direction sets | 350 / 250 / 200 |
 | `frame/design-screen-frame.tsx` | Reuses `HtmlArtifactIframe` from `html-artifact-frame.tsx` (exported, not copied); keeps at most 6 live iframes (LRU + IntersectionObserver) and shows placeholders for the rest | 200 |
 | `composer/design-composer.tsx`, `run-mode-control.tsx`, `design-context-chips.tsx` | Composer and pickers; Explore count / creative range / Refine; chips that apply to one turn | 250 / 200 / 150 |
-| `run/design-run-status.tsx`, `cancelled-run-sheet.tsx`, `interrupted-run-banner.tsx` | Live status; Keep / Discard; Retry missing | 200 / 150 / 120 |
+| `run/design-run-status.tsx`, `incomplete-run-banner.tsx` | Live status; Incomplete banner (Resume · Discard); no Keep sheet | 200 / 120 |
 | `inspector/design-inspector.tsx`, `preview-tab.tsx`, `code-tab.tsx`, `history-tab.tsx` | Preview / Code (read-only) / History with compare, Make current, Refine from this | 250 / 150 / 200 / 300 |
 | `conversation/design-conversation-panel.tsx` | Text-only `MessageList`; revisions appear as links to their Screens | 200 |
 | `hooks/use-design-projects.ts`, `use-design-project.ts` | TanStack Query on `list` / `get`, invalidated by `designProjects:changed`; `mutate` with CAS and rollback on `stale` | 150 / 250 |
@@ -192,7 +192,7 @@ Four channels are held in reserve (22–25). Cancel, approvals and questionnaire
 type DesignRunRequest =
   | { op: "explore"; count: 2 | 3 | 4; creativeRange: "close" | "balanced" | "bold";
       aspects: ("layout" | "color" | "typography" | "content")[]; baseRevisionId?: string;
-      retryRunId?: string }                               // the cap becomes the missing count
+      resumeRunId?: string }                              // the cap becomes the missing count
   | { op: "refine"; screenId: string; baseRevisionId: string };
 type DesignProjectOp =
   | { op: "rename"; title: string }
@@ -202,7 +202,7 @@ type DesignProjectOp =
   | { op: "chooseDirection"; directionSetId: string; screenId: string }
   | { op: "archiveDirectionSet"; directionSetId: string; archived: boolean }
   | { op: "deleteScreen"; screenId: string }
-  | { op: "settleRun"; runId: string; decision: "keep" | "discard" }  // cancelled or interrupted
+  | { op: "settleRun"; runId: string; decision: "discard" }  // Discard only: archives the incomplete set
   | { op: "applyDesignLanguage"; snapshot: DesignLanguageV1 }          // DS-2
   | { op: "removeReference"; assetId: string };                       // DS-3
 ```
@@ -232,8 +232,8 @@ type DesignProjectOp =
 
 | Phase | Scope | Exit criteria |
 |---|---|---|
-| **DS-1a Headless core** (PR 1) | Store and reconcile; gate; quota; `generation-profile.ts`; design render extension; harness `finishTurn` composition; context core; `DesignRunService`; IPC 1–10; `subscribeGenerationStream` extraction | Behavioral tests: CAS stale, crash between file and manifest write, restart → `interrupted` with drafts kept and **no new provider request** (a fake model counts requests), orphan GC, quota errors, Explore N stop with the summary request counted as 0, the 2N runaway stop, error/aborted guarded, a renderer `chat:start` on a design chat rejected, the allowlist invariant, 128 KiB refusal. Store perf lane: 200 revisions. ADR-F projection tests stay green with a design chat present; the iOS/Android contract suites run. |
-| **DS-1b Studio UI** (PR 2) | `renderer/design/` modules; React Grab vendoring and design CSP (DS-1.3); inspector; Playwright | Playwright on macOS and xvfb: create → explore (fake model) → choose → refine → quit mid-run → relaunch → interrupted banner → Keep; flag off → no route and unchanged bundle budget; React Flow lazy; keyboard and `focus-visible` checks. |
+| **DS-1a Headless core** (PR 1) | Store and reconcile; gate; quota; `generation-profile.ts`; design render extension; harness `finishTurn` composition; context core; `DesignRunService`; IPC 1–10; `subscribeGenerationStream` extraction | Behavioral tests: CAS stale, crash between file and manifest write, restart → `partial` or `interrupted` with drafts kept and **no new provider request** (a fake model counts requests), orphan GC, quota errors, Explore N stop with the summary request counted as 0, the 2N runaway stop, error/aborted guarded, a renderer `chat:start` on a design chat rejected, the allowlist invariant, 128 KiB refusal. Store perf lane: 200 revisions. ADR-F projection tests stay green with a design chat present; the iOS/Android contract suites run. |
+| **DS-1b Studio UI** (PR 2) | `renderer/design/` modules; React Grab vendoring and design CSP (DS-1.3); inspector; Playwright | Playwright on macOS and xvfb: create → explore (fake model) → choose → refine → quit mid-run → relaunch → Incomplete banner → Resume or Discard; flag off → no route and unchanged bundle budget; React Flow lazy; keyboard and `focus-visible` checks. |
 | **DS-2 Export + Design Language** | IPC 11–12; `applyDesignLanguage` op; DESIGN.md in the context builder | Byte-identical export across runs; a hostile ZIP path and a hostile DESIGN.md fail closed; an e2e covers export and apply. |
 | **DS-3 References + image** (after CI-1 and CI-1.10) | Reference nodes on the canvas (moved out of DS-1); IPC 13–14 through the CI consent sheet | A consent e2e; a request-counting fake proves cancelled consent sends 0 requests. |
 | **DS-4 Connected app** | `design-connected` profile; IPC 15–21 | **Entry gate:** a written GO against the [Designer Mode Phase 0 GO criteria](designer-mode-plan.md#go-criteria): correct definition or explicit ambiguity, HMR rebind-or-stale, workspace byte- and Git-unchanged before approval, a malicious guest contained, signed-app start/stop without orphans, and the point→prompt loop preserved, on `tests/fixtures/source-design-vite`. The license and provenance ledger must also exist, and scope is Vite + React only. **Exit:** as in plan §8 DS-4. |

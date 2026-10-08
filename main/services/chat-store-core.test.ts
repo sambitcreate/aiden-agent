@@ -1763,3 +1763,19 @@ test("an owner is main-only, exclusive with Bots, and never copied", async (t) =
   );
   assert.equal((await store.list()).length, 1);
 });
+
+test("renderer-authored appends cannot write into a feature-owned conversation", async (t) => {
+  const store = await testStore(t);
+  const owned = await store.create({ owner: { kind: "design-project", projectId: "project-1" } });
+  const regular = await store.create({ workspaceId: "default" });
+  await assert.rejects(
+    store.appendMessage(owned.id, { role: "user", content: "steer the design" }, { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  assert.equal((await store.get(owned.id))?.messages.length, 0);
+  // The main-owned design run still writes its own turns.
+  await store.appendMessage(owned.id, { role: "user", content: "Explore a pricing page" });
+  assert.equal((await store.get(owned.id))?.messages.length, 1);
+  await store.appendMessage(regular.id, { role: "user", content: "hello" }, { rejectFeatureOwned: true });
+  assert.equal((await store.get(regular.id))?.messages.length, 1);
+});

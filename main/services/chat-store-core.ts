@@ -1622,11 +1622,16 @@ export function createChatStore(
         autoTitle?: boolean;
         expectedWorkspaceId?: string;
         isCurrent?: () => boolean;
+        /** Renderer-authored appends refuse feature-owned (Design Studio) conversations. */
+        rejectFeatureOwned?: boolean;
       },
     ): Promise<Chat> {
       return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
+        if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
+          throw new Error("This conversation belongs to another Aiden feature and cannot be written from chat.");
+        }
         if (meta?.isCurrent && !meta.isCurrent()) {
           throw new Error("The renderer document is no longer active.");
         }
