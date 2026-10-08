@@ -7,6 +7,7 @@ import {
   E2E_ASSISTANT_RESPONSE,
   expect,
   finishLmStudioOnboarding,
+  waitForToastsToClear,
   REPOSITORY_ROOT,
   test,
 } from "./fixtures";
@@ -243,6 +244,10 @@ test.describe("Simulator stream", () => {
     await expect.poll(touchEnds).toBeGreaterThan(before);
 
     // Dragging stays inside the chat; a drop near the top-left corner snaps into it.
+    // A toast from onboarding or the screenshot can sit over the handle; let it clear, then make sure the
+    // handle itself receives the pointer before dragging it.
+    await waitForToastsToClear(page);
+    await handle.hover();
     const start = await handle.boundingBox();
     const box = await player.boundingBox();
     const viewport = await page.locator("[data-browser-floating-container] [data-scroll-top]").first().boundingBox();
