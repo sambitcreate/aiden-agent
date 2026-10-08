@@ -61,6 +61,14 @@ protocol AidenBotSessionTransport: Sendable {
         request: AidenQuestionRespondRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotQuestionAnswerReceipt
+    /// The generic `POST /approvals/{id}/respond`; a Bot approval is answered
+    /// by its `waitId` with no scope.
+    func respondToApproval(
+        id: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope?,
+        idempotencyKey: UUID
+    ) async throws -> AidenApprovalResponse
     func requestBotConnection(
         botId: String,
         request: AidenBotConnectionRequest,
@@ -108,7 +116,7 @@ func aidenBotSessionFailureIsAmbiguous(_ error: Error) -> Bool {
 @Observable
 final class AidenBotSessionModel {
     enum Action: Hashable, Sendable {
-        case send, resume, dismiss, stop, answerQuestion, retry
+        case send, resume, dismiss, stop, answerQuestion, answerApproval, retry
     }
 
     let botID: String
@@ -119,6 +127,8 @@ final class AidenBotSessionModel {
     private(set) var stateView: AidenBotSessionStateView?
     /// The A–E question the Bot is waiting on, or nil.
     private(set) var question: AidenRemoteBotQuestion?
+    /// The tool approval the Bot is waiting on, or nil.
+    private(set) var approval: AidenRemoteBotApproval?
     private(set) var epoch: String?
     private(set) var seq = 0
     private(set) var hasLoaded = false
@@ -129,6 +139,7 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
     @ObservationIgnored private var retainedMessage: (text: String, key: UUID)?
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
+    @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
     @ObservationIgnored private var connectionKeys: [String: UUID] = [:]
     /// The key of a Retry that failed ambiguously, by failed-turn id.
     @ObservationIgnored private var retainedRetry: (turnID: String, key: UUID)?
@@ -236,6 +247,8 @@ final class AidenBotSessionModel {
             stateView = view
         case let .question(next):
             question = next
+        case let .approval(next):
+            approval = next
         case .closed:
             return .closed
         }
@@ -262,6 +275,7 @@ final class AidenBotSessionModel {
         partial = session.partial.flatMap { $0.isEmpty ? nil : $0 }
         stateView = session.stateView
         question = session.question
+        approval = session.approval
         hasLoaded = true
     }
 
@@ -298,6 +312,52 @@ final class AidenBotSessionModel {
             return
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedQuestion = nil }
+            errorMessage = "That answer wasn’t sent. Please try again."
+        }
+    }
+
+    // MARK: Tool approvals
+
+    var canAnswerApproval: Bool {
+        hasLoaded && approval != nil && !inFlight.contains(.answerApproval)
+    }
+
+    /// Allows or denies the waiting tool call, once. Allow is refused when the
+    /// Mac says the phone may only deny it. The request UUID survives an
+    /// ambiguous failure so retrying the same decision replays the Mac's
+    /// receipt; another decision is a new request. When nothing is waiting any
+    /// more (expired or already answered), the card goes away.
+    func answerApproval(_ decision: AidenApprovalDecision) async {
+        guard canAnswerApproval, let current = approval else { return }
+        if decision == .allow && !current.canAllow { return }
+        let waitId = current.waitId
+        let key: UUID
+        if let retainedApproval, retainedApproval.waitId == waitId, retainedApproval.decision == decision {
+            key = retainedApproval.key
+        } else {
+            key = UUID()
+            retainedApproval = (waitId, decision, key)
+        }
+        inFlight.insert(.answerApproval)
+        defer { inFlight.remove(.answerApproval) }
+        do {
+            _ = try await transport.respondToApproval(
+                id: waitId,
+                decision: decision,
+                scope: nil,
+                idempotencyKey: key
+            )
+            retainedApproval = nil
+            if approval?.waitId == waitId { approval = nil }
+        } catch is CancellationError {
+            return
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedApproval = nil }
+            if case let AidenRemoteClientError.server(_, body) = error,
+               ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) {
+                if approval?.waitId == waitId { approval = nil }
+                return
+            }
             errorMessage = "That answer wasn’t sent. Please try again."
         }
     }

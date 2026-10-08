@@ -55,7 +55,10 @@ class AidenBotRevision25ClientTest {
     fun setup() {
         server = MockWebServer()
         server.start()
-        val capabilities = listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.BOT_WRITE, AidenRemoteCapability.CHAT_WRITE)
+        val capabilities = listOf(
+            AidenRemoteCapability.BOT_READ, AidenRemoteCapability.BOT_WRITE, AidenRemoteCapability.CHAT_WRITE,
+            AidenRemoteCapability.APPROVAL_RESPOND
+        )
         client = AidenRemoteClient(
             installation = AidenInstallation(
                 instanceId = "test_instance",
@@ -204,7 +207,7 @@ class AidenBotRevision25ClientTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body))
         val received = client.botSessionEvents("bot_fixture_01").toList()
         assertEquals(events.size, received.size)
-        assertEquals(listOf("snapshot", "partial", "entry", "state", "closed", "state", "question", "question"), received.map { it.type })
+        assertEquals(listOf("snapshot", "partial", "entry", "state", "closed", "state", "question", "question", "approval", "approval"), received.map { it.type })
         assertEquals("/api/aiden/v1/bots/bot_fixture_01/session/events", server.takeRequest().path)
 
         server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body))
@@ -214,5 +217,31 @@ class AidenBotRevision25ClientTest {
         } catch (e: sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException) {
             assertEquals(sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException.InvalidStreamIdentity, e)
         }
+    }
+
+    @Test
+    fun aBotApprovalIsAnsweredOnTheGenericApprovalRouteWithoutAScope() = runBlocking {
+        val transport = sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotSessionTransport(client)
+        val waitId = "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6"
+        val key = UUID.randomUUID()
+        server.enqueue(ok(Json.parseToJsonElement("""{"approvalId":"$waitId","decision":"allow","resolvedAt":"2026-08-19T15:02:00.000Z"}""")))
+        val receipt = transport.respondToApproval(waitId, AidenApprovalDecision.ALLOW, key)
+        assertEquals(waitId, receipt.approvalId)
+        assertEquals(AidenApprovalDecision.ALLOW, receipt.decision)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/approvals/$waitId/respond", request.path)
+        assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
+        assertEquals("""{"decision":"allow"}""", request.body.readUtf8())
+
+        // A settled approval is a refusal the caller can tell apart.
+        server.enqueue(error(409, "approval_already_resolved"))
+        try {
+            transport.respondToApproval(waitId, AidenApprovalDecision.DENY, UUID.randomUUID())
+            fail("A settled approval must be refused")
+        } catch (e: AidenRemoteClientException.Server) {
+            assertEquals(AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED, e.body.code)
+        }
+        assertEquals("""{"decision":"deny"}""", server.takeRequest().body.readUtf8())
     }
 }

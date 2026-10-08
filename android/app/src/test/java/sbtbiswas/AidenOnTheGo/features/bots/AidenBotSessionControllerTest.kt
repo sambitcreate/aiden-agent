@@ -95,6 +95,149 @@ class AidenBotSessionControllerTest {
         }
         override suspend fun requestConnection(botId: String, pluginId: String, key: UUID) =
             AidenBotConnectionRequestReceipt(pluginId, "Google Calendar", AidenBotConnectionRequestStatus.SENT)
+
+        data class ApprovalCall(val waitId: String, val decision: AidenApprovalDecision, val key: UUID)
+        val approvalCalls = mutableListOf<ApprovalCall>()
+        /** Failures the next approval responses throw, in order. */
+        val approvalFailures = ArrayDeque<Exception>()
+        var approvalGate: CompletableDeferred<Unit>? = null
+
+        override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID): AidenApprovalResponse {
+            approvalCalls += ApprovalCall(waitId, decision, key)
+            approvalGate?.await()
+            approvalFailures.removeFirstOrNull()?.let { throw it }
+            return AidenApprovalResponse(waitId, decision, resolvedAt = java.time.Instant.parse("2026-08-19T15:02:00Z"))
+        }
+    }
+
+    private val mailApproval = AidenBotApproval(
+        waitId = "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6",
+        toolCallId = "call_fixture_02",
+        toolName = "mcp__mail__send_email",
+        summary = "Send an email to dana@example.com: Lunch on Friday?",
+        canAllow = true
+    )
+
+    private fun approvalController(approval: AidenBotApproval, scope: kotlinx.coroutines.CoroutineScope): Pair<FakeTransport, AidenBotSessionController> {
+        val transport = FakeTransport(
+            interruptedSession.copy(state = AidenBotSessionState.IDLE, interrupted = false, approval = approval)
+        )
+        return transport to AidenBotSessionController(transport.session.botId, transport, scope)
+    }
+
+    @Test
+    fun aWaitingApprovalComesFromTheSnapshotAndFramesAndANullFrameClearsIt() = runTest {
+        val controller = AidenBotSessionController(interruptedSession.botId, FakeTransport(interruptedSession), backgroundScope)
+        // A snapshot carrying an approval shows it.
+        val waiting = interruptedSession.copy(approval = mailApproval)
+        assertTrue(controller.handle(snapshotOf(waiting)))
+        assertEquals(mailApproval, controller.state.value.session?.approval)
+
+        // The fixture's approval frames, in their own epoch: one appears, the next settles it.
+        val approvalFrames = fixtureEvents.filter { it.payload is AidenBotSessionEventPayload.Approval }
+        val base = interruptedSession.copy(
+            epoch = approvalFrames.first().epoch,
+            seq = approvalFrames.first().seq - 1,
+            state = AidenBotSessionState.IDLE,
+            interrupted = false,
+            blocked = null
+        )
+        assertTrue(controller.handle(snapshotOf(base)))
+        assertEquals(null, controller.state.value.session?.approval)
+        assertTrue(controller.handle(approvalFrames[0]))
+        val shown = controller.state.value.session?.approval
+        assertEquals("8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6", shown?.waitId)
+        assertEquals(true, shown?.canAllow)
+        assertTrue(controller.state.value.canStopTurn)
+        assertTrue(controller.handle(approvalFrames[1]))
+        assertEquals(null, controller.state.value.session?.approval)
+        assertEquals(approvalFrames[1].seq, controller.state.value.session?.seq)
+        assertFalse("nothing waits on an idle Bot any more", controller.state.value.canStopTurn)
+    }
+
+    @Test
+    fun anApprovalDecisionIsRetriedUnderOneKeyAndClearsWhenTheMacAnswers() = runTest {
+        val (transport, controller) = approvalController(mailApproval, backgroundScope)
+        controller.refetch()
+
+        transport.approvalFailures += IOException("offline")
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW))
+        assertEquals("an unanswered attempt keeps the card", mailApproval, controller.state.value.session?.approval)
+        assertTrue(controller.respondToApproval(AidenApprovalDecision.ALLOW))
+
+        assertEquals(
+            listOf(mailApproval.waitId, mailApproval.waitId),
+            transport.approvalCalls.map { it.waitId }
+        )
+        assertEquals(listOf(AidenApprovalDecision.ALLOW, AidenApprovalDecision.ALLOW), transport.approvalCalls.map { it.decision })
+        assertEquals("the retry replays the first attempt", transport.approvalCalls[0].key, transport.approvalCalls[1].key)
+        assertEquals(null, controller.state.value.session?.approval)
+        assertFalse(controller.state.value.isRespondingToApproval)
+        assertFalse("nothing is waiting any more", controller.respondToApproval(AidenApprovalDecision.DENY))
+        assertEquals(2, transport.approvalCalls.size)
+    }
+
+    @Test
+    fun theOtherDecisionAfterAnUnansweredAttemptGetsANewKey() = runTest {
+        val (transport, controller) = approvalController(mailApproval, backgroundScope)
+        controller.refetch()
+        transport.approvalFailures += IOException("offline")
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW))
+        assertTrue(controller.respondToApproval(AidenApprovalDecision.DENY))
+        assertEquals(listOf(AidenApprovalDecision.ALLOW, AidenApprovalDecision.DENY), transport.approvalCalls.map { it.decision })
+        assertNotEquals("another decision is another request", transport.approvalCalls[0].key, transport.approvalCalls[1].key)
+    }
+
+    @Test
+    fun aDenyOnlyApprovalRefusesAllowAndStillSendsDeny() = runTest {
+        val (transport, controller) = approvalController(mailApproval.copy(canAllow = false), backgroundScope)
+        controller.refetch()
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW))
+        assertTrue("Allow never reaches the Mac", transport.approvalCalls.isEmpty())
+        assertTrue(controller.respondToApproval(AidenApprovalDecision.DENY))
+        assertEquals(listOf(AidenApprovalDecision.DENY), transport.approvalCalls.map { it.decision })
+    }
+
+    @Test
+    fun anExpiredOrAlreadySettledApprovalIsCleared() = runTest {
+        val (transport, controller) = approvalController(mailApproval, backgroundScope)
+        controller.refetch()
+        transport.approvalFailures += serverError(409, AidenRemoteErrorCode.APPROVAL_EXPIRED)
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW))
+        assertEquals(null, controller.state.value.session?.approval)
+        assertTrue(controller.state.value.actionError != null)
+
+        // Settled on the Mac or another phone: the card goes away without an error.
+        controller.refetch()
+        assertEquals(mailApproval, controller.state.value.session?.approval)
+        transport.approvalFailures += serverError(409, AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED)
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.DENY))
+        assertEquals(null, controller.state.value.session?.approval)
+        assertEquals(null, controller.state.value.actionError)
+
+        // A refusal the Mac answered (capability_denied) keeps the card and ends that attempt's key.
+        controller.refetch()
+        transport.approvalFailures += serverError(403, AidenRemoteErrorCode.CAPABILITY_DENIED)
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW))
+        assertEquals(mailApproval, controller.state.value.session?.approval)
+        assertTrue(controller.respondToApproval(AidenApprovalDecision.ALLOW))
+        assertNotEquals(transport.approvalCalls[2].key, transport.approvalCalls[3].key)
+    }
+
+    @Test
+    fun aSecondTapWhileADecisionIsInFlightSendsNothing() = runTest {
+        val (transport, controller) = approvalController(mailApproval, backgroundScope)
+        controller.refetch()
+        val gate = CompletableDeferred<Unit>()
+        transport.approvalGate = gate
+        val first = async { controller.respondToApproval(AidenApprovalDecision.ALLOW) }
+        advanceUntilIdle()
+        assertTrue(controller.state.value.isRespondingToApproval)
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.DENY))
+        assertEquals(1, transport.approvalCalls.size)
+        gate.complete(Unit)
+        assertTrue(first.await())
+        assertFalse(controller.state.value.isRespondingToApproval)
     }
 
     private val colourQuestion = AidenBotQuestion(

@@ -115,6 +115,15 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
         throw URLError(.unsupportedURL)
     }
 
+    func respondToApproval(
+        id: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope?,
+        idempotencyKey: UUID
+    ) async throws -> AidenApprovalResponse {
+        throw URLError(.unsupportedURL)
+    }
+
     func requestBotConnection(
         botId: String,
         request: AidenBotConnectionRequest,
@@ -666,6 +675,31 @@ final class AidenBotSessionTests: XCTestCase {
         rejects("duplicate entry ids") { $0["entries"] = [userMessage, userMessage] }
         rejects("oversized partial") { $0["partial"] = String(repeating: "a", count: 100_001) }
         rejects("missing hasOlder") { $0["hasOlder"] = nil }
+        XCTAssertTrue(base.keys.contains("approval"), "the fixture carries the required approval key")
+        rejects("missing approval") { $0["approval"] = nil }
+
+        let approval: [String: Any] = [
+            "waitId": "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6", "toolCallId": "call_1",
+            "toolName": "mcp__mail__send_email", "summary": "Send an email", "canAllow": false,
+        ]
+        XCTAssertTrue(decodes(AidenBotSession.self, base.merging(["approval": approval]) { $1 }))
+        func rejectsApproval(_ label: String, _ change: [String: Any]) {
+            rejects(label) { $0["approval"] = approval.merging(change) { $1 } }
+        }
+        rejectsApproval("approval extra key", ["scope": "once"])
+        rejectsApproval("approval wait id grammar", ["waitId": "wait_1"])
+        rejectsApproval("approval wait id bound", ["waitId": String(repeating: "a", count: 65)])
+        rejectsApproval("empty tool call id", ["toolCallId": ""])
+        rejectsApproval("tool call id bound", ["toolCallId": String(repeating: "c", count: 129)])
+        rejectsApproval("tool name bound", ["toolName": String(repeating: "t", count: 121)])
+        rejectsApproval("empty summary", ["summary": ""])
+        rejectsApproval("summary bound", ["summary": String(repeating: "s", count: 2_001)])
+        rejectsApproval("canAllow is a boolean", ["canAllow": "yes"])
+        rejects("approval missing canAllow") { session in
+            var partialApproval = approval
+            partialApproval["canAllow"] = nil
+            session["approval"] = partialApproval
+        }
 
         func rejectsEntry(_ label: String, _ entry: [String: Any]) {
             var copy = base
@@ -726,6 +760,46 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertTrue(decodes(AidenBotSessionEvent.self, state))
         state["payload"] = ["state": "idle", "interrupted": false, "partial": "x"]
         XCTAssertFalse(decodes(AidenBotSessionEvent.self, state))
+
+        // The approval frames at the end of the fixture: one shows a card, the
+        // next settles it, and both survive an encode/decode round trip.
+        let approvalFrames = frames.filter { $0["type"] as? String == "approval" }
+        XCTAssertEqual(approvalFrames.count, 2)
+        let decoded = try approvalFrames.map {
+            try AidenRemoteJSONDecoder.decode(AidenBotSessionEvent.self, from: JSONSerialization.data(withJSONObject: $0))
+        }
+        guard case let .approval(shown?) = decoded[0].kind, case .approval(nil) = decoded[1].kind else {
+            return XCTFail("approval frames decode to a card and then a settlement")
+        }
+        XCTAssertEqual(shown.waitId, "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6")
+        XCTAssertTrue(shown.canAllow)
+        for event in decoded {
+            let reencoded = try AidenRemoteJSONDecoder.decode(AidenBotSessionEvent.self, from: JSONEncoder().encode(event))
+            XCTAssertEqual(reencoded, event)
+            XCTAssertEqual(reencoded.wireType, "approval")
+        }
+        let snapshotEvent = try AidenRemoteJSONDecoder.decode(
+            AidenBotSessionEvent.self,
+            from: JSONSerialization.data(withJSONObject: snapshot)
+        )
+        guard case let .snapshot(snapshotSession) = snapshotEvent.kind else {
+            return XCTFail("the fixture snapshot frame carries a session")
+        }
+        XCTAssertNil(snapshotSession.approval)
+        let sessionWithApproval = AidenBotSession(
+            botId: snapshotSession.botId, epoch: snapshotSession.epoch, seq: snapshotSession.seq,
+            stateView: snapshotSession.stateView, partial: snapshotSession.partial,
+            entries: snapshotSession.entries, hasOlder: snapshotSession.hasOlder, approval: shown
+        )
+        XCTAssertEqual(
+            try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONEncoder().encode(sessionWithApproval)),
+            sessionWithApproval
+        )
+        var approvalFrame = approvalFrames[0]
+        approvalFrame["payload"] = ["approval": NSNull(), "reason": "expired"]
+        XCTAssertFalse(decodes(AidenBotSessionEvent.self, approvalFrame))
+        approvalFrame["payload"] = [String: Any]()
+        XCTAssertFalse(decodes(AidenBotSessionEvent.self, approvalFrame), "approval is required, even when null")
     }
 
     func testRoutinePresetAndReceiptDecodersRejectWhatTheHostRejects() throws {
@@ -843,7 +917,7 @@ final class AidenBotSessionQuestionTests: XCTestCase {
 
     private func session(question: String) throws -> AidenBotSession {
         let json = """
-        {"botId":"bot_fixture_01","epoch":"epoch_1","seq":0,"state":"running","interrupted":false,"entries":[],"hasOlder":false,"question":\(question)}
+        {"botId":"bot_fixture_01","epoch":"epoch_1","seq":0,"state":"running","interrupted":false,"entries":[],"hasOlder":false,"question":\(question),"approval":null}
         """
         return try JSONDecoder().decode(AidenBotSession.self, from: Data(json.utf8))
     }
@@ -906,12 +980,140 @@ final class AidenBotSessionQuestionTests: XCTestCase {
     }
 }
 
+/// The Bot chat's tool approval: the snapshot and `approval` events show it,
+/// and Allow/Deny go once through the generic approval route.
+@MainActor
+final class AidenBotSessionApprovalTests: XCTestCase {
+    private let botID = "bot_fixture_01"
+    private let waitID = "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6"
+
+    private func approvalJSON(canAllow: Bool = true) -> String {
+        #"{"waitId":"8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6","toolCallId":"call_2","toolName":"mcp__mail__send_email","summary":"Send an email to dana@example.com","canAllow":\#(canAllow)}"#
+    }
+
+    private func session(approval: String, epoch: String = "epoch_1", seq: Int = 0) throws -> AidenBotSession {
+        let json = """
+        {"botId":"bot_fixture_01","epoch":"\(epoch)","seq":\(seq),"state":"running","interrupted":false,"entries":[],"hasOlder":false,"question":null,"approval":\(approval)}
+        """
+        return try JSONDecoder().decode(AidenBotSession.self, from: Data(json.utf8))
+    }
+
+    private func loadedModel(approval: String) async throws -> (AidenBotSessionModel, QuestionTransport) {
+        let transport = QuestionTransport(snapshot: try session(approval: approval))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        return (model, transport)
+    }
+
+    private func serverError(status: Int, code: String) throws -> AidenRemoteClientError {
+        let body = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"\#(code)","message":"No.","requestId":"req_test_1","retryable":false}"#.utf8)
+        )
+        return .server(statusCode: status, body: body)
+    }
+
+    func testSnapshotApprovalIsAllowedOnceByItsWaitIDAndClearsOnTheReceipt() async throws {
+        let (model, transport) = try await loadedModel(approval: approvalJSON())
+        XCTAssertEqual(model.approval?.waitId, waitID)
+        XCTAssertEqual(model.approval?.toolName, "mcp__mail__send_email")
+        XCTAssertTrue(model.canAnswerApproval)
+
+        await model.answerApproval(.allow)
+
+        XCTAssertEqual(transport.approvals.count, 1)
+        XCTAssertEqual(transport.approvals.first?.waitId, waitID)
+        XCTAssertEqual(transport.approvals.first?.decision, .allow)
+        XCTAssertNil(transport.approvals.first?.scope, "a Bot approval is answered once, with no scope")
+        XCTAssertNil(model.approval)
+        XCTAssertFalse(model.canAnswerApproval)
+
+        await model.answerApproval(.deny)
+        XCTAssertEqual(transport.approvals.count, 1, "nothing is waiting, so nothing more is sent")
+    }
+
+    func testFixtureApprovalFramesShowAndSettleTheCard() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let frames = try XCTUnwrap(fixture["botSessionEvents"] as? [[String: Any]])
+            .filter { $0["type"] as? String == "approval" }
+            .map { try AidenRemoteJSONDecoder.decode(AidenBotSessionEvent.self, from: JSONSerialization.data(withJSONObject: $0)) }
+        let first = try XCTUnwrap(frames.first)
+        let transport = QuestionTransport(
+            snapshot: try session(approval: "null", epoch: first.epoch, seq: first.seq - 1)
+        )
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        XCTAssertNil(model.approval)
+
+        let shown = await model.apply(first)
+        XCTAssertEqual(shown, .applied)
+        XCTAssertEqual(model.approval?.waitId, waitID)
+
+        let settled = await model.apply(try XCTUnwrap(frames.last))
+        XCTAssertEqual(settled, .applied)
+        XCTAssertNil(model.approval)
+        XCTAssertTrue(transport.approvals.isEmpty, "a settled approval is not answered by the phone")
+    }
+
+    func testALostDecisionIsRetriedUnderItsKeyAndAnotherDecisionIsANewRequest() async throws {
+        let (model, transport) = try await loadedModel(approval: approvalJSON())
+
+        transport.nextApprovalError = URLError(.networkConnectionLost)
+        await model.answerApproval(.allow)
+        XCTAssertEqual(model.approval?.waitId, waitID, "the card stays until the Mac confirms")
+        XCTAssertNotNil(model.errorMessage)
+        transport.nextApprovalError = URLError(.networkConnectionLost)
+        await model.answerApproval(.allow)
+        await model.answerApproval(.deny)
+
+        XCTAssertEqual(transport.approvals.map(\.decision), [.allow, .allow, .deny])
+        XCTAssertEqual(transport.approvals[0].key, transport.approvals[1].key, "the same decision replays under one key")
+        XCTAssertNotEqual(transport.approvals[1].key, transport.approvals[2].key, "another decision is another request")
+        XCTAssertNil(model.approval)
+    }
+
+    func testAllowIsRefusedWhenThePhoneMayOnlyDeny() async throws {
+        let (model, transport) = try await loadedModel(approval: approvalJSON(canAllow: false))
+        XCTAssertEqual(model.approval?.canAllow, false)
+
+        await model.answerApproval(.allow)
+        XCTAssertTrue(transport.approvals.isEmpty, "Allow never reaches the Mac for a deny-only approval")
+        XCTAssertNotNil(model.approval)
+
+        await model.answerApproval(.deny)
+        XCTAssertEqual(transport.approvals.map(\.decision), [.deny])
+        XCTAssertNil(model.approval)
+    }
+
+    func testNothingWaitingClearsTheCardButARefusalKeepsIt() async throws {
+        for code in ["approval_expired", "approval_already_resolved"] {
+            let (model, transport) = try await loadedModel(approval: approvalJSON())
+            transport.nextApprovalError = try serverError(status: 409, code: code)
+            await model.answerApproval(.deny)
+            XCTAssertNil(model.approval, "\(code) means nothing is waiting any more")
+            XCTAssertNil(model.errorMessage, code)
+        }
+
+        let (model, transport) = try await loadedModel(approval: approvalJSON())
+        transport.nextApprovalError = try serverError(status: 403, code: "capability_denied")
+        await model.answerApproval(.allow)
+        XCTAssertEqual(model.approval?.waitId, waitID, "a refused answer leaves the approval waiting")
+        XCTAssertNotNil(model.errorMessage)
+        await model.answerApproval(.allow)
+        XCTAssertNotEqual(transport.approvals[0].key, transport.approvals[1].key, "a definite refusal is not replayed")
+    }
+}
+
 /// A transport that serves one snapshot and records quick-reply answers.
 private final class QuestionTransport: AidenBotSessionTransport, @unchecked Sendable {
     let snapshot: AidenBotSession
     private(set) var answers: [(waitId: String, key: UUID, request: AidenQuestionRespondRequest)] = []
     /// Thrown by the next answer instead of a receipt.
     var nextAnswerError: Error?
+    private(set) var approvals: [(waitId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, key: UUID)] = []
+    /// Thrown by the next approval response instead of a resolution.
+    var nextApprovalError: Error?
 
     init(snapshot: AidenBotSession) {
         self.snapshot = snapshot
@@ -958,6 +1160,20 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
             AidenBotQuestionAnswerReceipt.self,
             from: Data("{\"waitId\":\"\(waitId)\"}".utf8)
         )
+    }
+
+    func respondToApproval(
+        id: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope?,
+        idempotencyKey: UUID
+    ) async throws -> AidenApprovalResponse {
+        approvals.append((id, decision, scope, idempotencyKey))
+        if let error = nextApprovalError {
+            nextApprovalError = nil
+            throw error
+        }
+        return AidenApprovalResponse(approvalId: id, decision: decision, resolvedAt: Date())
     }
 
     func requestBotConnection(

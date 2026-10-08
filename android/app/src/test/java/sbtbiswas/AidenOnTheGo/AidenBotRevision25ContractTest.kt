@@ -89,14 +89,25 @@ class AidenBotRevision25ContractTest {
 
         val events = roundTrip(ListSerializer(AidenBotSessionEvent.serializer()), fixture.getValue("botSessionEvents"))
         assertEquals(
-            listOf("snapshot", "partial", "entry", "state", "closed", "state", "question", "question"),
+            listOf("snapshot", "partial", "entry", "state", "closed", "state", "question", "question", "approval", "approval"),
             events.map { it.type }
         )
         assertEquals(AidenBotSessionBlock.ACCESS_CHANGED, (events[3].payload as AidenBotSessionEventPayload.State).view.blocked)
-        assertEquals(null, (events.last().payload as AidenBotSessionEventPayload.Question).question)
-        val asked = (events[events.size - 2].payload as AidenBotSessionEventPayload.Question).question
+        val questions = events.mapNotNull { (it.payload as? AidenBotSessionEventPayload.Question) }
+        assertEquals(null, questions.last().question)
+        val asked = questions.first().question
         assertEquals("5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c", asked?.waitId)
         assertEquals("Blue", asked?.questions?.first()?.options?.first()?.label)
+        // A waiting tool approval, then the frame that settles it.
+        val approvals = events.mapNotNull { (it.payload as? AidenBotSessionEventPayload.Approval) }
+        val waiting = approvals.first().approval
+        assertEquals("8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6", waiting?.waitId)
+        assertEquals("mcp__mail__send_email", waiting?.toolName)
+        assertEquals(true, waiting?.canAllow)
+        assertNull(approvals.last().approval)
+        // Nothing waits in the fixture sessions, and `approval: null` is written back explicitly.
+        assertNull(session.approval)
+        assertNull(needsModel.approval)
 
         roundTrip(AidenBotSessionSendRequest.serializer(), pair("botSessionSend", "request"))
         assertFalse(roundTrip(AidenBotSessionSendResponse.serializer(), pair("botSessionSend", "response")).deduped)
@@ -215,6 +226,51 @@ class AidenBotRevision25ContractTest {
         rejects(AidenBotSession.serializer(), session.with("entries" to many))
         // A blank message is never sent.
         assertThrows(Exception::class.java) { AidenBotSessionSendRequest("   ") }
+    }
+
+    /** A session always carries `approval`, and an approval has exactly the host's keys and bounds. */
+    @Test
+    fun sessionApprovalIsRequiredAndStrict() {
+        val session = fixture.getValue("botSession").jsonObject
+        val frame = fixture.getValue("botSessionEvents").jsonArray
+            .first { it.jsonObject["type"] == JsonPrimitive("approval") }.jsonObject
+        val waiting = frame.getValue("payload").jsonObject.getValue("approval").jsonObject
+
+        // A session carrying a waiting approval round-trips with it.
+        val carrying = roundTrip(AidenBotSession.serializer(), session.with("approval" to waiting))
+        assertEquals("8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6", carrying.approval?.waitId)
+        assertEquals("Send an email to dana@example.com: Lunch on Friday?", carrying.approval?.summary)
+        // Computer Use: the phone may only deny.
+        val denyOnly = roundTrip(AidenBotSession.serializer(), session.with("approval" to waiting.with("canAllow" to JsonPrimitive(false))))
+        assertEquals(false, denyOnly.approval?.canAllow)
+
+        // `approval` is required, even when nothing waits.
+        rejects(AidenBotSession.serializer(), JsonObject(session - "approval"))
+        // Exact keys; host bounds on every field.
+        for (invalid in listOf(
+            waiting.with("scopes" to JsonArray(listOf(JsonPrimitive("once")))),
+            JsonObject(waiting - "canAllow"),
+            waiting.with("canAllow" to JsonPrimitive("yes")),
+            waiting.with("canAllow" to JsonPrimitive("true")),
+            waiting.with("waitId" to JsonPrimitive("wait id")),
+            waiting.with("waitId" to JsonPrimitive("wait_1")),
+            waiting.with("waitId" to JsonPrimitive("a".repeat(65))),
+            waiting.with("toolCallId" to JsonPrimitive("")),
+            waiting.with("toolCallId" to JsonPrimitive("c".repeat(129))),
+            waiting.with("toolName" to JsonPrimitive("t".repeat(121))),
+            waiting.with("summary" to JsonPrimitive("")),
+            waiting.with("summary" to JsonPrimitive("s".repeat(2_001)))
+        )) {
+            rejects(AidenBotSession.serializer(), session.with("approval" to invalid))
+            rejects(AidenBotSessionEvent.serializer(), frame.with("payload" to JsonObject(mapOf("approval" to invalid))))
+        }
+        assertEquals(
+            "s".repeat(2_000),
+            json.decodeFromJsonElement(AidenBotSession.serializer(), session.with("approval" to waiting.with("summary" to JsonPrimitive("s".repeat(2_000))))).approval?.summary
+        )
+        // The frame's payload carries only `approval`.
+        rejects(AidenBotSessionEvent.serializer(), frame.with("payload" to JsonObject(mapOf("approval" to waiting, "question" to kotlinx.serialization.json.JsonNull))))
+        rejects(AidenBotSessionEvent.serializer(), frame.with("payload" to JsonObject(emptyMap())))
     }
 
     @Test

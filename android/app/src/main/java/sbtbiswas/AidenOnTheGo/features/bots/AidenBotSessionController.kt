@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import java.util.UUID
 
 /** The routes a durable Bot chat uses. [AidenRemoteClient] provides them on a revision-25 Mac. */
@@ -31,6 +32,8 @@ interface AidenBotSessionTransport {
         key: UUID
     ): AidenBotQuestionAnswerReceipt
     suspend fun requestConnection(botId: String, pluginId: String, key: UUID): AidenBotConnectionRequestReceipt
+    /** The generic `POST /approvals/{waitId}/respond`; a Bot approval takes no scope. */
+    suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID): AidenApprovalResponse
 }
 
 class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : AidenBotSessionTransport {
@@ -48,6 +51,8 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
     ) = client.answerBotQuestion(botId, waitId, request, key)
     override suspend fun requestConnection(botId: String, pluginId: String, key: UUID) =
         client.requestBotConnection(botId, pluginId, key)
+    override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID) =
+        client.respondToApproval(waitId, decision, idempotencyKey = key)
 }
 
 /** What applying one live event to the known session means. */
@@ -102,6 +107,8 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
         )
         is AidenBotSessionEventPayload.Question ->
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, question = payload.question))
+        is AidenBotSessionEventPayload.Approval ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, approval = payload.approval))
         AidenBotSessionEventPayload.Closed -> AidenBotSessionEventOutcome.Reconnect
         is AidenBotSessionEventPayload.Snapshot -> AidenBotSessionEventOutcome.Applied(payload.session)
     }
@@ -150,6 +157,7 @@ data class AidenBotSessionUiState(
     val isDismissing: Boolean = false,
     val isStopping: Boolean = false,
     val isAnsweringQuestion: Boolean = false,
+    val isRespondingToApproval: Boolean = false,
     val actionError: String? = null,
     val connectRequests: Map<String, AidenBotConnectRequestPhase> = emptyMap(),
     /** The Bot's state from the home list, used until the session loads. */
@@ -162,9 +170,9 @@ data class AidenBotSessionUiState(
     val canSend: Boolean
         get() = !needsModel && !isSending && !botMissing && state != AidenBotSessionState.UNAVAILABLE && session != null
 
-    /** Stop stays in the top bar while a turn runs, including while it waits on a question card. */
+    /** Stop stays in the top bar while a turn runs, including while it waits on a question or approval card. */
     val canStopTurn: Boolean
-        get() = isRunning || (session?.question != null && !isInterrupted)
+        get() = isRunning || ((session?.question != null || session?.approval != null) && !isInterrupted)
 
     /** The failed turn Retry resends: only the newest entry, only with text, only while sending is allowed. */
     val retryableFailedTurn: AidenBotSessionEntry.FailedTurn?
@@ -273,6 +281,7 @@ class AidenBotSessionController(
      * flight. A failed send keeps its key, so retrying the same text cannot post twice.
      */
     private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
+    private var pendingApprovalDecision: Pair<String, AidenApprovalDecision>? = null
 
     suspend fun send(text: String): Boolean {
         val trimmed = text.trim()
@@ -394,6 +403,61 @@ class AidenBotSessionController(
         }
     }
 
+    /**
+     * Allows or denies the waiting tool approval once. Allow is refused when the approval
+     * cannot be allowed from a phone. An unanswered attempt keeps its key, so retrying the
+     * same decision replays the Mac's outcome; the other decision gets a new key. An expired
+     * or already-settled approval is cleared. A second tap while one is in flight sends nothing.
+     */
+    suspend fun respondToApproval(decision: AidenApprovalDecision): Boolean {
+        val approval = _state.value.session?.approval ?: return false
+        if (decision == AidenApprovalDecision.ALLOW && !approval.canAllow) return false
+        var claimed = false
+        _state.update { current ->
+            if (current.isRespondingToApproval) current else {
+                claimed = true
+                current.copy(isRespondingToApproval = true, actionError = null)
+            }
+        }
+        if (!claimed) return false
+        val action = "$RESPOND_APPROVAL:${approval.waitId}"
+        if (pendingApprovalDecision != action to decision) {
+            keys.complete(action)
+            pendingApprovalDecision = action to decision
+        }
+        return try {
+            transport.respondToApproval(approval.waitId, decision, keys.key(action))
+            keys.complete(action)
+            pendingApprovalDecision = null
+            clearApproval(approval.waitId)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            if (aidenBotMacAnswered(error)) pendingApprovalDecision = null
+            when ((error as? AidenRemoteClientException.Server)?.body?.code) {
+                AidenRemoteErrorCode.APPROVAL_EXPIRED -> {
+                    clearApproval(approval.waitId)
+                    _state.update { it.copy(actionError = "That request expired.") }
+                }
+                // Settled elsewhere, on the Mac or another phone: nothing is waiting any more.
+                AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED -> clearApproval(approval.waitId)
+                else -> _state.update { it.copy(actionError = "Aiden couldn’t send that. Try again.") }
+            }
+            false
+        } finally {
+            _state.update { it.copy(isRespondingToApproval = false) }
+        }
+    }
+
+    private fun clearApproval(waitId: String) {
+        _state.update { current ->
+            val session = current.session
+            if (session?.approval?.waitId == waitId) current.copy(session = session.copy(approval = null)) else current
+        }
+    }
+
     suspend fun requestConnection(pluginId: String) {
         val phase = _state.value.connectRequests[pluginId]
         if (phase == AidenBotConnectRequestPhase.SENDING || phase == AidenBotConnectRequestPhase.SENT) return
@@ -455,6 +519,7 @@ class AidenBotSessionController(
         const val DISMISS = "dismiss"
         const val STOP = "stop"
         const val ANSWER_QUESTION = "answerQuestion"
+        const val RESPOND_APPROVAL = "respondApproval"
         const val RETRY = "retry"
     }
 }
