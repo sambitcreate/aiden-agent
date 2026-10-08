@@ -10,28 +10,20 @@ import { registerGenerativeUiPreviewDocument } from "../generative-ui-protocol.j
 import { llmClient } from "../llm-client.js";
 import { piRuntimeEffectStore } from "../pi-runtime-effect-store.js";
 import { createThrottledTrigger } from "../portable-config-watch-core.js";
+import { createProjectChangeNotifier } from "./change-notifier.js";
 import { createDesignChatPort } from "./chat-port.js";
 import { wrapDesignRevision } from "./design-preview.js";
 import { DesignRunService } from "./run-service.js";
 import { DesignProjectStore } from "./store.js";
 
 const CHANGE_THROTTLE_MS = 150;
-const changeTriggers = new Map<string, { trigger(): void; dispose(): void }>();
 
 /** Throttled per project: a burst of edits costs at most one broadcast per interval, plus a trailing one. */
-function notifyProjectChanged(projectId: string): void {
-  let trigger = changeTriggers.get(projectId);
-  if (!trigger) {
-    trigger = createThrottledTrigger(() => {
-      ipcMain.broadcast("designProjects:changed", {
-        projectId,
-        revision: designProjectStore.get(projectId)?.revision ?? 0,
-      });
-    }, CHANGE_THROTTLE_MS);
-    changeTriggers.set(projectId, trigger);
-  }
-  trigger.trigger();
-}
+const notifyProjectChanged = createProjectChangeNotifier({
+  broadcast: (event) => ipcMain.broadcast("designProjects:changed", event),
+  revisionOf: (projectId) => designProjectStore.get(projectId)?.revision,
+  createTrigger: (run) => createThrottledTrigger(run, CHANGE_THROTTLE_MS),
+});
 
 const designChats = createDesignChatPort({
   chatStore,
