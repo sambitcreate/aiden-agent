@@ -25,6 +25,7 @@ import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shar
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import {
   BOT_SILENT_REPLY,
+  botQuestionAnswerText,
   botTranscriptPreview,
   type BotLiveEvent,
   type BotPendingQuestion,
@@ -161,12 +162,14 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === "pi.tool-result" && message?.role === "toolResult") {
-      if (message.toolName === ASK_USER_QUESTION_TOOL_NAME && !message.isError) {
-        // The person's answer to a quick-reply card reads as a transcript entry.
-        mapped.push({
-          entry: { id, type: "question_answer", text: textOf(message.content), at: message.timestamp },
-          turn,
-        });
+      // The person's answer to a quick-reply card reads as their reply. A
+      // stopped question (an error result) records no answer and stays hidden.
+      const answerText =
+        message.toolName === ASK_USER_QUESTION_TOOL_NAME && !message.isError
+          ? botQuestionAnswerText(message.details)
+          : undefined;
+      if (answerText !== undefined) {
+        mapped.push({ entry: { id, type: "question_answer", text: answerText, at: message.timestamp }, turn });
         continue;
       }
       mapped.push({
@@ -487,12 +490,24 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     await stopFeed(feed);
   }
 
+  /** Push a `question` event when the Bot's waiting question differs from the feed's. */
+  function syncQuestion(feed: Feed): Promise<void> {
+    return enqueueWork(feed, async () => {
+      const question = deps.question?.(feed.botId) ?? null;
+      if (question?.waitId === feed.question?.waitId) return;
+      feed.question = question;
+      emit(feed, { type: "question", question });
+    });
+  }
+
   return {
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
       const feed = await openFeed(botId);
       // A new subscriber gets current connect-card statuses, not the feed's last view.
       await reproject(feed).catch((error) => report(botId, error));
+      // A question asked or settled while no feed was open is caught up here.
+      await syncQuestion(feed).catch((error) => report(botId, error));
       let set = subscribers.get(botId);
       if (!set) subscribers.set(botId, (set = new Set()));
       set.add(subscriber);
@@ -532,12 +547,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     async refreshQuestion(botId) {
       const feed = feeds.get(botId);
       if (!feed || feed.ended) return;
-      await enqueueWork(feed, async () => {
-        const question = deps.question?.(botId) ?? null;
-        if (JSON.stringify(question) === JSON.stringify(feed.question)) return;
-        feed.question = question;
-        emit(feed, { type: "question", question });
-      });
+      await syncQuestion(feed);
     },
 
     async summary(botId) {

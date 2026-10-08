@@ -9,6 +9,7 @@ import {
   parseAskUserQuestionResponse,
   parseAskUserQuestions,
   retainExpiredAskUserQuestionForLateAnswer,
+  summarizeAskUserQuestionResponse,
 } from "./ask-user-question.js";
 
 const questions = [
@@ -153,4 +154,20 @@ test("a late answer becomes a readable follow-up and an empty one offers nothing
   assert.match(followUp, /1\. How should I help\?\nAnswer: Skipped/u);
   assert.match(followUp, /2\. Which extras\?\nAnswer: Tests, Docs/u);
   assert.equal(formatLateAskUserQuestionFollowUp(parsed, []), undefined);
+});
+
+test("an answer summary reads as the person's reply", () => {
+  const two = [
+    { question: "Which colour?", header: "Colour", multiSelect: false, options: [{ label: "Blue", description: "b" }, { label: "Red", description: "r" }] },
+    { question: "Which sizes?", header: "Sizes", multiSelect: true, options: [{ label: "S", description: "s" }, { label: "M", description: "m" }] },
+  ];
+  assert.equal(
+    summarizeAskUserQuestionResponse(two.slice(0, 1), { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "Blue" }] }),
+    "Blue",
+  );
+  assert.equal(
+    summarizeAskUserQuestionResponse(two, { cancelled: false, answers: [{ questionIndex: 1, kind: "multi", selected: ["S", "M"] }] }),
+    "Colour: Skipped\nSizes: S, M",
+  );
+  assert.equal(summarizeAskUserQuestionResponse(two, { cancelled: true, answers: [] }), "Skipped");
 });

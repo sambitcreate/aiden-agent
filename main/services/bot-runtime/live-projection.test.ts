@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { applyBotLiveEvent, type BotLiveEvent, type BotLiveSnapshot } from "../../../renderer/shared/bot-live.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
 import {
@@ -13,7 +13,9 @@ import {
   type BotLiveProjection,
   type BotLiveProjectionDeps,
 } from "./live-projection.js";
+import { createBotQuestions } from "./bot-questions.js";
 import { recordingDeps } from "./test-support/fixtures.js";
+import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -336,6 +338,46 @@ test("connect cards carry their current status, and refresh re-sends a changed o
     await waitFor(() => status() === "dismissed", { what: "the dismissed status" });
     unsubscribe();
   } finally {
+    await live.close();
+  }
+});
+
+test("a waiting question reaches subscribers and late joiners, and its answer replaces it with a reply", async () => {
+  const questions = createBotQuestions();
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Blue banner coming up."),
+  ]);
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: questionEntries(questions, "bot:a") }) },
+    projection: { question: (botId) => questions.pending(botId)[0] ?? null },
+  });
+  const stopListening = questions.onChange((botId) => void live.projection.refreshQuestion(botId));
+  try {
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    assert.equal(first.snapshot.question, null);
+    await live.service.send("bot:a", { text: "pick a colour", requestId: "desk-1" });
+    await waitFor(() => tape.view?.question != null, { what: "the question event" });
+    const waitId = tape.view!.question!.waitId;
+    assert.equal(tape.view!.question!.questions[0]!.question, QUESTION_ARGS.questions[0]!.question);
+
+    const late = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(late.snapshot.question?.waitId, waitId, "a window opened later sees the same card");
+    late.unsubscribe();
+
+    assert.equal(questions.answer("bot:a", waitId, optionAnswer(waitId, "Blue")), "answered");
+    await waitFor(
+      () => tape.view?.question === null && visibleText(tape.view).includes("assistant:Blue banner coming up."),
+      { what: "the answer and the reply" },
+    );
+    assert.equal(tape.gaps, 0);
+    const answer = tape.view!.entries.find((entry) => entry.type === "question_answer");
+    assert.equal(answer?.type === "question_answer" ? answer.text : undefined, "Blue");
+    first.unsubscribe();
+  } finally {
+    stopListening();
     await live.close();
   }
 });

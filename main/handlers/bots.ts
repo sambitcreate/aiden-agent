@@ -24,7 +24,6 @@ import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-st
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import {
-  answerBotQuestion,
   botLiveProjection,
   botSessionRuntime,
   dismissBotConnection,
@@ -35,6 +34,8 @@ import {
   type AidenRemoteBotAvatarUploadRequest,
 } from "../services/aiden-remote-protocol.js";
 import { registerBotLiveHandlers } from "./bot-live.js";
+import { registerBotQuestionHandlers } from "./bot-questions.js";
+import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
 import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
 import {
   telegramBotBindingAuthority,
@@ -55,7 +56,6 @@ import {
   parseBotSend,
   parseBotSessionAction,
   parseBotApprovalDecision,
-  parseBotQuestionAnswer,
   parseBotUpdate,
 } from "./bot-params.js";
 
@@ -258,10 +258,7 @@ export function registerBotHandlers(): void {
   });
   ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
-  ipcMain.handle("bots:answerQuestion", async (_event, input: unknown) => {
-    const { botId, waitId, answer } = parseBotQuestionAnswer(input);
-    return { answered: answerBotQuestion(botId, waitId, answer) === "answered" };
-  });
+  registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });

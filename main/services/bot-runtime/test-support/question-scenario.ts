@@ -21,7 +21,11 @@ export interface QuestionScenarioArgs {
 
 export async function run(args: QuestionScenarioArgs, emit: Emit): Promise<void> {
   const ctx = BACKGROUND_CONTEXT;
-  const questions = createBotQuestions({ publish: (prompt) => emit("QUESTION", prompt.waitId) });
+  const questions = createBotQuestions();
+  questions.onChange((botId) => {
+    const [prompt] = questions.pending(botId);
+    if (prompt) emit("QUESTION", prompt.waitId);
+  });
   const deps = recordingDeps({ tools: questionEntries(questions, args.botId) });
   const { models } = createFauxModels([
     fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" }),

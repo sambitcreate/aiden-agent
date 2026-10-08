@@ -237,15 +237,6 @@ botQuestions.onChange((botId) => {
   );
 });
 
-/**
- * Answer the question waiting under `waitId` for this Bot. `rejected` when it
- * is no longer waiting (answered elsewhere, withdrawn, or never belonged to it).
- */
-export function answerBotQuestion(botId: string, waitId: string, answer: unknown): "answered" | "rejected" {
-  if (!botQuestions.pending(botId).some((prompt) => prompt.waitId === waitId)) return "rejected";
-  return botQuestions.answer(waitId, answer);
-}
-
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({

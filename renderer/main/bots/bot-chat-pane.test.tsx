@@ -70,6 +70,7 @@ test("a Bot's A–E question shows its card, and choosing an option answers it b
     "bots:answerQuestion": () => ({ answered: true }),
   });
   assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
+  assert.equal(screen.queryByPlaceholderText("Ask Planner"), null, "the card takes the composer's place");
   fireEvent.click(screen.getByRole("button", { name: /Blue/u }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:answerQuestion").length, 1));
   const input = calls.find((call) => call.channel === "bots:answerQuestion")!.args[0] as {
@@ -102,15 +103,17 @@ test("a question leaves the chat when the live view reports it settled, and its 
     type: "question",
     question: null,
   });
-  await waitFor(() => assert.equal(screen.queryByRole("heading", { name: "Which colour should the banner use?" }), null));
+  // Read textContent: a Testing Library query here stalls the test DOM once the composer remounts.
+  await waitFor(() => assert.equal(document.body.textContent?.includes("Which colour should the banner use?"), false));
   emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 2,
     type: "entry",
-    entry: { id: "qa1", type: "question_answer", text: "1. Which colour should the banner use?\nAnswer: Blue" },
+    entry: { id: "qa1", type: "question_answer", text: "Blue" },
   });
-  assert.ok(await screen.findByText(/Answer: Blue/u));
+  assert.ok(await screen.findByText("Blue"));
+  assert.ok(screen.getByPlaceholderText("Ask Planner"), "the composer is back");
 });
 
 test("a sequence gap re-subscribes and shows the fresh snapshot", async () => {

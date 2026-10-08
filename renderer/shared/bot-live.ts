@@ -24,6 +24,21 @@ export interface BotPendingQuestion {
   questions: AskUserQuestionV1[];
 }
 
+/**
+ * `details` of an answered Bot `ask_user_question` tool result: what the person
+ * chose, as shown in the transcript (`summarizeAskUserQuestionResponse`).
+ */
+export interface BotQuestionAnswerDetails {
+  answerText: string;
+}
+
+/** The person-facing answer text of a question tool result, or undefined. */
+export function botQuestionAnswerText(details: unknown): string | undefined {
+  if (details === null || typeof details !== "object" || Array.isArray(details)) return undefined;
+  const text = (details as { answerText?: unknown }).answerText;
+  return typeof text === "string" && text.trim().length > 0 ? text : undefined;
+}
+
 export interface BotTranscriptToolCall {
   id: string;
   name: string;
@@ -119,6 +134,9 @@ export function botTranscriptPreview(entries: readonly BotTranscriptEntry[]): { 
     if (entry.type === "user" && (entry.text.trim() || entry.imageCount > 0)) {
       const text = entry.text.trim() ? oneLine(entry.text) : entry.imageCount === 1 ? "Photo" : `${entry.imageCount} photos`;
       return { text, ...(entry.at === undefined ? {} : { at: entry.at }) };
+    }
+    if (entry.type === "question_answer") {
+      return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
     }
     if (entry.type === "routine") {
       return { text: entry.label, ...(entry.at === undefined ? {} : { at: entry.at }) };

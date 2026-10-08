@@ -131,6 +131,27 @@ export function formatAskUserQuestionAnswers(
 }
 
 /**
+ * What the person chose, as they would say it: the bare answer for one
+ * question, one `Header: answer` line per question otherwise, and "Skipped"
+ * for a closed card or an unanswered question. Shown as the person's reply in
+ * Bot chats; the model reads `formatAskUserQuestionAnswers` instead.
+ */
+export function summarizeAskUserQuestionResponse(
+  questions: readonly AskUserQuestionV1[],
+  response: Pick<AskUserQuestionResponseV1, "cancelled" | "answers">,
+): string {
+  if (response.cancelled) return "Skipped";
+  const byIndex = new Map(response.answers.map((answer) => [answer.questionIndex, answer]));
+  const answerText = (index: number) => {
+    const answer = byIndex.get(index);
+    if (!answer) return "Skipped";
+    return answer.kind === "multi" ? answer.selected.join(", ") : answer.answer;
+  };
+  if (questions.length === 1) return answerText(0);
+  return questions.map((question, index) => `${question.header}: ${answerText(index)}`).join("\n");
+}
+
+/**
  * Follow-up chat message for answers that arrived after the agent stopped
  * waiting. Returns undefined when nothing was answered, so there is nothing
  * worth sending.

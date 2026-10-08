@@ -3,11 +3,11 @@
 // A Bot question is the same A–E quick-reply card the legacy chats show. The
 // durable tool persists its `waitId` in the tool task's memo, so a question
 // re-asked after a restart keeps its id, and an answer arrives by `waitId`
-// from any desktop window or paired device. The first answer wins.
+// from any desktop window or paired device. The first valid answer wins.
 //
-// Stopping the turn (Dismiss, delete, quit) withdraws the prompt and rejects
-// the wait with the abort reason, so the tool records no answer and Resume
-// asks again under the same `waitId`.
+// Stopping the turn (Stop, Dismiss, delete, quit) withdraws the prompt and
+// rejects the wait with the abort reason, so the tool records no answer. After
+// a quit or crash, Resume asks again under the same `waitId`.
 
 import {
   ASK_USER_QUESTION_VERSION,
@@ -23,32 +23,32 @@ export interface BotQuestionPrompt {
   questions: AskUserQuestionV1[];
 }
 
-export interface BotQuestionRequest {
-  botId: string;
-  waitId: string;
-  toolCallId: string;
-  questions: AskUserQuestionV1[];
+export interface BotQuestionRequest extends BotQuestionPrompt {
   signal: AbortSignal | undefined;
 }
+
+/**
+ * - `answered`: the answer settled the question.
+ * - `not_waiting`: nothing waits under that `waitId` for that Bot (answered
+ *   elsewhere, withdrawn, or never asked).
+ * - `invalid`: the question waits, but the value is not a valid answer to it
+ *   (an option it does not have, a question index out of range, ...). The
+ *   question keeps waiting.
+ */
+export type BotQuestionAnswerOutcome = "answered" | "not_waiting" | "invalid";
 
 export interface BotQuestions {
   /** Ask the person. Resolves with their answer; rejects when `signal` aborts. */
   request(request: BotQuestionRequest): Promise<AskUserQuestionResponseV1>;
   /**
-   * Settle a waiting question with the answer in `value` (the composer's
-   * response shape, `promptId` = `waitId`). `rejected` when nothing waits under
-   * `waitId` or `value` is not a valid answer to it.
+   * Settle the question `waitId` of `botId` with `value`, the composer's
+   * response shape (`promptId` = `waitId`).
    */
-  answer(waitId: string, value: unknown): "answered" | "rejected";
+  answer(botId: string, waitId: string, value: unknown): BotQuestionAnswerOutcome;
   /** Questions waiting for an answer, oldest first; for one Bot when `botId` is given. */
   pending(botId?: string): BotQuestionPrompt[];
-  /** Called with the Bot id whenever its pending questions change. */
+  /** Called with the Bot id whenever its waiting questions change. */
   onChange(listener: (botId: string) => void): () => void;
-}
-
-export interface BotQuestionsOptions {
-  /** Pending set changed by a publish or a withdrawal, after the listeners ran. */
-  publish?(prompt: BotQuestionPrompt): void;
 }
 
 interface Waiting {
@@ -60,7 +60,18 @@ function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The question was withdrawn.", "AbortError");
 }
 
-export function createBotQuestions(options: BotQuestionsOptions = {}): BotQuestions {
+/** The prompt shape the shared response parser validates against. */
+function parserPrompt(prompt: BotQuestionPrompt) {
+  return {
+    version: ASK_USER_QUESTION_VERSION,
+    promptId: prompt.waitId,
+    streamId: "s-bot",
+    toolCallId: prompt.toolCallId,
+    questions: prompt.questions,
+  };
+}
+
+export function createBotQuestions(): BotQuestions {
   const waiting = new Map<string, Waiting>();
   const listeners = new Set<(botId: string) => void>();
 
@@ -83,6 +94,9 @@ export function createBotQuestions(options: BotQuestionsOptions = {}): BotQuesti
         toolCallId: request.toolCallId,
         questions: request.questions,
       };
+      // A wait under the same id can only be a stale invocation of the same
+      // call that nobody can answer any more: withdraw it before asking again.
+      waiting.get(request.waitId)?.settle(null, new DOMException("The question was asked again.", "AbortError"));
       return new Promise<AskUserQuestionResponseV1>((resolve, reject) => {
         const onAbort = () => settle(null, abortReason(request.signal!));
         const settle = (response: AskUserQuestionResponseV1 | null, reason?: unknown) => {
@@ -95,27 +109,15 @@ export function createBotQuestions(options: BotQuestionsOptions = {}): BotQuesti
         };
         waiting.set(request.waitId, { prompt, settle });
         request.signal?.addEventListener("abort", onAbort, { once: true });
-        try {
-          options.publish?.(prompt);
-        } catch (error) {
-          settle(null, error);
-          return;
-        }
         notify(prompt.botId);
       });
     },
 
-    answer(waitId, value) {
+    answer(botId, waitId, value) {
       const entry = waiting.get(waitId);
-      if (!entry) return "rejected";
-      const response = parseAskUserQuestionResponse(value, {
-        version: ASK_USER_QUESTION_VERSION,
-        promptId: waitId,
-        streamId: "s-bot",
-        toolCallId: entry.prompt.toolCallId,
-        questions: entry.prompt.questions,
-      });
-      if (!response) return "rejected";
+      if (!entry || entry.prompt.botId !== botId) return "not_waiting";
+      const response = parseAskUserQuestionResponse(value, parserPrompt(entry.prompt));
+      if (!response) return "invalid";
       entry.settle(response);
       return "answered";
     },

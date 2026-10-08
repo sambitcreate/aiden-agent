@@ -10,6 +10,15 @@ import {
   parseBotAccessUpdate,
   type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
+import {
+  ASK_USER_MAX_CUSTOM_ANSWER_LENGTH,
+  ASK_USER_MAX_LABEL_LENGTH,
+  ASK_USER_MAX_OPTIONS,
+  ASK_USER_MAX_QUESTIONS,
+  ASK_USER_QUESTION_VERSION,
+  type AskUserQuestionAnswerV1,
+  type AskUserQuestionResponseV1,
+} from "../../renderer/shared/ask-user-question.js";
 
 const CREATE_KEYS = new Set([
   "avatar",
@@ -217,20 +226,66 @@ export function parseBotApprovalDecision(input: unknown): { waitId: string; deci
   return { waitId: fields.waitId, decision: fields.decision };
 }
 
+const ANSWER_KEYS = new Set(["botId", "waitId", "answer"]);
+const RESPONSE_KEYS = new Set(["version", "promptId", "cancelled", "answers"]);
+const TEXT_ANSWER_KEYS = new Set(["questionIndex", "kind", "answer"]);
+const MULTI_ANSWER_KEYS = new Set(["questionIndex", "kind", "selected"]);
+
+function questionAnswerItem(value: unknown): AskUserQuestionAnswerV1 {
+  const kind = value && typeof value === "object" ? (value as { kind?: unknown }).kind : undefined;
+  const record = exact(value, kind === "multi" ? MULTI_ANSWER_KEYS : TEXT_ANSWER_KEYS, "bot question answer");
+  const questionIndex = record.questionIndex;
+  if (!Number.isSafeInteger(questionIndex) || (questionIndex as number) < 0 || (questionIndex as number) >= ASK_USER_MAX_QUESTIONS) {
+    throw new Error("Invalid bot question answer.");
+  }
+  const index = questionIndex as number;
+  if (kind === "multi") {
+    const selected = record.selected;
+    if (!Array.isArray(selected) || selected.length < 1 || selected.length > ASK_USER_MAX_OPTIONS) {
+      throw new Error("Invalid bot question answer.");
+    }
+    return {
+      questionIndex: index,
+      kind,
+      selected: selected.map((label) => text(label, "bot question answer", ASK_USER_MAX_LABEL_LENGTH)!),
+    };
+  }
+  if (kind !== "option" && kind !== "custom") throw new Error("Invalid bot question answer.");
+  const maximum = kind === "custom" ? ASK_USER_MAX_CUSTOM_ANSWER_LENGTH : ASK_USER_MAX_LABEL_LENGTH;
+  return { questionIndex: index, kind, answer: text(record.answer, "bot question answer", maximum)! };
+}
+
 /**
- * A Bot question answer: the wait id and the composer's response (`promptId`
- * is the wait id). The answer's shape is checked against the question itself
- * when it is settled, so only its envelope is validated here.
+ * A Bot question answer: the Bot, the durable `waitId`, and the quick-reply
+ * card's response for that wait (`promptId` must be the `waitId`). Option
+ * membership and the question count are checked against the waiting question
+ * itself when it settles.
  */
-export function parseBotQuestionAnswer(input: unknown): { botId: string; waitId: string; answer: unknown } {
-  const fields = exact(input, new Set(["botId", "waitId", "answer"]), "bot question answer fields");
+export function parseBotQuestionAnswer(input: unknown): { botId: string; waitId: string; answer: AskUserQuestionResponseV1 } {
+  const fields = exact(input, ANSWER_KEYS, "bot question answer fields");
   if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId)) {
     throw new Error("Invalid bot question id.");
   }
-  if (!fields.answer || typeof fields.answer !== "object" || Array.isArray(fields.answer)) {
+  const response = exact(fields.answer, RESPONSE_KEYS, "bot question answer");
+  if (
+    response.version !== ASK_USER_QUESTION_VERSION ||
+    response.promptId !== fields.waitId ||
+    typeof response.cancelled !== "boolean" ||
+    !Array.isArray(response.answers) ||
+    response.answers.length > ASK_USER_MAX_QUESTIONS
+  ) {
     throw new Error("Invalid bot question answer.");
   }
-  return { botId: parseBotId(fields.botId), waitId: fields.waitId, answer: fields.answer };
+  return {
+    botId: parseBotId(fields.botId),
+    waitId: fields.waitId,
+    answer: {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId: fields.waitId,
+      cancelled: response.cancelled,
+      answers: response.answers.map(questionAnswerItem),
+    },
+  };
 }
 
 export function parseBotChatCreate(value: unknown) {
