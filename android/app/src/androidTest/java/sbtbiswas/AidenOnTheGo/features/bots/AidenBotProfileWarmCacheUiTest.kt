@@ -23,7 +23,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotAccessView
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarView
 import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
 import sbtbiswas.AidenOnTheGo.models.AidenBotHealth
-import sbtbiswas.AidenOnTheGo.models.AidenBotLegacyAvatar
 import sbtbiswas.AidenOnTheGo.models.AidenBotSemanticAvatar
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
@@ -103,7 +102,7 @@ class AidenBotProfileWarmCacheUiTest {
             name = name,
             purpose = "Ships builds",
             instructions = "Be concise.",
-            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.ORBIT)),
+            avatar = AidenBotAvatarView(semantic = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.reset())),
             health = AidenBotHealth.READY,
             createdAt = now,
             updatedAt = now,

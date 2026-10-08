@@ -105,7 +105,7 @@ export async function getOnboardingSnapshot(
 }
 
 export async function setOnboardingProgress(
-  step: "profile" | "provider",
+  step: "profile" | "provider" | "bots",
   selectedProviderId?: string,
   isCurrent: () => boolean = () => true,
 ): Promise<OnboardingSnapshot> {
@@ -129,15 +129,20 @@ export async function setOnboardingProgress(
       throw new Error("The selected model provider is not ready.");
     }
   }
+  const priorStep = current?.lastSatisfiedStep;
   const state = await persist({
     version: ONBOARDING_STATE_VERSION,
     outcome: "incomplete",
     lastSatisfiedStep:
-      step === "provider" ||
-      current?.lastSatisfiedStep === "provider" ||
-      current?.lastSatisfiedStep === "tour"
-        ? "provider"
-        : "profile",
+      step === "bots"
+        ? "bots"
+        : step === "provider"
+          ? "provider"
+          : priorStep === "bots"
+            ? "bots"
+            : priorStep === "provider" || priorStep === "tour"
+              ? "provider"
+              : "profile",
     ...((selectedProviderId ?? current?.selectedProviderId)
       ? { selectedProviderId: selectedProviderId ?? current?.selectedProviderId }
       : {}),

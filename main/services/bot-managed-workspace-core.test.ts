@@ -480,3 +480,87 @@ test("owned directory and metadata permissions are repaired downward", async () 
     await rm(paths.parent, { recursive: true, force: true });
   }
 });
+
+test("Bot delete erases a nonempty home, its receipt and binding, and leaves other Bots", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-delete-");
+  try {
+    const minted = [WORKSPACE_A, WORKSPACE_B];
+    const service = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => minted.shift()!,
+    });
+    const doomed = await service.provision("bot-1");
+    const kept = await service.provision("bot-2");
+    await mkdir(join(doomed.homePath, "notes"), { mode: 0o700 });
+    await writeFile(join(doomed.homePath, "notes", "memory.md"), "private");
+    // A link inside the home must be removed, never followed.
+    const outside = join(paths.parent, "outside.txt");
+    await writeFile(outside, "keep me");
+    await symlink(outside, join(doomed.homePath, "link"));
+
+    assert.equal(await service.deleteHome("bot-1"), true);
+    await assert.rejects(lstat(doomed.homePath), { code: "ENOENT" });
+    await assert.rejects(lstat(receiptPath(paths.root, WORKSPACE_A)), { code: "ENOENT" });
+    assert.deepEqual(await readdir(join(paths.root, "removed")), []);
+    assert.equal(await readFile(outside, "utf8"), "keep me");
+    assert.deepEqual((await service.listBindings()).map(({ botId }) => botId), ["bot-2"]);
+    assert.equal((await service.resolve("bot-2")).homePath, kept.homePath);
+    await assert.rejects(service.resolve("bot-1"), /does not have a valid managed home/u);
+
+    // Idempotent, and a restarted service still audits clean.
+    assert.equal(await service.deleteHome("bot-1"), false);
+    await createBotManagedWorkspaceService({ root: () => paths.root }).audit();
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
+test("a Bot home delete interrupted after the move or the receipt removal is retryable", async () => {
+  for (const crashAfter of ["move", "receipt"] as const) {
+    const paths = await temporaryRoot(`aiden-bot-home-delete-crash-${crashAfter}-`);
+    try {
+      const service = createBotManagedWorkspaceService({
+        root: () => paths.root,
+        mintWorkspaceId: () => WORKSPACE_A,
+      });
+      const home = await service.provision("bot-1");
+      await writeFile(join(home.homePath, "file.txt"), "content");
+      // Reproduce the on-disk state a crash leaves: the home already moved
+      // aside (and, for the second case, its receipt already gone) while the
+      // binding still names it.
+      await mkdir(join(paths.root, "removed"), { mode: 0o700 });
+      await rename(home.homePath, join(paths.root, "removed", "crashed-home"));
+      if (crashAfter === "receipt") await unlink(receiptPath(paths.root, WORKSPACE_A));
+
+      const restarted = createBotManagedWorkspaceService({ root: () => paths.root });
+      await assert.rejects(restarted.audit());
+      assert.equal(await restarted.deleteHome("bot-1"), true);
+      assert.deepEqual(await restarted.listBindings(), []);
+      assert.deepEqual(await readdir(join(paths.root, "removed")), []);
+      await restarted.audit();
+    } finally {
+      await rm(paths.parent, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Bot home delete refuses a directory that replaced the owned home", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-delete-swap-");
+  try {
+    const service = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_A,
+    });
+    const home = await service.provision("bot-1");
+    const original = join(paths.parent, "original-owned-home");
+    await rename(home.homePath, original);
+    await mkdir(home.homePath, { mode: 0o700 });
+    await writeFile(join(home.homePath, "foreign.txt"), "not Aiden's");
+
+    await assert.rejects(service.deleteHome("bot-1"), /replaced directory/u);
+    assert.equal(await readFile(join(home.homePath, "foreign.txt"), "utf8"), "not Aiden's");
+    assert.equal((await lstat(original)).isDirectory(), true);
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});

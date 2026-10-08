@@ -54,9 +54,15 @@ object AidenRemoteProtocol {
     /** Contract revision 24: phones may observe and control runs started on
      * the Mac, in Telegram or by the scheduler. */
     const val PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1"
+    /** Contract revision 25: Bots rework. */
+    const val BOT_DELETE_FEATURE = "bot-delete-v1"
+    const val BOT_DURABLE_SESSION_FEATURE = "bot-durable-session-v1"
+    const val BOT_ROUTINES_FEATURE = "bot-routines-v1"
+    const val BOT_CONNECTION_REQUESTS_FEATURE = "bot-connection-requests-v1"
+    const val BOT_PRESETS_FEATURE = "bot-presets-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
-    const val MAX_QUESTION_OPTIONS = 4
+    const val MAX_QUESTION_OPTIONS = 5
     const val MAX_QUESTION_HEADER_LENGTH = 16
     const val MAX_QUESTION_OPTION_LABEL_LENGTH = 60
     const val MAX_QUESTION_LENGTH = 1_000
@@ -237,11 +243,12 @@ object AidenBotPrivateResponseValidator {
 
     private val fixtureBotRoots: Set<String> = setOf(
         "chat", "chatSummaries", "botSummary", "botList", "botDetail", "botAvatar", "botCreate",
-        "botIdentity", "botArchive", "botRestore", "botConversation", "botConversations",
+        "botIdentity", "botConversation", "botConversations",
         "botConversationQuery", "botChatCreate", "botCapabilityCatalog", "botPolicy",
-        "botPolicyUpdate", "botChatSubset", "botChatSubsetUpdate", "botFavorites",
-        "botFavoritesUpdate", "botNotice", "botNoticeAcknowledgement", "botAvatarUpload",
-        "botAvatarMetadata"
+        "botPolicyUpdate", "botAvatarUpload", "botAvatarMetadata",
+        "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
+        "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
+        "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate"
     )
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
     private val privateSummaryProjectionKeys = setOf(
@@ -411,11 +418,14 @@ object AidenBotPrivateResponseValidator {
         parentPath: List<String>,
         regularChat: Boolean
     ): Boolean {
+        // A waiting question's `header` is the card's short label, not an HTTP header.
+        if (key == "header" && root in listOf("botSession", "botSessionNeedsModel", "botSessionEvents") &&
+            parentPath.takeLast(3) == listOf("question", "questions", "[]")) return true
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
         if (key != "instructions" && key != "openingGreeting") return false
-        if (root in listOf("botDetail", "botArchive", "botRestore")) {
+        if (root == "botDetail") {
             return parentPath.isEmpty()
         }
         if (root in listOf("botCreate", "botIdentity")) {
@@ -426,10 +436,14 @@ object AidenBotPrivateResponseValidator {
 }
 
 object InstantIso8601Serializer : KSerializer<Instant> {
+    internal val millisecondFormat: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC)
+
     override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("Instant", PrimitiveKind.STRING)
 
     override fun serialize(encoder: Encoder, value: Instant) {
-        encoder.encodeString(DateTimeFormatter.ISO_INSTANT.format(value))
+        // The host writes millisecond UTC timestamps; keep the fraction so a round trip is exact.
+        encoder.encodeString(InstantIso8601Serializer.millisecondFormat.format(value))
     }
 
     override fun deserialize(decoder: Decoder): Instant {

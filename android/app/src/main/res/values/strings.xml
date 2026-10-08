@@ -4,7 +4,6 @@
     <!-- BEGIN model picker strings (features/shared/AidenModelPicker.kt) -->
     <string name="model_picker_title">Model</string>
     <string name="model_picker_title_with_thinking">Model &amp; Thinking</string>
-    <string name="model_picker_bot_title">AI Model</string>
     <string name="model_picker_thinking">Thinking</string>
     <string name="model_picker_select">Select model</string>
     <string name="model_picker_close">Close</string>
@@ -41,7 +40,6 @@
     <string name="action_stop">Stop</string>
     <string name="action_expand">Expand</string>
     <string name="action_collapse">Collapse</string>
-    <string name="action_options">Options</string>
     <string name="action_done">Done</string>
     <string name="action_edit">Edit</string>
     <string name="action_clear">Clear</string>
@@ -60,6 +58,8 @@
     <string name="action_search">Search</string>
     <string name="action_clear_search">Clear search</string>
     <string name="action_more_actions">More actions</string>
+    <string name="action_more_options">More options</string>
+    <string name="action_ok">OK</string>
     <string name="state_in_progress">In progress</string>
 
     <!-- Settings root -->
@@ -453,122 +453,167 @@
     <string name="usage_token_cache_read">Cache read</string>
 
     <!-- Bots: home -->
-    <string name="bots_status_queued">Queued</string>
     <string name="bots_status_working">Working</string>
-    <string name="bots_status_approval_needed">Approval needed</string>
-    <string name="bots_status_waiting_desktop">Waiting for desktop approval</string>
-    <string name="bots_status_updating">Updating</string>
-    <string name="bots_offline">Offline — showing saved Bots</string>
+    <string name="bots_offline">Offline. Showing your saved Bots.</string>
     <string name="bots_load_failed_title">Bots couldn’t load</string>
-    <string name="bots_load_failed_body">Reconnect to your paired desktop and try again.</string>
+    <string name="bots_load_failed_body">Make sure your Mac is on and nearby, then try again.</string>
     <string name="bots_empty_title">Make your first Bot</string>
     <string name="bots_empty_offline_title">No saved Bots</string>
-    <string name="bots_empty_body">Create a familiar helper with one persistent conversation and its own capabilities.</string>
-    <string name="bots_empty_offline_body">Reconnect to your paired desktop to load Bots.</string>
+    <string name="bots_empty_body">A Bot is a helper with its own chat. Give it a name and tell it what to help with.</string>
+    <string name="bots_empty_offline_body">Connect to your Mac to see your Bots.</string>
     <string name="bots_new">New Bot</string>
-    <string name="bots_no_results">No Results for \"%1$s\"</string>
-    <string name="bots_section_favorites">Favorites</string>
-    <string name="bots_section_bots">Bots</string>
-    <string name="bots_start_conversation">Start a conversation</string>
-    <string name="bots_archived_preview">Archived · %1$s</string>
-    <string name="bots_open_details_cd">Open %1$s details</string>
+    <string name="bots_no_results">No Bots match “%1$s”</string>
     <string name="bots_search_placeholder">Search Bots</string>
-    <string name="bots_open_chat_cd">Open Bot Chat</string>
-    <string name="bots_choose_title">Choose a Bot</string>
-    <string name="bots_choose_body">Open this Bot’s chat. Aiden starts it the first time if needed.</string>
     <string name="bots_avatar_cd">%1$s avatar</string>
     <string name="bots_avatar_default_cd">Bot Avatar</string>
+    <string name="bots_row_open_chat">Open chat</string>
+    <string name="bots_row_yesterday">Yesterday</string>
+    <string name="bot_menu_profile">Profile</string>
+    <string name="bot_menu_files">Files</string>
+    <string name="bot_field_name">Name</string>
+    <string name="bot_name_fallback_your_bot">your Bot</string>
+    <string name="bot_save_failed">Aiden couldn’t save. Try again.</string>
+    <string name="bot_delete_confirm">Delete Bot</string>
+    <string name="bot_delete_connect">Connect to your Mac to delete this Bot.</string>
+    <string name="bot_delete_failed">Aiden couldn’t delete this Bot. Try again.</string>
+
+    <!-- Bots: first run -->
+    <string name="bot_presets_title">Meet Your First Bot</string>
+    <string name="bot_presets_start_chat">Start Chat</string>
+    <string name="bot_presets_create_my_own">Create My Own</string>
+    <string name="bot_presets_routine">%1$s · %2$s</string>
 
     <!-- Bots: profile -->
-    <string name="bot_profile_favorites_failed">Aiden couldn\'t update Favorites. Try again.</string>
-    <string name="bot_profile_update_failed">Aiden couldn\'t update this Bot.</string>
-    <string name="bot_profile_title">Bot Profile</string>
-    <string name="bot_profile_archive">Archive Bot</string>
-    <string name="bot_profile_restore">Restore Bot</string>
-    <string name="bot_profile_restoring">Restoring…</string>
-    <string name="bot_profile_archiving">Archiving…</string>
     <string name="bot_profile_unavailable_title">Bot unavailable</string>
-    <string name="bot_profile_unavailable_connect">Connect to your paired desktop to see this Bot.</string>
-    <string name="bot_profile_unavailable_failed">Aiden couldn\'t load this Bot.</string>
-    <string name="bot_profile_archived_banner">Archived — chats are read-only</string>
-    <string name="bot_profile_action_chat">Chat</string>
-    <string name="bot_profile_open_chat_failed">Aiden couldn\'t open a chat with this Bot.</string>
-    <string name="bot_profile_action_access">Access</string>
-    <string name="bot_profile_action_unpin">Unpin</string>
-    <string name="bot_profile_action_pin">Pin</string>
-    <string name="bot_profile_favorite_order">Favorite Order</string>
-    <string name="bot_profile_favorite_position">%1$d of %2$d</string>
-    <string name="bot_profile_move_earlier">Move Earlier</string>
-    <string name="bot_profile_move_later">Move Later</string>
-    <string name="bot_profile_recent_chats">Recent Chats</string>
-    <string name="bot_profile_no_history">No conversation history yet.</string>
-    <string name="bot_profile_chat_fallback_title">Chat</string>
-    <string name="bot_profile_greeting">Greeting</string>
+    <string name="bot_profile_unavailable_connect">Connect to your Mac to see this Bot.</string>
+    <string name="bot_profile_unavailable_failed">Aiden couldn’t load this Bot.</string>
     <string name="bot_profile_instructions">Instructions</string>
-    <string name="bot_profile_archive_title">Archive %1$s?</string>
-    <string name="bot_profile_bot_fallback">Bot</string>
-    <string name="bot_profile_archive_body">Its chats stay available to read. Restore the Bot later to edit it or start new work.</string>
     <string name="bot_profile_loading">Loading Bot</string>
+    <string name="bot_profile_connect_to_save">Connect to your Mac to save changes.</string>
+    <string name="bot_profile_character_save_failed">Aiden couldn’t save the new look. Try again.</string>
+    <string name="bot_profile_change_photo">Change photo</string>
+    <string name="bot_profile_photo_options">Photo options</string>
+    <string name="bot_profile_choose_photo">Choose from Gallery</string>
+    <string name="bot_profile_remove_photo">Remove photo</string>
+    <string name="bot_profile_subtitle_placeholder">What it helps with</string>
+
+    <!-- Bots: character -->
+    <string name="bot_character_title">Character</string>
+    <string name="bot_character_reset">Reset to default</string>
+    <string name="bot_color_lilac">Lilac</string>
+    <string name="bot_color_sky">Sky</string>
+    <string name="bot_color_mint">Mint</string>
+    <string name="bot_color_sun">Sun</string>
+    <string name="bot_color_periwinkle">Periwinkle</string>
+    <string name="bot_color_coral">Coral</string>
+    <string name="bot_color_peach">Peach</string>
+    <string name="bot_color_aqua">Aqua</string>
+    <string name="bot_color_rose">Rose</string>
+    <string name="bot_color_lime">Lime</string>
+    <string name="bot_color_plum">Plum</string>
+    <string name="bot_color_graphite">Graphite</string>
+    <string name="bot_shape_orb">Circle</string>
+    <string name="bot_shape_wisp">Wisp</string>
+    <string name="bot_shape_squircle">Rounded square</string>
+    <string name="bot_shape_capsule">Pill</string>
+    <string name="bot_shape_peak">Triangle</string>
+    <string name="bot_shape_hex">Hexagon</string>
+    <string name="bot_shape_cloud">Cloud</string>
+    <string name="bot_shape_drop">Drop</string>
+
+    <!-- Bots: routines -->
+    <string name="bot_routines_title">Routines</string>
+    <string name="bot_routines_load_failed">Aiden couldn’t load routines.</string>
+    <string name="bot_routine_add">Add routine</string>
+    <string name="bot_routine_toggle_cd">%1$s on</string>
+    <string name="bot_routine_new">New routine</string>
+    <string name="bot_routine_edit">Edit routine</string>
+    <string name="bot_routine_how_often">How often?</string>
+    <string name="bot_routine_once">Once</string>
+    <string name="bot_routine_daily">Every day</string>
+    <string name="bot_routine_weekdays">Weekdays</string>
+    <string name="bot_routine_weekly">Weekly</string>
+    <string name="bot_routine_monthly">Monthly</string>
+    <string name="bot_routine_day_sun">Su</string>
+    <string name="bot_routine_day_mon">Mo</string>
+    <string name="bot_routine_day_tue">Tu</string>
+    <string name="bot_routine_day_wed">We</string>
+    <string name="bot_routine_day_thu">Th</string>
+    <string name="bot_routine_day_fri">Fr</string>
+    <string name="bot_routine_day_sat">Sa</string>
+    <string name="bot_routine_day_of_month">Day of the month</string>
+    <string name="bot_routine_date">Date</string>
+    <string name="bot_routine_time">Time</string>
+    <string name="bot_routine_earlier_cd">Earlier %1$s</string>
+    <string name="bot_routine_later_cd">Later %1$s</string>
+    <string name="bot_routine_message_label">What should it do?</string>
+    <string name="bot_routine_message_placeholder">Give me a short brief for today</string>
+    <string name="bot_routine_delete">Delete routine</string>
+    <string name="bot_routine_update_failed">Aiden couldn’t update this routine. Try again.</string>
+    <string name="bot_routine_delete_failed">Aiden couldn’t delete this routine. Try again.</string>
+    <string name="bot_routine_save_failed">Aiden couldn’t save this routine. Try again.</string>
+
+    <!-- Bots: advanced -->
+    <string name="bot_advanced_title">Advanced</string>
+    <string name="bot_advanced_loading">Loading settings</string>
+    <string name="bot_advanced_connect">Connect to your Mac to change these settings.</string>
+    <string name="bot_advanced_needs_model">Set up an AI model on your Mac first.</string>
+    <string name="bot_advanced_load_failed">Aiden couldn’t load these settings. Try again.</string>
+    <string name="bot_advanced_model">AI model</string>
+    <string name="bot_advanced_use_recommended">Use recommended</string>
+    <string name="bot_advanced_access">What it can use</string>
+    <string name="bot_advanced_access_full_footer">It can use everything Aiden can on your Mac. It still asks before anything risky.</string>
+    <string name="bot_advanced_access_custom_footer">It can only use what you turn on here.</string>
+    <string name="bot_access_choice_full">Everything</string>
+    <string name="bot_access_choice_custom">Only what I pick</string>
+    <string name="bot_advanced_greeting">Opening greeting</string>
+    <string name="bot_advanced_greeting_footer">The first thing it says in a new chat. Leave empty for none.</string>
+    <string name="bot_advanced_folders">Folders</string>
+    <string name="bot_advanced_run_commands">Run commands on your Mac</string>
+    <string name="bot_advanced_connected_apps">Connected apps</string>
+
+    <!-- Bots: chat -->
+    <string name="bot_chat_open_profile_cd">Open %1$s’s profile</string>
+    <string name="bot_chat_open_failed">Aiden couldn’t open this Bot’s chat. Try again.</string>
+    <string name="bot_session_connect">Connect to your Mac to open this chat.</string>
+    <string name="bot_session_loading">Loading chat</string>
+    <string name="bot_session_missing">This Bot is no longer on your Mac.</string>
+    <string name="bot_session_load_failed">Aiden couldn’t load this chat. Make sure your Mac is on and nearby.</string>
+    <string name="bot_session_unreachable">Aiden couldn’t reach your Mac. Try again.</string>
+    <string name="bot_session_reset">This chat was restarted.</string>
+    <string name="bot_session_stopped">Stopped</string>
+    <string name="bot_session_interrupted">I got interrupted while working on this.</string>
+    <string name="bot_session_access_changed">This Bot\'s access changed. Review it in Advanced.</string>
+    <string name="bot_session_resume">Resume</string>
+    <string name="bot_session_dismiss">Dismiss</string>
+    <string name="bot_session_failed_turn">I couldn\'t finish that reply.</string>
+    <string name="bot_session_needs_model">Needs an AI model</string>
+    <string name="bot_session_set_up">Set up</string>
+    <string name="bot_session_connect_title">Connect %1$s</string>
+    <string name="bot_session_connected">Connected ✓</string>
+    <string name="bot_session_finish_read_only">Finish this on your Mac.</string>
+    <string name="bot_session_check_mac">Check your Mac to finish.</string>
+    <string name="bot_session_finish_on_mac">Finish on your Mac</string>
+    <string name="bot_session_send">Send</string>
+    <string name="bot_files_connect">Connect to your Mac to see files.</string>
+    <string name="bot_files_unavailable">Files aren’t available for this Bot right now.</string>
+    <string name="bot_files_loading">Loading files</string>
+    <string name="bot_files_back">Back to files</string>
+    <string name="bot_files_empty">No files yet.</string>
+    <string name="bot_files_open_failed">Aiden couldn’t open that file.</string>
 
     <!-- Bots: editor -->
     <string name="bot_editor_new_title">New Bot</string>
-    <string name="bot_editor_edit_title">Edit Bot</string>
-    <string name="bot_editor_save_failed">Failed to save Bot</string>
-    <string name="bot_editor_cannot_start">Can\'t start a new Bot</string>
-    <string name="bot_editor_cannot_load">Can\'t load this Bot</string>
-    <string name="bot_editor_loading_options">Loading Bot options</string>
-    <string name="bot_editor_identity">Identity</string>
-    <string name="bot_editor_name">Name</string>
-    <string name="bot_editor_name_placeholder">e.g. Python Pro, Code Reviewer</string>
-    <string name="bot_editor_purpose">Purpose (Optional)</string>
-    <string name="bot_editor_purpose_placeholder">Briefly describe what this bot does</string>
-    <string name="bot_editor_greeting">Opening Greeting (Optional)</string>
-    <string name="bot_editor_greeting_placeholder">First message sent when starting a chat</string>
-    <string name="bot_editor_instructions_placeholder" tools:ignore="TypographyEllipsis">System instructions and behavior rules...</string>
-    <string name="bot_editor_avatar_studio">Avatar Studio</string>
-    <string name="bot_editor_avatar_shape">Shape</string>
-    <string name="bot_editor_avatar_color">Color</string>
-    <string name="bot_editor_avatar_eyes">Eyes</string>
-    <string name="bot_editor_avatar_accessory">Accessory</string>
-    <string name="bot_editor_image_studio">Create with Image Studio</string>
-    <string name="bot_editor_access_mode">Access Mode</string>
-    <string name="bot_editor_provider_model">AI Provider &amp; Model</string>
-    <string name="bot_editor_file_scopes">Desktop File Scopes</string>
-    <string name="bot_editor_terminal">Terminal Execution</string>
-    <string name="bot_editor_mcp_connections">MCP Connections</string>
-    <string name="bot_editor_discard_title">Discard changes?</string>
-    <string name="bot_editor_discard_body">You have unsaved changes to this Bot. If you leave now, your changes will be discarded.</string>
-    <string name="bot_editor_access_full">Full Access</string>
-    <string name="bot_editor_access_custom">Custom Access</string>
+    <string name="bot_editor_creating">Creating…</string>
+    <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
+    <string name="bot_editor_help_label">What should it help with?</string>
+    <string name="bot_editor_help_placeholder">Plan my meals and make a grocery list every week</string>
+    <string name="bot_editor_later_hint">You can change its look, instructions and what it can use later.</string>
+    <string name="bot_editor_instructions_load_failed">Aiden couldn’t load the instructions. Try again.</string>
+    <string name="bot_editor_name_placeholder">Like Meal Planner or Chief of Staff</string>
+    <string name="bot_editor_instructions_placeholder">Tell %1$s how to help you</string>
 
-    <!-- Bots: custom access -->
-    <string name="bot_access_previous_skill_unavailable">Previously selected skill — unavailable</string>
-    <string name="bot_access_option_unavailable">%1$s — Unavailable</string>
-    <string name="bot_access_title">Custom Access</string>
-    <string name="bot_access_conflict">Access policy was changed on your paired desktop. Review the latest policy and try again.</string>
-    <string name="bot_access_conflict_fallback">Conflict updating access</string>
-    <string name="bot_access_save_failed">Failed to save access policy</string>
-    <string name="bot_access_no_bots_title">No Bots to configure</string>
-    <string name="bot_access_load_failed_title">Can\'t load access</string>
-    <string name="bot_access_no_bots_body">Create a Bot first, then choose what it can use.</string>
-    <string name="bot_access_loading">Loading access</string>
-    <string name="bot_access_select_bot">Select Bot</string>
-    <string name="bot_access_desktop_files">Desktop Files</string>
-    <string name="bot_access_terminal_shell">Terminal &amp; Shell</string>
-    <string name="bot_access_shell_title">Execute Shell Commands</string>
-    <string name="bot_access_shell_body">Allows bot to run terminal commands on the paired desktop</string>
-    <string name="bot_access_skills">Skills</string>
-    <string name="bot_access_other">Other Capabilities</string>
-    <string name="bot_access_discard_title">Discard access changes?</string>
-    <string name="bot_access_discard_body">Your unsaved Custom Access changes will be lost.</string>
-    <string name="bot_access_discard_confirm">Discard Changes</string>
-
-    <!-- Bots: Image Studio -->
-    <string name="bot_image_default_prompt">A friendly AI assistant avatar named %1$s</string>
-    <string name="bot_image_generation">Image Generation</string>
-    <string name="bot_image_generation_body">Bot photos generated on a supported Apple device can be synchronized to Android. You can also customize your Bot with the built-in Semantic Avatar studio.</string>
-    <string name="bot_image_description">Avatar Description</string>
-    <string name="bot_image_description_placeholder" tools:ignore="TypographyEllipsis">Describe the appearance of your bot...</string>
+    <!-- Bots: photo -->
     <string name="bot_avatar_saving">Saving avatar…</string>
     <string name="bot_avatar_restoring">Restoring avatar…</string>
 
@@ -671,7 +716,6 @@
     <string name="chat_approval_review_only">This paired device can review approvals but cannot respond.</string>
     <string name="chat_approval_schedule_write_required">Schedule write access is required to approve this task.</string>
     <string name="chat_approval_confirm_on_desktop">Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.</string>
-    <string name="chat_composer_placeholder_bot">Message %1$s</string>
     <string name="chat_composer_placeholder">Message Aiden</string>
     <string name="chat_progress_hide">Hide progress</string>
     <string name="chat_progress_show">Show progress</string>
@@ -837,18 +881,6 @@
     <string name="shell_connection_connecting">Connecting</string>
     <string name="shell_connection_offline">Offline</string>
     <string name="shell_connection_needs_pairing">Needs pairing</string>
-
-    <!-- Bot chat tools -->
-    <string name="bot_tools_scope_bot">Bot defaults</string>
-    <string name="bot_tools_scope_chat">This chat</string>
-    <string name="bot_tools_mode_inherit">Inherit Bot</string>
-    <string name="bot_tools_mode_custom">Customize</string>
-    <string name="bot_tools_files">Files</string>
-    <string name="bot_tools_access">Access</string>
-    <string name="bot_tools_profile">Profile</string>
-    <string name="bot_tools_effective_access">Effective bot access</string>
-    <string name="bot_tools_mode">Mode</string>
-    <string name="bot_tools_run_commands">Run commands</string>
 
     <!-- Shared components -->
     <string name="model_picker_close_sheet">Close sheet</string>

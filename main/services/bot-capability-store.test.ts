@@ -844,38 +844,34 @@ test("the public chat lifecycle fence invalidates an acquired lease synchronousl
   assert.throws(() => admission.lease.assertCurrent(), /access changed/u);
 });
 
-test("protected archive status blocks admission across restart until explicit restore", async (t) => {
+test("Bot delete fences live leases and stays erased across restart", async (t) => {
   const root = await temporaryRoot(t);
   const first = storeAt(root);
   await first.store.initialize();
   await first.store.acknowledgeNotice("device:a", acknowledgement());
-  await first.store.createBotPolicy({
+  const policy = await first.store.createBotPolicy({
     botId: "bot:one",
     catalog: catalog(),
     access: { accessMode: "full", catalogRevision, confirmedForeground: true },
   });
+  await first.store.createChatPolicy({
+    chatId: "chat:one",
+    botId: "bot:one",
+    expectedBotPolicyRevision: policy.revision,
+    catalog: catalog(),
+  });
   const running = await first.store.admit({ audienceId: "device:a", botId: "bot:one" });
 
-  assert.equal(await first.store.archiveBotAuthority("bot:one"), true);
+  assert.equal(await first.store.deleteBotAuthority("bot:one"), true);
   assert.equal(running.lease.signal.aborted, true);
-  assert.equal((await first.store.getBotPolicy("bot:one")).accessMode, "full");
-  await assert.rejects(
-    first.store.admit({ audienceId: "device:a", botId: "bot:one" }),
-    /archived/u,
-  );
-  await first.store.assertBotAuthorityMatchesIdentity({ botId: "bot:one", archived: true });
+  await assert.rejects(first.store.admit({ audienceId: "device:a", botId: "bot:one" }));
+  assert.equal(await first.store.deleteBotAuthority("bot:one"), false);
 
   const restarted = storeAt(root);
   await restarted.store.initialize();
-  assert.equal(await restarted.store.getBotAuthorityStatus("bot:one"), "archived");
-  await assert.rejects(
-    restarted.store.assertBotAuthorityMatchesIdentity({ botId: "bot:one", archived: false }),
-    /do not match/u,
-  );
-  assert.equal(await restarted.store.restoreBotAuthority("bot:one"), true);
-  await restarted.store.assertBotAuthorityMatchesIdentity({ botId: "bot:one", archived: false });
-  const restored = await restarted.store.admit({ audienceId: "device:a", botId: "bot:one" });
-  restored.lease.assertCurrent();
+  await assert.rejects(restarted.store.getBotPolicy("bot:one"), BotCapabilityUnavailableError);
+  await assert.rejects(restarted.store.getChatPolicy("chat:one"), BotCapabilityUnavailableError);
+  assert.deepEqual((await restarted.store.auditBotInventory([])).orphanedBotIds, []);
 });
 
 test("device notice revocation is isolated and survives restart", async (t) => {

@@ -13,6 +13,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotEditorScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotProfileScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
+import sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter
+import sbtbiswas.AidenOnTheGo.features.chat.AidenBotChatRoute
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatDetailScreen
 import sbtbiswas.AidenOnTheGo.features.remote.AidenInstallationsScreen
 import sbtbiswas.AidenOnTheGo.features.remote.AidenPairDesktopScreen
@@ -127,7 +129,13 @@ class MainActivity : ComponentActivity() {
                         if (client == null) {
                             coordinator.presentError("Connect to Aiden Agent before opening this link.")
                         } else {
-                            try {
+                            if (coordinator.serverInfo.value?.supportsBotDurableSession == true) {
+                                navigationStore.setSelectedArea(
+                                    coordinator.activeInstanceId.orEmpty(),
+                                    AidenProductArea.BOTS
+                                )
+                                navigator.navigate(navigator.stack.resetTo(AidenScreen.BotChat(destination.botId)))
+                            } else try {
                                 val page = client.botConversations(botId = destination.botId)
                                 when (val resolved = aidenResolvedBotDeepLink(destination.botId, page.conversations)) {
                                     is AidenBotDeepLinkResolution.OpenChat -> {
@@ -206,6 +214,7 @@ class MainActivity : ComponentActivity() {
                                     botsViewModel = botsViewModel,
                                     onNavigateToChat = { chatId -> navigator.openFromShell(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateToBotProfile = { botId -> push(AidenScreen.BotProfile(botId)) },
+                                    onNavigateToBotChat = { botId -> push(AidenScreen.BotChat(botId)) },
                                     onNavigateToBotEditor = { botId -> push(AidenScreen.BotEditor(botId)) },
                                     onNavigateToWorkspaceFiles = { wsId -> push(AidenScreen.WorkspaceFiles(wsId)) },
                                     onNavigateToWorkspaceGit = { wsId -> push(AidenScreen.WorkspaceGit(wsId)) },
@@ -224,7 +233,31 @@ class MainActivity : ComponentActivity() {
                                     networkAvailability = networkAvailability,
                                     startVoiceOnOpen = screen.startsVoice,
                                     onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
+                                    onNavigateToBotProfile = { botId -> push(AidenScreen.BotProfile(botId)) },
+                                    botDeleter = AidenRemoteBotDeleter,
                                     onNavigateBack = navigator::back
+                                )
+                            }
+                            is AidenScreen.BotChat -> {
+                                AidenBotChatRoute(
+                                    botId = screen.botId,
+                                    coordinator = coordinator,
+                                    chatCache = chatCache,
+                                    draftStore = draftStore,
+                                    voiceInputStore = voiceInputStore,
+                                    liveNotificationManager = liveNotificationManager,
+                                    networkAvailability = networkAvailability,
+                                    onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
+                                    onNavigateToBotProfile = { botId -> push(AidenScreen.BotProfile(botId)) },
+                                    onNavigateBack = {
+                                        botsViewModel.loadBots(force = true)
+                                        navigator.back()
+                                    },
+                                    // A deleted Bot's profile may sit below its chat: return to the list.
+                                    onBotDeleted = {
+                                        botsViewModel.loadBots(force = true)
+                                        navigator.navigate(AidenNavigationStack.Root)
+                                    }
                                 )
                             }
                             is AidenScreen.BotProfile -> {
@@ -234,7 +267,12 @@ class MainActivity : ComponentActivity() {
                                     onNavigateBack = navigator::back,
                                     onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateToEditBot = { botId -> push(AidenScreen.BotEditor(botId)) },
-                                    onBotMutated = { botsViewModel.loadBots(force = true) }
+                                    onBotMutated = { botsViewModel.loadBots(force = true) },
+                                    botDeleter = AidenRemoteBotDeleter,
+                                    onBotDeleted = {
+                                        botsViewModel.loadBots(force = true)
+                                        navigator.navigate(AidenNavigationStack.Root)
+                                    }
                                 )
                             }
                             is AidenScreen.BotEditor -> {
@@ -244,7 +282,11 @@ class MainActivity : ComponentActivity() {
                                     onNavigateBack = navigator::back,
                                     onBotSaved = { botId ->
                                         botsViewModel.loadBots(force = true)
-                                        navigator.navigate(navigator.stack.completeBotEdit(botId))
+                                        // Creating a Bot opens its chat; saving instructions returns to the profile.
+                                        navigator.navigate(
+                                            if (screen.botId == null) navigator.stack.completeBotCreate(botId)
+                                            else navigator.stack.completeBotEdit(botId)
+                                        )
                                     }
                                 )
                             }

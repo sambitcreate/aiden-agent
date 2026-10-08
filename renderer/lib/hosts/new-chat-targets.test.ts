@@ -125,7 +125,7 @@ test("a created project the feed has listed is retired, so the host deleting it 
   );
 });
 
-test("Bots are grouped by host, without archived Bots or hosts that have none", () => {
+test("Bots are grouped by host, without hosts that have none", () => {
   const botGrants = [...CHAT_GRANTS, "bot:read", "bot:write"];
   const groups = remoteBotGroups(
     [view("host-b", "Studio", botGrants), view("host-c", "Laptop", botGrants), view("host-d", "Spare", CHAT_GRANTS)],
@@ -136,13 +136,11 @@ test("Bots are grouped by host, without archived Bots or hosts that have none", 
         feed("host-b", {
           bots: [
             { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" },
-            { id: "bot-2", name: "Retired", health: "archived" },
-            { id: "bot-3", name: "Old", archivedAt: "2026-01-01T00:00:00.000Z" },
             { id: "bot-4" },
           ],
         }),
       ],
-      ["host-c", feed("host-c", { bots: [{ id: "bot-9", name: "Gone", health: "archived" }] })],
+      ["host-c", feed("host-c", { bots: [] })],
       ["host-d", feed("host-d", { bots: [{ id: "bot-5", name: "Scribe" }] })],
     ]),
   );

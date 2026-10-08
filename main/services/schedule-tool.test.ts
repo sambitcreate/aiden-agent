@@ -1508,3 +1508,190 @@ test("standard schedule edits preserve a pinned task provider", async () => {
   assert.equal(fake.tasks[0]?.providerId, "provider-1");
   assert.equal(fake.tasks[0]?.model, "model-1");
 });
+
+function botRoutineTask(id: string, botId: string): ScheduledTask {
+  return {
+    id,
+    name: `Routine ${id}`,
+    enabled: true,
+    mode: "llm",
+    cron: "41 8 * * 0",
+    timezone: "UTC",
+    prompt: "Plan this week's dinners.",
+    permission: "read-only",
+    botId,
+    routineSchedule: { kind: "weekly", days: [0], time: "08:41" },
+    notify: true,
+    createdAt: 1,
+    updatedAt: 7,
+  };
+}
+
+test("generic automation tools never list or change a Bot's routines", async () => {
+  const fake = fakeDependencies();
+  fake.tasks.push(
+    {
+      id: "task-1",
+      name: "Daily brief",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Summarize updates.",
+      permission: "read-only",
+      notify: true,
+      createdAt: 1,
+      updatedAt: 4,
+    },
+    botRoutineTask("routine-1", "bot-chef"),
+  );
+  const standard = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  const listed = jsonResult(await standard.execute("list", { action: "list" }));
+  assert.deepEqual((listed.tasks as Array<{ id: string }>).map((task) => task.id), ["task-1"]);
+  await assert.rejects(
+    standard.execute("pause", {
+      action: "pause",
+      id: "routine-1",
+      taskName: "Routine routine-1",
+      expectedUpdatedAt: 7,
+    }),
+    /not found/iu,
+  );
+  await assert.rejects(
+    standard.execute("remove", {
+      action: "remove",
+      id: "routine-1",
+      taskName: "Routine routine-1",
+      expectedUpdatedAt: 7,
+    }),
+    /not found/iu,
+  );
+  assert.equal(fake.tasks.find((task) => task.id === "routine-1")?.enabled, true);
+
+  const assistantList = createAssistantScheduleListTool(fake.dependencies);
+  const assistantListed = jsonResult(await assistantList.execute("list", {}));
+  assert.deepEqual(
+    (assistantListed.tasks as Array<{ id: string }>).map((task) => task.id),
+    ["task-1"],
+  );
+});
+
+function fakeBotRoutines() {
+  const calls: Array<{ action: string; input: unknown }> = [];
+  const routine = (botId: string, id = "routine-1") => ({
+    id,
+    botId,
+    name: "Weekly meal prep",
+    prompt: "Plan this week's dinners.",
+    schedule: { kind: "weekly" as const, days: [0], time: "08:41" },
+    timezone: "UTC",
+    label: "Every Sunday at 8:41 AM",
+    enabled: true,
+    updatedAt: 3,
+  });
+  return {
+    calls,
+    routines: {
+      list: async (botId: string) => {
+        calls.push({ action: "list", input: botId });
+        return [routine(botId)];
+      },
+      create: async (input: { botId: string }) => {
+        calls.push({ action: "create", input });
+        return routine(input.botId);
+      },
+      update: async (input: { botId: string; id: string }) => {
+        calls.push({ action: "update", input });
+        return routine(input.botId, input.id);
+      },
+      delete: async (input: unknown) => {
+        calls.push({ action: "delete", input });
+      },
+    },
+  };
+}
+
+test("inside a Bot turn the schedule tool manages only that Bot's routines", async () => {
+  const fake = fakeBotRoutines();
+  const tools = scheduleTaskToolsForContext({
+    bot: { botId: "bot-chef", routines: fake.routines },
+  });
+  assert.deepEqual(tools.map((tool) => tool.name), [SCHEDULE_TOOL_NAME]);
+  const [tool] = tools;
+
+  const created = jsonResult(
+    await tool!.execute("create", {
+      action: "create",
+      name: "Weekly meal prep",
+      schedule: { kind: "weekly", days: [0], time: "08:41" },
+      prompt: "Plan this week's dinners.",
+    }),
+  );
+  assert.deepEqual(fake.calls[0], {
+    action: "create",
+    input: {
+      botId: "bot-chef",
+      name: "Weekly meal prep",
+      schedule: { kind: "weekly", days: [0], time: "08:41" },
+      prompt: "Plan this week's dinners.",
+    },
+  });
+  assert.equal((created.routine as { label: string }).label, "Every Sunday at 8:41 AM");
+
+  await tool!.execute("list", { action: "list" });
+  assert.deepEqual(fake.calls[1], { action: "list", input: "bot-chef" });
+
+  await tool!.execute("update", {
+    action: "update",
+    id: "routine-1",
+    expectedUpdatedAt: 3,
+    schedule: { kind: "daily", time: "09:00" },
+  });
+  assert.deepEqual(fake.calls[2], {
+    action: "update",
+    input: {
+      botId: "bot-chef",
+      id: "routine-1",
+      expectedUpdatedAt: 3,
+      schedule: { kind: "daily", time: "09:00" },
+    },
+  });
+
+  await tool!.execute("remove", { action: "remove", id: "routine-1", expectedUpdatedAt: 3 });
+  assert.deepEqual(fake.calls[3], {
+    action: "delete",
+    input: { botId: "bot-chef", id: "routine-1", expectedUpdatedAt: 3 },
+  });
+
+  // The Bot cannot aim a routine at another Bot or smuggle raw cron through.
+  await assert.rejects(
+    tool!.execute("other", {
+      action: "create",
+      botId: "bot-scout",
+      name: "Steal",
+      schedule: { kind: "daily", time: "09:00" },
+      prompt: "x",
+    }),
+    /Invalid/u,
+  );
+  await assert.rejects(
+    tool!.execute("cron", {
+      action: "create",
+      name: "Raw",
+      cron: "* * * * *",
+      prompt: "x",
+    }),
+    /Invalid/u,
+  );
+  assert.equal(fake.calls.length, 4);
+});
+
+test("a routine run cannot create routines", () => {
+  const fake = fakeBotRoutines();
+  assert.deepEqual(
+    scheduleTaskToolsForContext({
+      bot: { botId: "bot-chef", routineRun: true, routines: fake.routines },
+    }),
+    [],
+  );
+});

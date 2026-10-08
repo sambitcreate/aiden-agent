@@ -1,0 +1,539 @@
+package sbtbiswas.AidenOnTheGo.features.bots
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import java.util.UUID
+
+/** The routes a durable Bot chat uses. [AidenRemoteClient] provides them on a revision-25 Mac. */
+interface AidenBotSessionTransport {
+    suspend fun session(botId: String): AidenBotSession
+    fun events(botId: String): Flow<AidenBotSessionEvent>
+    suspend fun send(botId: String, text: String, key: UUID): AidenBotSessionSendResponse
+    suspend fun resume(botId: String, key: UUID): AidenBotSessionStateView
+    suspend fun dismiss(botId: String, key: UUID): AidenBotSessionStateView
+    suspend fun stop(botId: String, key: UUID): AidenBotSessionStateView
+    suspend fun answerQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        key: UUID
+    ): AidenBotQuestionAnswerReceipt
+    suspend fun requestConnection(botId: String, pluginId: String, key: UUID): AidenBotConnectionRequestReceipt
+    /** The generic `POST /approvals/{waitId}/respond`; a Bot approval takes no scope. */
+    suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID): AidenApprovalResponse
+}
+
+class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : AidenBotSessionTransport {
+    override suspend fun session(botId: String) = client.botSession(botId)
+    override fun events(botId: String) = client.botSessionEvents(botId)
+    override suspend fun send(botId: String, text: String, key: UUID) = client.sendBotMessage(botId, text, key)
+    override suspend fun resume(botId: String, key: UUID) = client.resumeBotSession(botId, key)
+    override suspend fun dismiss(botId: String, key: UUID) = client.dismissBotSession(botId, key)
+    override suspend fun stop(botId: String, key: UUID) = client.stopBotSession(botId, key)
+    override suspend fun answerQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        key: UUID
+    ) = client.answerBotQuestion(botId, waitId, request, key)
+    override suspend fun requestConnection(botId: String, pluginId: String, key: UUID) =
+        client.requestBotConnection(botId, pluginId, key)
+    override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID) =
+        client.respondToApproval(waitId, decision, idempotencyKey = key)
+}
+
+/** What applying one live event to the known session means. */
+sealed class AidenBotSessionEventOutcome {
+    data class Applied(val session: AidenBotSession) : AidenBotSessionEventOutcome()
+    /** A replayed or stale frame from the current epoch. */
+    object Ignored : AidenBotSessionEventOutcome()
+    /** The epoch changed or a sequence number was skipped: discard and refetch. */
+    object Refetch : AidenBotSessionEventOutcome()
+    /** The host closed the session: reconnect for a new epoch. */
+    object Reconnect : AidenBotSessionEventOutcome()
+}
+
+/**
+ * The `(epoch, seq)` rule. A snapshot always replaces. Otherwise an event from another epoch,
+ * or one that is not exactly `seq + 1`, means local state can no longer be trusted; events at
+ * or below the known `seq` in the same epoch are replays and are ignored.
+ */
+fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionEvent): AidenBotSessionEventOutcome {
+    val payload = event.payload
+    if (payload is AidenBotSessionEventPayload.Snapshot) return AidenBotSessionEventOutcome.Applied(payload.session)
+    if (current == null || event.epoch != current.epoch) return AidenBotSessionEventOutcome.Refetch
+    if (event.seq <= current.seq) return AidenBotSessionEventOutcome.Ignored
+    if (event.seq != current.seq + 1) return AidenBotSessionEventOutcome.Refetch
+    return when (payload) {
+        is AidenBotSessionEventPayload.Partial ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, partial = payload.text.ifEmpty { null }))
+        is AidenBotSessionEventPayload.Entry -> {
+            val existing = current.entries.indexOfFirst { it.id == payload.entry.id }
+            val entries = if (existing >= 0) {
+                current.entries.toMutableList().also { it[existing] = payload.entry }
+            } else {
+                current.entries + payload.entry
+            }
+            val trimmed = entries.takeLast(AidenBotSessionWire.MAX_ENTRIES)
+            // Only a newly appended assistant answer replaces the streaming text; a connect
+            // card, notice or in-place update arriving mid-turn keeps it (matches iOS).
+            val answered = existing < 0 &&
+                payload.entry is AidenBotSessionEntry.Message &&
+                payload.entry.role == AidenBotMessageRole.ASSISTANT
+            AidenBotSessionEventOutcome.Applied(
+                current.copy(
+                    seq = event.seq,
+                    partial = if (answered) null else current.partial,
+                    entries = trimmed,
+                    hasOlder = current.hasOlder || trimmed.size < entries.size
+                )
+            )
+        }
+        is AidenBotSessionEventPayload.State -> AidenBotSessionEventOutcome.Applied(
+            current.copy(
+                seq = event.seq,
+                state = payload.view.state,
+                interrupted = payload.view.interrupted,
+                blocked = payload.view.blocked
+            )
+        )
+        is AidenBotSessionEventPayload.Question ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, question = payload.question))
+        is AidenBotSessionEventPayload.Approval ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, approval = payload.approval))
+        AidenBotSessionEventPayload.Closed -> AidenBotSessionEventOutcome.Reconnect
+        is AidenBotSessionEventPayload.Snapshot -> AidenBotSessionEventOutcome.Applied(payload.session)
+    }
+}
+
+/**
+ * Idempotency keys for one logical action. A retry after a lost connection reuses the key, so
+ * the Mac replays the first outcome instead of acting twice. Once the Mac has answered (success
+ * or an error response) the action is finished and the next tap gets a fresh key.
+ */
+class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
+    private val keys = mutableMapOf<String, UUID>()
+
+    @Synchronized
+    fun key(action: String): UUID = keys.getOrPut(action, newKey)
+
+    @Synchronized
+    fun complete(action: String) {
+        keys.remove(action)
+    }
+
+    /** Ends [action] when [error] is an answer from the Mac; keeps its key when the outcome is unknown. */
+    fun failed(action: String, error: Exception) {
+        if (aidenBotMacAnswered(error)) complete(action)
+    }
+}
+
+/** The chat whose files a Bot's ••• menu opens: this Bot's canonical conversation, or null when it has none. */
+fun aidenBotFilesChatId(botId: String, conversations: List<AidenBotConversationItem>): String? =
+    aidenCanonicalBotConversations(conversations).firstOrNull { it.botId == botId }?.chatId
+
+/** True when the Mac sent an HTTP answer, so a retry is a new action rather than a replay. */
+fun aidenBotMacAnswered(error: Exception): Boolean = error is AidenRemoteClientException.Server
+
+/** Where a connect card's action stands on this phone. */
+enum class AidenBotConnectRequestPhase { IDLE, SENDING, SENT, FAILED }
+
+data class AidenBotSessionUiState(
+    val session: AidenBotSession? = null,
+    val isLoading: Boolean = true,
+    val loadFailed: Boolean = false,
+    /** The Mac no longer has this Bot (deleted elsewhere): the feed stops. */
+    val botMissing: Boolean = false,
+    val isSending: Boolean = false,
+    val isResuming: Boolean = false,
+    val isDismissing: Boolean = false,
+    val isStopping: Boolean = false,
+    val isAnsweringQuestion: Boolean = false,
+    val isRespondingToApproval: Boolean = false,
+    val actionError: String? = null,
+    val connectRequests: Map<String, AidenBotConnectRequestPhase> = emptyMap(),
+    /** The Bot's state from the home list, used until the session loads. */
+    val knownState: AidenBotSessionState? = null
+) {
+    val state: AidenBotSessionState? get() = session?.state ?: knownState
+    val needsModel: Boolean get() = state == AidenBotSessionState.NEEDS_MODEL
+    val isRunning: Boolean get() = state == AidenBotSessionState.RUNNING
+    val isInterrupted: Boolean get() = session?.interrupted == true
+    val canSend: Boolean
+        get() = !needsModel && !isSending && !botMissing && state != AidenBotSessionState.UNAVAILABLE && session != null
+
+    /** Stop stays in the top bar while a turn runs, including while it waits on a question or approval card. */
+    val canStopTurn: Boolean
+        get() = isRunning || ((session?.question != null || session?.approval != null) && !isInterrupted)
+
+    /** The failed turn Retry resends: only the newest entry, only with text, only while sending is allowed. */
+    val retryableFailedTurn: AidenBotSessionEntry.FailedTurn?
+        get() {
+            val failed = session?.entries?.lastOrNull() as? AidenBotSessionEntry.FailedTurn ?: return null
+            val text = failed.retryText ?: return null
+            if (!canSend || text.isBlank() ||
+                text.codePointCount(0, text.length) > AidenBotSessionWire.MAX_MESSAGE_LENGTH
+            ) return null
+            return failed
+        }
+}
+
+/**
+ * Drives one durable Bot chat: loads `GET /bots/{id}/session`, follows the event feed with the
+ * `(epoch, seq)` rule, and sends turns and controls with stable idempotency keys.
+ */
+class AidenBotSessionController(
+    val botId: String,
+    private val transport: AidenBotSessionTransport,
+    private val scope: CoroutineScope,
+    knownState: AidenBotSessionState? = null,
+    private val keys: AidenBotActionKeys = AidenBotActionKeys(),
+    private val reconnectDelayMillis: Long = 1_500
+) {
+    private val _state = MutableStateFlow(AidenBotSessionUiState(knownState = knownState))
+    val state: StateFlow<AidenBotSessionUiState> = _state.asStateFlow()
+    private var feedJob: Job? = null
+    private var pendingSendText: String? = null
+
+    /** Starts loading and following the session; safe to call once per screen. */
+    fun start() {
+        if (feedJob?.isActive == true) return
+        feedJob = scope.launch { follow() }
+    }
+
+    fun stopFollowing() {
+        feedJob?.cancel()
+        feedJob = null
+    }
+
+    /** Reloads `GET /bots/{id}/session`; returns false when it could not. */
+    suspend fun refetch(): Boolean {
+        return try {
+            val session = transport.session(botId)
+            _state.update { it.copy(session = session, isLoading = false, loadFailed = false) }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            val missing = (error as? AidenRemoteClientException.Server)?.statusCode == 404
+            _state.update { it.copy(isLoading = false, loadFailed = it.session == null, botMissing = it.botMissing || missing) }
+            false
+        }
+    }
+
+    /** Applies one event; returns false when the feed should be reopened. */
+    suspend fun handle(event: AidenBotSessionEvent): Boolean {
+        return when (val outcome = aidenApplyBotSessionEvent(_state.value.session, event)) {
+            is AidenBotSessionEventOutcome.Applied -> {
+                _state.update { it.copy(session = outcome.session, isLoading = false, loadFailed = false) }
+                outcome.session.entries.filterIsInstance<AidenBotSessionEntry.ConnectCard>()
+                    .filter { it.status != AidenBotConnectCardStatus.PENDING }
+                    .forEach { card -> _state.update { it.copy(connectRequests = it.connectRequests - card.pluginId) } }
+                true
+            }
+            AidenBotSessionEventOutcome.Ignored -> true
+            // Keep showing what we have; a failed refetch reopens the feed, whose first
+            // frame is a fresh snapshot.
+            AidenBotSessionEventOutcome.Refetch -> refetch()
+            AidenBotSessionEventOutcome.Reconnect -> false
+        }
+    }
+
+    private suspend fun follow() {
+        refetch()
+        while (scope.isActive && !_state.value.botMissing) {
+            try {
+                transport.events(botId).collect { event ->
+                    if (!handle(event)) throw ReopenFeed()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: AidenRemoteClientException.Server) {
+                // A deleted Bot has no feed to come back to.
+                if (error.statusCode == 404) {
+                    _state.update { it.copy(botMissing = true, isLoading = false, loadFailed = it.session == null) }
+                    return
+                }
+                // This phone isn't allowed to read the chat: retrying cannot help.
+                if (error.statusCode == 401 || error.statusCode == 403) {
+                    _state.update { it.copy(isLoading = false, loadFailed = it.session == null) }
+                    return
+                }
+            } catch (_: Exception) {
+                // Closed or dropped feed: wait, then reconnect; the next snapshot restores state.
+            }
+            delay(reconnectDelayMillis)
+        }
+    }
+
+    private class ReopenFeed : Exception("reopen Bot session feed")
+
+    /**
+     * Sends [text]. Nothing is sent while the Bot needs an AI model or another send is in
+     * flight. A failed send keeps its key, so retrying the same text cannot post twice.
+     */
+    private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
+    private var pendingApprovalDecision: Pair<String, AidenApprovalDecision>? = null
+
+    suspend fun send(text: String): Boolean {
+        val trimmed = text.trim()
+        val current = _state.value
+        if (trimmed.isEmpty() || !current.canSend) return false
+        if (pendingSendText != trimmed) {
+            keys.complete(SEND)
+            pendingSendText = trimmed
+        }
+        val key = keys.key(SEND)
+        _state.update { it.copy(isSending = true, actionError = null) }
+        return try {
+            val receipt = transport.send(botId, trimmed, key)
+            keys.complete(SEND)
+            pendingSendText = null
+            applyStateView(receipt.stateView)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(SEND, error)
+            if (aidenBotMacAnswered(error)) pendingSendText = null
+            _state.update { it.copy(actionError = "Aiden couldn’t send that. Try again.") }
+            false
+        } finally {
+            _state.update { it.copy(isSending = false) }
+        }
+    }
+
+    /**
+     * Resends the newest failed turn's text as a new message. The retry has its own key, never
+     * the original message's: an unanswered retry keeps it, so a second tap on the same failed
+     * turn replays instead of posting twice, and another failed turn gets a fresh one.
+     */
+    suspend fun retry(): Boolean {
+        val failed = _state.value.retryableFailedTurn ?: return false
+        val text = failed.retryText ?: return false
+        val action = "$RETRY:${failed.id}"
+        var claimed = false
+        _state.update { current ->
+            if (current.isSending) current else {
+                claimed = true
+                current.copy(isSending = true, actionError = null)
+            }
+        }
+        if (!claimed) return false
+        return try {
+            val receipt = transport.send(botId, text, keys.key(action))
+            keys.complete(action)
+            applyStateView(receipt.stateView)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            _state.update { it.copy(actionError = "Aiden couldn’t send that. Try again.") }
+            false
+        } finally {
+            _state.update { it.copy(isSending = false) }
+        }
+    }
+
+    /** Resume a paused turn. A second tap while one is in flight sends nothing. */
+    suspend fun resume() = control(
+        RESUME,
+        inFlight = { it.isResuming },
+        mark = { s, v -> s.copy(isResuming = v) },
+        call = { key -> transport.resume(botId, key) }
+    )
+
+    suspend fun dismiss() = control(
+        DISMISS,
+        inFlight = { it.isDismissing },
+        mark = { s, v -> s.copy(isDismissing = v) },
+        call = { key -> transport.dismiss(botId, key) }
+    )
+
+    suspend fun stop() = control(
+        STOP,
+        inFlight = { it.isStopping },
+        mark = { s, v -> s.copy(isStopping = v) },
+        call = { key -> transport.stop(botId, key) }
+    )
+
+    /**
+     * Answers the waiting A–E question once. A failed answer keeps its key, so retrying the
+     * same answer replays the Mac's receipt instead of answering twice; a different answer
+     * gets a new key. A second tap while one is in flight sends nothing.
+     */
+    suspend fun answerQuestion(response: AidenQuestionRespondRequest): Boolean {
+        val question = _state.value.session?.question ?: return false
+        if (_state.value.isAnsweringQuestion) return false
+        val action = "$ANSWER_QUESTION:${question.waitId}"
+        if (pendingAnswer != action to response) {
+            keys.complete(action)
+            pendingAnswer = action to response
+        }
+        _state.update { it.copy(isAnsweringQuestion = true, actionError = null) }
+        return try {
+            transport.answerQuestion(botId, question.waitId, response, keys.key(action))
+            keys.complete(action)
+            pendingAnswer = null
+            _state.update { current ->
+                val session = current.session
+                if (session?.question?.waitId == question.waitId) {
+                    current.copy(session = session.copy(question = null))
+                } else {
+                    current
+                }
+            }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _state.update { it.copy(actionError = "Aiden couldn’t send that answer. Try again.") }
+            false
+        } finally {
+            _state.update { it.copy(isAnsweringQuestion = false) }
+        }
+    }
+
+    /**
+     * Allows or denies the waiting tool approval once. Allow is refused when the approval
+     * cannot be allowed from a phone. An unanswered attempt keeps its key, so retrying the
+     * same decision replays the Mac's outcome; the other decision gets a new key. An expired
+     * or already-settled approval is cleared. A second tap while one is in flight sends nothing.
+     */
+    suspend fun respondToApproval(decision: AidenApprovalDecision): Boolean {
+        val approval = _state.value.session?.approval ?: return false
+        if (decision == AidenApprovalDecision.ALLOW && !approval.canAllow) return false
+        var claimed = false
+        _state.update { current ->
+            if (current.isRespondingToApproval) current else {
+                claimed = true
+                current.copy(isRespondingToApproval = true, actionError = null)
+            }
+        }
+        if (!claimed) return false
+        val action = "$RESPOND_APPROVAL:${approval.waitId}"
+        if (pendingApprovalDecision != action to decision) {
+            keys.complete(action)
+            pendingApprovalDecision = action to decision
+        }
+        return try {
+            transport.respondToApproval(approval.waitId, decision, keys.key(action))
+            keys.complete(action)
+            pendingApprovalDecision = null
+            clearApproval(approval.waitId)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            if (aidenBotMacAnswered(error)) pendingApprovalDecision = null
+            when ((error as? AidenRemoteClientException.Server)?.body?.code) {
+                AidenRemoteErrorCode.APPROVAL_EXPIRED -> {
+                    clearApproval(approval.waitId)
+                    _state.update { it.copy(actionError = "That request expired.") }
+                }
+                // Settled elsewhere, on the Mac or another phone: nothing is waiting any more.
+                AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED -> clearApproval(approval.waitId)
+                else -> _state.update { it.copy(actionError = "Aiden couldn’t send that. Try again.") }
+            }
+            false
+        } finally {
+            _state.update { it.copy(isRespondingToApproval = false) }
+        }
+    }
+
+    private fun clearApproval(waitId: String) {
+        _state.update { current ->
+            val session = current.session
+            if (session?.approval?.waitId == waitId) current.copy(session = session.copy(approval = null)) else current
+        }
+    }
+
+    suspend fun requestConnection(pluginId: String) {
+        val phase = _state.value.connectRequests[pluginId]
+        if (phase == AidenBotConnectRequestPhase.SENDING || phase == AidenBotConnectRequestPhase.SENT) return
+        val action = "connect:$pluginId"
+        _state.update { it.copy(connectRequests = it.connectRequests + (pluginId to AidenBotConnectRequestPhase.SENDING)) }
+        val next = try {
+            transport.requestConnection(botId, pluginId, keys.key(action))
+            keys.complete(action)
+            AidenBotConnectRequestPhase.SENT
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            AidenBotConnectRequestPhase.FAILED
+        }
+        _state.update { it.copy(connectRequests = it.connectRequests + (pluginId to next)) }
+    }
+
+    private suspend fun control(
+        action: String,
+        inFlight: (AidenBotSessionUiState) -> Boolean,
+        mark: (AidenBotSessionUiState, Boolean) -> AidenBotSessionUiState,
+        call: suspend (UUID) -> AidenBotSessionStateView
+    ): Boolean {
+        var claimed = false
+        _state.update { current ->
+            if (inFlight(current)) current else {
+                claimed = true
+                mark(current, true).copy(actionError = null)
+            }
+        }
+        if (!claimed) return false
+        return try {
+            val view = call(keys.key(action))
+            keys.complete(action)
+            applyStateView(view)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            _state.update { it.copy(actionError = "Aiden couldn’t reach your Mac. Try again.") }
+            false
+        } finally {
+            _state.update { mark(it, false) }
+        }
+    }
+
+    private fun applyStateView(view: AidenBotSessionStateView) {
+        _state.update { current ->
+            val session = current.session ?: return@update current.copy(knownState = view.state)
+            current.copy(session = session.copy(state = view.state, interrupted = view.interrupted, blocked = view.blocked))
+        }
+    }
+
+    companion object {
+        const val SEND = "send"
+        const val RESUME = "resume"
+        const val DISMISS = "dismiss"
+        const val STOP = "stop"
+        const val ANSWER_QUESTION = "answerQuestion"
+        const val RESPOND_APPROVAL = "respondApproval"
+        const val RETRY = "retry"
+    }
+}
+
+/**
+ * Bot row copy built by the JVM-tested [AidenBotHomeRow] presentation. Screen copy lives in
+ * `strings.xml` (`bot_session_*`).
+ */
+object AidenBotSessionCopy {
+    const val NEEDS_MODEL = "Needs an AI model"
+    const val PAUSED_ROW = "Paused — tap to resume"
+}

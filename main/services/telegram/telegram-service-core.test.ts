@@ -540,6 +540,7 @@ interface HarnessOptions {
   delayAfterFirstBatch?: boolean;
   existingChats?: MockTurnOptions["existingChats"];
   storeInboundFile?: import("./telegram-service-core.js").TelegramServiceDeps["storeInboundFile"];
+  botIngress?: import("./telegram-service-core.js").TelegramServiceDeps["botIngress"];
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -608,6 +609,7 @@ function harness(o: HarnessOptions = {}) {
     handleExtensionUpdate: o.handleExtensionUpdate,
     synthesizeVoice: o.synthesizeVoice,
     storeInboundFile: o.storeInboundFile,
+    botIngress: o.botIngress,
     getToken: () => Promise.resolve("mock-token"),
     now: () => 0,
     sleep: sleepMock.sleep,
@@ -1158,6 +1160,72 @@ test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mo
   assert.equal(turnMock.startedParams()[0]?.chatId, "telegram-work-bot-a");
   assert.equal(turnMock.startedParams()[0]?.workspaceId, "bot-home-a");
   assert.equal(turnMock.startedParams()[0]?.mode, undefined);
+});
+
+const durableBinding = {
+  botId: "bot-a",
+  profile: "work",
+  chatId: 100,
+  ownerUserId: 42,
+  workspaceId: "work",
+  backingWorkspaceId: "bot-home-a",
+  backingChatId: "telegram-work-bot-a",
+} as const;
+
+test("a Bot-bound message is admitted to the durable Bot session before the offset advances", async () => {
+  const owner = person(42, "owner");
+  const admitted: import("./bot-reply-outbox.js").TelegramBotMessage[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const { service, config, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
+    autoStop: true,
+    botIngress: {
+      admit: async (message) => {
+        admitted.push(message);
+        await gate;
+        return { requestId: "tg:bot-a:10:0:1", deduped: false };
+      },
+    },
+  });
+
+  await service.start();
+  await waitFor(() => admitted.length === 1);
+  assert.equal(config.persistOffsetCalls(), 0, "the offset waits for durable admission");
+  release();
+  await waitFor(() => config.persistOffsetCalls() === 1);
+  assert.equal(admitted[0]?.botId, "bot-a");
+  assert.equal(admitted[0]?.text, "plan dinner");
+  assert.equal(turnMock.startCalls(), 0, "the legacy turn path is not used");
+});
+
+test("a Bot message whose admission fails keeps the offset so Telegram redelivers it", async () => {
+  const owner = person(42, "owner");
+  let attempts = 0;
+  const { service, config, logs } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
+    autoStop: true,
+    botIngress: {
+      admit: async () => {
+        attempts += 1;
+        throw new Error("Bots are open in another Aiden window.");
+      },
+    },
+  });
+
+  await service.start();
+  await waitFor(() => attempts === 1 && logs.errors.length > 0);
+  assert.equal(config.persistOffsetCalls(), 0);
 });
 
 test("an ordinary unbound route never enters Bot validation or changes fallback routing", async () => {

@@ -371,7 +371,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Reusable Skills",
     "MCP Connectors",
     "Aiden Live",
-    "Reusable Bots",
+    "Meet your Bots",
     "Scheduled Automations",
     "Voice & Dictation",
     "Command Palette",
@@ -386,7 +386,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
-  assert.match(featurePresentation, /one persistent chat, explicit image understanding/u);
+  assert.match(featurePresentation, /Each Bot keeps one chat, remembers its instructions, and can run on a schedule/u);
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,

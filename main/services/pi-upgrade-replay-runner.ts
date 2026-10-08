@@ -256,7 +256,6 @@ async function botTelegramSurfaceReplay(): Promise<boolean> {
   const service = new ContextLifecycleService({
     getChat: async () => chat,
     listChatsByBot: async () => [chat],
-    isBotArchived: async () => false,
     beginChatTurn: () => ({
       chatId: chat.id, turnId: "phase7", ownerId: "telegram:phase7", isActive: () => true,
       reserveAppendPayload: () => undefined, reserveSkillPreparation: () => undefined,

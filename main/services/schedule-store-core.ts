@@ -10,11 +10,20 @@ import {
 import type {
   ScheduledRun,
   ScheduledRunResult,
+  ScheduledRunSkipReason,
   ScheduledTask,
   ScheduledTaskInput,
 } from "./types.js";
 import { validateScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 import { acpHarnessUnavailableReason } from "../../renderer/shared/acp-harness.js";
+import {
+  botRoutineCron,
+  parseBotRoutineDate,
+  parseBotRoutineSchedule,
+  type BotRoutineSchedule,
+} from "../../renderer/shared/bot-routine-schedule.js";
+import { isPathSafeBotCapabilityId } from "../../renderer/shared/bot-capabilities.js";
+import { BOT_LIMITS } from "../../renderer/shared/bots.js";
 
 const RUNS_PER_TASK = 50;
 const STORED_OUTPUT_LIMIT = 64 * 1024;
@@ -113,6 +122,53 @@ function cleanOptional(value: string | undefined, limit = 512): string | undefin
   return trimmed ? trimmed.slice(0, limit) : undefined;
 }
 
+function yearIn(timestamp: number, timezone: string): number {
+  const year = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric" })
+    .formatToParts(new Date(timestamp))
+    .find((part) => part.type === "year")?.value;
+  return Number(year);
+}
+
+/**
+ * Bot routines run inside their Bot's own conversation with the Bot's model,
+ * access, and tools; the generic workspace, script, MCP, provider, and
+ * Assistant fields would grant a second authority, so they are refused.
+ */
+function assertBotRoutineShape(task: {
+  botId: string;
+  mode: string;
+  workspaceId?: string;
+  script?: string;
+  mcpServerIds?: readonly string[];
+  mcpServerBindings?: readonly unknown[];
+  executionProfile?: string;
+  providerId?: string;
+  model?: string;
+  providerFingerprint?: string;
+  cron: string;
+  routineSchedule: BotRoutineSchedule;
+}): void {
+  if (!isPathSafeBotCapabilityId(task.botId, BOT_LIMITS.idChars)) {
+    throw new Error("Invalid routine Bot.");
+  }
+  if (
+    task.mode !== "llm" ||
+    task.workspaceId !== undefined ||
+    task.script !== undefined ||
+    (task.mcpServerIds?.length ?? 0) > 0 ||
+    (task.mcpServerBindings?.length ?? 0) > 0 ||
+    task.executionProfile !== undefined ||
+    task.providerId !== undefined ||
+    task.model !== undefined ||
+    task.providerFingerprint !== undefined
+  ) {
+    throw new Error("A Bot routine only carries a message for its Bot.");
+  }
+  if (task.cron !== botRoutineCron(task.routineSchedule)) {
+    throw new Error("The routine schedule does not match its timing.");
+  }
+}
+
 function normalizeInput(
   input: ScheduledTaskInput,
   existing: ScheduledTask | undefined,
@@ -122,7 +178,18 @@ function normalizeInput(
   if (!name) throw new Error("Task name is required.");
   if (input.mode !== "llm" && input.mode !== "script") throw new Error("Invalid task mode.");
   const timezone = validateTimezone(input.timezone ?? existing?.timezone ?? systemTimezone());
-  const cron = input.cron.trim();
+  if (input.botId !== undefined && existing && existing.botId !== input.botId) {
+    throw new Error("A routine cannot move to another Bot.");
+  }
+  const botId = existing?.botId ?? input.botId;
+  if (botId === undefined && input.routineSchedule !== undefined) {
+    throw new Error("Only Bot routines use a routine schedule.");
+  }
+  const routineSchedule =
+    botId === undefined
+      ? undefined
+      : parseBotRoutineSchedule(input.routineSchedule ?? existing?.routineSchedule);
+  const cron = routineSchedule ? botRoutineCron(routineSchedule) : input.cron.trim();
   const enabled = input.enabled ?? existing?.enabled ?? true;
   const prompt = input.mode === "llm" ? cleanOptional(input.prompt, 32 * 1024) : undefined;
   const script = input.mode === "script" ? validateScriptName(input.script ?? "") : undefined;
@@ -196,7 +263,30 @@ function normalizeInput(
     providerFingerprint,
     webSearchEnabled,
   });
+  if (botId !== undefined && routineSchedule) {
+    assertBotRoutineShape({
+      botId,
+      mode: input.mode,
+      workspaceId,
+      script,
+      mcpServerIds,
+      mcpServerBindings,
+      executionProfile,
+      providerId,
+      model,
+      providerFingerprint,
+      cron,
+      routineSchedule,
+    });
+  }
   const nextRunAt = enabled ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
+  if (
+    routineSchedule?.kind === "once" &&
+    nextRunAt !== undefined &&
+    yearIn(nextRunAt, timezone) !== parseBotRoutineDate(routineSchedule.date).year
+  ) {
+    throw new Error("Pick a time in the future for this routine.");
+  }
   return {
     id: existing?.id ?? cleanOptional(input.id, 160) ?? randomUUID(),
     name,
@@ -218,6 +308,7 @@ function normalizeInput(
     executionProfile,
     webSearchEnabled,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
+    ...(botId !== undefined ? { botId, routineSchedule } : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
@@ -227,7 +318,17 @@ function normalizeInput(
 }
 
 function isRunResult(value: unknown): value is ScheduledRunResult {
-  return value === "success" || value === "error" || value === "silent" || value === "blocked";
+  return (
+    value === "success" ||
+    value === "error" ||
+    value === "silent" ||
+    value === "blocked" ||
+    value === "skipped"
+  );
+}
+
+function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
+  return value === "bot_paused" || value === "duplicate";
 }
 
 function normalizeStoredTask(value: unknown): ScheduledTask | null {
@@ -266,7 +367,34 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
   let mcpServerIds: string[] | undefined;
   let mcpServerBindings: ScheduledTask["mcpServerBindings"];
   let scheduleError: string | undefined;
+  // A routine whose Bot identity is unreadable can never be attributed to a
+  // Bot or a workspace again; dropping it is safer than reviving it as a
+  // generic workspace task.
+  if (task.botId !== undefined && !isPathSafeBotCapabilityId(task.botId, BOT_LIMITS.idChars)) {
+    return null;
+  }
+  const botId = typeof task.botId === "string" ? task.botId : undefined;
+  let routineSchedule: BotRoutineSchedule | undefined;
   try {
+    if (botId !== undefined) {
+      routineSchedule = parseBotRoutineSchedule(task.routineSchedule);
+      assertBotRoutineShape({
+        botId,
+        mode: task.mode,
+        workspaceId,
+        script,
+        mcpServerIds: Array.isArray(task.mcpServerIds) ? task.mcpServerIds : undefined,
+        mcpServerBindings: Array.isArray(task.mcpServerBindings) ? task.mcpServerBindings : undefined,
+        executionProfile,
+        providerId,
+        model,
+        providerFingerprint,
+        cron: task.cron,
+        routineSchedule,
+      });
+    } else if (task.routineSchedule !== undefined) {
+      throw new Error("Only Bot routines use a routine schedule.");
+    }
     mcpServerIds = validateScheduledMcpServerIds(task.mcpServerIds);
     mcpServerBindings = validateScheduledMcpServerBindings(task.mcpServerBindings);
     nextScheduledRun(task.cron, task.timezone);
@@ -327,6 +455,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     executionProfile,
     webSearchEnabled,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
+    ...(botId !== undefined ? { botId, ...(routineSchedule ? { routineSchedule } : {}) } : {}),
     notify: task.notify !== false,
     lastResult: scheduleError
       ? "error"
@@ -362,6 +491,7 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     result: run.result,
+    ...(run.result === "skipped" && isSkipReason(run.reason) ? { reason: run.reason } : {}),
     output: run.output.slice(0, STORED_OUTPUT_LIMIT),
     error: typeof run.error === "string" ? run.error.slice(0, STORED_ERROR_LIMIT) : undefined,
     chatId: typeof run.chatId === "string" ? run.chatId : undefined,

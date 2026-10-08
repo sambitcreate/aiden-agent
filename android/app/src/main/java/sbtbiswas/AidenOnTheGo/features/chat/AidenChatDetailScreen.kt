@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
@@ -75,6 +76,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotChatTopBar
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleteDialog
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleter
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotFilesSheet
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotChatPlaceholder
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotDeleteAvailable
+import sbtbiswas.AidenOnTheGo.features.bots.rememberAidenBotChatIdentity
 import sbtbiswas.AidenOnTheGo.navigation.LocalAidenIsCommittedDestination
 import sbtbiswas.AidenOnTheGo.navigation.LocalAidenShowsUpNavigation
 import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
@@ -119,9 +127,12 @@ fun AidenChatDetailScreen(
     networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     startVoiceOnOpen: Boolean = false,
     onNavigateToChat: (String) -> Unit = {},
+    onNavigateToBotProfile: (String) -> Unit = {},
+    botDeleter: AidenBotDeleter? = null,
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -425,6 +436,46 @@ fun AidenChatDetailScreen(
         consumedItemCount = itemCount
     }
 
+    val botIdentity = chat?.botId?.let { rememberAidenBotChatIdentity(coordinator, it, chat?.title.orEmpty()) }
+    val canDeleteBot = botIdentity != null && aidenBotDeleteAvailable(serverInfo, botDeleter)
+    var showBotFiles by remember(chatId) { mutableStateOf(false) }
+    var confirmingBotDelete by remember(chatId) { mutableStateOf(false) }
+    var isDeletingBot by remember(chatId) { mutableStateOf(false) }
+
+    if (showBotFiles) {
+        AidenBotFilesSheet(chatId = chatId, coordinator = coordinator, onDismiss = { showBotFiles = false })
+    }
+    if (confirmingBotDelete && botIdentity != null) {
+        AidenBotDeleteDialog(
+            name = botIdentity.name,
+            isDeleting = isDeletingBot,
+            onDismiss = { confirmingBotDelete = false },
+            onConfirm = {
+                val cl = coordinator.client.value
+                val deleter = botDeleter
+                if (cl == null || deleter == null) {
+                    confirmingBotDelete = false
+                    return@AidenBotDeleteDialog
+                }
+                scope.launch {
+                    isDeletingBot = true
+                    try {
+                        deleter.delete(cl, botIdentity.botId)
+                        confirmingBotDelete = false
+                        onNavigateBack()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        confirmingBotDelete = false
+                        coordinator.presentError(resources.getString(R.string.bot_delete_failed))
+                    } finally {
+                        isDeletingBot = false
+                    }
+                }
+            }
+        )
+    }
+
     workspaceFileReference?.let { reference ->
         val workspaceId = chat?.workspaceId
         if (workspaceId != null && chat?.isBotChat != true) {
@@ -439,65 +490,81 @@ fun AidenChatDetailScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.statusBars,
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = chat?.title?.ifEmpty { stringResource(R.string.chat_title_fallback) } ?: stringResource(R.string.chat_title_fallback),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        // Workspace chats show the model the next turn will use; Bot
-                        // chats keep their Bot-owned model.
-                        val subtitleProviderId = if (chat?.isBotChat == true) chat?.providerId else selectedProviderId ?: chat?.providerId
-                        val subtitleModelId = if (chat?.isBotChat == true) chat?.modelId else selectedModelId ?: chat?.modelId
-                        subtitleModelId?.let { modelId ->
-                            val providers = modelCatalog?.providers.orEmpty()
-                            val provider = providers.firstOrNull { it.id == subtitleProviderId }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (subtitleProviderId != null) {
-                                    AidenProviderIcon(
-                                        providerId = subtitleProviderId,
-                                        providerLabel = provider?.label ?: subtitleProviderId,
-                                        modelId = modelId,
-                                        artwork = provider?.artwork,
-                                        size = 14.dp,
-                                        modifier = Modifier.clearAndSetSemantics {}
+            val botId = chat?.botId
+            if (botId != null && botIdentity != null) {
+                AidenBotChatTopBar(
+                    identity = botIdentity,
+                    coordinator = coordinator,
+                    isStreaming = isStreaming,
+                    canStop = viewModel.canStopCurrentRun && !isStopping,
+                    onStop = { viewModel.cancelTurn() },
+                    onBack = onNavigateBack,
+                    onOpenProfile = { onNavigateToBotProfile(botId) },
+                    onOpenFiles = { showBotFiles = true },
+                    canDelete = canDeleteBot,
+                    onDelete = { confirmingBotDelete = true }
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                text = chat?.title?.ifEmpty { stringResource(R.string.chat_title_fallback) } ?: stringResource(R.string.chat_title_fallback),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            // Workspace chats show the model the next turn will use; Bot
+                            // chats keep their Bot-owned model.
+                            val subtitleProviderId = if (chat?.isBotChat == true) chat?.providerId else selectedProviderId ?: chat?.providerId
+                            val subtitleModelId = if (chat?.isBotChat == true) chat?.modelId else selectedModelId ?: chat?.modelId
+                            subtitleModelId?.let { modelId ->
+                                val providers = modelCatalog?.providers.orEmpty()
+                                val provider = providers.firstOrNull { it.id == subtitleProviderId }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (subtitleProviderId != null) {
+                                        AidenProviderIcon(
+                                            providerId = subtitleProviderId,
+                                            providerLabel = provider?.label ?: subtitleProviderId,
+                                            modelId = modelId,
+                                            artwork = provider?.artwork,
+                                            size = 14.dp,
+                                            modifier = Modifier.clearAndSetSemantics {}
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        text = aidenModelDisplayLabel(providers, subtitleProviderId, modelId),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = palette.secondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                    Spacer(Modifier.width(6.dp))
                                 }
-                                Text(
-                                    text = aidenModelDisplayLabel(providers, subtitleProviderId, modelId),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = palette.secondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
                             }
                         }
-                    }
-                },
-                navigationIcon = {
-                    if (LocalAidenShowsUpNavigation.current) IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
-                    }
-                },
-                actions = {
-                    if (isStreaming) {
-                        IconButton(
-                            onClick = { viewModel.cancelTurn() },
-                            enabled = viewModel.canStopCurrentRun && !isStopping
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.action_stop), tint = palette.danger)
+                    },
+                    navigationIcon = {
+                        if (LocalAidenShowsUpNavigation.current) IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = palette.canvas,
-                    titleContentColor = palette.foreground
+                    },
+                    actions = {
+                        if (isStreaming) {
+                            IconButton(
+                                onClick = { viewModel.cancelTurn() },
+                                enabled = viewModel.canStopCurrentRun && !isStopping
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.action_stop), tint = palette.danger)
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = palette.canvas,
+                        titleContentColor = palette.foreground
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
             Column(
@@ -799,7 +866,7 @@ fun AidenChatDetailScreen(
                                 AidenModelRoute(providerId, modelId)
                             }
                     },
-                    placeholder = if (chat?.isBotChat == true) stringResource(R.string.chat_composer_placeholder_bot, chat?.title ?: stringResource(R.string.bot_profile_bot_fallback)) else stringResource(R.string.chat_composer_placeholder),
+                    placeholder = if (chat?.isBotChat == true) aidenBotChatPlaceholder(botIdentity?.name) else stringResource(R.string.chat_composer_placeholder),
                     isReadOnly = false,
                     voiceErrorMessage = voiceInput.errorMessage,
                     modifier = Modifier.fillMaxWidth()

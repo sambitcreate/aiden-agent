@@ -8,10 +8,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
-import {
-  BotArchivedFileReadAuthorityError,
-  createBotArchivedFileReadAuthority,
-} from "./bot-archived-file-read-authority.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenOpaqueHandleStore } from "./aiden-remote-opaque-handles.js";
 import { AIDEN_REMOTE_BASE_PATH, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
@@ -22,10 +18,6 @@ import {
   type BotRuntimeEffectiveAuthority,
 } from "./bot-runtime-authority.js";
 import type { Chat } from "./types.js";
-import type { BotDefinition } from "../../renderer/shared/bots.js";
-import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
-import type { BotArchivedReadAuthoritySnapshot } from "./bot-capability-store-core.js";
-import { BotMutationGate } from "./bot-mutation-gate.js";
 
 function authorityFixture(input: {
   root: string;
@@ -221,167 +213,6 @@ test("remote Bot Files rejects ordinary and cross-Bot chats before managed-home 
     (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "not_found",
   );
   assert.equal(admissions, 0);
-});
-
-test("archived Bot file reads retain exact read authority while writes remain blocked", async () => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-archived-bot-files-"));
-  const root = path.join(temporary, "managed-home");
-  await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(path.join(root, "history.txt"), "archived\n", "utf8");
-  const bot: BotDefinition = {
-    id: "bot-1",
-    name: "Archivist",
-    instructions: "Keep records.",
-    avatar: "spark",
-    revision: "bot-revision-1",
-    createdAt: 1,
-    updatedAt: 2,
-    archivedAt: 3,
-  };
-  const chat: Chat = {
-    id: "chat-1",
-    botId: bot.id,
-    workspaceId: "managed-workspace-1",
-    title: "History",
-    messages: [],
-    createdAt: 1,
-    updatedAt: 2,
-  };
-  let policyEpoch = 1;
-  let botState: BotDefinition = bot;
-  const archivedPolicy = (): BotArchivedReadAuthoritySnapshot => ({
-    policy: {
-      botId: bot.id,
-      authorityStatus: "archived",
-      accessMode: "full",
-      catalogRevision: "catalog-1",
-      policyEpoch,
-      revision: "bot-policy-1",
-      revisionSequence: 1,
-      createdAt: 1,
-      updatedAt: 2,
-    },
-    chat: {
-      chatId: chat.id,
-      botId: bot.id,
-      mode: "inherit",
-      catalogRevision: "catalog-1",
-      policyEpoch: 1,
-      revision: "chat-policy-1",
-      revisionSequence: 1,
-      createdAt: 1,
-      updatedAt: 2,
-    },
-  });
-  const homeOption = {
-    id: "file-home",
-    label: "Bot folder",
-    available: true,
-    kind: "bot_home" as const,
-  };
-  const snapshot: BotCapabilityCatalogSnapshot = {
-    catalog: {
-      revision: "catalog-1",
-      providers: [],
-      fileScopes: [homeOption],
-      shellAvailable: false,
-      connections: [],
-      skills: [],
-      otherCapabilities: [],
-      notice: { version: "bot-full-access-v1", requiresAcknowledgement: true },
-    },
-    resources: {
-      providers: [],
-      fileScopes: [{
-        option: homeOption,
-        sourceId: "builtin.bot_home.v1",
-        scopeFingerprint: "scope-fingerprint",
-        exactFingerprint: "scope-exact",
-      }],
-      shell: {
-        available: false,
-        shellFingerprint: "shell-fingerprint",
-        exactFingerprint: "shell-exact",
-      },
-      connections: [],
-      skills: [],
-      otherCapabilities: [],
-    },
-  };
-  let releases = 0;
-  const managedWorkspace = {
-    botId: bot.id,
-    workspaceId: "managed-workspace-1",
-    createdAt: 1,
-    homePath: root,
-    incarnation: { device: "1", inode: "1" },
-  };
-  const archivedRead = createBotArchivedFileReadAuthority({
-    bots: { get: async () => botState },
-    chats: { get: async () => chat },
-    capabilities: {
-      inspectArchivedReadAuthority: async () => archivedPolicy(),
-      assertAuthorityBindingsCurrent: async () => undefined,
-    },
-    catalog: { snapshotForRuntime: async () => snapshot },
-    managedWorkspace: {
-      resolve: async () => managedWorkspace,
-      revalidate: async () => managedWorkspace,
-    },
-    mutationGate: new BotMutationGate(),
-    inventoryLeases: {
-      acquire: () => ({
-        generation: 1,
-        signal: new AbortController().signal,
-        assertCurrent: () => undefined,
-        release: () => { releases += 1; },
-      }),
-    },
-  });
-  const service = new AidenRemoteBotFileService({
-    instanceId: "instance-1",
-    chats: { get: async () => chat },
-    authority: {
-      admit: async () => { throw new BotRuntimeAuthorityError("bot_unavailable"); },
-    },
-    archivedRead,
-  });
-  try {
-    const index = await service.list("device-1", chat.id);
-    const file = index.entries.find(({ displayPath }) => displayPath === "history.txt");
-    assert.ok(file);
-    assert.equal((await service.read("device-1", chat.id, file.id)).content, "archived\n");
-    await assert.rejects(
-      () => service.write("device-1", chat.id, file.id, {
-        content: "changed\n",
-        expectedVersion: "1".repeat(64),
-      }),
-      (error: unknown) =>
-        error instanceof AidenRemoteServiceError && error.code === "bot_archived",
-    );
-    assert.equal(await fs.readFile(path.join(root, "history.txt"), "utf8"), "archived\n");
-
-    await assert.rejects(
-      () => archivedRead.run({ botId: bot.id, chatId: chat.id }, async (context) => {
-        policyEpoch = 2;
-        await context.revalidateBeforeEffect();
-      }),
-      (error: unknown) =>
-        error instanceof BotArchivedFileReadAuthorityError && error.classification === "changed",
-    );
-    policyEpoch = 1;
-    await assert.rejects(
-      () => archivedRead.run({ botId: bot.id, chatId: chat.id }, async (context) => {
-        botState = { ...bot, archivedAt: undefined };
-        await context.revalidateBeforeEffect();
-      }),
-      (error: unknown) =>
-        error instanceof BotArchivedFileReadAuthorityError && error.classification === "changed",
-    );
-    assert.ok(releases >= 5);
-  } finally {
-    await fs.rm(temporary, { recursive: true, force: true });
-  }
 });
 
 async function httpFixture(options: {

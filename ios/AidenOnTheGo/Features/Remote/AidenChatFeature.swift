@@ -750,13 +750,9 @@ private struct AidenBotHeaderNameGlassModifier: ViewModifier {
         if #available(iOS 26, *), !reduceTransparency {
             content.glassEffect(.regular.interactive(), in: Capsule())
         } else if reduceTransparency {
-            content
-                .background(palette.raised, in: Capsule())
-                .overlay(Capsule().stroke(palette.foreground.opacity(0.16), lineWidth: 0.5))
+            content.background(palette.raised, in: Capsule())
         } else {
-            content
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+            content.background(.regularMaterial, in: Capsule())
         }
     }
 }
@@ -1468,7 +1464,6 @@ final class AidenChatViewModel {
     var showsComposerModelControl: Bool { !chat.isBotChat }
     private(set) var botPrimarySupportsImages: Bool?
     private(set) var botVisionModelSelection: AidenBotModelSelection?
-    var needsBotVisionSetup = false
     var acceptsImageAttachments: Bool {
         if chat.isBotChat {
             return botPrimarySupportsImages == true || botVisionModelSelection != nil
@@ -2501,18 +2496,20 @@ final class AidenChatViewModel {
 
     func setBotVisionModelSelection(_ selection: AidenBotModelSelection?) {
         botVisionModelSelection = selection
-        if selection != nil { needsBotVisionSetup = false }
     }
 
     func setBotPrimarySupportsImages(_ supportsImages: Bool?) {
         botPrimarySupportsImages = supportsImages
-        if supportsImages == true { needsBotVisionSetup = false }
     }
 
+    /// A Bot without an image model can't look at photos. Say so plainly
+    /// instead of opening a setup flow; Advanced is where it can change.
     func requestBotVisionSetup() {
         guard chat.isBotChat, !acceptsImageAttachments else { return }
-        needsBotVisionSetup = true
+        presentedError = Self.botCannotSeePhotosMessage
     }
+
+    static let botCannotSeePhotosMessage = "This Bot can’t look at photos yet. You can pick a photo model in its Profile under ••• → Advanced."
 
     func selectModel(providerId: String, modelId: String, thinkingLevel: String?) {
         guard !chat.isBotChat else { return }
@@ -2537,7 +2534,7 @@ final class AidenChatViewModel {
         case .proceed:
             break
         case .configureBotVision:
-                needsBotVisionSetup = true
+            presentedError = Self.botCannotSeePhotosMessage
             return
         case .chooseImageCapableModel:
             presentedError = String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
@@ -4667,6 +4664,8 @@ struct AidenChatDetailView: View {
     @State private var composerHeight: CGFloat = 132
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
+    @State private var isConfirmingBotDelete = false
+    @Environment(\.dismiss) private var dismissChat
     @State private var workspaceFileReference: String?
     @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
@@ -4770,7 +4769,6 @@ struct AidenChatDetailView: View {
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
-        .safeAreaInset(edge: .top, spacing: 0) { botIdentityInset }
         .task(id: chatLoadEpoch) {
             // Loads on appear and after each return from the background. A
             // newer epoch cancels an older load still in flight.
@@ -4825,13 +4823,11 @@ struct AidenChatDetailView: View {
         } message: {
             Text(model.presentedError ?? model.readAloud.errorMessage ?? "The operation could not be completed.")
         }
-        .alert("Set Up Image Understanding", isPresented: $model.needsBotVisionSetup) {
-            if let botID = model.chat.botId {
-                Button("Edit Bot") { botSheet = .edit(botID) }
-            }
-            Button("Not Now", role: .cancel) { }
-        } message: {
-            Text("This Bot’s primary model reads text only. Choose a vision model for photos and screenshots; attached images and a focused question will go to that model, while replies keep using the current primary model.")
+        .aidenBotDeleteConfirmation(
+            isPresented: $isConfirmingBotDelete,
+            botName: botToolsModel?.bot?.name ?? model.chat.title
+        ) {
+            deleteBotFromChat()
         }
         .onAppear {
             model.setHapticsActive(true)
@@ -5059,7 +5055,8 @@ struct AidenChatDetailView: View {
                 attachmentPicker: attachmentPicker,
                 motionNamespace: attachmentMotionNamespace,
                 canToggleAttachments: canToggleAttachmentPicker,
-                onToggleAttachmentPicker: toggleAttachmentPicker
+                onToggleAttachmentPicker: toggleAttachmentPicker,
+                placeholder: botToolsModel?.bot.map { "Ask \($0.name)" } ?? "Message Aiden"
             )
         }
         .disabled(model.isReadOnlyPresentation)
@@ -5145,25 +5142,15 @@ struct AidenChatDetailView: View {
     @ToolbarContentBuilder
     private var chatToolbar: some ToolbarContent {
         if let coordinator, let botToolsModel {
+            ToolbarItem(placement: .principal) {
+                botHeaderPill(coordinator: coordinator, model: botToolsModel)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
                         openBotProfile(coordinator: coordinator, model: botToolsModel)
                     } label: {
-                        Label("Bot Details", systemImage: "person.crop.circle")
-                    }
-
-                    Button {
-                        botSheet = .edit(botToolsModel.botID)
-                    } label: {
-                        Label("Edit Bot", systemImage: "pencil")
-                    }
-                    .disabled(!canEditBotFromChat)
-
-                    Button {
-                        openBotAccess(coordinator: coordinator, model: botToolsModel)
-                    } label: {
-                        Label("Access", systemImage: "switch.2")
+                        Label("Profile", systemImage: "person.crop.circle")
                     }
 
                     if botToolsModel.fileGrant(
@@ -5176,13 +5163,21 @@ struct AidenChatDetailView: View {
                             Label("Files", systemImage: "folder")
                         }
                     }
+
+                    if AidenBotDeletion.isAvailable(coordinator: coordinator), botToolsModel.bot != nil {
+                        Button(role: .destructive) {
+                            isConfirmingBotDelete = true
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 } label: {
                     Image(systemName: AidenChromeSymbols.overflowMenu)
                         .font(.body.weight(.semibold))
                         .contentShape(Circle())
                 }
                 .buttonBorderShape(.circle)
-                .accessibilityLabel("Bot actions")
+                .accessibilityLabel("More")
             }
         } else if model.chat.botId == nil,
                   let coordinator, let workspace, workspace.hasFolder {
@@ -5197,89 +5192,60 @@ struct AidenChatDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var botIdentityInset: some View {
-        if let coordinator, let botToolsModel {
-            ZStack(alignment: .top) {
-                Button {
-                    openBotProfile(coordinator: coordinator, model: botToolsModel)
-                } label: {
-                    VStack(spacing: -8) {
-                        if let bot = botToolsModel.bot {
-                            AidenBotCanonicalAvatarView(
-                                coordinator: coordinator,
-                                botID: bot.id,
-                                avatar: bot.avatar,
-                                name: bot.name,
-                                size: 60
-                            )
-                        } else {
-                            Image(systemName: "person.crop.circle.fill")
-                                .font(.system(size: 54))
-                                .foregroundStyle(palette.secondary)
-                                .frame(width: 60, height: 60)
-                        }
-
-                        HStack(spacing: 5) {
-                            Text(botToolsModel.bot?.name ?? model.chat.title)
-                                .font(.headline.weight(.semibold))
-                                .lineLimit(1)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(palette.secondary)
-                        }
-                        .foregroundStyle(palette.foreground)
-                        .padding(.horizontal, 14)
-                        .frame(minWidth: 92, maxWidth: 210, minHeight: 34)
-                        .aidenBotHeaderNameGlass()
-                    }
-                    .fixedSize(horizontal: true, vertical: true)
-                    .contentShape(Rectangle())
+    /// A small avatar and the Bot's name. Tapping it opens the Profile.
+    private func botHeaderPill(
+        coordinator: AidenRemoteCoordinator,
+        model botModel: AidenBotChatToolsModel
+    ) -> some View {
+        Button {
+            openBotProfile(coordinator: coordinator, model: botModel)
+        } label: {
+            HStack(spacing: 8) {
+                if let bot = botModel.bot {
+                    AidenBotCanonicalAvatarView(
+                        coordinator: coordinator,
+                        botID: bot.id,
+                        avatar: bot.avatar,
+                        name: bot.name,
+                        size: 26
+                    )
+                } else {
+                    Circle()
+                        .fill(palette.raised)
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Bot details for \(botToolsModel.bot?.name ?? model.chat.title)")
-                .accessibilityHint("Opens this Bot’s settings and profile")
-                .offset(y: -17)
+                Text(botModel.bot?.name ?? model.chat.title)
+                    .font(.headline)
+                    .foregroundStyle(palette.foreground)
+                    .lineLimit(1)
             }
-            .frame(height: 13)
-            .zIndex(2)
+            .padding(.leading, 4)
+            .padding(.trailing, 12)
+            .frame(minHeight: 34)
+            .aidenBotHeaderNameGlass()
+            .contentShape(Capsule())
         }
-    }
-
-    private var canEditBotFromChat: Bool {
-        guard coordinator?.connectionState == .connected,
-              coordinator?.installationStore.activeInstallation?.canWriteBots == true,
-              let bot = botToolsModel?.bot else { return false }
-        return bot.health != .archived
+        .buttonStyle(.plain)
+        .accessibilityLabel(botModel.bot?.name ?? model.chat.title)
+        .accessibilityHint("Opens the Bot’s profile")
     }
 
     @ViewBuilder
     private func botSheetContent(_ destination: AidenBotChatSheet) -> some View {
         if let coordinator, let botToolsModel {
             switch destination {
-            case .access:
-                AidenBotChatAccessSheetView(
-                    coordinator: coordinator,
-                    model: botToolsModel,
-                    hostAllowsMutations: effectiveAllowsMutations
-                )
             case .profile(let bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
                     initialSummary: bot,
-                    onOpenConversation: { _ in },
-                    onCreateConversation: { _ in },
                     onChanged: {
                         Task { await botToolsModel.load(coordinator: coordinator) }
                     },
-                    showsDismissButton: true,
-                    showsConversationAction: false,
-                    showsFavoriteControls: false
+                    onDeleted: {
+                        botSheet = nil
+                        dismissChat()
+                    }
                 )
-            case .edit(let botID):
-                AidenBotEditorView(coordinator: coordinator, mode: .edit(botID: botID)) { _ in
-                    Task { await botToolsModel.load(coordinator: coordinator) }
-                }
             case .files(let grant):
                 NavigationStack {
                     AidenBotConversationFilesView(coordinator: coordinator, grant: grant)
@@ -5297,6 +5263,10 @@ struct AidenChatDetailView: View {
         coordinator: AidenRemoteCoordinator,
         model: AidenBotChatToolsModel
     ) {
+        if let bot = model.bot {
+            botSheet = .profile(AidenBotSummary(detail: bot))
+            return
+        }
         Task {
             guard await model.refresh(coordinator: coordinator),
                   let bot = model.bot else { return }
@@ -5304,13 +5274,17 @@ struct AidenChatDetailView: View {
         }
     }
 
-    private func openBotAccess(
-        coordinator: AidenRemoteCoordinator,
-        model: AidenBotChatToolsModel
-    ) {
+    private func deleteBotFromChat() {
+        guard let coordinator, let bot = botToolsModel?.bot else { return }
         Task {
-            guard await model.refresh(coordinator: coordinator) else { return }
-            botSheet = .access
+            do {
+                try await AidenBotDeletion.delete(botID: bot.id, revision: bot.revision, coordinator: coordinator)
+                dismissChat()
+            } catch is CancellationError {
+                return
+            } catch {
+                model.presentedError = "\(bot.name) wasn’t deleted. Please try again."
+            }
         }
     }
 
@@ -7057,7 +7031,8 @@ private struct AidenLiveResponseView: View {
     }
 }
 
-private struct AidenApprovalCard: View {
+/// Shared with the Bot session chat (`AidenBotSessionChatView`).
+struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var isExpanded = false
@@ -7224,7 +7199,8 @@ private struct AidenApprovalCard: View {
 /// plus a custom-answer field; a non-empty custom draft wins over selections.
 /// Submit requires at least one addressed question; skipping the card resolves
 /// the whole prompt as cancelled.
-private struct AidenQuestionCard: View {
+/// Shared with the Bot session chat (`AidenBotSessionChatView`).
+struct AidenQuestionCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
 
@@ -7670,6 +7646,7 @@ private struct AidenComposerView: View {
     let motionNamespace: Namespace.ID
     let canToggleAttachments: Bool
     let onToggleAttachmentPicker: () -> Void
+    var placeholder = "Message Aiden"
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
 
@@ -7743,7 +7720,7 @@ private struct AidenComposerView: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
-            TextField("Message Aiden", text: $model.draft, axis: .vertical)
+            TextField(placeholder, text: $model.draft, axis: .vertical)
                     .lineLimit(1...6)
                     .padding(.horizontal, 4)
                     .padding(.top, 5)
