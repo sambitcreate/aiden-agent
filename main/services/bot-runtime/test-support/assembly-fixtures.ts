@@ -25,6 +25,7 @@ import type {
 } from "../bot-extension.js";
 import { createBotToolAssembly, type BotAdmission, type BotToolCandidate } from "../bot-tool-assembly.js";
 import { createBotToolFacts } from "../bot-tool-facts.js";
+import { botIngressAllowsTool } from "../bot-tool-policy.js";
 import { fakeBot } from "./fixtures.js";
 
 export const MAIL_SERVER = { id: "conn-mail", name: "Mail" } as const;
@@ -260,6 +261,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
     systemSections: async (_bot, offered) => ["BASE", "PERSONA", "AUTHORITY", assembly.guidance("bot-1", offered.toolNames)],
     currentTools: (bot, turn) => assembly.currentTools(bot.id, turn),
     checkPolicy: (botId, toolName, call) => assembly.checkPolicy(botId, toolName, call),
+    turnAllows: botIngressAllowsTool,
     requestApproval: async (request) => {
       deps.approvals.push(request);
       return options.approve ? options.approve(request) : "allow";

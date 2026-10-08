@@ -328,6 +328,13 @@ fun AidenBotSessionScreen(
                         )
                     }
                 }
+                ui.session?.approval?.let { approval ->
+                    item(key = "approval-${approval.waitId}") {
+                        AidenBotApprovalCard(approval, enabled = !ui.isRespondingToApproval) { decision ->
+                            scope.launch { controller.respondToApproval(decision) }
+                        }
+                    }
+                }
                 if (ui.needsModel) {
                     item(key = "needs-model") { AidenBotNeedsModelCard(busy = openingAdvanced, onSetUp = ::openAdvanced) }
                 }

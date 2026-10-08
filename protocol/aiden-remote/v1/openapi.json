@@ -2964,7 +2964,7 @@
       ],
       "post": {
         "operationId": "respondApproval",
-        "description": "Resolve an approval owned by this device. Allowing schedule_task or edit_automation additionally requires schedule:write; clients without that grant may deny only.",
+        "description": "Resolve an approval owned by this device. Allowing schedule_task or edit_automation additionally requires schedule:write; clients without that grant may deny only. Contract revision 25: an approvalId that is a durable Bot approval waitId (BotSession.approval) is answered on that Bot by any device holding bot:read and bot:write as well; only scope once is accepted, and allowing one whose canAllow is false is capability_denied (deny still works).",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "approval:respond",
         "parameters": [
@@ -13897,7 +13897,8 @@
           "interrupted",
           "entries",
           "hasOlder",
-          "question"
+          "question",
+          "approval"
         ],
         "properties": {
           "botId": {
@@ -13934,6 +13935,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BotQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "approval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotApproval"
               },
               {
                 "type": "null"
@@ -13980,6 +13991,7 @@
               "entry",
               "state",
               "question",
+              "approval",
               "closed"
             ]
           },
@@ -14523,6 +14535,44 @@
             "items": {
               "$ref": "#/components/schemas/PendingQuestionItem"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotApproval": {
+        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it.",
+        "type": "object",
+        "required": [
+          "waitId",
+          "toolCallId",
+          "toolName",
+          "summary",
+          "canAllow"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "toolCallId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "toolName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "canAllow": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

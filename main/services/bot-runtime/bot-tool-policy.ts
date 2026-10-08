@@ -20,6 +20,7 @@ import { SHARE_IMAGE_TOOL_NAME } from "../share-image-tool.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
+import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 
 export const WEB_SEARCH_TOOL = "web_search";
 export const SUBAGENT_TOOL = "subagent";
@@ -47,6 +48,32 @@ export interface BotToolTurn {
 }
 
 export type BotToolVerdict = { allowed: true } | { allowed: false; reason: string };
+
+/** The ingress rules of one input, from its request id. */
+export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> & { intro: boolean } {
+  return {
+    telegram: requestId?.startsWith("tg:") ?? false,
+    routine: requestId?.startsWith("routine:") ?? false,
+    intro: requestId?.startsWith(BOT_INTRO_REQUEST_PREFIX) ?? false,
+  };
+}
+
+const UNATTENDED_WITHHELD = new Set<string>([ASK_USER_QUESTION_TOOL_NAME, ROUTINE_TOOL, SUBAGENT_TOOL]);
+
+/**
+ * Whether an input from this ingress may use `name`, whatever the Bot's
+ * access: the self-intro uses no tools, and routine and Telegram turns get no
+ * question card, routine tool or subagents. A run that serves several inputs
+ * (a steer joined it) may use a tool only when every input allows it.
+ */
+export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
+  return requestIds.every((requestId) => {
+    const turn = botTurnOf(requestId);
+    if (turn.intro) return false;
+    if (turn.telegram || turn.routine) return !UNATTENDED_WITHHELD.has(name);
+    return true;
+  });
+}
 
 const FILE_TOOLS = new Set<string>(BOT_FILE_TOOL_NAMES);
 

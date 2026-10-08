@@ -293,6 +293,63 @@ data class AidenBotQuestion(
     }
 }
 
+/**
+ * A tool approval a Bot is waiting on (`approval` on the session and on `approval`
+ * events). It is answered once through the generic `POST /approvals/{waitId}/respond`.
+ * [canAllow] false (Computer Use) means this phone may only deny it.
+ */
+data class AidenBotApproval(
+    val waitId: String,
+    val toolCallId: String,
+    val toolName: String,
+    val summary: String,
+    val canAllow: Boolean
+) {
+    init {
+        AidenBotWire.validateString(waitId, "waitId", MAX_WAIT_ID_LENGTH)
+        if (!WAIT_ID.matches(waitId)) throw AidenBotContractException.InvalidField("waitId")
+        AidenBotWire.validateString(toolCallId, "toolCallId", MAX_TOOL_CALL_ID_LENGTH)
+        AidenBotWire.validateString(toolName, "toolName", MAX_TOOL_NAME_LENGTH)
+        AidenBotWire.validateString(summary, "summary", MAX_SUMMARY_LENGTH)
+    }
+
+    fun toJson(): JsonObject = buildJsonObject {
+        put("waitId", JsonPrimitive(waitId))
+        put("toolCallId", JsonPrimitive(toolCallId))
+        put("toolName", JsonPrimitive(toolName))
+        put("summary", JsonPrimitive(summary))
+        put("canAllow", JsonPrimitive(canAllow))
+    }
+
+    companion object {
+        const val MAX_WAIT_ID_LENGTH = 64
+        const val MAX_TOOL_CALL_ID_LENGTH = 128
+        const val MAX_TOOL_NAME_LENGTH = 120
+        const val MAX_SUMMARY_LENGTH = 2_000
+        private val WAIT_ID = Regex("^[A-Za-z0-9-]{1,64}$")
+        private val KEYS = setOf("waitId", "toolCallId", "toolName", "summary", "canAllow")
+
+        fun parse(element: JsonElement): AidenBotApproval {
+            val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("approval")
+            if (obj.keys != KEYS) throw AidenBotContractException.InvalidField("approval")
+            fun string(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw AidenBotContractException.InvalidField(key)
+            val canAllow = (obj["canAllow"] as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.content
+            return AidenBotApproval(
+                waitId = string("waitId"),
+                toolCallId = string("toolCallId"),
+                toolName = string("toolName"),
+                summary = string("summary"),
+                canAllow = when (canAllow) {
+                    "true" -> true
+                    "false" -> false
+                    else -> throw AidenBotContractException.InvalidField("canAllow")
+                }
+            )
+        }
+    }
+}
+
 /** `POST /bots/{botId}/questions/{waitId}/answer` receipt: the same wait id on every repeat. */
 @Serializable
 data class AidenBotQuestionAnswerReceipt(val waitId: String) {
@@ -314,7 +371,9 @@ data class AidenBotSession(
     val entries: List<AidenBotSessionEntry>,
     val hasOlder: Boolean,
     /** The question the Bot is waiting on, or null. Always on the wire, as `null` when nothing waits. */
-    val question: AidenBotQuestion?
+    val question: AidenBotQuestion?,
+    /** The tool approval the Bot is waiting on, or null. Always on the wire, as `null` when nothing waits. */
+    val approval: AidenBotApproval?
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -328,7 +387,7 @@ data class AidenBotSession(
     }
 }
 
-/** Every session field except `question`, which the Bot wire's omitted-null rule would drop. */
+/** Every session field except `question` and `approval`, which the Bot wire's omitted-null rule would drop. */
 @Serializable
 private data class AidenBotSessionFields(
     val botId: String,
@@ -342,7 +401,7 @@ private data class AidenBotSessionFields(
     @Serializable(with = AidenStrictBooleanSerializer::class) val hasOlder: Boolean
 )
 
-/** Writes `question` explicitly (`null` when nothing waits) and requires it on read. */
+/** Writes `question` and `approval` explicitly (`null` when nothing waits) and requires them on read. */
 object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("AidenBotSession")
 
@@ -353,14 +412,23 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             value.blocked, value.partial, value.entries, value.hasOlder
         )
         val body = jsonEncoder.json.encodeToJsonElement(AidenBotSessionFields.serializer(), fields).jsonObject
-        jsonEncoder.encodeJsonElement(JsonObject(body + ("question" to (value.question?.toJson() ?: JsonNull))))
+        jsonEncoder.encodeJsonElement(
+            JsonObject(
+                body + ("question" to (value.question?.toJson() ?: JsonNull)) +
+                    ("approval" to (value.approval?.toJson() ?: JsonNull))
+            )
+        )
     }
 
     override fun deserialize(decoder: Decoder): AidenBotSession {
         val jsonDecoder = decoder as? JsonDecoder ?: throw SerializationException("Bot sessions are JSON only")
         val body = jsonDecoder.decodeJsonElement() as? JsonObject ?: throw AidenBotContractException.InvalidField("session")
         val question = body["question"] ?: throw AidenBotContractException.InvalidField("question")
-        val fields = jsonDecoder.json.decodeFromJsonElement(AidenBotSessionFields.serializer(), JsonObject(body - "question"))
+        val approval = body["approval"] ?: throw AidenBotContractException.InvalidField("approval")
+        val fields = jsonDecoder.json.decodeFromJsonElement(
+            AidenBotSessionFields.serializer(),
+            JsonObject(body - "question" - "approval")
+        )
         return AidenBotSession(
             botId = fields.botId,
             epoch = fields.epoch,
@@ -371,7 +439,8 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             partial = fields.partial,
             entries = fields.entries,
             hasOlder = fields.hasOlder,
-            question = if (question is JsonNull) null else AidenBotQuestion.parse(question)
+            question = if (question is JsonNull) null else AidenBotQuestion.parse(question),
+            approval = if (approval is JsonNull) null else AidenBotApproval.parse(approval)
         )
     }
 }
@@ -458,6 +527,8 @@ sealed class AidenBotSessionEventPayload {
     data class State(val view: AidenBotSessionStateView) : AidenBotSessionEventPayload()
     /** The waiting question appeared (non-null) or was settled (null). */
     data class Question(val question: AidenBotQuestion?) : AidenBotSessionEventPayload()
+    /** The waiting tool approval appeared (non-null) or was settled or withdrawn (null). */
+    data class Approval(val approval: AidenBotApproval?) : AidenBotSessionEventPayload()
     /** The host closed this Bot's session; reconnect for a new epoch. */
     object Closed : AidenBotSessionEventPayload() {
         override fun toString(): String = "Closed"
@@ -490,6 +561,7 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.Entry -> "entry"
             is AidenBotSessionEventPayload.State -> "state"
             is AidenBotSessionEventPayload.Question -> "question"
+            is AidenBotSessionEventPayload.Approval -> "approval"
             AidenBotSessionEventPayload.Closed -> "closed"
         }
 }
@@ -514,6 +586,9 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
                 wire.encodeToJsonElement(AidenBotSessionStateView.serializer(), p.view).jsonObject
             is AidenBotSessionEventPayload.Question -> buildJsonObject {
                 put("question", p.question?.toJson() ?: JsonNull)
+            }
+            is AidenBotSessionEventPayload.Approval -> buildJsonObject {
+                put("approval", p.approval?.toJson() ?: JsonNull)
             }
             AidenBotSessionEventPayload.Closed -> JsonObject(emptyMap())
         }
@@ -569,6 +644,11 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
                 payload.requireKeys(setOf("question"))
                 val element = payload.getValue("question")
                 AidenBotSessionEventPayload.Question(if (element is JsonNull) null else AidenBotQuestion.parse(element))
+            }
+            "approval" -> {
+                payload.requireKeys(setOf("approval"))
+                val element = payload.getValue("approval")
+                AidenBotSessionEventPayload.Approval(if (element is JsonNull) null else AidenBotApproval.parse(element))
             }
             "closed" -> {
                 payload.requireKeys(emptySet())

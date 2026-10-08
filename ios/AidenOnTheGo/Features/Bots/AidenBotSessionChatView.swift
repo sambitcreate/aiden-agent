@@ -31,6 +31,11 @@ struct AidenBotSessionChatView: View {
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
     }
 
+    /// Answering a Bot's tool approval needs `approval:respond` beside Bot write.
+    private var canRespondToApprovals: Bool {
+        canWrite && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
+    }
+
     private var canRequestConnections: Bool {
         canWrite && AidenBotHostFeature.isAdvertised(AidenBotHostFeature.connectionRequests, coordinator: coordinator)
     }
@@ -323,6 +328,22 @@ struct AidenBotSessionChatView: View {
                 )
                 .disabled(!canWrite || !model.canAnswerQuestion)
                 .id(question.waitId)
+            }
+            if let approval = model.approval {
+                // The workspace chat's approval card. Allow is hidden when the
+                // Mac says this tool can only be denied from a phone.
+                AidenApprovalCard(
+                    summary: approval.summary,
+                    kind: .action,
+                    canRespond: canRespondToApprovals,
+                    hasRequiredWriteCapability: canRespondToApprovals,
+                    canAllow: approval.canAllow,
+                    scopes: [.once],
+                    onDeny: { Task { await model.answerApproval(.deny) } },
+                    onAllow: { _ in Task { await model.answerApproval(.allow) } }
+                )
+                .disabled(!canRespondToApprovals || !model.canAnswerApproval)
+                .id(approval.waitId)
             }
             if model.needsModel {
                 AidenBotNeedsModelCard(

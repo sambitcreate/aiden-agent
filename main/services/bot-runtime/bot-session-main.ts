@@ -44,7 +44,7 @@ import { createBotToolAssembly } from "./bot-tool-assembly.js";
 import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
 
 import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
-import { isBotIntroRequest } from "./bot-intro.js";
+import { botIngressAllowsTool } from "./bot-tool-policy.js";
 
 export { BOT_CONNECT_CARD_ENTRY_KIND };
 const MODEL_CACHE_MS = 30_000;
@@ -156,10 +156,10 @@ const extension: BotExtensionDeps = {
       ];
     });
   },
-  currentTools: (bot, turn) =>
-    // The one-time self-intro answers from its instructions alone.
-    isBotIntroRequest(turn.requestId) ? Promise.resolve([]) : tools.currentTools(bot.id, turn),
+  currentTools: (bot, turn) => tools.currentTools(bot.id, turn),
   checkPolicy: (botId, toolName, call) => tools.checkPolicy(botId, toolName, call),
+  // Per run: the self-intro uses no tools; routine and Telegram turns get no question card.
+  turnAllows: botIngressAllowsTool,
   requestApproval: (request) => botApprovals.request(request),
   async readmit(botId) {
     if (!(await botStore.get(botId))) return { ok: false, reason: "bot_missing" };
@@ -189,7 +189,7 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
     const resolved = await withAdmission(botId, async (admission) => {
       const { sourceProviderId, sourceModelId } = admission.authority.provider;
       const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
-      runtimeModels.register(runtime as unknown as BotModelRuntime);
+      runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
       return runtime;
     });
     const ref = { provider: resolved.model.provider, modelId: resolved.model.id };
@@ -228,6 +228,16 @@ export async function connectCardStatus(botId: string, card: ConnectCardEntry) {
 }
 
 let liveProjection: BotLiveProjection | undefined;
+const stateListeners = new Set<(botId: string, state: BotSessionState) => void>();
+
+/**
+ * Hear every Bot session state change in this process (for example the
+ * Telegram outbox re-attaching a reply once its paused turn is resumed).
+ */
+export function onBotSessionStateChange(listener: (botId: string, state: BotSessionState) => void): () => void {
+  stateListeners.add(listener);
+  return () => void stateListeners.delete(listener);
+}
 
 // A question appearing or settling reaches open desktop chats at once; the
 // Remote session projector listens to the same bridge (`remote-service-main`).
@@ -260,7 +270,7 @@ export async function dismissBotConnection(botId: string, pluginId: string): Pro
 export function botSessionRuntime(): Promise<BotSessionRuntime> {
   runtime ??= createBotSessionService({
     profileDir: profileDir(),
-    models: runtimeModels.models,
+    models: runtimeModels.modelsFor,
     extension,
     resolveModel,
     knownBotIds: async () => new Set((await botStore.list()).map(({ id }) => id)),
@@ -268,6 +278,10 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),
       (botId) => toolSources.forgetBot(botId),
+      async (botId) => {
+        runtimeModels.forget(botId);
+        resolvedModels.delete(botId);
+      },
       deleteRoutines,
       (botId) => dismissals.forgetBot(botId),
       unbindTelegram,
@@ -276,6 +290,13 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     onStateChange: (botId, state) => {
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
+      for (const listener of stateListeners) {
+        try {
+          listener(botId, state);
+        } catch (error) {
+          logger.warn("bots", `Bot ${botId} state listener failed.`, error);
+        }
+      }
     },
     onReport: (botId, error) => logger.warn("bots", `Bot ${botId} runtime report.`, error),
   }).catch((error) => {

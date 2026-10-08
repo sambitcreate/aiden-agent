@@ -11,6 +11,10 @@
 //   published through the same serialized projection as entries and state.
 //   Answering it is idempotent per request UUID; another UUID for a question
 //   that is no longer waiting is `question_expired`.
+// - A tool approval the Bot waits on is the snapshot's `approval` and an
+//   `approval` frame, in the same order. Phones answer it by `waitId` through
+//   the shared `POST /approvals/{id}/respond` route (`respondApproval`),
+//   idempotent per request UUID; Computer Use can only be denied from a phone.
 // - Routines, connection requests and starter presets call their main services.
 
 import { randomUUID } from "node:crypto";
@@ -43,6 +47,7 @@ import {
   parseAidenRemoteBotQuestionAnswerRequest,
   parseAidenRemoteBotSession,
   parseAidenRemoteEmptyRequest,
+  type AidenRemoteBotApproval,
   type AidenRemoteBotConnectionRequestReceipt,
   type AidenRemoteBotMessageReceipt,
   type AidenRemoteBotPresetCreateResult,
@@ -59,7 +64,9 @@ import {
   type AidenRemoteBotSummary,
 } from "./aiden-remote-protocol.js";
 import { openCursorSse, sseFrame, type CursorSseHandle } from "./aiden-remote-sse.js";
+import type { BotApprovals } from "./bot-runtime/bot-approvals.js";
 import type { BotQuestions } from "./bot-runtime/bot-questions.js";
+import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
 import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import { livePartialText, projectBotTranscript } from "./bot-runtime/live-projection.js";
 import {
@@ -102,6 +109,8 @@ export interface AidenRemoteBotSessionServiceOptions {
   runtime(): Promise<AidenRemoteBotSessionRuntime>;
   /** The Bot's waiting A–E questions (the same bridge the desktop answers through). */
   questions?: Pick<BotQuestions, "pending" | "answer" | "onChange">;
+  /** The Bot's waiting tool approvals (the same bridge the desktop answers through). */
+  approvals?: Pick<BotApprovals, "pending" | "decide" | "onChange">;
   routines?: Pick<BotRoutineService, "list" | "create" | "update" | "delete">;
   presets?: {
     list(): readonly BotPreset[];
@@ -303,6 +312,7 @@ class BotLiveProjector {
   partial: string | undefined;
   state: AidenRemoteBotSessionStateView = { state: "idle", interrupted: false };
   question: AidenRemoteBotQuestion | null = null;
+  approval: AidenRemoteBotApproval | null = null;
   readonly subscribers = new Set<Subscriber>();
   private view: ConversationView | undefined;
   private stopWatch: (() => Promise<unknown>) | undefined;
@@ -317,6 +327,7 @@ class BotLiveProjector {
     private readonly idleMs: number,
     private readonly onClosed: () => void,
     private readonly readQuestion: () => AidenRemoteBotQuestion | null = () => null,
+    private readonly readApproval: () => AidenRemoteBotApproval | null = () => null,
   ) {}
 
   async attach(conversation: Conversation): Promise<void> {
@@ -327,6 +338,7 @@ class BotLiveProjector {
     this.partial = projectBotSessionPartial(watch.value);
     this.state = await this.readState();
     this.question = this.readQuestion();
+    this.approval = this.readApproval();
     watch.start(async (view) => {
       await this.advance(view);
     });
@@ -343,6 +355,7 @@ class BotLiveProjector {
       ...(this.partial !== undefined ? { partial: this.partial } : {}),
       ...windowed(this.entries),
       question: this.question,
+      approval: this.approval,
     });
   }
 
@@ -418,6 +431,7 @@ class BotLiveProjector {
     const partial = projectBotSessionPartial(view);
     const state = await this.readState().catch(() => this.state);
     const question = this.readQuestion();
+    const approval = this.readApproval();
     if (this.closed) return;
 
     const previous = this.entries;
@@ -434,6 +448,7 @@ class BotLiveProjector {
       this.partial = partial;
       this.state = state;
       this.question = question;
+      this.approval = approval;
       this.seq += 1;
       this.broadcast(this.snapshotFrame());
       return;
@@ -455,6 +470,10 @@ class BotLiveProjector {
     if (question?.waitId !== this.question?.waitId) {
       this.question = question;
       this.frame({ type: "question", payload: { question } });
+    }
+    if (approval?.waitId !== this.approval?.waitId) {
+      this.approval = approval;
+      this.frame({ type: "approval", payload: { approval } });
     }
   }
 
@@ -487,6 +506,18 @@ class BotLiveProjector {
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
+
+/** A waiting Bot approval as phones see it. */
+function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string }): AidenRemoteBotApproval {
+  return {
+    waitId: prompt.waitId,
+    toolCallId: wireText(prompt.toolCallId, 128),
+    toolName: wireText(prompt.toolName, 120),
+    summary: wireText(prompt.summary, 2_000) || "Aiden needs approval.",
+    // Computer Use acts on the Mac's screen: it is allowed there, never from a phone.
+    canAllow: !isComputerUseCapabilityTool(prompt.toolName),
+  };
+}
 
 function mapSessionError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
@@ -578,12 +609,16 @@ function parseOrInvalid<Result>(parser: (value: unknown) => Result, value: unkno
 export class AidenRemoteBotSessionService {
   private readonly projectors = new Map<string, Promise<BotLiveProjector>>();
   private readonly subscriptions = new Map<string, Set<CursorSseHandle>>();
+  /** Bot approval ids answered here recently, so a retried request replays its receipt. */
+  private readonly answeredApprovals = new Set<string>();
 
   constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
-    // A question asked or settled is published in order with entries and state.
-    options.questions?.onChange((botId) => {
+    // A question or approval asked or settled is published in order with entries and state.
+    const refresh = (botId: string) => {
       void this.projectors.get(botId)?.then((projector) => projector.refresh(), () => undefined);
-    });
+    };
+    options.questions?.onChange(refresh);
+    options.approvals?.onChange(refresh);
   }
 
   get supportsRoutines(): boolean {
@@ -608,6 +643,58 @@ export class AidenRemoteBotSessionService {
     return prompt === undefined
       ? null
       : { waitId: prompt.waitId, toolCallId: prompt.toolCallId, questions: prompt.questions };
+  }
+
+  /** The Bot's oldest waiting tool approval, in the wire shape. */
+  private approvalOf(botId: string): AidenRemoteBotApproval | null {
+    const prompt = this.options.approvals?.pending(botId)[0];
+    return prompt === undefined ? null : wireApproval(prompt);
+  }
+
+  /** Whether `waitId` names a Bot approval (waiting now, or answered here recently). */
+  ownsApproval(waitId: string): boolean {
+    return this.answeredApprovals.has(waitId) || (this.options.approvals?.pending().some((prompt) => prompt.waitId === waitId) ?? false);
+  }
+
+  /**
+   * Allow or deny a Bot's waiting tool approval by `waitId`. Idempotent per
+   * request UUID. Only "once" is offered; Computer Use is denied-only from a
+   * phone; an approval that is no longer waiting is `approval_expired`.
+   */
+  async respondApproval(
+    deviceId: string,
+    waitId: string,
+    decision: "allow" | "deny",
+    key: string,
+    scope?: string,
+  ): Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }> {
+    const approvals = this.options.approvals;
+    if (!approvals) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    return this.options.bots.executeIdempotent(
+      { deviceId, route: "POST /approvals/{id}/respond", resourceId: waitId, key },
+      scope ? { approvalId: waitId, decision, scope } : { approvalId: waitId, decision },
+      async () => {
+        const prompt = approvals.pending().find((candidate) => candidate.waitId === waitId);
+        if (!prompt) throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
+        await this.options.bots.bot(prompt.botId);
+        if (scope !== undefined && scope !== "once") {
+          throw new AidenRemoteServiceError("invalid_request", "This approval cannot be remembered with that scope.", 400);
+        }
+        if (decision === "allow" && !wireApproval(prompt).canAllow) {
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "This approval can only be allowed from the Aiden desktop app.",
+            403,
+          );
+        }
+        if (!approvals.decide(waitId, decision)) {
+          throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
+        }
+        this.answeredApprovals.add(waitId);
+        if (this.answeredApprovals.size > 256) this.answeredApprovals.delete(this.answeredApprovals.values().next().value!);
+        return { approvalId: waitId, decision, resolvedAt: new Date(this.options.now?.() ?? Date.now()).toISOString() };
+      },
+    );
   }
 
   private questionService() {
@@ -688,6 +775,7 @@ export class AidenRemoteBotSessionService {
           if (this.projectors.get(botId) === created) this.projectors.delete(botId);
         },
         () => this.questionOf(botId),
+        () => this.approvalOf(botId),
       );
       await projector.attach(conversation);
       return projector;
@@ -712,7 +800,7 @@ export class AidenRemoteBotSessionService {
       if (state.state === "unavailable") {
         // Bots are held by another Aiden process: nothing can be opened.
         return parseAidenRemoteBotSession({
-          botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false, question: null,
+          botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false, question: null, approval: null,
         });
       }
       const projector = await this.liveProjector(bot.id);

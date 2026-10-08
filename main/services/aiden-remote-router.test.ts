@@ -4513,6 +4513,61 @@ test("the Bot question answer route passes its waitId, request key and answer th
   }
 });
 
+test("the approval route answers a durable Bot's approval by waitId, and only for a device that may use Bots", async () => {
+  const waitId = "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6";
+  const seen: string[] = [];
+  const session = {
+    supportsRoutines: true,
+    supportsPresets: true,
+    supportsConnectionRequests: true,
+    ownsApproval: (id: string) => id === waitId,
+    respondApproval: async (deviceId: string, id: string, decision: string, key: string, scope?: string) => {
+      seen.push(`approve:${deviceId.length > 0}:${id}:${decision}:${key}:${scope ?? "-"}`);
+      return { approvalId: id, decision, resolvedAt: "2026-10-08T00:00:00.000Z" };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const respond = (base: string, id: string, key: string) =>
+    fetch(`${base}/approvals/${id}/respond`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        "idempotency-key": key,
+      },
+      body: JSON.stringify({ decision: "allow" }),
+    });
+
+  const app = await fixture({
+    capabilities: ["approval:respond", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+    botSessions: session,
+  });
+  try {
+    const response = await respond(app.base, waitId, "approve-request-0001");
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      approvalId: waitId,
+      decision: "allow",
+      resolvedAt: "2026-10-08T00:00:00.000Z",
+    });
+    assert.deepEqual(seen, [`approve:true:${waitId}:allow:approve-request-0001:-`]);
+    // Any other id is still a workspace chat approval, never a Bot's.
+    await respond(app.base, "approval-other", "approve-request-0002");
+    assert.equal(seen.length, 1);
+  } finally {
+    await app.close();
+  }
+
+  const noBots = await fixture({ capabilities: ["approval:respond", "bot:read"], acceptsBotCapabilities: true, botSessions: session });
+  try {
+    assert.equal((await respond(noBots.base, waitId, "approve-request-0003")).status, 403);
+    assert.equal(seen.length, 1, "a device without Bot write access never reaches the Bot");
+  } finally {
+    await noBots.close();
+  }
+});
+
 test("the Bot question answer route needs Bot write access", async () => {
   let reached = 0;
   const session = {

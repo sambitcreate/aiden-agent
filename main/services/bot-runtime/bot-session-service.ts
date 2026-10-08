@@ -9,9 +9,14 @@
 //   state and makes no provider request.
 // - Nothing here resumes a harness on its own. The startup scan only records
 //   which Bots are interrupted.
-// - `deleteBot` aborts the live run and erases the Bot's session before the
-//   caller-supplied cleanup steps run.
+// - `deleteBot` records the delete durably (`bots/pending-deletes.json`)
+//   before its first destructive step, then aborts the live run, erases the
+//   Bot's session and runs the caller-supplied cleanup steps. A pending delete
+//   refuses to reopen the Bot's session, and startup rolls it forward through
+//   every step before anything else.
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -30,6 +35,7 @@ import {
   type BotReadmission,
   type BotRegistry,
 } from "./bot-extension.js";
+import { writeFileAtomic } from "../durable-fs.js";
 import {
   createBotHarnessHost,
   isBotHarnessHostUnavailable,
@@ -63,7 +69,11 @@ export type BotNotice =
 export type BotReplyOutcome =
   | { kind: "completed"; text: string }
   | { kind: "failed"; error: string }
-  | { kind: "interrupted" };
+  /**
+   * No answer now. `settled`: the turn ended without one for good (dismissed,
+   * stopped or deleted); otherwise it is paused and Resume can still answer it.
+   */
+  | { kind: "interrupted"; settled?: true };
 
 export interface BotInputAttachment {
   type: "image";
@@ -155,8 +165,11 @@ export interface BotSessionRuntime extends BotSessionService {
 
 export interface BotSessionServiceDeps {
   profileDir: string;
-  /** pi-ai model access, per Bot so a Bot's provider binding stays exact. */
-  models: Models;
+  /**
+   * pi-ai model access. Production passes each Bot its own view, so a Bot's
+   * provider binding and per-conversation headers stay its own.
+   */
+  models: Models | ((botId: string) => Models);
   extension: BotExtensionDeps;
   /**
    * The Bot's current model, or `null` when it has no model configured. Any
@@ -204,6 +217,24 @@ function unfinishedInput(inspection: HarnessInspection): SubmissionRecord | unde
   return inspection.submissions.find((submission) => submission.type === "input");
 }
 
+const PENDING_DELETES_FILE = "pending-deletes.json";
+
+/** Bots whose delete started and has not finished every step. */
+async function readPendingDeletes(file: string): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const parsed = JSON.parse(raw) as { version?: unknown; botIds?: unknown };
+  if (parsed.version !== 1 || !Array.isArray(parsed.botIds) || !parsed.botIds.every((id) => typeof id === "string")) {
+    throw new Error("The pending Bot delete record is unreadable.");
+  }
+  return parsed.botIds as string[];
+}
+
 /** A keyed promise chain: one operation per Bot at a time. */
 function createKeyedQueue() {
   const tails = new Map<string, Promise<unknown>>();
@@ -241,6 +272,23 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   /** Interrupted turns whose Resume was refused because the Bot's access changed. */
   const blocked = new Map<string, "access_changed" | "bot_missing">();
   const deleted = new Set<string>();
+  const pendingDeletesFile = path.join(deps.profileDir, "bots", PENDING_DELETES_FILE);
+  // A delete cut short by a crash still owns the Bot: never reopen its session.
+  for (const botId of await readPendingDeletes(pendingDeletesFile)) deleted.add(botId);
+
+  /** Add or remove a Bot in the durable pending-delete record (one writer at a time). */
+  function recordPendingDelete(botId: string, pending: boolean): Promise<void> {
+    return serialize(PENDING_DELETES_FILE, async () => {
+      const current = new Set(await readPendingDeletes(pendingDeletesFile));
+      if (pending === current.has(botId)) return;
+      if (pending) current.add(botId);
+      else current.delete(botId);
+      await writeFileAtomic(pendingDeletesFile, JSON.stringify({ version: 1, botIds: [...current] }), {
+        mode: 0o600,
+        mkdirMode: 0o700,
+      });
+    });
+  }
 
   function requireHost(): BotHarnessHost {
     if (host === null) throw new BotSessionError("unavailable");
@@ -307,18 +355,18 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     }
   }
 
-  /** Bind the Bot's current model and reload its extension before anything runs. */
-  async function prepareToRun(
-    botId: string,
-    conversation: Conversation,
-    registry: BotRegistry,
-    requestId: string | undefined,
-  ): Promise<void> {
+  /**
+   * Bind the Bot's current model and reload its extension before anything runs.
+   * The registry always holds the attended tool set: the input may queue behind
+   * other turns, so its own ingress rules are applied when its run makes each
+   * request and call (`turnAllows` in `bot-extension.ts`), never here.
+   */
+  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
     if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message);
     const model = resolved.ref;
-    await registry.refresh(requestId === undefined ? {} : { requestId });
+    await registry.refresh();
     const agent = await conversation.agent(ctx);
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
       await conversation.configure({ model }, ctx);
@@ -331,11 +379,6 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     await writeNotice(conversation, { notice: "interrupted", submissionId });
   }
 
-  /** The request that started the paused turn, so its tools match a routine run. */
-  async function pausedRequestId(botId: string): Promise<string | undefined> {
-    return unfinishedInput(await requireHost().inspect(botId))?.requestId;
-  }
-
   async function lookupRequest(conversation: Conversation, requestId: string) {
     return conversation.commit((tx) => tx.submissionByRequest(conversation.id, requestId), ctx);
   }
@@ -343,6 +386,10 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   const service: BotSessionRuntime = {
     async initialize() {
       if (host === null) return { removedOrphans: [], interrupted: [] };
+      // Finish deletes a crash cut short before anything else sees the Bot.
+      for (const botId of await readPendingDeletes(pendingDeletesFile)) {
+        await service.deleteBot(botId).catch((error: unknown) => deps.onReport?.(botId, error));
+      }
       const removedOrphans = await host.sweepOrphans(await deps.knownBotIds());
       const interrupted = await host.interruptedBots();
       for (const { botId } of interrupted) {
@@ -367,7 +414,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
-        await prepareToRun(botId, conversation, registry, input.requestId);
+        await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
           blocked.delete(botId);
@@ -408,7 +455,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         }
         blocked.delete(botId);
         const { conversation, registry } = await openBot(botId);
-        await prepareToRun(botId, conversation, registry, await pausedRequestId(botId));
+        await prepareToRun(botId, conversation, registry);
         const opened = await requireHost().open(botId);
         opened.harness.resume();
         requireHost().touch(botId);
@@ -425,8 +472,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind !== "interrupted") return remember(key, before);
         const { conversation, registry } = await openBot(botId);
         // Pending tool calls settle against the Bot's tools while aborting.
-        const requestId = await pausedRequestId(botId);
-        await registry.refresh(requestId === undefined ? {} : { requestId }).catch(() => undefined);
+        await registry.refresh().catch(() => undefined);
         await dismissPaused(conversation, before.submissionId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));
@@ -450,14 +496,18 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const owner = requireHost();
         deleted.add(botId);
         blocked.delete(botId);
+        // Durable before the first destructive step, so a crash anywhere below
+        // is finished at the next start instead of leaving a Bot half deleted.
+        await recordPendingDelete(botId, true);
         await owner.destroy(botId);
         registries.delete(botId);
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
+        await recordPendingDelete(botId, false);
       });
     },
 
     async awaitReply(botId, submissionId, signal) {
-      if (deleted.has(botId)) return { kind: "interrupted" };
+      if (deleted.has(botId)) return { kind: "interrupted", settled: true };
       const opened = await requireHost().open(botId);
       const id = Number(submissionId) as SubmissionId;
       const submission = await opened.harness.submission(id, ctx);
@@ -484,7 +534,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const answer = await opened.conversation.commit((tx) => tx.entry(AssistantEntry, settled.answer!), ctx);
         return { kind: "completed", text: assistantText(answer?.model?.[0] as AssistantMessage | undefined) };
       }
-      if (settled.reason === "aborted") return { kind: "interrupted" };
+      if (settled.reason === "aborted") return { kind: "interrupted", settled: true };
       return { kind: "failed", error: settled.reason ?? "The reply failed." };
     },
 

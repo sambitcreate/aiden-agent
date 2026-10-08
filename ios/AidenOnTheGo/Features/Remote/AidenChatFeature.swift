@@ -7009,7 +7009,8 @@ private struct AidenLiveResponseView: View {
     }
 }
 
-private struct AidenApprovalCard: View {
+/// Shared with the Bot session chat (`AidenBotSessionChatView`).
+struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @State private var isExpanded = false

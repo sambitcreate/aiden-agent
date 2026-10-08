@@ -124,7 +124,8 @@ function notifyBotRoutine(task: ScheduledTask, body: string): void {
     isSupported: () => Notification.isSupported(),
     create: (options) => new Notification(options),
     openChat: async (botId) => {
-      await requestAppPath(`/bots/${encodeURIComponent(botId)}`);
+      // The routine posted into the Bot's chat, not its Profile.
+      await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
     },
     onError: (stage) => {
       logger.warn("schedule", `Routine notification ${stage} failed.`);
