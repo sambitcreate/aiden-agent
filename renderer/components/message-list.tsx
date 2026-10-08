@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Callout, Text } from "./ui";
-import { AidenOrb } from "./aiden-orb";
+import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
@@ -592,7 +592,7 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
     }
     const timer = window.setTimeout(() => setCurrent(activity), delay);
     return () => window.clearTimeout(timer);
-  }, [activity?.phase, activity?.label, activity?.orbState, current]);
+  }, [activity?.phase, activity?.label, activity?.mark, current]);
 
   if (!current) return null;
   return (
@@ -602,7 +602,7 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
       className="agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2 py-0.5"
       data-agent-activity={current.phase}
     >
-      <AidenOrb state={current.orbState} size={20} className="shrink-0 text-primary" />
+      <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
       <Text
         variant="small"
         color="secondary"

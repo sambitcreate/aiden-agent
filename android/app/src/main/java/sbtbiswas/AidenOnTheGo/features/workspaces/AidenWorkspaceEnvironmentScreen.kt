@@ -56,6 +56,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
 import androidx.compose.ui.res.pluralStringResource
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 private val AidenFileTreeStep = 14.dp
 
@@ -541,13 +542,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .clip(MaterialTheme.shapes.medium),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = palette.raised,
-                        unfocusedContainerColor = palette.raised,
-                        disabledContainerColor = palette.raised,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
-                    ),
+                    colors = sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors(),
                     singleLine = true
                 )
 
@@ -580,7 +575,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     cursors.forEach { (path, _) ->
                         if (path.isEmpty() || path in expanded) {
                             item(key = "page:$path") {
-                                TextButton(onClick = { loadPage(fileIndex?.entries?.firstOrNull { it.displayPath == path }) },
+                                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { loadPage(fileIndex?.entries?.firstOrNull { it.displayPath == path }) },
                                     enabled = path !in loadingFolders && availability().canLoadPage && !isLoading) {
                                     Text(if (path.isEmpty()) stringResource(R.string.files_load_more) else stringResource(R.string.files_load_more_in, path))
                                 }

@@ -172,11 +172,12 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
     slate: { light: "#3A434E", dark: "#D1D6DE" },
     berry: { light: "#443F4A", dark: "#D5CFD6" },
     moss: { light: "#3F4943", dark: "#D1D6D3" },
-    paper: { light: "#3E3C38", dark: "#D6D2CA" },
-    calm: { light: "#44403A", dark: "#D8D3C8" },
+    paper: { light: "#373329", dark: "#F5F4F1" },
+    calm: { light: "#373329", dark: "#F5F4F1" },
     graphite: { light: "#38383B", dark: "#D4D4D8" },
     dusk: { light: "#37423F", dark: "#CFE0DD" },
     midnight: { light: "#38405A", dark: "#D2D8E6" },
+    monochrome: { light: "#000000", dark: "#FFFFFF" },
   } as const;
   const darkAccents = {
     aiden: "#3E97F6",
@@ -188,6 +189,7 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
     graphite: "#A1A1AA",
     dusk: "#2DD4BF",
     midnight: "#7FA0F0",
+    monochrome: "#FFFFFF",
   } as const;
 
   for (const preset of THEME_PRESETS) {
@@ -208,6 +210,37 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
   assert.equal(dark["--text-quaternary"], "#9AA3AE");
   assert.equal(dark["--surface-control"], "rgb(209 212 218 / 0.094)");
   assert.equal(dark["--accent"], "#3E97F6");
+});
+
+test("monochrome inverts accent control text and keeps status hues distinct from its neutral accent", () => {
+  const light = resolveThemeTokens(getPresetVariant("monochrome", "light"), "light");
+  const dark = resolveThemeTokens(getPresetVariant("monochrome", "dark"), "dark");
+  // A black accent carries white control text; a white accent carries black.
+  assert.equal(light["--accent"], "#000000");
+  assert.equal(light["--accent-foreground"], "#FFFFFF");
+  assert.equal(dark["--accent"], "#FFFFFF");
+  assert.equal(dark["--accent-foreground"], "#000000");
+  for (const tokens of [light, dark]) {
+    for (const tone of ["--support-red", "--support-green", "--support-warning"] as const) {
+      assert.notEqual(tokens[tone], tokens["--accent"], `${tone} stays chromatic`);
+      assert.notEqual(tokens[tone], tokens["--text-primary"], `${tone} is not collapsed to text`);
+    }
+  }
+});
+
+test("paper and calm share warm neutrals but remain visually distinct", () => {
+  const paper = THEME_PRESETS.find((preset) => preset.id === "paper")!;
+  const calm = THEME_PRESETS.find((preset) => preset.id === "calm")!;
+  for (const scheme of ["light", "dark"] as const) {
+    assert.notEqual(paper[scheme].canvas, calm[scheme].canvas, `${scheme} canvases differ`);
+    assert.notEqual(paper[scheme].sidebar, calm[scheme].sidebar, `${scheme} sidebars differ`);
+    assert.notEqual(paper[scheme].accent, calm[scheme].accent, `${scheme} accents differ`);
+  }
+  // Paper is the crisper, lighter light theme.
+  assert.ok(
+    colorContrastRatio(paper.light.canvas, "#000000") > colorContrastRatio(calm.light.canvas, "#000000"),
+    "paper light canvas is lighter than calm",
+  );
 });
 
 test("every built-in theme keeps semantic foregrounds above 4.75 on base and composite surfaces", () => {
@@ -437,7 +470,7 @@ test("audited UI components retain semantic typography, radii, colors, and radio
   assert.match(geminiVoice, /<RadioGroupItem/u);
   assert.match(geminiVoice, /selected \? "bg-list-selection"/u);
   assert.doesNotMatch(geminiVoice, /border-accent|has-\[:focus-visible\]/u);
-  assert.match(modelManager, /border border-field bg-popover[\s\S]*?active && "bg-list-selection"/u);
+  assert.match(modelManager, /rounded-card bg-popover[\s\S]*?active && "bg-list-selection"/u);
   assert.doesNotMatch(modelManager, /active \? "border-accent"/u);
 });
 

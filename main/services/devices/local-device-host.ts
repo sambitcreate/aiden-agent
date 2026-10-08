@@ -201,13 +201,39 @@ export function androidUnavailableReason(sdk: AndroidSdk): string | null {
   return null;
 }
 
-/** The hub and every host command see the SDK: `ANDROID_HOME` set and its tools first on PATH. */
-export function androidSdkEnv(env: NodeJS.ProcessEnv, root: string | null): NodeJS.ProcessEnv {
+/**
+ * Android Studio's bundled Java runtime, used when `JAVA_HOME` is unset. The
+ * hub runs `avdmanager` to list AVDs before it boots one, and `avdmanager`
+ * needs Java. A Mac that only has Android Studio has no Java on PATH
+ * (`/usr/bin/java` is a stub), so every boot failed with "Failed to allocate an
+ * emulator port". Only existence checks; nothing is run.
+ */
+export async function findAndroidStudioJava(input: {
+  env: NodeJS.ProcessEnv;
+  pathExists(file: string): Promise<boolean>;
+}): Promise<string | null> {
+  if (input.env.JAVA_HOME?.trim()) return null;
+  const apps = ["/Applications/Android Studio.app", path.join(input.env.HOME ?? "", "Applications", "Android Studio.app")];
+  for (const app of apps) {
+    const javaHome = path.join(app, "Contents", "jbr", "Contents", "Home");
+    if (await input.pathExists(path.join(javaHome, "bin", "java"))) return javaHome;
+  }
+  return null;
+}
+
+/** The hub and every host command see the SDK: `ANDROID_HOME` set and its tools first on PATH, plus Java when found. */
+export function androidSdkEnv(env: NodeJS.ProcessEnv, root: string | null, javaHome: string | null = null): NodeJS.ProcessEnv {
   if (!root) return env;
   return {
     ...env,
     ANDROID_HOME: root,
-    PATH: [path.join(root, "platform-tools"), path.join(root, "emulator"), env.PATH ?? ""].join(":"),
+    ...(javaHome ? { JAVA_HOME: javaHome } : {}),
+    PATH: [
+      path.join(root, "platform-tools"),
+      path.join(root, "emulator"),
+      ...(javaHome ? [path.join(javaHome, "bin")] : []),
+      env.PATH ?? "",
+    ].join(":"),
   };
 }
 
@@ -449,7 +475,8 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     }
     if (platform === "android") {
       const sdk = await findAndroidSdk({ env: deps.env, pathExists, realPath });
-      sdkEnv = androidSdkEnv(deps.env, sdk.root);
+      const javaHome = sdk.root ? await findAndroidStudioJava({ env: deps.env, pathExists }) : null;
+      sdkEnv = androidSdkEnv(deps.env, sdk.root, javaHome);
       const reason = androidUnavailableReason(sdk);
       return reason ? { platform, available: false, reason } : { platform, available: true };
     }

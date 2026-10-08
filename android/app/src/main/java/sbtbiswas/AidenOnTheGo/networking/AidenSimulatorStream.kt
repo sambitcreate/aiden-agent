@@ -231,6 +231,40 @@ data class AidenSimulatorScreen(
     val orientation: AidenSimulatorOrientation
 )
 
+/**
+ * How the viewer turns a frame for display. serve-sim streams the raw portrait
+ * framebuffer: a device that reports landscape or upside down while its screen
+ * config stays portrait-sized is drawn turned into that orientation, so what
+ * the user sees and where a touch lands share one space. [degrees] are
+ * clockwise. Adapted from t3code apps/web/src/components/device/DeviceStreamView.tsx (MIT).
+ */
+enum class AidenSimulatorDisplayRotation(val degrees: Float) {
+    NONE(0f),
+    /** `landscape_left`. */
+    CLOCKWISE(90f),
+    /** `landscape_right`. */
+    COUNTER_CLOCKWISE(-90f),
+    /** `portrait_upside_down`. */
+    HALF_TURN(180f);
+
+    /** A quarter turn swaps the frame's width and height on screen. */
+    val isSideways: Boolean
+        get() = this == CLOCKWISE || this == COUNTER_CLOCKWISE
+
+    companion object {
+        fun of(screen: AidenSimulatorScreen?): AidenSimulatorDisplayRotation {
+            // A landscape-sized config means the frames already arrive rotated.
+            if (screen == null || screen.width > screen.height) return NONE
+            return when (screen.orientation) {
+                AidenSimulatorOrientation.PORTRAIT -> NONE
+                AidenSimulatorOrientation.LANDSCAPE_LEFT -> CLOCKWISE
+                AidenSimulatorOrientation.LANDSCAPE_RIGHT -> COUNTER_CLOCKWISE
+                AidenSimulatorOrientation.PORTRAIT_UPSIDE_DOWN -> HALF_TURN
+            }
+        }
+    }
+}
+
 enum class AidenSimulatorTouchPhase(val wireValue: String) { BEGIN("begin"), MOVE("move"), END("end") }
 
 enum class AidenSimulatorButton(val wireValue: String) {
@@ -280,15 +314,14 @@ object AidenSimulatorInput {
         return tagged(TAG_ORIENTATION, buildJsonObject { put("orientation", next.wireValue) })
     }
 
-    fun mapTouch(x: Double, y: Double, screen: AidenSimulatorScreen?): Pair<Double, Double> {
-        if (screen == null || screen.width > screen.height) return x to y
-        return when (screen.orientation) {
-            AidenSimulatorOrientation.LANDSCAPE_LEFT -> y to 1 - x
-            AidenSimulatorOrientation.LANDSCAPE_RIGHT -> 1 - y to x
-            AidenSimulatorOrientation.PORTRAIT_UPSIDE_DOWN -> 1 - x to 1 - y
-            AidenSimulatorOrientation.PORTRAIT -> x to y
+    /** A point in the displayed (turned) frame, mapped back into the raw framebuffer's axes. */
+    fun mapTouch(x: Double, y: Double, screen: AidenSimulatorScreen?): Pair<Double, Double> =
+        when (AidenSimulatorDisplayRotation.of(screen)) {
+            AidenSimulatorDisplayRotation.CLOCKWISE -> y to 1 - x
+            AidenSimulatorDisplayRotation.COUNTER_CLOCKWISE -> 1 - y to x
+            AidenSimulatorDisplayRotation.HALF_TURN -> 1 - x to 1 - y
+            AidenSimulatorDisplayRotation.NONE -> x to y
         }
-    }
 
     /** A valid `0x82` screen config, or null for any other or malformed message. */
     fun decodeScreenConfig(message: ByteArray): AidenSimulatorScreen? {

@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.simulators
 
 import kotlin.math.sqrt
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorDisplayRotation
 
 /**
  * Whether the viewer's controls overlay is showing. Controls greet the user
@@ -103,6 +104,24 @@ data class AidenFittedRect(val left: Float, val top: Float, val width: Float, va
             val width = contentWidth * scale
             val height = contentHeight * scale
             return AidenFittedRect((containerWidth - width) / 2f, (containerHeight - height) / 2f, width, height)
+        }
+
+        /**
+         * Where a [frameWidth] × [frameHeight] frame shows once turned by
+         * [rotation]: a quarter turn fits the transposed size. Touches are
+         * normalized against this rect, then `AidenSimulatorInput.mapTouch`
+         * maps them back into the raw frame.
+         */
+        fun displayed(
+            containerWidth: Float,
+            containerHeight: Float,
+            frameWidth: Float,
+            frameHeight: Float,
+            rotation: AidenSimulatorDisplayRotation
+        ): AidenFittedRect = if (rotation.isSideways) {
+            aspectFit(containerWidth, containerHeight, frameHeight, frameWidth)
+        } else {
+            aspectFit(containerWidth, containerHeight, frameWidth, frameHeight)
         }
     }
 }

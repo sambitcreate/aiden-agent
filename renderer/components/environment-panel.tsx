@@ -33,7 +33,7 @@ import {
 } from "./files-panel";
 import { EnvironmentOverview } from "./environment-overview";
 import { ReviewPanel } from "./review-panel";
-import { SubagentOrb } from "./subagent-chips";
+import { SubagentMark } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
 import {
   DEFAULT_PANEL_WIDTH,
@@ -1439,7 +1439,7 @@ function EnvironmentPanelSurface({
         "environment-panel absolute z-30 flex min-h-0 flex-col overflow-hidden bg-popover text-primary",
         inline
           ? "inset-y-0 right-0 border-l border-separator"
-          : "bottom-3 right-3 rounded-sheet border border-separator shadow-dialog",
+          : "bottom-3 right-3 rounded-sheet shadow-dialog",
         !inline && (containerWidth - width < 160 ? "top-14" : "top-3"),
         resizing
           ? "transition-none"
@@ -1681,7 +1681,7 @@ function QuickViewCard({
       onFocusCapture={() => panel.activateSurface("quick-view")}
       onPointerDownCapture={() => panel.activateSurface("quick-view")}
       className={cn(
-        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-sheet border border-separator bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-sheet bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
         (!open || !presented) && "translate-x-[calc(100%+0.75rem)] opacity-0",
       )}
       style={{
@@ -1802,7 +1802,7 @@ function QuickViewCard({
                   aria-label={`Open Subagents, ${subagentSummary.ariaLabel}`}
                   className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                 >
-                  <SubagentOrb
+                  <SubagentMark
                     role={representativeSubagent?.role}
                     state={representativeSubagent?.state ?? "finished"}
                     activity={representativeSubagent?.snapshot?.activity}

@@ -28,7 +28,13 @@ function harnessFor(providerId: unknown): HarnessEntry {
 
 async function statusOf(providerId: string, entry: HarnessEntry): Promise<AcpHarnessStatus> {
   const status = await entry.service().status();
-  return { providerId, runtime: projectRuntime(status.runtime), signedIn: status.signedIn, busy: status.busy };
+  return {
+    providerId,
+    publisher: status.publisher,
+    runtime: projectRuntime(status.runtime, status.downloadHost),
+    signedIn: status.signedIn,
+    busy: status.busy,
+  };
 }
 
 export function registerAcpHarnessHandlers(): void {

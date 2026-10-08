@@ -107,6 +107,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 internal enum class AidenTaskStepTone { DONE, ACTIVE, PENDING }
 
@@ -766,10 +767,10 @@ private fun AidenAgentDetailContent(
     var confirmsStop by remember(agent.agentId) { mutableStateOf(false) }
     val palette = AidenTheme.palette
     Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
-        TextButton(onClick = onBack) { Text(stringResource(R.string.action_back), color = palette.foreground) }
+        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onBack) { Text(stringResource(R.string.action_back), color = palette.foreground) }
         agents.firstOrNull { it.agentId == agent.parentAgentId }?.let { parent ->
             val parentDescription = stringResource(R.string.chat_agent_open_parent_cd, parent.label)
-            TextButton(onClick = { openAgent(parent) }, modifier = Modifier.semantics { contentDescription = parentDescription }) {
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = { openAgent(parent) }, modifier = Modifier.semantics { contentDescription = parentDescription }) {
                 Text(stringResource(R.string.chat_agent_started_by, parent.label), color = palette.foreground)
             }
         }
@@ -795,7 +796,7 @@ private fun AidenAgentDetailContent(
         }
         if (stopControl != AidenAgentStopControl.HIDDEN) {
             Spacer(modifier = Modifier.height(20.dp))
-            TextButton(
+            TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
                 onClick = { confirmsStop = true },
                 enabled = stopControl == AidenAgentStopControl.AVAILABLE
             ) {

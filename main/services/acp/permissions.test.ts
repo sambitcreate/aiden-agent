@@ -54,6 +54,10 @@ test("Ask shows Aiden's approval and maps each answer to the agent's own option"
   // Network fetches can exfiltrate data, so Ask asks for them too.
   const fetchAsk = await decide("fetch", "ask", "allow_once");
   assert.equal(fetchAsk.host.approvals[0]?.kind, "fetch");
+  // Deletes and moves are file changes the card can name precisely; edits carry no marker.
+  assert.equal((await decide("delete", "ask")).host.approvals[0]?.fileChange, "delete");
+  assert.equal((await decide("move", "ask")).host.approvals[0]?.fileChange, "move");
+  assert.equal((await decide("edit", "ask")).host.approvals[0]?.fileChange, undefined);
   // A dismissed card (not a Stop) is a refusal, never an implicit allow.
   assert.equal((await decide("edit", "ask", "cancelled")).chosen, "reject_once");
 });

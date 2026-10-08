@@ -71,6 +71,19 @@ const WEEKDAYS = [
 
 const APP_DEFAULT_PROVIDER_CHOICE = "__app_default__";
 
+/** The soft inline warning under the Provider select when an LLM task may not be able to run. */
+export function ScheduledTaskProviderWarning({ message }: { message: string | undefined }) {
+  if (!message) return null;
+  return (
+    <div
+      className="mt-2 flex items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-1.5 text-small text-status-warning"
+      role="status"
+    >
+      <span>{message}</span>
+    </div>
+  );
+}
+
 export function ScheduledTaskEditor({
   open,
   initial,
@@ -607,16 +620,7 @@ export function ScheduledTaskEditor({
                 ))}
               </SelectContent>
             </Select>
-            {providerGuardrail ? (
-              <div
-                className="mt-2 flex items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-1.5 text-small text-status-warning"
-                role="status"
-              >
-                <span>
-                  No provider pinned. If no app default is available, this task cannot run.
-                </span>
-              </div>
-            ) : null}
+            <ScheduledTaskProviderWarning message={providerGuardrail} />
           </Field>
         ) : null}
         {pinnedProvider && providerModelOptions ? (

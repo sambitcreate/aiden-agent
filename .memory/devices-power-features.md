@@ -19,7 +19,7 @@ This is the iOS work for T3-parity device features in the Simulator tab. Every c
   - The agent's `device_screenshot` takes an optional `saveTo`, validated by `device-save-path.ts`:
     - It must be inside the workspace or Downloads.
     - It is checked lexically and again through realpath of the deepest existing ancestor before any mkdir.
-    - The file is opened with `O_NOFOLLOW`.
+    - The write goes through the native `aiden-worktree-file-io` `save` operation (held-parent `O_EXCL` temp + `renameat`); see `devices-review-fixes.md` item 7.
     - The path is checked before the capture.
   - `deviceToolRequiresApproval` makes `saveTo` ask under "ask" permission. `llm-client.ts` now calls this function instead of using `DEVICE_APPROVAL_TOOL_NAMES`.
 - **Accessibility overlay** (ported from T3 `deviceHubApi.ts`).

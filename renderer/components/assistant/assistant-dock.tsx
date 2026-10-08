@@ -1,15 +1,15 @@
 // Aiden's window-level Live control. Before setup it presents the app
-// mark; after setup it becomes a stateful blue Libraries.dev orb.
+// mark; after setup it becomes a stateful blue Live mark.
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useCommandHandler } from "../../lib/command-system";
 import type { SettingsSection } from "../../lib/settings-section";
-import { AidenLiveOrb } from "./aiden-live-orb";
+import { AidenLiveMark } from "./aiden-live-mark";
 import {
   AssistantLiveHud,
   AssistantLiveSetupDialog,
-  assistantLiveOrbState,
+  assistantLiveMarkState,
 } from "./assistant-live";
 import { AssistantComputerUseApproval } from "./assistant-computer-use-approval";
 import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
@@ -83,7 +83,7 @@ export function AssistantDockPresentation({
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const liveApproval = chat.approvals.find((approval) => approval.toolName === "computer_use");
   const approvalPending = Boolean(liveApproval);
-  const orbState = assistantLiveOrbState(live, approvalPending);
+  const markState = assistantLiveMarkState(live, approvalPending);
 
   React.useEffect(() => {
     if (!live.active) setStopRevealed(false);
@@ -128,7 +128,7 @@ export function AssistantDockPresentation({
       style={{ right: `calc(var(--aiden-live-edge-inset) + ${Math.max(0, rightInset)}px)` }}
     >
       {(live.active || live.error) && (hudOpen || live.screenActive) ? (
-        <AssistantLiveHud live={live} orbState={orbState}>
+        <AssistantLiveHud live={live} markState={markState}>
           {liveApproval ? (
             <AssistantComputerUseApproval
               prompt={liveApproval}
@@ -141,8 +141,8 @@ export function AssistantDockPresentation({
         ref={triggerRef}
         type="button"
         className="aiden-live-trigger pointer-events-auto"
-        data-kind={setupCompleted ? "orb" : "logo"}
-        data-state={orbState}
+        data-kind={setupCompleted ? "mark" : "logo"}
+        data-state={markState}
         data-stop-revealed={stopRevealed && live.active}
         disabled={live.state === "closing"}
         aria-label={
@@ -157,7 +157,7 @@ export function AssistantDockPresentation({
         onClick={openPanel}
       >
         {setupCompleted ? (
-          <AidenLiveOrb state={orbState} level={live.microphoneLevel} />
+          <AidenLiveMark state={markState} level={live.microphoneLevel} />
         ) : (
           <span className="aiden-live-trigger-logo-mask squircle-control">
             <img src={AIDEN_LOGO_URL} alt="" draggable={false} />

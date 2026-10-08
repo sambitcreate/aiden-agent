@@ -4,7 +4,7 @@ import { isDevicePasteShortcut, pasteHostClipboardToDevice } from "./device-clip
 
 const TARGET = { platform: "ios" as const, hostId: "local", deviceId: "ABCD-1234" };
 
-test("Cmd+V on the device pastes once the pasteboard is set, pressing and releasing Cmd around V", async () => {
+test("Cmd+V on the device pastes once the pasteboard is set, holding Cmd in its own frame around V", async () => {
   const events: string[] = [];
   const result = await pasteHostClipboardToDevice({
     target: TARGET,
@@ -13,9 +13,23 @@ test("Cmd+V on the device pastes once the pasteboard is set, pressing and releas
       return { bytes: 5 };
     },
     sendKey: (code, phase) => events.push(`${code}:${phase}`),
+    wait: async (ms) => {
+      assert.ok(ms > 0);
+      events.push("pause");
+    },
   });
   assert.deepEqual(result, { bytes: 5 });
-  assert.deepEqual(events, ["copy:ABCD-1234", "MetaLeft:down", "KeyV:down", "KeyV:up", "MetaLeft:up"]);
+  // Sent in one burst, iOS on a real simulator sometimes saw V before Cmd and typed "v".
+  assert.deepEqual(events, [
+    "copy:ABCD-1234",
+    "MetaLeft:down",
+    "pause",
+    "KeyV:down",
+    "pause",
+    "KeyV:up",
+    "pause",
+    "MetaLeft:up",
+  ]);
 });
 
 test("no keys are sent when the clipboard was refused or input is disconnected", async () => {

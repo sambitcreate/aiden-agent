@@ -547,6 +547,7 @@
       ],
       "files": [
         "renderer/components/settings/harness-runtime-section.test.tsx",
+        "renderer/components/agent-approval-card.test.tsx",
         "renderer/shared/acp-harness.test.ts",
         "main/services/display-image-artifact-store.test.ts",
         "main/services/display-image-extension.test.ts",
@@ -676,6 +677,7 @@
         "renderer/lib/device-clipboard.test.ts",
         "renderer/lib/device-3d/device-3d.test.ts",
         "renderer/lib/device-3d/android-fold-scene.test.ts",
+        "renderer/lib/device-3d/bundled-models.test.ts",
         "renderer/lib/device-3d/device-motion.test.ts",
         "renderer/lib/device-3d/device-models.test.ts",
         "renderer/lib/device-3d/duo-viewer.test.ts",
@@ -690,6 +692,7 @@
         "renderer/lib/device-foreground.test.ts",
         "renderer/lib/device-grant.test.ts",
         "renderer/lib/device-mini-player-layout.test.ts",
+        "renderer/lib/device-display-rotation.test.ts",
         "renderer/lib/device-multitouch.test.ts",
         "renderer/lib/device-stream-mobile-fixture.test.ts",
         "renderer/lib/device-stream.test.ts",
@@ -825,7 +828,8 @@
         "scripts/subagent-run-store-packaged-acceptance.test.mjs",
         "scripts/update-model-capabilities.test.mjs",
         "scripts/vendor-cua-driver.test.mjs",
-        "scripts/verify-macos-package.test.mjs"
+        "scripts/verify-macos-package.test.mjs",
+        "renderer/components/aiden-activity-mark.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

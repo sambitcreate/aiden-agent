@@ -72,8 +72,24 @@ struct AidenSimulatorControlsState: Equatable {
 }
 
 /// Maps a touch in the viewer into the displayed frame, normalized 0...1
-/// from the top left. The frame is aspect-fit inside the container.
+/// from the top left. The frame is turned by its display rotation and then
+/// aspect-fit inside the container; `AidenSimulatorHelperMessage.rawPoint`
+/// maps the normalized point back into the raw framebuffer.
 enum AidenSimulatorTouchMapping {
+    /// The frame's size as drawn: a quarter turn swaps width and height.
+    static func displaySize(imageSize: CGSize, rotation: AidenSimulatorDisplayRotation) -> CGSize {
+        rotation.isSideways ? CGSize(width: imageSize.height, height: imageSize.width) : imageSize
+    }
+
+    /// Where the turned frame sits in the container.
+    static func displayRect(
+        imageSize: CGSize,
+        rotation: AidenSimulatorDisplayRotation,
+        in container: CGSize
+    ) -> CGRect {
+        fittedRect(imageSize: displaySize(imageSize: imageSize, rotation: rotation), in: container)
+    }
+
     static func fittedRect(imageSize: CGSize, in container: CGSize) -> CGRect {
         guard imageSize.width > 0, imageSize.height > 0, container.width > 0, container.height > 0 else {
             return .zero
@@ -93,10 +109,11 @@ enum AidenSimulatorTouchMapping {
     static func normalizedPoint(
         _ location: CGPoint,
         imageSize: CGSize,
+        rotation: AidenSimulatorDisplayRotation = .none,
         container: CGSize,
         clamped: Bool = false
     ) -> CGPoint? {
-        let rect = fittedRect(imageSize: imageSize, in: container)
+        let rect = displayRect(imageSize: imageSize, rotation: rotation, in: container)
         guard rect.width > 0, rect.height > 0 else { return nil }
         let x = (location.x - rect.minX) / rect.width
         let y = (location.y - rect.minY) / rect.height

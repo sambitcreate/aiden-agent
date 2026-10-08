@@ -68,6 +68,14 @@ import {
 import { createDeviceGrantSource } from "../lib/device-grant";
 import type { MultiTouchSink } from "../lib/device-multitouch";
 import { deviceFeatureCapabilities, type DeviceFeatureTarget } from "../shared/device-features";
+import {
+  DEVICE_SCREEN_CONTAINER_STYLE,
+  deviceDisplayRotation,
+  displayedAspect,
+  displayedAxScreen,
+  fittedScreenStyle,
+  rotatedMediaStyle,
+} from "../lib/device-display-rotation";
 import { LOCAL_DEVICE_HOST_ID, type DeviceSession, type DeviceStreamGrant, type DeviceSummary } from "../shared/devices";
 
 /** A burst of rejected grants means the proxy is refusing us, not that one grant expired. */
@@ -346,7 +354,10 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     pressedKeysRef.current.clear();
   }, []);
 
-  const aspect = screen ? screen.width / screen.height : defaultAspect(device);
+  // A portrait framebuffer reporting landscape is drawn turned, matching the touch remap.
+  const displayRotation = deviceDisplayRotation(device.platform, screen);
+  const aspect = screen ? displayedAspect(screen, displayRotation) : defaultAspect(device);
+  const mediaStyle = rotatedMediaStyle(displayRotation);
   const model = resolveDeviceModelId(device.platform, device.name);
   const assetModel = resolveDeviceAssetModelId(device.platform, device.name);
   const duo = isDuoDevice(device.platform, device.name, screen);
@@ -502,6 +513,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
       <div
         ref={stageRef}
         className="device-viewer-stage"
+        // The flat screen sizes itself against the stage (see `fittedScreenStyle`).
+        style={DEVICE_SCREEN_CONTAINER_STYLE}
         data-frame={frame3d ? "3d" : "flat"}
         onFocus={() => {
           stageFocusedRef.current = true;
@@ -569,7 +582,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           className="device-viewer-screen"
           data-typing-surface="device"
           hidden={frame3d}
-          style={{ aspectRatio: String(aspect) }}
+          style={{ ...DEVICE_SCREEN_CONTAINER_STYLE, ...fittedScreenStyle(aspect), aspectRatio: String(aspect) }}
           tabIndex={0}
           role="application"
           aria-roledescription={`${noun} screen`}
@@ -582,15 +595,15 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           onKeyUp={key("up")}
           onContextMenu={(event) => event.preventDefault()}
         >
-          <canvas ref={canvasRef} hidden={Boolean(mjpegUrl)} aria-hidden />
-          {mjpegUrl ? <img ref={attachImage} alt="" draggable={false} /> : null}
+          <canvas ref={canvasRef} hidden={Boolean(mjpegUrl)} style={mediaStyle} aria-hidden />
+          {mjpegUrl ? <img ref={attachImage} alt="" draggable={false} style={mediaStyle} /> : null}
           {capabilities.axOverlay && axOverlay && active && !frame3d ? (
             <DeviceAxOverlay
               hostId={session.hostId}
               deviceId={session.deviceId}
               platform={device.platform}
               grants={featureGrants}
-              screen={screen}
+              screen={displayedAxScreen(screen, displayRotation)}
               screenRef={screenRef}
               poll={localDevice}
               refreshKey={axRefresh}

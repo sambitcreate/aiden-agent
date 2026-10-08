@@ -145,9 +145,9 @@ fun AidenComposerView(
                             color = palette.canvas.copy(alpha = 0.7f),
                             shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.animateItem(
-                                fadeInSpec = if (reduceMotion) null else AidenMotion.nonSpatialExpressiveSpring(),
+                                fadeInSpec = if (reduceMotion) null else AidenMotion.short(),
                                 placementSpec = if (reduceMotion) null else AidenMotion.spatialExpressiveSpring(),
-                                fadeOutSpec = if (reduceMotion) null else AidenMotion.nonSpatialExpressiveSpring()
+                                fadeOutSpec = if (reduceMotion) null else AidenMotion.short()
                             )
                         ) {
                             Row(
@@ -530,8 +530,8 @@ fun AidenComposerView(
                                 if (reduceMotion) {
                                     EnterTransition.None togetherWith ExitTransition.None
                                 } else {
-                                    (scaleIn(AidenMotion.spatialExpressiveSpring()) + fadeIn(AidenMotion.nonSpatialExpressiveSpring()))
-                                        .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring()) + fadeOut(AidenMotion.nonSpatialExpressiveSpring()))
+                                    (scaleIn(AidenMotion.spatialExpressiveSpring()) + fadeIn(AidenMotion.short()))
+                                        .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring()) + fadeOut(AidenMotion.short()))
                                 }
                             },
                             label = "send_stop_morph"
@@ -687,10 +687,10 @@ private fun AidenRunInputSplitButton(
                             EnterTransition.None togetherWith ExitTransition.None
                         } else {
                             (slideInVertically(AidenMotion.spatialExpressiveSpring()) { it / 2 } +
-                                fadeIn(AidenMotion.nonSpatialExpressiveSpring()))
+                                fadeIn(AidenMotion.short()))
                                 .togetherWith(
                                     slideOutVertically(AidenMotion.spatialExpressiveSpring()) { -it / 2 } +
-                                        fadeOut(AidenMotion.nonSpatialExpressiveSpring())
+                                        fadeOut(AidenMotion.short())
                                 )
                                 .using(SizeTransform(clip = true))
                         }

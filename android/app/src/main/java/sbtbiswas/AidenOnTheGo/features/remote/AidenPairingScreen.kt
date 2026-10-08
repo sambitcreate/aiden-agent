@@ -88,6 +88,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 /**
  * Paired desktops as one radio group of settings rows: tapping a row makes it active, the
@@ -438,7 +439,7 @@ private fun AidenPairingMethods(
             }
         }
 
-        TextButton(
+        TextButton(contentPadding = AidenButtonDefaults.TextContentPadding,
             onClick = { selectedTab = if (selectedTab == 2) 0 else 2 },
             shape = AidenShape.Button,
             modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)

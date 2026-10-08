@@ -301,7 +301,7 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });
 
-test("Quick View exposes conditional current-chat counts and the shared orb", () => {
+test("Quick View exposes conditional current-chat counts and the shared activity mark", () => {
   const environment = source("./environment-panel.tsx");
 
   assert.match(
@@ -310,7 +310,7 @@ test("Quick View exposes conditional current-chat counts and the shared orb", ()
   );
   assert.match(environment, /\{hasSubagents \? \(/u);
   assert.match(environment, /panel\.showTools\("subagents"\)/u);
-  assert.match(environment, /<SubagentOrb/u);
+  assert.match(environment, /<SubagentMark/u);
   assert.match(environment, /activity=\{representativeSubagent\?\.snapshot\?\.activity\}/u);
   assert.doesNotMatch(
     environment,

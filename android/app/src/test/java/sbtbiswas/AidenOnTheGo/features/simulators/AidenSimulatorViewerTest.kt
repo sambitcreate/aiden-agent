@@ -7,12 +7,21 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -20,7 +29,12 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorDevice
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorListing
 import sbtbiswas.AidenOnTheGo.networking.AidenMobileSimulatorsFixture
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorDisplayRotation
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorInput
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorOrientation
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorScreen
 import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorStreamSession
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorTouchPhase
 
 class AidenSimulatorViewerTest {
     // --- Controls overlay ---
@@ -119,7 +133,107 @@ class AidenSimulatorViewerTest {
         assertNull(AidenFittedRect.aspectFit(0f, 100f, 10f, 10f).normalized(0f, 0f))
     }
 
+    // --- Display orientation ---
+
+    private fun encodedPoint(x: Double, y: Double, screen: AidenSimulatorScreen): Pair<Double, Double> {
+        val message = AidenSimulatorInput.touch(AidenSimulatorTouchPhase.BEGIN, x, y, screen)
+        val payload = Json.parseToJsonElement(String(message, 1, message.size - 1, Charsets.UTF_8)).jsonObject
+        return payload.getValue("x").jsonPrimitive.double to payload.getValue("y").jsonPrimitive.double
+    }
+
+    @Test
+    fun rawPortraitFramesAreShownTurnedToTheDeviceOrientation() {
+        // serve-sim's raw portrait framebuffer, 1:2, in a square 400 px viewer.
+        val upright = AidenFittedRect(100f, 0f, 200f, 400f)
+        val sideways = AidenFittedRect(0f, 100f, 400f, 200f)
+        val cases = listOf(
+            Triple(AidenSimulatorOrientation.PORTRAIT, AidenSimulatorDisplayRotation.NONE, upright),
+            Triple(AidenSimulatorOrientation.LANDSCAPE_LEFT, AidenSimulatorDisplayRotation.CLOCKWISE, sideways),
+            Triple(AidenSimulatorOrientation.PORTRAIT_UPSIDE_DOWN, AidenSimulatorDisplayRotation.HALF_TURN, upright),
+            Triple(AidenSimulatorOrientation.LANDSCAPE_RIGHT, AidenSimulatorDisplayRotation.COUNTER_CLOCKWISE, sideways)
+        )
+        for ((orientation, rotation, rect) in cases) {
+            assertEquals("$orientation", rotation, AidenSimulatorDisplayRotation.of(AidenSimulatorScreen(1206, 2622, orientation)))
+            assertEquals("$orientation", rect, AidenFittedRect.displayed(400f, 400f, 100f, 200f, rotation))
+        }
+        // A landscape-sized config already streams landscape frames: nothing turns.
+        val rotated = AidenSimulatorScreen(2622, 1206, AidenSimulatorOrientation.LANDSCAPE_LEFT)
+        assertEquals(AidenSimulatorDisplayRotation.NONE, AidenSimulatorDisplayRotation.of(rotated))
+        assertEquals(sideways, AidenFittedRect.displayed(400f, 400f, 200f, 100f, AidenSimulatorDisplayRotation.NONE))
+        assertEquals(AidenSimulatorDisplayRotation.NONE, AidenSimulatorDisplayRotation.of(null))
+    }
+
+    @Test
+    fun aTapLandsOnTheRawPixelShownUnderIt() {
+        // Draw raw pixels the way the viewer does (unturned size, turned clockwise
+        // by `degrees` about the shown rect's center), then tap there: the encoded
+        // touch must name the same raw pixel.
+        val frameWidth = 1206f
+        val frameHeight = 2622f
+        val rawPoints = listOf(0.25 to 0.75, 0.1 to 0.2, 0.9 to 0.6)
+        for (orientation in AidenSimulatorOrientation.entries) {
+            val screen = AidenSimulatorScreen(frameWidth.toInt(), frameHeight.toInt(), orientation)
+            val rotation = AidenSimulatorDisplayRotation.of(screen)
+            val shown = AidenFittedRect.displayed(1080f, 1920f, frameWidth, frameHeight, rotation)
+            val drawnWidth = if (rotation.isSideways) shown.height else shown.width
+            val drawnHeight = if (rotation.isSideways) shown.width else shown.height
+            val radians = Math.toRadians(rotation.degrees.toDouble())
+            for ((u, v) in rawPoints) {
+                val dx = (u - 0.5) * drawnWidth
+                val dy = (v - 0.5) * drawnHeight
+                val x = shown.left + shown.width / 2 + dx * cos(radians) - dy * sin(radians)
+                val y = shown.top + shown.height / 2 + dx * sin(radians) + dy * cos(radians)
+                val tap = shown.normalized(x.toFloat(), y.toFloat())
+                assertNotNull("$orientation ($u, $v)", tap)
+                val (rawX, rawY) = encodedPoint(tap!!.first, tap.second, screen)
+                assertEquals("$orientation x", u, rawX, 1e-4)
+                assertEquals("$orientation y", v, rawY, 1e-4)
+            }
+        }
+    }
+
+    @Test
+    fun fixtureTouchVectorsTappedOnTheShownFrameEncodeTheirPayloads() {
+        val vectors = AidenMobileSimulatorsFixture.section.getValue("inputMessages").jsonArray.map { it.jsonObject }
+        var checked = 0
+        for (vector in vectors) {
+            val command = vector.getValue("command").jsonObject
+            val screenJson = vector["screen"] as? JsonObject
+            if (command.getValue("kind").jsonPrimitive.content != "touch" || screenJson == null) continue
+            val screen = AidenSimulatorScreen(
+                screenJson.getValue("width").jsonPrimitive.int,
+                screenJson.getValue("height").jsonPrimitive.int,
+                AidenSimulatorOrientation.fromWire(screenJson.getValue("orientation").jsonPrimitive.content)!!
+            )
+            // The fixture's command point is in the displayed frame.
+            val shown = AidenFittedRect.displayed(
+                1080f, 1920f, screen.width.toFloat(), screen.height.toFloat(), AidenSimulatorDisplayRotation.of(screen)
+            )
+            val tap = shown.normalized(
+                shown.left + command.getValue("x").jsonPrimitive.double.toFloat() * shown.width,
+                shown.top + command.getValue("y").jsonPrimitive.double.toFloat() * shown.height
+            )!!
+            val (rawX, rawY) = encodedPoint(tap.first, tap.second, screen)
+            val payload = vector.getValue("payload").jsonObject
+            assertEquals(payload.getValue("x").jsonPrimitive.double, rawX, 1e-4)
+            assertEquals(payload.getValue("y").jsonPrimitive.double, rawY, 1e-4)
+            checked++
+        }
+        assertTrue("every orientation vector is exercised", checked >= 5)
+    }
+
     // --- Frame decoding ---
+
+    @Test
+    fun aTurnedFrameSubsamplesAgainstTheWayItIsDrawn() {
+        // A raw portrait frame shown landscape in a 1080x540 viewer is drawn 1080 wide
+        // along its own height, so it may shrink by 2 but not by 4.
+        val turned = AidenSimulatorFrameSampling.inSampleSize(1206, 2622, 1080, 540, AidenSimulatorDisplayRotation.CLOCKWISE)
+        assertEquals(2, turned)
+        assertTrue(2622 / turned >= 1080)
+        // Unturned, the same viewer would have sampled it below its drawn size.
+        assertEquals(4, AidenSimulatorFrameSampling.inSampleSize(1206, 2622, 1080, 540))
+    }
 
     @Test
     fun framesSubsampleOnlyWhileTheyStayAtLeastAsLargeAsTheyAreDrawn() {

@@ -8,6 +8,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
+import sbtbiswas.AidenOnTheGo.config.AidenPalette
+import sbtbiswas.AidenOnTheGo.config.AidenThemeCatalog
+import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenColorScheme
 
 class AidenProviderIconTest {
     private val resolver = AidenProviderIconResolver
@@ -77,11 +81,26 @@ class AidenProviderIconTest {
     fun modelAndCustomProviderIdsResolveToTheirLogo() {
         assertEquals("claude", resolver.slug("anthropic", "claude-sonnet-4"))
         assertEquals("anthropic", resolver.slug("anthropic"))
+        assertEquals("antigravity", resolver.slug("antigravity"))
         assertEquals("grok", resolver.slug("xai", "grok-4"))
         assertEquals("google", resolver.slug(" Gemini "))
         assertEquals("ollama", resolver.slug("custom:ollama-2"))
         assertNull(resolver.slug("custom:ollama-01"))
         assertNull(resolver.slug("custom:my-server"))
         assertNull(resolver.logoRes("radius"))
+    }
+
+    @Test
+    fun neutralFallbackInitialStaysReadableForEveryPreset() {
+        // The fallback initial draws onSurfaceVariant on surfaceContainerHigh.
+        AidenThemePresetID.entries.filterNot { it.isDynamic }.forEach { preset ->
+            listOf(true, false).forEach { isDark ->
+                val scheme = aidenColorScheme(AidenThemeCatalog.palette(preset, isDark), isDark)
+                assertTrue(
+                    "fallback initial on $preset ${if (isDark) "dark" else "light"} must stay readable",
+                    AidenPalette.contrastRatio(scheme.onSurfaceVariant, scheme.surfaceContainerHigh) >= 3f
+                )
+            }
+        }
     }
 }

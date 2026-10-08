@@ -261,11 +261,11 @@ fun AidenBotImagePlaygroundSheet(
 
         Button(
             onClick = onDismiss,
-            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(stringResource(R.string.action_done), color = Color.White, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.action_done), color = palette.onAccent, fontWeight = FontWeight.Bold)
         }
     }
 }

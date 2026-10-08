@@ -18,6 +18,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenSimulatorDevice
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorListing
 import sbtbiswas.AidenOnTheGo.models.AidenSimulatorToolVersions
 import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorButton
+import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorDisplayRotation
 import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorInput
 import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorStreamFailure
 import sbtbiswas.AidenOnTheGo.networking.AidenSimulatorStreamPhase
@@ -309,12 +310,18 @@ class AidenSimulatorsViewModel(
             boot(device)
             return
         }
-        val frameDecoder = AidenSimulatorFrameDecoder { viewSize }
+        var streamSession: AidenSimulatorStreamSession<ImageBitmap>? = null
+        val frameDecoder = AidenSimulatorFrameDecoder(
+            viewSize = { viewSize },
+            // Frames are sized for the way they are shown, turned to the last screen config.
+            rotation = { AidenSimulatorDisplayRotation.of(streamSession?.state?.value?.screen) }
+        )
         val session = remote.session(device.id, viewModelScope, frameDecoder::decode)
         if (session == null) {
             _viewer.update { it.copy(error = AidenSimulatorViewerError.UNREACHABLE) }
             return
         }
+        streamSession = session
         decoder = frameDecoder
         _session.value = session
         _controls.update { it.withInputConnected(false) }

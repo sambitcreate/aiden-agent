@@ -29,6 +29,8 @@ test("the floating player is a labelled, keyboard-reachable surface with Home, R
   // The move handle and the screen both take focus; the screen takes touches and keys.
   assert.match(html, /role="group" aria-label="Move Checkout flow" tabindex="0"/u);
   assert.match(html, /tabindex="0" role="application" aria-roledescription="simulator screen"/u);
+  // The screen is a reserved typing surface, so the composer's type-to-focus never takes its keys.
+  assert.match(html, /data-typing-surface="device"[^>]*role="application" aria-roledescription="simulator screen"/u);
   assert.match(html, /Escape to put it back in its tab/u);
   // Home and Rotate wait for a live stream.
   assert.match(html, /disabled=""[^>]*aria-label="Home"|aria-label="Home"[^>]*disabled=""/u);

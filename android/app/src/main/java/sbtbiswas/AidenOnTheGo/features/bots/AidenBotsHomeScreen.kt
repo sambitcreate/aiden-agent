@@ -474,7 +474,7 @@ fun AidenBotsHomeScreen(
                                 action = {
                                     Button(
                                         onClick = { viewModel.loadBots(force = true) },
-                                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
                                         shape = MaterialTheme.shapes.extraLarge,
                                         modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                                     ) { Text(stringResource(R.string.action_retry)) }
@@ -496,7 +496,7 @@ fun AidenBotsHomeScreen(
                                     {
                                         Button(
                                             onClick = onNavigateToCreateBot,
-                                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onAccent),
                                             shape = MaterialTheme.shapes.extraLarge,
                                             modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                                         ) { Text(stringResource(R.string.bots_new)) }

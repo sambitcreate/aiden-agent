@@ -151,6 +151,31 @@ test("touches on the real model reach the active display in raw framebuffer spac
   disposeDeviceModel(asset);
 });
 
+test("the cover's camera cutout lies over the hole in the simulator's cover display", () => {
+  const { asset, scene, left } = procedural();
+  const view = camera();
+  scene.setAngle(180);
+  scene.root.rotation.y = Math.PI;
+  scene.root.updateMatrixWorld(true);
+  const cutout = left.children.find(
+    (child): child is Mesh => child instanceof Mesh && !Array.isArray(child.material) && child.material.name === "cutout",
+  );
+  assert.ok(cutout, "the left leaf carries the cover camera");
+  const point = project(cutout, cutout.geometry.boundingBox!.getCenter(new Vector3()), view);
+  // Read the display under the camera, not the opaque cutout drawn over it.
+  left.remove(cutout);
+  scene.root.updateMatrixWorld(true);
+  const coverScreen: DeviceScreenSize = { width: 1398, height: 2034, orientation: "portrait", screenId: 1 };
+  const hit = scene.screenPoint(point.x, point.y, view, coverScreen, duoDisplayKey(coverScreen));
+  assert.ok(hit, "the camera sits on the cover display");
+  // Measured on a real iPhone Duo simulator: the mask's hole is centred at (1255, 143) of 1398 × 2034,
+  // in the top corner away from the hinge. The stream draws it too, so the model must not add a second one.
+  close(hit.x, 1255 / 1398, 0.01, "camera x");
+  close(hit.y, 143 / 2034, 0.01, "camera y");
+  scene.dispose();
+  disposeDeviceModel(asset);
+});
+
 test("a pinch finds the leaf under the fingers on the real model", () => {
   const { asset, scene, innerLeft, innerRight } = procedural();
   const view = camera();

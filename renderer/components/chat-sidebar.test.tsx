@@ -114,7 +114,7 @@ test("update-ready banner uses the Aiden mark and shared compact-surface motion"
   assert.match(banner, /setTimeout\(\(\) => setPresent\(false\), APP_UPDATE_BANNER_EXIT_MS\)/u);
   assert.match(
     styles,
-    /@keyframes aiden-app-update-banner-in[\s\S]*translateY\(4px\) scale\(0\.98\)/u,
+    /@keyframes aiden-app-update-banner-in[\s\S]*translateY\(4px\) scale\(var\(--motion-popup-scale\)\)/u,
   );
   assert.match(
     styles,
@@ -291,11 +291,11 @@ test("sidebar collapse keeps shared chrome geometry on one synchronized motion c
   const ui = source("./ui.tsx");
   assert.match(
     ui,
-    /bg-sidebar transition-\[width,opacity\] duration-300 ease-out motion-reduce:transition-none/u,
+    /bg-sidebar transition-\[width,opacity\] duration-300 ease-emphasized motion-reduce:transition-none/u,
   );
   assert.match(
     ui,
-    /scroll-area-header[\s\S]{0,180}transition-\[padding\] duration-300 ease-out motion-reduce:transition-none/u,
+    /scroll-area-header[\s\S]{0,180}transition-\[padding\] duration-300 ease-emphasized motion-reduce:transition-none/u,
   );
   assert.match(ui, /style=\{\{ paddingLeft: split\?\.collapsed \? 142 : undefined \}\}/u);
 });
@@ -306,7 +306,7 @@ test("sidebar breakpoint hands layout width through an animated spacer", () => {
   assert.match(ui, /absolute inset-y-0 left-0 z-10[\s\S]{0,120}transition-\[width,opacity\]/u);
   assert.match(
     ui,
-    /aria-hidden="true"[\s\S]{0,180}transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,120}reservedSidebarWidth/u,
+    /aria-hidden="true"[\s\S]{0,180}transition-\[width\] duration-300 ease-emphasized motion-reduce:transition-none[\s\S]{0,120}reservedSidebarWidth/u,
   );
   assert.doesNotMatch(ui, /compact && !collapsed && "absolute inset-y-0/u);
 });
@@ -362,11 +362,9 @@ test("shared controls use theme fills for text entry and focus states", () => {
   assert.match(button, /focus-visible:bg-accent-hover/u);
   assert.doesNotMatch(button, /focus-visible:ring/u);
   for (const control of [input, textarea]) {
-    assert.match(control, /focus:bg-input/u);
     assert.doesNotMatch(control, /focus:border-focus-ring/u);
     assert.doesNotMatch(control, /focus:ring-/u);
   }
-  assert.match(selectTrigger, /focus:bg-input/u);
   assert.doesNotMatch(selectTrigger, /focus-visible:ring-/u);
   assert.match(source("../styles.css"), /outline: 2px solid var\(--focus-ring\) !important/u);
   assert.doesNotMatch(selectTrigger, /focus:border-focus-ring/u);

@@ -7,8 +7,6 @@ with the iOS app.
   See Hermex-LICENSE.txt.
 - KeychainAccess 4.2.2
   See KeychainAccess-LICENSE.txt.
-- Thinking Orbs 0.3.1 (vendored SwiftUI iOS port)
-  See ThinkingOrbs-LICENSE.txt.
 - MarkdownUI 2.4.1
   See MarkdownUI-LICENSE.txt.
 - NetworkImage 6.0.1 (transitive dependency of MarkdownUI)

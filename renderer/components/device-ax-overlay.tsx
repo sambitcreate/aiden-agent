@@ -139,16 +139,22 @@ export function DeviceAxOverlay(props: {
   );
 }
 
+/** The widest the hovered label may grow, as a fraction of the screen width. */
+export const DEVICE_AX_LABEL_MAX_WIDTH = 0.6;
+
 /** The hovered element's label and role, kept inside the screen. */
 export function DeviceAxLabel({ element }: { element: DeviceAxElement }) {
   const below = element.y < 0.08;
+  // Start at the element, but never so far right that a full-width label runs off the screen.
+  const left = Math.max(0, Math.min(element.x, 1 - DEVICE_AX_LABEL_MAX_WIDTH));
   return (
     <div
       className="device-ax-label"
       data-placement={below ? "below" : "above"}
       style={{
-        left: `${Math.min(element.x, 0.6) * 100}%`,
+        left: `${left * 100}%`,
         top: `${(below ? element.y + element.height : element.y) * 100}%`,
+        maxWidth: `${DEVICE_AX_LABEL_MAX_WIDTH * 100}%`,
       }}
     >
       <span className="device-ax-label-text">{element.label || "Unlabeled"}</span>

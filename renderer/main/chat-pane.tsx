@@ -191,7 +191,12 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
-import { isAcpHarnessProvider } from "../shared/acp-harness";
+import {
+  acpHarnessChatReason,
+  acpHarnessReadinessMessage,
+  isAcpHarnessProvider,
+  type AcpHarnessBlockedSurface,
+} from "../shared/acp-harness";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -235,6 +240,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  // Agent-backed models need someone answering approvals in an ordinary chat.
+  const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
+    chat.data?.botId || bot.data ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
   const sideQuestionBlockedReason = draft
     ? "Send the first message before asking a side question."
     : chat.data?.botId || bot.data
@@ -284,7 +292,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
       settings.data?.hiddenModelsByProvider,
       hasMessages,
     ) &&
-    (selectedProvider.hasKey || !selectedProvider.needsKey),
+    (selectedProvider.hasKey || !selectedProvider.needsKey) &&
+    !acpHarnessChatReason(selectedProvider.id, selectedProvider.label, agentBlockedSurface),
+  );
+  // Assistant and Bot chats do not offer agent-backed models at all.
+  const pickerProviders = React.useMemo(
+    () =>
+      !settings.data
+        ? []
+        : agentBlockedSurface
+          ? (providers.data ?? []).filter((provider) => !isAcpHarnessProvider(provider.id))
+          : (providers.data ?? []),
+    [agentBlockedSurface, providers.data, settings.data],
   );
   const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
@@ -293,6 +312,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "Sign in with ChatGPT in Settings → Providers to use Codex."
         : "Choose a chat model, or add one in Settings → Providers.";
     }
+    const agentReason = acpHarnessReadinessMessage(selectedProvider, agentBlockedSurface);
+    if (agentReason) return agentReason;
     if (selectedProvider.needsKey && !selectedProvider.hasKey) {
       if (selectedProvider.id === OPENAI_CODEX_PROVIDER_ID) {
         return "Sign in with ChatGPT in Settings → Providers to use Codex.";
@@ -312,7 +333,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       return "This model is hidden from new chats. Show a model in Settings → Providers before sending.";
     }
     return undefined;
-  }, [hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
+  }, [agentBlockedSurface, hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
   const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
   const computerUseReady = computerUseReadinessReady(
     computerUseStatus.data?.ready === true,
@@ -2384,7 +2405,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     !streamComplete && !visibleDetachedProjection;
   const timelineActivity = visualizingLive &&
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
-      ? { phase: "visualizing" as const, label: "Visualizing", orbState: "working" as const }
+      ? { phase: "visualizing" as const, label: "Visualizing", mark: "scan-grid" as const }
       : agentActivity;
   const chronologicalLiveRows = assistantPresentationRows(
     displayedStreamingText ?? "",
@@ -2910,7 +2931,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onDraftChange={onDraftContextChange}
                 modelPicker={
                   <ModelPicker
-                    providers={settings.data ? (providers.data ?? []) : []}
+                    providers={pickerProviders}
                     providerId={providerId}
                     model={model}
                     onChange={(nextProviderId, nextModel) => {

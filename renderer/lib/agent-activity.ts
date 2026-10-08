@@ -1,4 +1,4 @@
-import type { OrbState } from "thinking-orbs";
+import type { ActivityMark } from "../shared/activity-marks";
 import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
 
 export interface ToolActivity {
@@ -21,7 +21,7 @@ export type AgentActivityPhase =
 export interface AgentActivity {
   phase: AgentActivityPhase;
   label: string;
-  orbState: OrbState;
+  mark: ActivityMark;
 }
 
 /** Hold transient phase changes briefly without delaying safety-critical controls. */
@@ -77,38 +77,38 @@ export function resolveAgentActivity({
   toolActivity,
 }: AgentActivityInput): AgentActivity | null {
   if (isStopping) {
-    return { phase: "stopping", label: "Stopping…", orbState: "shaping" };
+    return { phase: "stopping", label: "Stopping…", mark: "bounce" };
   }
 
   if (pendingApproval) {
-    return { phase: "waiting", label: "Waiting for approval", orbState: "listening" };
+    return { phase: "waiting", label: "Waiting for approval", mark: "glance" };
   }
 
   if (toolActivity?.state === "running") {
     if (toolActivity.toolName === RENDER_ARTIFACT_TOOL_NAME) {
-      return { phase: "visualizing", label: "Visualizing", orbState: "working" };
+      return { phase: "visualizing", label: "Visualizing", mark: "scan-grid" };
     }
     return isSearchTool(toolActivity.toolName)
-      ? { phase: "searching", label: toolActivity.label, orbState: "searching" }
-      : { phase: "working", label: toolActivity.label, orbState: "working" };
+      ? { phase: "searching", label: toolActivity.label, mark: "scan-grid" }
+      : { phase: "working", label: toolActivity.label, mark: "quad-shuffle" };
   }
 
   if (isStarting) {
-    return { phase: "preparing", label: "Preparing…", orbState: "shaping" };
+    return { phase: "preparing", label: "Preparing…", mark: "bounce" };
   }
 
   if (isModelLoading) {
-    return { phase: "loading", label: "Model loading…", orbState: "shaping" };
+    return { phase: "loading", label: "Model loading…", mark: "bounce" };
   }
 
   if (streamingText === null) return null;
 
   return textStreaming && streamingText.length > 0
-    ? { phase: "responding", label: "Responding…", orbState: "composing" }
-    : { phase: "thinking", label: "Thinking", orbState: "solving" };
+    ? { phase: "responding", label: "Responding…", mark: "compose" }
+    : { phase: "thinking", label: "Thinking", mark: "tri-step" };
 }
 
-/** Let transcript-owned phase cards replace the generic orb row exactly once. */
+/** Let transcript-owned phase cards replace the generic activity row exactly once. */
 export function resolveVisibleAgentActivity(
   activity: AgentActivity | null,
   { reasoningVisible, visualizingVisible, toolVisible = false }: AgentActivityVisibility,

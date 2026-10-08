@@ -15,6 +15,13 @@ export const DEVICE_PASTE_KEYS: ReadonlyArray<readonly [code: string, phase: "do
   ["MetaLeft", "up"],
 ];
 
+/**
+ * The pause between paste key events. Sent in one burst, iOS sometimes
+ * handles V before it registers Cmd, so the field receives a literal "v" or
+ * nothing at all; a short gap keeps Cmd held while V goes down and up.
+ */
+export const DEVICE_PASTE_KEY_GAP_MS = 40;
+
 /** Plain Cmd+V while the device screen has focus. */
 export function isDevicePasteShortcut(event: {
   code: string;
@@ -36,12 +43,19 @@ export async function pasteHostClipboardToDevice(input: {
   copy(target: DeviceFeatureTarget): Promise<{ bytes: number }>;
   /** The stream client's key sender; absent while input is disconnected. */
   sendKey: ((code: string, phase: "down" | "up") => void) | null;
+  /** Waits between key events; injectable for tests. */
+  wait?: (ms: number) => Promise<void>;
 }): Promise<{ bytes: number }> {
   const noun = input.target.platform === "android" ? "emulator" : "simulator";
-  if (!input.sendKey) throw new Error(`The ${noun} is not accepting input right now.`);
+  const sendKey = input.sendKey;
+  if (!sendKey) throw new Error(`The ${noun} is not accepting input right now.`);
+  const wait = input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const result = await input.copy(input.target);
   if (input.target.platform === "ios") {
-    for (const [code, phase] of DEVICE_PASTE_KEYS) input.sendKey(code, phase);
+    for (const [index, [code, phase]] of DEVICE_PASTE_KEYS.entries()) {
+      if (index > 0) await wait(DEVICE_PASTE_KEY_GAP_MS);
+      sendKey(code, phase);
+    }
   }
   return result;
 }
