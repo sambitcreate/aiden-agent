@@ -1,6 +1,7 @@
 // Adapted from t3code packages/client-runtime/src/device/phoneViewer.ts @ a6ec88f7 (MIT).
-// T3 swaps in downloaded Apple GLB bodies; Aiden builds its own procedural
-// hardware models synchronously (`hardware-models.ts`) and never fetches assets.
+// A matching device shows its procedural body at once (`hardware-models.ts`,
+// or a family shape), then T3's bundled GLB body replaces it when it loads. A
+// GLB that fails to load or validate leaves the procedural body in place.
 import {
   AmbientLight,
   Box3,
@@ -21,8 +22,13 @@ import { createDeviceMotion } from "./device-motion";
 import { createDeviceFraming } from "./framing";
 import { buildHandsetModel } from "./hardware-models";
 import { createRenderScheduler } from "./interaction";
-import { createModelPhoneScene, disposeDeviceModel } from "./model-scene";
+import { createModelPhoneScene, disposeDeviceModel, loadDeviceModel, type LoadedDeviceModel } from "./model-scene";
 import type { DeviceModelId } from "./model-registry";
+import {
+  createDeviceModelSlot,
+  type DeviceAccessorySource,
+  type DeviceModelSource,
+} from "./model-source";
 import { createPhoneScene, phoneDisplayLayout } from "./phone-scene";
 import { IOS_PHONE_SHAPE, type DeviceShapeProfile } from "./shape-profile";
 import { nearestDeviceView } from "./view-snap";
@@ -37,6 +43,10 @@ import {
 export interface PhoneViewer {
   /** A hardware model by exact simulator name, or null for the family body. Duo bodies use `duo-viewer.ts`. */
   readonly setModel: (id: DeviceModelId | null) => void;
+  /** A bundled GLB body for this exact device, loaded lazily over the procedural body. */
+  readonly setAsset: (source: DeviceModelSource | null) => void;
+  /** An accessory for the loaded GLB body, such as the iPad's Magic Keyboard. */
+  readonly setAccessory: (source: DeviceAccessorySource | null) => void;
   readonly frameUpdated: () => void;
   readonly setScreen: (screen: DeviceScreenSize | null, profile?: DeviceShapeProfile) => void;
   /** Android foldables: hinge degrees (0 closed, 180 open), or null for a slab phone. */
@@ -70,9 +80,15 @@ export function createPhoneViewer(options: {
   readonly onFramingAspect?: (aspect: number) => void;
   readonly profile?: DeviceShapeProfile;
   readonly model?: DeviceModelId | null;
+  readonly asset?: DeviceModelSource | null;
+  readonly accessory?: DeviceAccessorySource | null;
   readonly foldAngle?: number | null;
   readonly runtime?: ViewerRuntime;
+  /** Fetches and parses a bundled model; tests pass their own. */
+  readonly loadModel?: (source: DeviceModelSource | DeviceAccessorySource, signal: AbortSignal) => Promise<LoadedDeviceModel>;
+  readonly onModelError?: (cause: unknown) => void;
 }): PhoneViewer {
+  const loadModel = options.loadModel ?? ((source, signal) => loadDeviceModel(source, signal));
   const runtime = options.runtime ?? browserViewerRuntime();
   const renderer = runtime.createRenderer(options.canvas);
   const makeTexture = () => {
@@ -116,7 +132,13 @@ export function createPhoneViewer(options: {
   let orientationTurn: { from: number; to: number; startedAt: number } | null = null;
   let foldTurn: { from: number; to: number; startedAt: number } | null = null;
   let modelId: DeviceModelId | null = null;
+  /** The procedural hardware body, owned by this viewer. */
   let modelAsset: Group | null = null;
+  /** The installed GLB body, owned by its model slot. */
+  let glb: LoadedDeviceModel | null = null;
+  let assetSource: DeviceModelSource | null = null;
+  let accessory: LoadedDeviceModel | null = null;
+  let accessoryBounds: Box3 | null = null;
   // The inner display's raw width over height. Cover frames leave the last unfolded shape.
   const rawAspect = () => (hasFrame ? options.source.width / options.source.height : Number.NaN);
   let foldAspect = isFoldInnerAspect(rawAspect()) ? rawAspect() : DEFAULT_FOLD_INNER_ASPECT;
@@ -162,6 +184,7 @@ export function createPhoneViewer(options: {
       new Vector3(-phone.width / 2, -phone.height / 2, 0),
       new Vector3(phone.width / 2, phone.height / 2, 0),
     );
+    if (glb && accessoryBounds) bounds.union(accessoryBounds);
     bounds.applyMatrix4(new Matrix4().makeRotationZ(orientationAngle));
     const size = bounds.getSize(new Vector3());
     const aspect = size.x / size.y;
@@ -256,7 +279,7 @@ export function createPhoneViewer(options: {
       const frameAspect = rawAspect();
       const innerChanged = isFoldInnerAspect(frameAspect) && frameAspect !== foldAspect;
       if (innerChanged) foldAspect = frameAspect;
-      const imported = modelAsset !== null;
+      const imported = modelAsset !== null || glb !== null;
       if (!imported && "setAngle" in phone && innerChanged) {
         // A new inner display shape resizes the body; the hinge keeps its visible angle.
         const angle = visibleFoldAngle(foldAngle ?? 180);
@@ -288,7 +311,24 @@ export function createPhoneViewer(options: {
     }
     applyPose();
   };
-  /** Prepares the next scene before releasing the visible one; a model that fails to build keeps the family body. */
+  /** Replaces the visible body with one already prepared. A procedural body is owned here; a GLB body by its slot. */
+  const swap = (next: AnyScene, procedural: Group | null) => {
+    foldTurn = null;
+    scene.remove(phone.root);
+    phone.dispose();
+    if (modelAsset) disposeDeviceModel(modelAsset);
+    modelAsset = procedural;
+    phone = next;
+    scene.add(phone.root);
+    if (accessory) {
+      if (glb) phone.orientation.add(accessory.asset);
+      else accessory.asset.removeFromParent();
+    }
+    applyPose();
+    fit(true);
+    scheduler.invalidate();
+  };
+  /** The procedural body for `modelId`; a model that fails to build keeps the family body. */
   const installModel = (id: DeviceModelId | null) => {
     let asset: Group | null = null;
     let next: AnyScene;
@@ -300,16 +340,50 @@ export function createPhoneViewer(options: {
       asset = null;
       next = familyScene();
     }
-    foldTurn = null;
-    scene.remove(phone.root);
-    phone.dispose();
-    if (modelAsset) disposeDeviceModel(modelAsset);
-    modelAsset = asset;
-    phone = next;
-    scene.add(phone.root);
-    applyPose();
-    fit(true);
-    scheduler.invalidate();
+    swap(next, asset);
+  };
+  const modelSlot = createDeviceModelSlot<LoadedDeviceModel>({
+    load: loadModel,
+    onError: options.onModelError,
+    install(model) {
+      if (disposed) {
+        glb = null;
+        return;
+      }
+      // Validate and prepare the GLB scene before releasing the visible body; a throw keeps it.
+      const next = model ? createModelPhoneScene(model.asset, texture, layout) : null;
+      const showingGlb = glb !== null;
+      glb = model;
+      if (next) swap(next, null);
+      // Removing a GLB body brings the procedural one back; a refused GLB never replaced it.
+      else if (showingGlb) installModel(modelId);
+    },
+  });
+  const accessorySlot = createDeviceModelSlot<LoadedDeviceModel, DeviceAccessorySource>({
+    load: loadModel,
+    onError: options.onModelError,
+    install(model) {
+      const bounds = model ? new Box3().setFromObject(model.asset) : null;
+      if (bounds && (bounds.isEmpty() || ![...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite))) {
+        throw new Error("Device accessory has invalid bounds");
+      }
+      accessory?.asset.removeFromParent();
+      accessory = model;
+      accessoryBounds = bounds;
+      if (disposed) return;
+      if (glb && accessory) phone.orientation.add(accessory.asset);
+      fit(true);
+      scheduler.invalidate();
+    },
+  });
+  /** An accessory belongs to one model; any other is ignored. */
+  const setAccessory = (source: DeviceAccessorySource | null) => {
+    accessorySlot.set(source?.modelId === assetSource?.id ? source : null);
+  };
+  const setAsset = (source: DeviceModelSource | null) => {
+    if (source?.id !== assetSource?.id || source?.url !== assetSource?.url) accessorySlot.set(null);
+    assetSource = source;
+    modelSlot.set(source);
   };
   const contextLost = (event: Event) => {
     event.preventDefault();
@@ -321,19 +395,28 @@ export function createPhoneViewer(options: {
     modelId = options.model;
     installModel(modelId);
   }
+  setAsset(options.asset ?? null);
+  setAccessory(options.accessory ?? null);
 
   return {
     setModel(id) {
       if (disposed || id === modelId) return;
       modelId = id;
-      installModel(id);
+      // A loaded GLB body stays; the procedural one is rebuilt if it is removed.
+      if (!glb) installModel(id);
+    },
+    setAsset(source) {
+      if (!disposed) setAsset(source);
+    },
+    setAccessory(source) {
+      if (!disposed) setAccessory(source);
     },
     setFoldAngle(next) {
       if (disposed || next === foldAngle) return;
       const previous = foldAngle;
       foldAngle = next;
       // A hardware model owns the scene; reinstalling it reads foldAngle if it is removed.
-      if (modelAsset) return;
+      if (modelAsset || glb) return;
       if (next === null || !("setAngle" in phone)) {
         if (next !== null && !isAndroid(profile)) return;
         scene.remove(phone.root);
@@ -428,6 +511,10 @@ export function createPhoneViewer(options: {
       options.canvas.removeEventListener("webglcontextlost", contextLost);
       scene.remove(phone.root);
       phone.dispose();
+      // The slots release the GLB body and accessory once the scene no longer holds them.
+      accessory?.asset.removeFromParent();
+      accessorySlot.dispose();
+      modelSlot.dispose();
       if (modelAsset) disposeDeviceModel(modelAsset);
       modelAsset = null;
       texture.dispose();

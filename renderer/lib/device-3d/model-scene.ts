@@ -1,8 +1,39 @@
 // Adapted from t3code packages/client-runtime/src/device/modelScene.ts @ a6ec88f7 (MIT).
-// T3 loads normalized GLB assets; Aiden feeds the same contract with its own
-// procedural models, built synchronously in `hardware-models.ts`.
+// The normalized contract is shared by T3's bundled GLB assets (loaded here) and
+// Aiden's procedural fallback models, built synchronously in `hardware-models.ts`.
 import { Box3, Group, Mesh, MeshBasicMaterial, Texture, type Material, type Object3D } from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import type { DeviceAssetSource } from "./model-source";
 import { createDisplayProjection, updateDisplayUv, type PhoneDisplayLayout } from "./phone-scene";
+
+export interface LoadedDeviceModel {
+  readonly asset: Group;
+  dispose(): void;
+}
+
+/** Fetches and parses a bundled GLB. Aborting releases anything already decoded. */
+export async function loadDeviceModel(
+  source: DeviceAssetSource,
+  signal: AbortSignal,
+  fetchImpl: (url: string, init: { signal: AbortSignal }) => Promise<Response> = (url, init) => fetch(url, init),
+): Promise<LoadedDeviceModel> {
+  const response = await fetchImpl(source.url, { signal });
+  if (!response.ok) throw new Error(`Device model request failed: ${response.status}`);
+  const data = await response.arrayBuffer();
+  signal.throwIfAborted();
+  return parseDeviceModel(data, source.url, signal);
+}
+
+/** Parses GLB bytes. `url` resolves any external resources; bundled models embed theirs. */
+export async function parseDeviceModel(data: ArrayBuffer, url: string, signal?: AbortSignal): Promise<LoadedDeviceModel> {
+  const base = globalThis.location ? new URL(".", new URL(url, globalThis.location.href)).href : "";
+  const gltf = await new GLTFLoader().parseAsync(data, base);
+  if (signal?.aborted) {
+    disposeDeviceModel(gltf.scene);
+    signal.throwIfAborted();
+  }
+  return { asset: gltf.scene, dispose: () => disposeDeviceModel(gltf.scene) };
+}
 
 /** Model resources belong to one viewer; the live framebuffer texture belongs to its stream presentation. */
 export function disposeDeviceModel(root: Object3D) {
@@ -21,7 +52,13 @@ export function disposeDeviceModel(root: Object3D) {
   });
   for (const geometry of geometries) geometry.dispose();
   for (const material of materials) material.dispose();
-  for (const texture of textures) texture.dispose();
+  const images = new Set<ImageBitmap>();
+  for (const texture of textures) {
+    texture.dispose();
+    // GLTFLoader decodes textures to ImageBitmaps, which hold memory until closed.
+    if (typeof ImageBitmap !== "undefined" && texture.image instanceof ImageBitmap) images.add(texture.image);
+  }
+  for (const image of images) image.close();
 }
 
 /** Assets are portrait, front +Z, with one centred `device-screen` 2.2 units tall and planar display UVs. */

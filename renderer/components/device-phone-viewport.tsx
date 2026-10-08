@@ -4,12 +4,16 @@ import { devicesApi } from "../lib/ipc";
 import type { DeviceScreenSize } from "../lib/device-stream";
 import { createPhoneInteraction, type PhoneInteraction, type Point } from "../lib/device-3d/interaction";
 import type { DeviceModelId } from "../lib/device-3d/model-registry";
+import type { DeviceAssetModelId } from "../lib/device-3d/model-source";
 import type { PhoneViewer } from "../lib/device-3d/phone-viewer";
 import type { DeviceShapeProfile } from "../lib/device-3d/shape-profile";
 import { bindPhoneTrackpad, type PhoneTrackpad } from "../lib/device-3d/trackpad";
 
 /** three.js loads only when a 3D view is first shown. */
 const loadPhoneViewer = () => import("../lib/device-3d/phone-viewer");
+/** The bundled model URLs; a module that cannot load leaves the procedural bodies. */
+const loadModelAssets = () => import("../lib/device-3d/device-model-assets").catch(() => null);
+type ModelAssets = Awaited<ReturnType<typeof loadModelAssets>>;
 
 export interface DevicePhoneViewportProps {
   /** The hidden canvas the stream client decodes into. */
@@ -18,6 +22,10 @@ export interface DevicePhoneViewportProps {
   profile: DeviceShapeProfile;
   /** A hardware model by exact simulator name, or null for the family body. */
   model: DeviceModelId | null;
+  /** T3's bundled GLB for this exact device, which replaces the procedural body once loaded. */
+  asset: DeviceAssetModelId | null;
+  /** Shows the Magic Keyboard with a bundled iPad Pro body. */
+  keyboardAttached: boolean;
   /**
    * Android foldables: the hinge angle (0 closed, 180 open), or null for a slab
    * phone. Fed by the Android fold controls' state.
@@ -37,6 +45,8 @@ export function DevicePhoneViewport({
   screen,
   profile,
   model,
+  asset,
+  keyboardAttached,
   foldAngle,
   onFrameListener,
   onResetReady,
@@ -52,6 +62,8 @@ export function DevicePhoneViewport({
   const profileRef = React.useRef(profile);
   const modelRef = React.useRef(model);
   const foldAngleRef = React.useRef(foldAngle);
+  const assetRef = React.useRef({ asset, keyboardAttached });
+  const assetsRef = React.useRef<ModelAssets>(null);
   const touchRef = React.useRef(touch);
   touchRef.current = touch;
 
@@ -59,6 +71,14 @@ export function DevicePhoneViewport({
     foldAngleRef.current = foldAngle;
     viewerRef.current?.setFoldAngle(foldAngle);
   }, [foldAngle]);
+
+  React.useEffect(() => {
+    assetRef.current = { asset, keyboardAttached };
+    const assets = assetsRef.current;
+    if (!assets) return;
+    viewerRef.current?.setAsset(assets.deviceModelSource(asset));
+    viewerRef.current?.setAccessory(keyboardAttached ? assets.deviceKeyboardSource(asset) : null);
+  }, [asset, keyboardAttached]);
 
   React.useEffect(() => {
     screenRef.current = screen;
@@ -101,15 +121,21 @@ export function DevicePhoneViewport({
       trackpad?.cancel();
     };
     window.addEventListener("blur", blur);
-    void loadPhoneViewer()
-      .then(({ createPhoneViewer }) => {
+    void Promise.all([loadPhoneViewer(), loadModelAssets()])
+      .then(([{ createPhoneViewer }, assets]) => {
         if (disposed) return;
+        assetsRef.current = assets;
+        const wanted = assetRef.current;
         const viewer = createPhoneViewer({
           canvas,
           source: decoded,
           onUnavailable,
           profile: profileRef.current,
           model: modelRef.current,
+          asset: assets?.deviceModelSource(wanted.asset) ?? null,
+          accessory: wanted.keyboardAttached ? (assets?.deviceKeyboardSource(wanted.asset) ?? null) : null,
+          // A model that cannot load keeps the procedural body; the 3D view stays up.
+          onModelError: (cause) => console.warn("Device 3D model could not load", cause),
           foldAngle: foldAngleRef.current,
         });
         viewerRef.current = viewer;

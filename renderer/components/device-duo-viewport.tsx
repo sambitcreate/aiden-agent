@@ -14,6 +14,8 @@ import { bindPhoneTrackpad, type PhoneTrackpad } from "../lib/device-3d/trackpad
 
 /** three.js loads only when a 3D view is first shown. */
 const loadDuoViewer = () => import("../lib/device-3d/duo-viewer");
+/** The bundled Duo GLB's URL; a module that cannot load leaves the procedural body. */
+const loadModelAssets = () => import("../lib/device-3d/device-model-assets").catch(() => null);
 
 export interface DeviceDuoViewportProps {
   /** The hidden canvas the stream client decodes the active display into. */
@@ -97,14 +99,18 @@ export function DeviceDuoViewport({
     };
     onInputCancel(blur);
     window.addEventListener("blur", blur);
-    void loadDuoViewer()
-      .then(({ createDuoViewer }) => {
+    void Promise.all([loadDuoViewer(), loadModelAssets()])
+      .then(([{ createDuoViewer }, assets]) => {
         if (disposed) return;
         const sources = { 1: document.createElement("canvas"), 3: document.createElement("canvas") };
         const viewer = createDuoViewer({
           canvas,
           sources,
           onUnavailable,
+          // Every hinge-reporting iOS simulator is an iPhone Duo, so it gets the Duo's own body.
+          asset: assets?.deviceModelSource("iphone-duo") ?? null,
+          // A model that cannot load keeps the procedural body; the 3D view stays up.
+          onModelError: (cause) => console.warn("iPhone Duo 3D model could not load", cause),
           // Snapping to the other display turns the device over; the hub confirms or the view rolls back.
           onPanelRequested: (panel) =>
             client.current?.controlDuo({ control: "physical", value: panel === 1 ? "facedown" : "faceup" }),

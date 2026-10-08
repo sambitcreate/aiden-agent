@@ -8,7 +8,7 @@ Bring Aiden's Simulator devices feature up to date with T3 Code's Devices panel.
 
 ## Constraints
 
-- **3D models.** T3's Apple-derived `.glb` device models are never bundled, downloaded or derived from. They carry no redistribution licence (owner decision, 2026-10-08). Hardware frames are original, procedural three.js models. The T3 viewer, motion, snapping and Duo code around them is ported.
+- **3D models.** Owner decision (2026-10-08, reversing the earlier ban): bundle T3's Apple-derived `.glb` device models, the same files T3 ships. No redistribution licence is established for them; `renderer/assets/devices/models/sources.json` records their provenance. Matching devices load the GLB lazily; Aiden's original procedural models remain the immediate body, the fallback when a GLB fails, and the body for every other device. The T3 viewer, motion, snapping, model-loading and Duo code is ported.
 - **Network posture.** The existing posture is unchanged. Nothing runs at startup or in the background, and there is no polling. Tool installs and updates happen only through explicit user action plus the existing consent and `allowInstall` gates. Paired Macs and SSH hosts are contacted only on user action.
 - **No migrations.** Aiden is pre-1.0, so legacy state shapes are deleted rather than migrated.
 

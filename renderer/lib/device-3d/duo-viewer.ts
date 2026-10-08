@@ -23,7 +23,8 @@ import { buildDuoModel, DUO_COVER_PIXELS, DUO_INNER_PIXELS } from "./duo-model";
 import { createDuoScene, duoDisplayKey, duoFrameMatches, type DuoHingeLeaf, type DuoPanelId } from "./duo-scene";
 import { duoViewSnaps, nearestDuoView, type DuoRestFace } from "./duo-snap";
 import { createRenderScheduler } from "./interaction";
-import { disposeDeviceModel } from "./model-scene";
+import { disposeDeviceModel, loadDeviceModel, type LoadedDeviceModel } from "./model-scene";
+import { createDeviceModelSlot, type DeviceModelSource } from "./model-source";
 import {
   browserViewerRuntime,
   captureCanvas,
@@ -65,6 +66,10 @@ export function createDuoViewer(options: {
   onOrientationRequested?: (orientation: DeviceScreenSize["orientation"]) => void;
   /** Supplies the articulated asset; tests pass a minimal rig. */
   buildModel?: () => Group;
+  /** T3's bundled Duo GLB; it replaces the procedural body once loaded, which stays on failure. */
+  asset?: DeviceModelSource | null;
+  loadModel?: (source: DeviceModelSource, signal: AbortSignal) => Promise<LoadedDeviceModel>;
+  onModelError?: (cause: unknown) => void;
   runtime?: ViewerRuntime;
 }): DuoViewer {
   const runtime = options.runtime ?? browserViewerRuntime();
@@ -100,7 +105,9 @@ export function createDuoViewer(options: {
   const fill = new DirectionalLight(0xc7dcff, 2);
   fill.position.set(8, -3, -5);
   scene.add(new AmbientLight(0xffffff, environment ? 1.2 : 2.4), key, fill);
-  const asset = (options.buildModel ?? buildDuoModel)();
+  const buildModel = options.buildModel ?? buildDuoModel;
+  /** The procedural body while it is shown; owned here. A loaded GLB body is owned by its slot. */
+  let procedural: Group | null = buildModel();
   let model: ReturnType<typeof createDuoScene> | null = null;
   let screen: DeviceScreenSize | null = null;
   let readyKey = "";
@@ -259,20 +266,36 @@ export function createDuoViewer(options: {
     (callback) => runtime.requestFrame(callback),
     (id) => runtime.cancelFrame(id),
   );
-  const install = () => {
-    model = createDuoScene(asset, { 1: surfaces[0]!.texture, 3: surfaces[1]!.texture });
+  /** Prepares the articulated scene for `body` before releasing the visible one; a throw keeps it. */
+  const install = (body: Group, replacing: boolean) => {
+    const next = createDuoScene(body, { 1: surfaces[0]!.texture, 3: surfaces[1]!.texture });
+    if (model) {
+      scene.remove(model.root);
+      model.dispose();
+    }
+    model = next;
     appliedAngle = Number.NaN;
     scene.add(model.root);
     applyPose();
+    if (replacing && screen?.screenId === 1 && physicalPose !== "tent") {
+      // A new body's cover plane decides the resting view, as when T3's model loads after configuration.
+      const snap = nearestDuoView(orbit.rotation, activeSnaps());
+      if (snap) {
+        restFace = snap.face;
+        orbit.setPose(snap.rotation, runtime.now(), true);
+        applyPose();
+      }
+    }
     pivot.copy(targetPivot);
     applyPose();
-    fit();
+    // A body of another scale is refitted at once rather than zoomed into place.
+    fit(replacing);
   };
   try {
-    install();
+    install(procedural!, false);
   } catch (cause) {
     for (const surface of surfaces) surface.texture.dispose();
-    disposeDeviceModel(asset);
+    if (procedural) disposeDeviceModel(procedural);
     environment?.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
@@ -283,6 +306,23 @@ export function createDuoViewer(options: {
     fail();
   };
   options.canvas.addEventListener("webglcontextlost", lost);
+  const slot = createDeviceModelSlot<LoadedDeviceModel>({
+    load: options.loadModel ?? ((source, signal) => loadDeviceModel(source, signal)),
+    onError: options.onModelError,
+    install(loaded) {
+      if (disposed) return;
+      if (loaded) {
+        install(loaded.asset, true);
+        if (procedural) disposeDeviceModel(procedural);
+        procedural = null;
+      } else if (!procedural) {
+        procedural = buildModel();
+        install(procedural, true);
+      }
+      scheduler.invalidate();
+    },
+  });
+  slot.set(options.asset ?? null);
   /** Whether an 8×8 sample of `source` is all black: an inactive panel's shutdown frame. */
   const blank = (source: HTMLCanvasElement) => {
     const probe = runtime.createCanvas(8, 8);
@@ -552,7 +592,9 @@ export function createDuoViewer(options: {
         model.dispose();
       }
       model = null;
-      disposeDeviceModel(asset);
+      slot.dispose();
+      if (procedural) disposeDeviceModel(procedural);
+      procedural = null;
       for (const surface of surfaces) surface.texture.dispose();
       scene.environment = null;
       environment?.dispose();

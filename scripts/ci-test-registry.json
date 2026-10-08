@@ -677,6 +677,7 @@
         "renderer/lib/device-3d/device-3d.test.ts",
         "renderer/lib/device-3d/android-fold-scene.test.ts",
         "renderer/lib/device-3d/device-motion.test.ts",
+        "renderer/lib/device-3d/device-models.test.ts",
         "renderer/lib/device-3d/duo-viewer.test.ts",
         "renderer/lib/device-3d/duo.test.ts",
         "renderer/lib/device-3d/hardware-models.test.ts",
