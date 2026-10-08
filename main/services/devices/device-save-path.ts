@@ -4,11 +4,18 @@
  * lexically first and again after resolving symlinks, so neither `..` nor a
  * link inside an allowed folder can lead out of it. Missing folders are
  * created one level at a time and no folder below the root may be a link.
- * The file itself is opened without following a final symlink.
+ * The bytes are written by Aiden's native confined file helper, which holds
+ * each folder open while it walks down from the root and replaces the file
+ * through the held parent, so a folder swapped for a link after these checks
+ * cannot redirect the write.
  */
-import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath } from "node:fs/promises";
+import { lstat, mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import {
+  captureManagedWorktreeRootIdentity,
+  ManagedWorktreeFileIoError,
+  saveConfinedWorkspaceFile,
+} from "../managed-worktree-file-io.js";
 
 export interface DeviceSaveRoots {
   /** The chat's workspace folder, when the chat has one with file access. */
@@ -60,12 +67,24 @@ export function resolveDeviceSavePath(requested: unknown, roots: DeviceSaveRoots
  * inside the root) before the next one. A link swapped in for a missing
  * folder therefore stops the walk instead of letting a recursive create
  * follow it out of the root.
+ *
+ * The walk only produces clear errors. The write itself never re-resolves the
+ * checked path: the native helper reopens the root by the device and inode
+ * captured before the walk, opens each folder beneath the previous descriptor
+ * with `O_NOFOLLOW`, writes an `O_EXCL` temporary in the held parent and
+ * renames it over the file through that descriptor. A folder replaced by a
+ * link after the walk makes the helper refuse; a folder moved elsewhere after
+ * the helper opened it takes the file with it, but nothing outside the root
+ * is created, truncated or replaced. An existing file is replaced as a
+ * directory entry, so a hard link to a file elsewhere keeps its contents.
  */
 export async function writeDeviceSaveFile(file: string, roots: DeviceSaveRoots, bytes: Uint8Array): Promise<string> {
+  if (process.platform !== "darwin") throw new Error("Saving screenshots to a file needs macOS.");
   const allowed = [roots.workspace, roots.downloads].filter((root): root is string => Boolean(root && path.isAbsolute(root)));
   const root = allowed.find((candidate) => inside(path.resolve(candidate), file));
   if (!root) throw new Error(`That save path is outside the allowed folders. ${DEVICE_SAVE_PATH_HINT}`);
-  const realRoot = await realpath(root);
+  const identity = await captureManagedWorktreeRootIdentity(root);
+  const realRoot = identity.path;
   const escapes = () => new Error(`That save path leads outside the allowed folders. ${DEVICE_SAVE_PATH_HINT}`);
   const relative = path.relative(path.resolve(root), path.dirname(file));
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw escapes();
@@ -90,20 +109,24 @@ export async function writeDeviceSaveFile(file: string, roots: DeviceSaveRoots, 
     current = real;
   }
   const target = path.join(current, path.basename(file));
-  const handle = await open(
-    target,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
-    0o644,
-  ).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ELOOP") {
-      throw new Error(`That save path is a link, which is not allowed. ${DEVICE_SAVE_PATH_HINT}`);
+  const existing = await lstat(target).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    throw new Error(`That save path is a link, which is not allowed. ${DEVICE_SAVE_PATH_HINT}`);
+  }
+  if (existing && !existing.isFile()) {
+    throw new Error(`That save path names a folder or special file. ${DEVICE_SAVE_PATH_HINT}`);
+  }
+  const confined = path.relative(realRoot, target);
+  if (!confined || confined.startsWith("..") || path.isAbsolute(confined)) throw escapes();
+  try {
+    await saveConfinedWorkspaceFile(identity, confined.split(path.sep).join("/"), Buffer.from(bytes));
+  } catch (error) {
+    if (error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination") {
+      throw new Error(
+        `That save path changed while the screenshot was being saved, so it was not written. ${DEVICE_SAVE_PATH_HINT}`,
+      );
     }
     throw error;
-  });
-  try {
-    await handle.writeFile(bytes);
-  } finally {
-    await handle.close();
   }
   return target;
 }

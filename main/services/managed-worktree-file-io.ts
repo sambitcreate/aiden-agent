@@ -224,3 +224,27 @@ export async function createConfinedWorkspaceFile(
   if (!header) throw new ManagedWorktreeFileIoError("io_failed");
   return { device: header[1]!, inode: header[2]! };
 }
+
+/**
+ * Create or replace a regular file beneath `root`. The helper walks every
+ * component with descriptor-relative, no-follow opens (creating missing
+ * directories), writes a fresh temporary in the held parent, and renames it
+ * over the leaf through that same descriptor. A replaced ancestor cannot
+ * redirect the write, and an existing file is replaced, never truncated.
+ */
+export async function saveConfinedWorkspaceFile(
+  root: ManagedWorktreeRootIdentity,
+  relativePath: string,
+  content: Buffer,
+  signal?: AbortSignal,
+): Promise<{ device: string; inode: string }> {
+  if (content.length > 64 * 1024 * 1024) throw new ManagedWorktreeFileIoError("invalid_input");
+  const output = await runConfinedFile(
+    ["save", root.path, root.device, root.inode, relativePath, String(content.length)],
+    signal,
+    content,
+  );
+  const header = /^c ([0-9]+) ([0-9]+)\n$/u.exec(output.toString("ascii"));
+  if (!header) throw new ManagedWorktreeFileIoError("io_failed");
+  return { device: header[1]!, inode: header[2]! };
+}

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import type { PathLike } from "node:fs";
-import fsPromises, { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { renameSync, symlinkSync, type PathLike } from "node:fs";
+import fsPromises, { link, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -119,6 +120,66 @@ test("a link swapped in for a missing folder while writing creates nothing outsi
   } finally {
     fsPromises.mkdir = original;
     syncBuiltinESMExports();
+    await dirs.cleanup();
+  }
+});
+
+test("a checked folder swapped for an outside link just before the write changes nothing outside the root", async () => {
+  const dirs = await roots();
+  const originalOpen = fsPromises.open;
+  const originalExecFile = childProcess.execFile;
+  const shots = path.join(dirs.workspace, "shots");
+  let swaps = 0;
+  // Another process replaces the already checked `shots` with a link to an
+  // outside folder after the walk, immediately before the file is written:
+  // at the writer's first open of the file or its file helper, whichever
+  // comes first.
+  const swap = () => {
+    if (swaps++ > 0) return;
+    renameSync(shots, path.join(dirs.workspace, "shots-moved"));
+    symlinkSync(dirs.outside, shots);
+  };
+  try {
+    await mkdir(shots);
+    await writeFile(path.join(shots, "shot.png"), "inside");
+    await writeFile(path.join(dirs.outside, "shot.png"), "outside");
+    const allowed = { workspace: dirs.workspace, downloads: dirs.downloads };
+    const file = resolveDeviceSavePath("shots/shot.png", allowed, "d.png");
+    fsPromises.open = (async (target: PathLike, ...rest: unknown[]) => {
+      if (String(target).endsWith(`${path.sep}shot.png`)) swap();
+      return originalOpen(target, ...(rest as []));
+    }) as typeof fsPromises.open;
+    childProcess.execFile = ((...args: unknown[]) => {
+      swap();
+      return (originalExecFile as (...values: unknown[]) => childProcess.ChildProcess)(...args);
+    }) as typeof childProcess.execFile;
+    syncBuiltinESMExports();
+
+    await assert.rejects(writeDeviceSaveFile(file, allowed, PNG));
+    assert.equal(swaps, 1, "the swap happened during the write");
+    assert.equal(await readFile(path.join(dirs.outside, "shot.png"), "utf8"), "outside", "the outside file is untouched");
+    assert.deepEqual(await readdir(dirs.outside), ["shot.png"], "nothing new is created outside the root");
+    assert.equal(await readFile(path.join(dirs.workspace, "shots-moved", "shot.png"), "utf8"), "inside");
+    assert.deepEqual(await readdir(path.join(dirs.workspace, "shots-moved")), ["shot.png"], "no temporary file is left behind");
+  } finally {
+    fsPromises.open = originalOpen;
+    childProcess.execFile = originalExecFile;
+    syncBuiltinESMExports();
+    await dirs.cleanup();
+  }
+});
+
+test("saving over an existing file replaces it without writing through a hard link to a file elsewhere", async () => {
+  const dirs = await roots();
+  try {
+    const allowed = { workspace: dirs.workspace, downloads: dirs.downloads };
+    await writeFile(path.join(dirs.outside, "target.png"), "keep");
+    await link(path.join(dirs.outside, "target.png"), path.join(dirs.workspace, "hard.png"));
+    const written = await writeDeviceSaveFile(resolveDeviceSavePath("hard.png", allowed, "d.png"), allowed, PNG);
+    assert.deepEqual(new Uint8Array(await readFile(written)), PNG);
+    assert.equal(await readFile(path.join(dirs.outside, "target.png"), "utf8"), "keep");
+    assert.deepEqual(await readdir(dirs.workspace), ["hard.png"], "no temporary file is left behind");
+  } finally {
     await dirs.cleanup();
   }
 });
