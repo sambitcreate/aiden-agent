@@ -39,10 +39,9 @@ test("live child snapshots are durable before owner-bound renderer delivery", as
 });
 
 test("historical inspector reads require a live document and matching chat owner", async () => {
-  const [handler, historyRead, rendererIpc] = await Promise.all([
+  const [handler, historyRead] = await Promise.all([
     source("main/handlers/subagents.ts"),
     source("main/services/subagents/subagent-history-read-core.ts"),
-    source("renderer/lib/ipc.ts"),
   ]);
   assert.match(handler, /rendererDocumentOwner\(/u);
   assert.match(handler, /readSubagentHistoryDetailForOwner\(/u);
@@ -60,8 +59,6 @@ test("historical inspector reads require a live document and matching chat owner
   assert.doesNotMatch(handler, /broadcast\(/u);
   assert.doesNotMatch(handler, /throw error|error\.message/u);
   assert.match(handler, /Aiden could not load subagent history/u);
-  assert.match(rendererIpc, /parseSubagentRunSnapshot\(/u);
-  assert.match(rendererIpc, /snapshot\?\.generationId === streamId/u);
 });
 
 test("run-store failures keep filesystem details out of renderer-visible errors", async () => {
@@ -120,7 +117,7 @@ test("chat removal deletes private child history before the chat can disappear",
   ]);
   assert.match(
     handler,
-    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\)[\s\S]*return result/u,
+    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId, \{ rejectFeatureOwned: true \}\)[\s\S]*return result/u,
   );
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");

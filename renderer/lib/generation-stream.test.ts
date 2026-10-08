@@ -61,6 +61,57 @@ test("a subscriber sees only its own stream and releases every listener at the t
   }
 });
 
+function subagentSnapshot(generationId: string) {
+  return {
+    version: 1,
+    runId: "run-1",
+    groupId: "group-1",
+    generationId,
+    childId: "child-1",
+    chatId: "chat-1",
+    workspaceId: "workspace-1",
+    revision: 1,
+    role: "reviewer",
+    label: "Review",
+    taskPreview: "Review the authority boundary.",
+    state: "completed",
+    finishedAt: 2_000,
+    terminalMarkdown: "Complete.",
+    startedAt: 1_000,
+    updatedAt: 2_000,
+    modelId: "test-model",
+    turns: 2,
+    tools: 3,
+    tokens: 100,
+    warnings: [],
+  };
+}
+
+test("a subagent snapshot reaches the projection only for its own generation", () => {
+  const bridge = installFakeBridge();
+  try {
+    const received: unknown[] = [];
+    const stream = subscribeGenerationStream("generation-1", { chatId: "chat-1", workspaceId: "workspace-1" }, {
+      onDelta: () => assert.fail("no text expected"),
+      onDone: () => assert.fail("no terminal expected"),
+      onError: (message) => assert.fail(message),
+      onSubagents: (snapshot) => received.push(snapshot),
+    });
+    const own = subagentSnapshot("generation-1");
+    bridge.emit("chat:subagents", { streamId: "generation-1", snapshot: own });
+    bridge.emit("chat:subagents", { streamId: "generation-1", snapshot: subagentSnapshot("generation-2") });
+    bridge.emit("chat:subagents", { streamId: "generation-2", snapshot: own });
+    assert.deepEqual(received, [own]);
+    assert.deepEqual(
+      stream.projection().subagents.map((snapshot) => snapshot.runId),
+      ["run-1"],
+    );
+    stream.dispose();
+  } finally {
+    bridge.restore();
+  }
+});
+
 test("dispose stops delivery before any terminal event", () => {
   const bridge = installFakeBridge();
   try {

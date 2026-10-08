@@ -581,7 +581,6 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
 
 test("the shell reconciles lifecycle-detached terminal chats without per-stream listeners", () => {
   const root = source("../main/root-view.tsx");
-  const ipc = source("../lib/ipc.ts");
   const pane = source("../main/chat-pane.tsx");
 
   assert.match(root, /subscribeDetachedTerminalChats\(\s+onNotification/u);
@@ -590,10 +589,6 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   assert.match(
     root,
     /queryClient\.fetchQuery\(\{\s+queryKey: chatKey,\s+queryFn: \(\) => chatsApi\.get\(chatId\),\s+staleTime: 0,\s+\}\)/u,
-  );
-  assert.match(
-    ipc,
-    /rememberDetachedLifecycleStream\(\s+\{\s+streamId,\s+chatId: params\.chatId,\s+workspaceId: params\.workspaceId \?\? "default",\s+\},\s+\{\s+content: projectedContent,\s+lastTextDeltaAt: projectedLastTextDeltaAt,\s+reasoning: projectedReasoning,\s+timeline: projectedTimeline,\s+artifacts: projectedArtifacts,\s+subagents: projectedSubagents,/u,
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
