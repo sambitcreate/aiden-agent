@@ -1,13 +1,12 @@
 package sbtbiswas.AidenOnTheGo.features.shared
 
 import android.graphics.BitmapFactory
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -18,13 +17,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.AidenProviderArtwork
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
 object AidenProviderIconResolver {
     val supportedSlugs = setOf(
@@ -37,6 +38,58 @@ object AidenProviderIconResolver {
         "openai", "openai-codex", "opencode", "opencode-go", "openrouter",
         "tailscale", "together", "vercel-ai-gateway", "xai", "xiaomi", "xiaomi-token-plan-ams",
         "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai", "zai-coding-cn"
+    )
+
+    /** Marks drawn in their brand colors; every other logo is tinted like text. */
+    val multicolorSlugs = setOf(
+        "fireworks", "groq", "opencode", "opencode-go", "together", "zai", "zai-coding-cn"
+    )
+
+    // The drawables are generated from renderer/assets/provider-logos by
+    // android/scripts/generate-provider-logos.py; rerun it when a logo changes.
+    private val logos: Map<String, Int> = mapOf(
+        "amazon-bedrock" to R.drawable.ic_provider_amazon_bedrock,
+        "ant-ling" to R.drawable.ic_provider_ant_ling,
+        "anthropic" to R.drawable.ic_provider_anthropic,
+        "apple-foundation-models" to R.drawable.ic_provider_apple_foundation_models,
+        "azure-openai-responses" to R.drawable.ic_provider_azure_openai_responses,
+        "cerebras" to R.drawable.ic_provider_cerebras,
+        "claude" to R.drawable.ic_provider_claude,
+        "cloudflare-ai-gateway" to R.drawable.ic_provider_cloudflare_ai_gateway,
+        "cloudflare-workers-ai" to R.drawable.ic_provider_cloudflare_workers_ai,
+        "concentrate" to R.drawable.ic_provider_concentrate,
+        "deepseek" to R.drawable.ic_provider_deepseek,
+        "fireworks" to R.drawable.ic_provider_fireworks,
+        "github-copilot" to R.drawable.ic_provider_github_copilot,
+        "google" to R.drawable.ic_provider_google,
+        "google-vertex" to R.drawable.ic_provider_google_vertex,
+        "grok" to R.drawable.ic_provider_grok,
+        "groq" to R.drawable.ic_provider_groq,
+        "huggingface" to R.drawable.ic_provider_huggingface,
+        "kimi-coding" to R.drawable.ic_provider_kimi_coding,
+        "lmstudio" to R.drawable.ic_provider_lmstudio,
+        "minimax" to R.drawable.ic_provider_minimax,
+        "minimax-cn" to R.drawable.ic_provider_minimax_cn,
+        "mistral" to R.drawable.ic_provider_mistral,
+        "moonshotai" to R.drawable.ic_provider_moonshotai,
+        "moonshotai-cn" to R.drawable.ic_provider_moonshotai_cn,
+        "nvidia" to R.drawable.ic_provider_nvidia,
+        "ollama" to R.drawable.ic_provider_ollama,
+        "openai" to R.drawable.ic_provider_openai,
+        "openai-codex" to R.drawable.ic_provider_openai_codex,
+        "opencode" to R.drawable.ic_provider_opencode,
+        "opencode-go" to R.drawable.ic_provider_opencode_go,
+        "openrouter" to R.drawable.ic_provider_openrouter,
+        "tailscale" to R.drawable.ic_provider_tailscale,
+        "together" to R.drawable.ic_provider_together,
+        "vercel-ai-gateway" to R.drawable.ic_provider_vercel_ai_gateway,
+        "xai" to R.drawable.ic_provider_xai,
+        "xiaomi" to R.drawable.ic_provider_xiaomi,
+        "xiaomi-token-plan-ams" to R.drawable.ic_provider_xiaomi_token_plan_ams,
+        "xiaomi-token-plan-cn" to R.drawable.ic_provider_xiaomi_token_plan_cn,
+        "xiaomi-token-plan-sgp" to R.drawable.ic_provider_xiaomi_token_plan_sgp,
+        "zai" to R.drawable.ic_provider_zai,
+        "zai-coding-cn" to R.drawable.ic_provider_zai_coding_cn
     )
 
     private val aliases = mapOf(
@@ -58,6 +111,10 @@ object AidenProviderIconResolver {
         return if (supportedSlugs.contains(provider)) provider else null
     }
 
+    /** The bundled logo for a resolved slug, or null when the provider has none. */
+    @DrawableRes
+    fun logoRes(slug: String): Int? = logos[slug]
+
     private fun matchesNumberedCustomProvider(provider: String, base: String): Boolean {
         if (provider == base) return true
         if (!provider.startsWith("$base-")) return false
@@ -67,6 +124,13 @@ object AidenProviderIconResolver {
     }
 }
 
+/**
+ * A provider's mark: custom artwork when the host supplies it, otherwise the bundled logo
+ * shared with desktop and iOS, otherwise a neutral initial. Mono logos take [tint] (or the
+ * surface's content color) so they follow the theme; multicolor logos keep their brand
+ * colors. The mark is decorative because every caller sets the provider name beside it,
+ * so it stays out of TalkBack.
+ */
 @Composable
 fun AidenProviderIcon(
     providerId: String,
@@ -77,8 +141,11 @@ fun AidenProviderIcon(
     size: Dp = 24.dp,
     tint: Color? = null
 ) {
-    val palette = AidenTheme.palette
     val slug = AidenProviderIconResolver.slug(providerId, modelId)
+    val logo = slug?.let(AidenProviderIconResolver::logoRes)
+    val markModifier = modifier
+        .size(size)
+        .semantics { hideFromAccessibility() }
 
     // Bounded custom PNG artwork if supplied
     val customBitmap = remember(artwork) {
@@ -89,72 +156,41 @@ fun AidenProviderIcon(
         }
     }
 
-    if (customBitmap != null) {
-        Image(
+    when {
+        customBitmap != null -> Image(
             bitmap = customBitmap,
-            contentDescription = providerLabel,
-            modifier = modifier
-                .size(size)
-                .clip(RoundedCornerShape(size * 0.2f))
+            contentDescription = null,
+            modifier = markModifier.clip(RoundedCornerShape(size * 0.2f))
         )
-    } else {
-        // Semantic Monogram or Icon Badge
-        val initial = providerLabel.trim().firstOrNull()?.uppercaseChar() ?: 'A'
-        val monogram = aidenProviderMonogramColors(
-            brandFill = aidenProviderBrandFill(slug) ?: palette.accent,
-            surface = palette.raised,
-            liftedFill = MaterialTheme.colorScheme.surfaceContainerHighest,
-            liftedInk = palette.foreground
+        logo != null && slug in AidenProviderIconResolver.multicolorSlugs -> Image(
+            painter = painterResource(logo),
+            contentDescription = null,
+            modifier = markModifier
         )
-
-        Box(
-            modifier = modifier
-                .size(size)
-                .clip(RoundedCornerShape(size * 0.25f))
-                .background(monogram.fill),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = initial.toString(),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                fontSize = (size.value * 0.55f).sp,
-                color = monogram.ink
-            )
+        logo != null -> Icon(
+            painter = painterResource(logo),
+            contentDescription = null,
+            modifier = markModifier,
+            tint = tint ?: MaterialTheme.colorScheme.onSurface
+        )
+        else -> {
+            // Unknown, custom, and future providers get a quiet initial rather than a
+            // brand color Aiden does not know, matching desktop and iOS.
+            val initial = providerLabel.trim().firstOrNull()?.uppercaseChar() ?: '?'
+            Box(
+                modifier = markModifier
+                    .clip(RoundedCornerShape(size * 0.28f))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = initial.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = (size.value * 0.48f).sp,
+                    color = tint ?: MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
-
-/** Brand fill for a provider's monogram badge, or null to fall back to the theme accent. */
-internal fun aidenProviderBrandFill(slug: String?): Color? = when (slug) {
-    "openai", "openai-codex" -> Color(0xFF10A37F)
-    "claude", "anthropic" -> Color(0xFFD97706)
-    "google", "google-vertex" -> Color(0xFF4285F4)
-    "deepseek" -> Color(0xFF0066FF)
-    "grok", "xai" -> Color(0xFF1D1D1D)
-    "mistral" -> Color(0xFFFF7000)
-    "ollama" -> Color(0xFF24292E)
-    else -> null
-}
-
-internal data class AidenMonogramColors(val fill: Color, val ink: Color)
-
-/** True when a near-black brand fill would sink into a dark surface and lose its edge. */
-internal fun aidenMonogramBlendsIntoSurface(fill: Color, surface: Color): Boolean =
-    fill.luminance() < 0.03f && surface.luminance() < 0.18f
-
-/**
- * Badge colors for a monogram: the brand fill with white ink, or, when that fill would
- * disappear into a dark surface, a lifted tonal fill with foreground ink.
- */
-internal fun aidenProviderMonogramColors(
-    brandFill: Color,
-    surface: Color,
-    liftedFill: Color,
-    liftedInk: Color
-): AidenMonogramColors =
-    if (aidenMonogramBlendsIntoSurface(brandFill, surface)) {
-        AidenMonogramColors(fill = liftedFill, ink = liftedInk)
-    } else {
-        AidenMonogramColors(fill = brandFill, ink = Color.White)
-    }

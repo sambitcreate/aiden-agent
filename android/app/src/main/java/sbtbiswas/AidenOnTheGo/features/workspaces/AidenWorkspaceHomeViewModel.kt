@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.combine
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledRunIdempotencyKeys
+import sbtbiswas.AidenOnTheGo.features.shared.AidenRevalidation
 import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledTask
@@ -92,6 +93,7 @@ class AidenWorkspaceHomeViewModel(
     private var hydratedWorkspaceIds: Set<String> = emptySet()
     private var hydratedCanReadSchedules: Boolean? = null
     private var paginationBoundary: AidenChatSummary? = null
+    private var lastLoadedAtMillis: Long? = null
     private val pendingRunKeysByInstance = mutableMapOf<String, AidenScheduledRunIdempotencyKeys>()
 
     fun pendingScheduledRunKeys(instanceId: String): AidenScheduledRunIdempotencyKeys =
@@ -133,6 +135,7 @@ class AidenWorkspaceHomeViewModel(
         ) return
 
         if (hydratedInstanceId != instanceId) {
+            lastLoadedAtMillis = null
             loadGeneration += 1
             loadedClient = null
             loadedInstanceId = null
@@ -279,6 +282,7 @@ class AidenWorkspaceHomeViewModel(
                 if (isCurrentLoad(requestGeneration, client, instanceId) && allCoreSucceeded) {
                     loadedClient = client
                     loadedInstanceId = instanceId
+                    lastLoadedAtMillis = System.currentTimeMillis()
                 }
             } finally {
                 if (isCurrentLoad(requestGeneration, client, instanceId)) {
@@ -288,6 +292,16 @@ class AidenWorkspaceHomeViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * Rereads chats, tasks and Usage when the home comes back to the foreground after
+     * [AidenRevalidation.STALE_AFTER_MILLIS]. Saved rows stay on screen meanwhile.
+     */
+    fun revalidate(nowMillis: Long = System.currentTimeMillis()) {
+        if (coordinator.connectionState.value != AidenConnectionState.CONNECTED) return
+        if (!AidenRevalidation.isDue(lastLoadedAtMillis, nowMillis, inFlight = loadingClient != null)) return
+        load(force = true)
     }
 
     fun refresh(workspaces: List<AidenWorkspace>) {
