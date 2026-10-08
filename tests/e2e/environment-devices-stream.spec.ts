@@ -252,8 +252,9 @@ test.describe("Simulator stream", () => {
     const box = await player.boundingBox();
     const viewport = await page.locator("[data-browser-floating-container] [data-scroll-top]").first().boundingBox();
     expect(start && box && viewport).toBeTruthy();
-    // Grab the handle and drop the player just inside the chat's top-left corner, the way a person would.
-    const grabX = start!.x + 40;
+    // Grab the handle by its grip (a narrow player's header buttons fill the rest of it, and a press on a
+    // button never starts a drag) and drop the player just inside the chat's top-left corner.
+    const grabX = start!.x + 10;
     const grabY = start!.y + start!.height / 2;
     await page.mouse.move(grabX, grabY);
     await page.mouse.down();
