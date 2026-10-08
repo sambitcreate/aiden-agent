@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ACTIVITY_MARKS, type ActivityMark } from "../shared/activity-marks.js";
-import { AidenActivityMark } from "./aiden-activity-mark.js";
+import { AidenActivityMark, rewindWhenFrozen } from "./aiden-activity-mark.js";
 
 // Shape counts from docs/activity-marks.md; iOS and Android draw the same geometry.
 const SHAPES: Record<ActivityMark, { circle: number; rect: number }> = {
@@ -71,4 +71,39 @@ test("every phase offset starts mid-cycle like the native (t − d) mod D, never
   }
   // Bounce dot 2 trails dot 1 by 0.13s of a 1.2s cycle: −1.07s, as on iOS and Android.
   assert.match(renderToStaticMarkup(<AidenActivityMark mark="bounce" />), /animation-delay:-1\.07s/u);
+});
+
+test("a mark that freezes mid-cycle rewinds to its t = 0 still pose, and a running one is left alone", () => {
+  const globals = globalThis as { document?: unknown; window?: unknown };
+  const saved = { document: globals.document, window: globals.window };
+  const fakeMark = (paused: boolean) => {
+    const animations = [{ currentTime: 3600 as number | null }, { currentTime: 900 as number | null }];
+    const node = {
+      hasAttribute: (name: string) => paused && name === "data-paused",
+      getAnimations: () => animations,
+    } as unknown as SVGSVGElement;
+    return { node, animations };
+  };
+  const setReduceMotion = (on: boolean) => {
+    globals.document = { documentElement: { dataset: { reduceMotion: String(on) } } };
+    globals.window = { matchMedia: () => ({ matches: false }) };
+  };
+  try {
+    setReduceMotion(false);
+    const running = fakeMark(false);
+    rewindWhenFrozen(running.node);
+    assert.deepEqual(running.animations.map((a) => a.currentTime), [3600, 900]);
+
+    const inactive = fakeMark(true);
+    rewindWhenFrozen(inactive.node);
+    assert.deepEqual(inactive.animations.map((a) => a.currentTime), [0, 0]);
+
+    setReduceMotion(true);
+    const reduced = fakeMark(false);
+    rewindWhenFrozen(reduced.node);
+    assert.deepEqual(reduced.animations.map((a) => a.currentTime), [0, 0]);
+  } finally {
+    globals.document = saved.document;
+    globals.window = saved.window;
+  }
 });

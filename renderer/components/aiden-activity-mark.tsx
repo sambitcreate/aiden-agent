@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { ActivityMark } from "../shared/activity-marks";
+import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { cn } from "../lib/ui-utils";
 
 // Per-shape phase offsets (seconds) come from docs/activity-marks.md. They are
@@ -129,6 +130,22 @@ function visibilityObserver(): IntersectionObserver | null {
   return sharedObserver;
 }
 
+function reduceMotionActive(): boolean {
+  return document.documentElement.dataset.reduceMotion === "true" ||
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+/**
+ * A mark that freezes mid-cycle (it goes inactive, or Reduce Motion turns on)
+ * would otherwise hold whatever frame it was on. Rewinding its tracks to time 0
+ * lands it on the specified still pose, the same one iOS and Android show.
+ */
+export function rewindWhenFrozen(node: SVGSVGElement): void {
+  if (typeof node.getAnimations !== "function") return;
+  if (!node.hasAttribute("data-paused") && !reduceMotionActive()) return;
+  for (const animation of node.getAnimations({ subtree: true })) animation.currentTime = 0;
+}
+
 export interface AidenActivityMarkProps {
   mark: ActivityMark;
   /** Rendered size in CSS pixels. */
@@ -163,6 +180,20 @@ export function AidenActivityMark({
     observer.observe(node);
     return () => observer.unobserve(node);
   }, []);
+
+  React.useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const rewind = () => rewindWhenFrozen(node);
+    rewind();
+    const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    window.addEventListener(APPEARANCE_CHANGE_EVENT, rewind);
+    motion?.addEventListener("change", rewind);
+    return () => {
+      window.removeEventListener(APPEARANCE_CHANGE_EVENT, rewind);
+      motion?.removeEventListener("change", rewind);
+    };
+  }, [active, mark]);
 
   // The voice level picks one of five swell sizes in CSS rather than writing a
   // custom property on every microphone update.
