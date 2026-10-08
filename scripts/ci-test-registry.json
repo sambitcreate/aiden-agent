@@ -280,6 +280,7 @@
         "main/services/aiden-remote-approved-roots.test.ts",
         "main/services/aiden-remote-bot-files.test.ts",
         "main/services/aiden-remote-bots.test.ts",
+        "main/services/aiden-remote-bot-session.test.ts",
         "main/services/aiden-remote-chat-http.test.ts",
         "main/services/aiden-remote-chat-progress-authorize.test.ts",
         "main/services/aiden-remote-chat-progress.test.ts",
