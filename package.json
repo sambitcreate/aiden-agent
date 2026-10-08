@@ -205,7 +205,8 @@
     "build:native:c": "node scripts/build-native-c-helpers.mjs",
     "build:electron:production": "node scripts/patch-pi-oauth-branding.mjs && node scripts/build-electron.mjs --production",
     "assets:onboarding": "node scripts/optimize-onboarding-assets.mjs",
-    "check:bundle-budget": "node scripts/check-renderer-bundle-budget.mjs"
+    "check:bundle-budget": "node scripts/check-renderer-bundle-budget.mjs",
+    "test:e2e:workspace-panel": "npm run type-check:e2e && npm run build && playwright test tests/e2e/workspace-panel.spec.ts --config=playwright.config.ts --fail-on-flaky-tests"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.7.0",

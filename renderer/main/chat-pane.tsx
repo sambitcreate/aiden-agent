@@ -1102,6 +1102,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
   }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
 
+  React.useEffect(() => {
+    environmentPanel.setContextDetails(!draft && chat.data ? {
+      chat: chat.data,
+      providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
+      modelLabel: model ?? "Unavailable",
+      pressure: contextPressure,
+      compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
+    } : null);
+    return () => environmentPanel.setContextDetails(null);
+  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
+
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
     environmentPanel.setActiveChat(chatId, effectiveWorkspaceId ?? null);
@@ -2551,7 +2562,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               workspaceId={effectiveWorkspace?.id}
               folderPath={effectiveWorkspace?.folderPath}
             />
-            <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
+            <EnvironmentPanelToggle />
             <QuickViewToggle disabled={!effectiveWorkspace} />
             <Button
               iconOnly
@@ -2881,6 +2892,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 contextMeter={
                   draft || !showComposerContextUsage ? undefined : (
                     <ContextMeter
+                      onViewDetails={() => environmentPanel.showTools("context")}
                       pressure={contextPressure}
                       compacting={
                         contextCompactPending ||

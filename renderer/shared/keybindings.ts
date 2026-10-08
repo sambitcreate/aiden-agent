@@ -295,7 +295,7 @@ export const COMMANDS = [
   command({
     id: "environment.toggle",
     title: "Toggle Environment",
-    description: "Show or hide Review, Subagents, and Files.",
+    description: "Open the workspace tools launcher or hide the panel.",
     category: "Tools",
     keywords: ["review", "subagents", "files", "git", "changes"],
     defaultBinding: "Command+Shift+E",

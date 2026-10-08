@@ -106,11 +106,33 @@ flowchart TD
 
 The shipped ChatGPT/Codex renderer establishes two related but distinct surfaces beside a stable conversation: a compact floating summary and larger work surfaces for Review or Files. Aiden names the compact status card **Quick View** and keeps **Environment** for the persistent, resizable Review, Subagents, and Files work surface. Quick View's `Changes` row opens Review, its execution row distinguishes local/cloud targets, its branch row opens branch/worktree controls, and its later rows lead into commit/push and comparison workflows. The tables below separate directly evidenced behavior from the additional production states Aiden needs under loading, empty, error, narrow-window, and concurrent-file-change conditions.
 
+### Workspace launcher and user-opened tabs (2026-10-07)
+
+Generic panel opening selects a New tab launcher. Tool actions and deep links
+select their destination directly. The shared strip contains only opened tools;
++ returns to the launcher, and closing the last tab returns there too. Changes,
+Files, Context, and Terminal are singleton tool views; browser page titles come
+from the existing browser service. The overflow menu and arrow/Home/End keyboard
+navigation expose tabs that do not fit. Closing Files hides its mounted editor
+without discarding a draft; existing lifecycle guards still protect edits.
+
+The launcher offers Changes, Files, Terminal, Context, Browser, Quick View, and
+capability-gated More tools. Missing workspace prerequisites have explanatory
+labels. The URL field only navigates after explicit submission. No suggested
+sites or new document/side-chat capabilities are fabricated from the reference.
+
+Terminal can move between bottom and side placements while its renderer surface
+and PTY sessions remain owned by the existing workspace provider. Moving to the
+bottom dismisses a floating panel that would cover the terminal controls. Hiding
+or closing the tool tab does not terminate sessions; session close still does.
+Context uses the same runtime projection as the composer meter and separately
+labels recorded usage. Appearance can hide the meter without hiding the tool.
+
 ### Shell and layout states
 
 | State | User sees | Interaction contract |
 |---|---|---|
-| Closed | Conversation uses the full workbench width; separate Environment and Quick View toolbar controls remain available. | Each surface has an independent open bit. `⌘⇧E` and `/environment` toggle the last full Environment destination; `/quick-view` toggles Quick View without changing Environment. |
+| Closed | Conversation uses the full workbench width; separate Environment and Quick View toolbar controls remain available. | Each surface has an independent open bit. `⌘⇧E` and `/environment` open the New tab tool launcher or hide the panel; `/quick-view` toggles Quick View without changing Environment. |
 | Summary opening / closing | The compact card fades from 4px above and `.98` scale over `180ms`. | It does not resize, dim, or make the conversation inert. Motion is removed under Reduce Motion. |
 | Quick View open | A rounded top-right card shows working changes, local execution, the active branch, commit/push, compare, and current-chat subagents. | The dedicated two-row list control toggles this card. The adjacent panel control opens or closes Environment independently. `Changes` deep-links into Review without clearing Quick View. |
 | Quick View + Environment | Both surfaces remain visibly open side by side when the measured workbench has room. | Invoking either surface brings it forward without closing the other. Opening the app sidebar recomputes placement from the remaining workbench width. On smaller layouts, the foreground surface is shown while the background surface is automatically hidden and inert; its open state and mounted tool state are preserved. |

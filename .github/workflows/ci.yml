@@ -72,6 +72,8 @@ jobs:
   build:
     name: Desktop production build
     needs: changes
+    outputs:
+      artifact-name: ${{ steps.bundle.outputs.name }}
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
@@ -90,11 +92,14 @@ jobs:
       - name: Check main-window initial JS budget
         run: npm run check:bundle-budget
       - name: Package production bundles and native helpers
-        run: tar -cf "$RUNNER_TEMP/desktop-build.tar" build
+        id: bundle
+        run: |
+          tar -cf "$RUNNER_TEMP/desktop-build.tar" build
+          echo "name=desktop-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - name: Upload production build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: desktop-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.bundle.outputs.name }}
           path: ${{ runner.temp }}/desktop-build.tar
           if-no-files-found: error
           retention-days: 1
@@ -122,7 +127,8 @@ jobs:
       - name: Download production build
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
-          name: desktop-build-${{ github.run_id }}-${{ github.run_attempt }}
+          # A failed-job rerun reuses the successful producer's original artifact.
+          name: ${{ needs.build.outputs.artifact-name }}
           path: ${{ runner.temp }}/desktop-build
       - name: Restore production build
         run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
@@ -184,7 +190,7 @@ jobs:
       - name: Download production build
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
-          name: desktop-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.build.outputs.artifact-name }}
           path: ${{ runner.temp }}/desktop-build
       - name: Restore production build
         run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
