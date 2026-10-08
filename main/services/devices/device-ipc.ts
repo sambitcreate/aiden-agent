@@ -8,12 +8,13 @@ import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import type { DeviceService } from "./device-service.js";
 import {
   DEVICE_HOST_ID_PATTERN,
+  DEVICE_ID_PATTERN,
   LOCAL_DEVICE_HOST_ID,
   parseDeviceActionInput,
   type DeviceConsentKind,
 } from "../../../renderer/shared/devices.js";
 
-const ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
+const ID_PATTERN = DEVICE_ID_PATTERN;
 const CHAT_ID_MAX_LENGTH = 256;
 
 export interface DeviceIpcEvent {

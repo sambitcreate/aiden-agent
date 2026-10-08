@@ -55,8 +55,9 @@ const IOS_PRIVACY_SERVICES: Record<Exclude<DevicePermission, "notifications">, s
   location: "location",
 };
 
-// Aiden toggle names -> `serve-sim-ax-settings` options. Increase Contrast uses `simctl ui`.
-const IOS_AX_TOGGLES: Record<Exclude<DeviceToggle, "increaseContrast">, string> = {
+// Aiden toggle names -> `serve-sim-ax-settings` options. Increase Contrast uses `simctl ui`;
+// the network switch is Android-only.
+const IOS_AX_TOGGLES: Record<Exclude<DeviceToggle, "increaseContrast" | "networkEnabled">, string> = {
   reduceMotion: "reduce-motion",
   reduceTransparency: "reduce-transparency",
   showBorders: "show-borders",
@@ -113,6 +114,9 @@ export function iosActionCommand(
       if (input.setting === "increaseContrast") {
         return simctl(udid, "ui", "increase_contrast", input.value ? "enabled" : "disabled");
       }
+      if (input.setting === "networkEnabled") {
+        throw new DeviceActionUnavailableError("iOS Simulators cannot turn the network off.");
+      }
       return axSettings(ready, udid, "set", IOS_AX_TOGGLES[input.setting], input.value ? "on" : "off");
     case "setLiquidGlass":
       return axSettings(ready, udid, "set", "liquid-glass", input.value);
@@ -149,6 +153,8 @@ export function iosActionCommand(
       return simctl(udid, "location", "set", `${input.latitude},${input.longitude}`);
     case "clearLocation":
       return simctl(udid, "location", "clear");
+    case "setOrientation":
+      throw new DeviceActionUnavailableError("Rotate an iOS Simulator with the rail's Rotate button.");
   }
 }
 
@@ -165,6 +171,7 @@ const ACTION_LABELS: Record<DeviceActionInput["type"], string> = {
   setPermission: "change the permission",
   setLocation: "set the location",
   clearLocation: "clear the location",
+  setOrientation: "rotate",
 };
 
 export async function runDeviceAction(ready: DeviceHostReady, input: DeviceActionInput): Promise<void> {
