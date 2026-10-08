@@ -294,7 +294,7 @@ export const appApi = {
     invoke<OnboardingSnapshot>("app:getOnboardingState", legacyComplete),
   setOnboardingOutcome: (outcome: OnboardingOutcome, selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingOutcome", outcome, selectedProviderId),
-  setOnboardingProgress: (step: "profile" | "provider", selectedProviderId?: string) =>
+  setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>

@@ -909,7 +909,7 @@ ipcMain.handle(
     ) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
-    if (step !== "profile" && step !== "provider") {
+    if (step !== "profile" && step !== "provider" && step !== "bots") {
       throw new Error("Invalid onboarding step.");
     }
     if (
