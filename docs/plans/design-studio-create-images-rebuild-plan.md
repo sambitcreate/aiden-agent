@@ -328,20 +328,20 @@ Rules:
 - **Project library:** create, rename, duplicate, delete, with the delete cascade preview.
 - **Project route:** canvas of Screens and reference images.
 - **Composer:** reuses the existing composer through a chat-turn hook, not a `presentation` flag on ChatPane.
-- **Generation:** Explore 2–4 directions (keep draft / discard on cancel), Choose / Archive, Refine one immutable revision.
+- **Generation:** Explore 2–4 directions (a cancelled run keeps its drafts as partial; Resume or Discard it), Choose / Archive, Refine one immutable revision.
 - **Inspector:** Preview / Code / History with compare.
 - **Visual edit:** element selection via React Grab (pinned and vendored), inserting chips as untrusted context.
 
 | Task | Deliverable | Port from `ref-design-studio` |
 |---|---|---|
-| DS-1.1 Project store | One-schema manifest, revision files, project quota; initialized in the reconcile chain | Ideas from `design-project-store.ts` / `design-project-contract.ts` (rewrite, no V2) |
-| DS-1.2 Design tool profile | `design` capability profile, `render_artifact` only, `finishTurn` stop, 128 KiB bounded context, earlier HTML marked untrusted | `generative-ui-extension.ts` changes, migrated to Pi 1.x |
-| DS-1.3 Generative-UI design CSP and vendoring | Design guest CSP + React Grab primitives, pinned | `generative-ui-html/protocol/host-libraries` diffs, `scripts/vendor-generative-ui-libs.mjs` (main's copies are nearly unchanged; ports cleanly) |
-| DS-1.4 IPC | `main/handlers/design/*.ts` (≤ 25 channels) and `renderer/lib/design-ipc.ts` | Rewrite of `designer.ts` |
-| DS-1.5 Canvas and nodes | `renderer/design/` components (Screen node, reference node, tool rail) and hooks `useDesignProject`, `useDesignSelection`, `useDesignPreview` | Split of `design-workspace.tsx`; `renderer/shared/design-selection.ts` ported as-is |
-| DS-1.6 Explore / Refine flows | Direction sets, choose/archive, refine lineage, cancelled-run prompt | `design-workspace.ts` logic (pure parts) |
-| DS-1.7 Inspector | Preview / Code / History tabs with shared `Button` and tokens | `design-project-inspector.tsx` (restyle) |
-| DS-1.8 E2E | Playwright: create → explore (fake model) → choose → refine → relaunch → state intact; flag off → no route | – |
+| DS-1.1 Project store *(delivered by DS-1a)* | One-schema manifest, revision files, project quota; initialized in the reconcile chain | Ideas from `design-project-store.ts` / `design-project-contract.ts` (rewrite, no V2) |
+| DS-1.2 Design tool profile *(delivered by DS-1a)* | `design` capability profile, `render_artifact` only, `finishTurn` stop, 128 KiB bounded context, earlier HTML marked untrusted | `generative-ui-extension.ts` changes, migrated to Pi 1.x |
+| DS-1.3 Generative-UI design CSP and vendoring *(DS-1b)* | Design guest CSP + React Grab primitives, pinned | `generative-ui-html/protocol/host-libraries` diffs, `scripts/vendor-generative-ui-libs.mjs` (main's copies are nearly unchanged; ports cleanly) |
+| DS-1.4 IPC *(delivered by DS-1a)* | `main/handlers/design/*.ts` (≤ 25 channels) and `renderer/lib/design-ipc.ts` | Rewrite of `designer.ts` |
+| DS-1.5 Canvas and nodes *(DS-1b)* | `renderer/design/` components (Screen node, reference node, tool rail) and hooks `useDesignProject`, `useDesignSelection`, `useDesignPreview` | Split of `design-workspace.tsx`; `renderer/shared/design-selection.ts` ported as-is |
+| DS-1.6 Explore / Refine flows *(DS-1b)* | Direction sets, choose/archive, refine lineage, Incomplete-run banner (Resume · Discard) | `design-workspace.ts` logic (pure parts) |
+| DS-1.7 Inspector *(DS-1b)* | Preview / Code / History tabs with shared `Button` and tokens | `design-project-inspector.tsx` (restyle) |
+| DS-1.8 E2E *(DS-1b)* | Playwright: create → explore (fake model) → choose → refine → relaunch → state intact; flag off → no route | – |
 
 **Exit:**
 - All new tests are behavioral, and new files are ≤ 800 lines.
