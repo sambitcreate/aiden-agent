@@ -211,6 +211,38 @@ final class AidenSimulatorViewerTests: XCTestCase {
         }
     }
 
+    func testTouchTrackerPairsEveryBeginWithOneEndEvenWhenTheGestureIsCancelled() {
+        typealias Touch = AidenSimulatorTouchTracker.Touch
+        var tracker = AidenSimulatorTouchTracker()
+        // A touch that starts in the letterbox never begins.
+        XCTAssertNil(tracker.changed(inside: nil, clamped: CGPoint(x: 0, y: 0.5)))
+        XCTAssertNil(tracker.ended(clamped: CGPoint(x: 0, y: 0.5)))
+
+        XCTAssertEqual(tracker.changed(inside: CGPoint(x: 0.2, y: 0.3), clamped: CGPoint(x: 0.2, y: 0.3)),
+                       Touch(phase: .begin, point: CGPoint(x: 0.2, y: 0.3)))
+        // Once down, the finger follows the clamped point off the frame's edge.
+        XCTAssertEqual(tracker.changed(inside: nil, clamped: CGPoint(x: 1, y: 0.4)),
+                       Touch(phase: .move, point: CGPoint(x: 1, y: 0.4)))
+
+        // The system cancels the gesture (edge swipe, Notification Center): no onEnded.
+        // The finger is lifted where it last was, exactly once.
+        XCTAssertEqual(tracker.cancel(), Touch(phase: .end, point: CGPoint(x: 1, y: 0.4)))
+        XCTAssertNil(tracker.cancel())
+        XCTAssertNil(tracker.ended(clamped: CGPoint(x: 1, y: 0.4)))
+
+        // The next touch begins again rather than moving a finger the helper already lifted.
+        XCTAssertEqual(tracker.changed(inside: CGPoint(x: 0.5, y: 0.5), clamped: CGPoint(x: 0.5, y: 0.5))?.phase, .begin)
+        // A normal end followed by the gesture state reset sends one end, not two.
+        XCTAssertEqual(tracker.ended(clamped: CGPoint(x: 0.6, y: 0.5)), Touch(phase: .end, point: CGPoint(x: 0.6, y: 0.5)))
+        XCTAssertNil(tracker.cancel())
+
+        // A dropped socket forgets the contact without sending anything.
+        _ = tracker.changed(inside: CGPoint(x: 0.1, y: 0.1), clamped: CGPoint(x: 0.1, y: 0.1))
+        tracker.reset()
+        XCTAssertFalse(tracker.isTracking)
+        XCTAssertEqual(tracker.changed(inside: CGPoint(x: 0.1, y: 0.2), clamped: CGPoint(x: 0.1, y: 0.2))?.phase, .begin)
+    }
+
     func testTouchesAreClampedToTheFrame() throws {
         let encoded = AidenSimulatorHelperMessage.touch(.move, x: -0.2, y: 1.7, screen: nil)
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded.dropFirst()) as? [String: Any])

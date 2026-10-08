@@ -106,6 +106,44 @@ enum AidenSimulatorTouchMapping {
     }
 }
 
+/// One finger on the simulator screen. Every begin gets exactly one end, even
+/// when the system cancels the gesture (an edge swipe, Notification Center,
+/// the app leaving the foreground) and SwiftUI never calls `onEnded`.
+struct AidenSimulatorTouchTracker: Equatable {
+    struct Touch: Equatable {
+        let phase: AidenSimulatorTouchPhase
+        let point: CGPoint
+    }
+
+    private(set) var lastPoint: CGPoint?
+
+    var isTracking: Bool { lastPoint != nil }
+
+    /// `inside` is nil outside the frame; `clamped` keeps a started touch at the edge.
+    mutating func changed(inside: CGPoint?, clamped: CGPoint?) -> Touch? {
+        if lastPoint != nil {
+            guard let clamped else { return nil }
+            lastPoint = clamped
+            return Touch(phase: .move, point: clamped)
+        }
+        guard let inside else { return nil }
+        lastPoint = inside
+        return Touch(phase: .begin, point: inside)
+    }
+
+    mutating func ended(clamped: CGPoint?) -> Touch? {
+        guard let last = lastPoint else { return nil }
+        lastPoint = nil
+        return Touch(phase: .end, point: clamped ?? last)
+    }
+
+    /// The gesture was cancelled or the viewer is going away: lift the finger where it last was.
+    mutating func cancel() -> Touch? { ended(clamped: nil) }
+
+    /// The input socket ended; the next touch starts a new contact.
+    mutating func reset() { lastPoint = nil }
+}
+
 enum AidenSimulatorViewerCopy {
     static let sharingOff = String(localized:
         "Turn on Share with Aiden On The Go in Aiden on your Mac (Settings → Simulator)."
@@ -180,6 +218,7 @@ final class AidenSimulatorViewerModel: Identifiable {
     @ObservationIgnored private var inputRetries = 0
     @ObservationIgnored private var streamRetries = 0
     @ObservationIgnored private var isActive = false
+    @ObservationIgnored private var touches = AidenSimulatorTouchTracker()
     @ObservationIgnored private var work: Task<Void, Never>?
 
     init(client: AidenRemoteClient, listing: AidenSimulatorListing) {
@@ -216,6 +255,8 @@ final class AidenSimulatorViewerModel: Identifiable {
     /// stream, the socket and their session. The last frame stays on screen.
     func deactivate() {
         guard isActive else { return }
+        // A finger still down when the app leaves is lifted before the socket closes.
+        touchCancelled()
         isActive = false
         stopStreaming()
         if case .streaming = phase { phase = .idle }
@@ -253,9 +294,26 @@ final class AidenSimulatorViewerModel: Identifiable {
 
     // MARK: Input
 
-    func touch(_ phase: AidenSimulatorTouchPhase, x: Double, y: Double) {
-        guard inputConnected else { return }
-        socket?.send(AidenSimulatorHelperMessage.touch(phase, x: x, y: y, screen: screen))
+    /// `inside` is the normalized point when it lies on the frame; `clamped` is pinned to it.
+    func touchChanged(inside: CGPoint?, clamped: CGPoint?) {
+        guard inputConnected || touches.isTracking else { return }
+        send(touches.changed(inside: inside, clamped: clamped))
+    }
+
+    func touchEnded(clamped: CGPoint?) {
+        send(touches.ended(clamped: clamped))
+    }
+
+    /// The system cancelled the gesture without `onEnded`.
+    func touchCancelled() {
+        send(touches.cancel())
+    }
+
+    private func send(_ touch: AidenSimulatorTouchTracker.Touch?) {
+        guard let touch, inputConnected else { return }
+        socket?.send(AidenSimulatorHelperMessage.touch(
+            touch.phase, x: touch.point.x, y: touch.point.y, screen: screen
+        ))
     }
 
     func home() { press(.home) }
@@ -339,6 +397,7 @@ final class AidenSimulatorViewerModel: Identifiable {
         stream = nil
         socket?.close()
         socket = nil
+        touches.reset()
         transport?.close()
         transport = nil
         if controls.inputConnected { controls.apply(.inputDisconnected) }
@@ -419,6 +478,7 @@ final class AidenSimulatorViewerModel: Identifiable {
             screen = config
         case .closed(let closeCode, let httpStatus):
             socket = nil
+            touches.reset()
             if controls.inputConnected { controls.apply(.inputDisconnected) }
             switch AidenSimulatorInputRetryPolicy.decision(
                 closeCode: closeCode,
