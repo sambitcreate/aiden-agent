@@ -22,13 +22,20 @@ import { StudioAssetStore } from "../../services/studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../../services/studio-assets/test-fixture.js";
 import { registerCreateImagesHandlers, type CreateImagesOwner } from "./register.js";
 
-interface FakeEvent { owner: CreateImagesOwner }
+/** `owner: null` is a document that is not an Aiden window: the production owner check throws for it. */
+interface FakeEvent { owner: CreateImagesOwner | null }
+const FOREIGN_OWNER = "Images can only be used from the active Aiden window.";
 function documentOwner(id: number, documentId: string): CreateImagesOwner {
   const grants: StudioAssetGrantOwner = { id, documentId, isDestroyed: () => false, onInvalidated: () => () => undefined };
   return { key: `${id}:${documentId}`, grants };
 }
 const WINDOW_A: FakeEvent = { owner: documentOwner(1, "doc-a") };
 const WINDOW_B: FakeEvent = { owner: documentOwner(1, "doc-b") };
+const FOREIGN: FakeEvent = { owner: null };
+function ownerOf(event: FakeEvent): CreateImagesOwner {
+  if (!event.owner) throw new Error(FOREIGN_OWNER);
+  return event.owner;
+}
 
 const CHANNELS = [
   "imageWorkflows:cancel-run", "imageWorkflows:create", "imageWorkflows:get", "imageWorkflows:get-run",
@@ -74,20 +81,28 @@ async function harness(t: TestContext, reply?: (index: number) => FakeImageReply
   };
   const listeners = new Map<string, (event: FakeEvent, input: unknown) => unknown>();
   let picked: Uint8Array | null = null;
+  let pickCalls = 0;
   const registered = registerCreateImagesHandlers<FakeEvent>({
     enabled: true,
     handle: (channel, listener) => listeners.set(channel, listener),
-    owner: (event) => event.owner,
+    owner: ownerOf,
     services: guardedServices,
     grants: new StudioAssetGrants(),
-    pickImage: async () => picked,
+    pickImage: async () => {
+      pickCalls += 1;
+      return picked;
+    },
   });
   const invoke = async <T>(channel: string, input: unknown, event: FakeEvent = WINDOW_A): Promise<T> => {
     const listener = listeners.get(channel);
     if (!listener) throw new Error(`No handler for ${channel}`);
     return (await listener(event, input)) as T;
   };
-  return { invoke, listeners, registered, fake, runtime, assets, pick: (bytes: Uint8Array | null) => (picked = bytes) };
+  return {
+    invoke, listeners, registered, fake, runtime, assets,
+    pick: (bytes: Uint8Array | null) => (picked = bytes),
+    pickCalls: () => pickCalls,
+  };
 }
 
 async function starter(env: Awaited<ReturnType<typeof harness>>, prompt = "A red bicycle"): Promise<WorkflowDocV1> {
@@ -107,7 +122,7 @@ test("the inventory is exactly the twelve ADR channels, and the flag gates all o
   const none = registerCreateImagesHandlers<FakeEvent>({
     enabled: false,
     handle: () => (calls += 1),
-    owner: (event) => event.owner,
+    owner: ownerOf,
     services: () => env.runtime.services(),
     grants: new StudioAssetGrants(),
     pickImage: async () => null,
@@ -122,6 +137,47 @@ test("every channel rejects unexpected fields before touching storage", async (t
   }
   assert.deepEqual(await env.invoke("imageWorkflows:list", {}), { workflows: [], imageCounts: {} });
   assert.equal(env.fake.calls.length, 0);
+});
+
+test("every channel refuses a valid request from a document that is not an Aiden window, and changes nothing", async (t) => {
+  const env = await harness(t, () => ({ kind: "hold" }));
+  const doc = await starter(env);
+  const generate = doc.nodes.find((node) => node.type === "generate-image")!;
+  const prepared = await env.invoke<PrepareRunResponse>("imageWorkflows:prepare-run", { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+  assert.ok("plan" in prepared);
+  const edited = structuredClone(doc);
+  edited.title = "Renamed by a stranger";
+  // Each request is one the owning window could send successfully, so only the owner check can refuse it.
+  const valid: Record<string, unknown> = {
+    "imageWorkflows:list": {},
+    "imageWorkflows:create": { template: "starter", title: "Planted" },
+    "imageWorkflows:get": { workflowId: doc.id },
+    "imageWorkflows:save": { workflowId: doc.id, baseRevision: doc.revision, document: edited },
+    "imageWorkflows:mutate": { op: "duplicate", workflowId: doc.id },
+    "imageWorkflows:list-models": {},
+    "imageWorkflows:import-image": { source: "bytes", name: "x.png", mimeType: "image/png", data: pngBytes(6, 6, 3) },
+    "imageWorkflows:prepare-run": { workflowId: doc.id, revision: doc.revision, scope: { kind: "node-only", nodeId: generate.id } },
+    "imageWorkflows:start-run": { consentId: prepared.plan.consentId },
+    "imageWorkflows:cancel-run": { runId: "a-run-that-does-not-exist" },
+    "imageWorkflows:get-run": { workflowId: doc.id },
+    "imageWorkflows:list-runs": { workflowId: doc.id, limit: 5 },
+  };
+  assert.deepEqual(Object.keys(valid).sort(), CHANNELS);
+  const before = await env.invoke<ListWorkflowsResponse>("imageWorkflows:list", {});
+  const assetsBefore = env.assets.usage();
+  for (const channel of CHANNELS) {
+    await assert.rejects(env.invoke(channel, valid[channel], FOREIGN), { message: FOREIGN_OWNER }, channel);
+  }
+  await assert.rejects(env.invoke("imageWorkflows:import-image", { source: "dialog" }, FOREIGN), { message: FOREIGN_OWNER });
+  assert.equal(env.pickCalls(), 0);
+  assert.deepEqual(await env.invoke<ListWorkflowsResponse>("imageWorkflows:list", {}), before);
+  assert.deepEqual((await env.invoke<GetWorkflowResponse>("imageWorkflows:get", { workflowId: doc.id })).workflow, doc);
+  assert.deepEqual(env.assets.usage(), assetsBefore);
+  assert.deepEqual(await env.invoke("imageWorkflows:list-runs", { workflowId: doc.id, limit: 5 }), { runs: [] });
+  assert.equal(env.fake.calls.length, 0);
+  // The owning window's consent survived the foreign attempts and still starts exactly one request.
+  assert.ok("runId" in (await env.invoke<{ runId: string }>("imageWorkflows:start-run", { consentId: prepared.plan.consentId })));
+  await until(() => env.fake.calls.length === 1, "the held request");
 });
 
 test("create defaults the Generate node to Nano Banana 2, and get returns document-bound image URLs", async (t) => {
