@@ -246,6 +246,80 @@ test("a turn interrupted by a quit is delivered once after an explicit Resume, a
   await fourth.quit();
 });
 
+test("a Resume that lands while startup recovery is still settling its paused observation is delivered once", async () => {
+  const dir = tempDir();
+  const file = path.join(dir, "outbox.json");
+  const delivered: string[] = [];
+  const message = { botId: "bot:a", chatId: 7, messageId: 93, ownerUserId: 7, text: "plan the month" };
+
+  const fauxBefore = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
+  const before = await createBotSessionService({
+    profileDir: dir,
+    models: fauxBefore.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+  });
+  const beforeIngress = createTelegramBotIngress({ file, session: before, deliver: async (reply) => void delivered.push(reply.text) });
+  await beforeIngress.admit(message);
+  await waitFor(async () => (await before.state("bot:a")).kind === "running" && fauxBefore.calls() === 1, {
+    what: "the Telegram turn to stream",
+  });
+  await before.shutdown();
+  await beforeIngress.idle();
+  beforeIngress.stop();
+
+  const fauxModels = createFauxModels([fauxAssistantMessage("resumed answer")]);
+  let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+    onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
+  });
+  // Hold the first recovery wait after it has observed the paused turn.
+  let held: BotReplyOutcome | undefined;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let waits = 0;
+  const gatedSession = {
+    send: session.send.bind(session),
+    async awaitReply(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome> {
+      waits += 1;
+      const outcome = await session.awaitReply(botId, submissionId, signal);
+      if (waits === 1) {
+        held = outcome;
+        await released;
+      }
+      return outcome;
+    },
+  };
+  ingress = createTelegramBotIngress({ file, session: gatedSession, deliver: async (reply) => void delivered.push(reply.text) });
+  try {
+    await session.initialize();
+    await ingress.recover();
+    await waitFor(async () => held !== undefined, { what: "recovery to observe the paused turn" });
+    assert.equal(held?.kind, "interrupted");
+
+    await session.resume("bot:a", "desk-resume");
+    await waitFor(async () => fauxModels.calls() === 1 && (await session.state("bot:a")).kind === "idle", {
+      what: "the resumed turn to finish",
+    });
+    release();
+
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "sent", { what: "the resumed reply to be sent" });
+    await ingress.idle();
+    assert.deepEqual(delivered, ["resumed answer"]);
+  } finally {
+    release();
+    await session.shutdown();
+    await ingress.idle();
+    ingress.stop();
+  }
+});
+
 test("a turn the person dismissed is settled and never delivered", async () => {
   const dir = tempDir();
   const file = path.join(dir, "outbox.json");

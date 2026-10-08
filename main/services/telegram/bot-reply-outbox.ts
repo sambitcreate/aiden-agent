@@ -127,6 +127,12 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
   let tail: Promise<unknown> = Promise.resolve();
   /** Rows with a wait running, so one row is never tracked (or delivered) twice. */
   const tracking = new Set<string>();
+  /**
+   * Tracked rows whose Bot left the paused state while their wait was still
+   * settling. The wait may have observed the pause before Resume (or Dismiss),
+   * so the row is checked again once that wait lets go of it.
+   */
+  const recheck = new Set<string>();
 
   /** Serialize every read-modify-write of the outbox file. */
   function locked<T>(action: (file: OutboxFile) => Promise<T> | T): Promise<T> {
@@ -199,6 +205,10 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         await track(row);
       } finally {
         tracking.delete(row.requestId);
+      }
+      if (recheck.delete(row.requestId) && !stopper.signal.aborted) {
+        const current = await locked((file) => file.rows.find((candidate) => candidate.requestId === row.requestId));
+        if (current?.state === "interrupted") trackOnce({ ...current });
       }
     });
   }
@@ -273,9 +283,16 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       if (state.kind === "interrupted" || stopper.signal.aborted) return;
       inBackground(async () => {
         const rows = await locked((file) =>
-          file.rows.filter((row) => row.botId === botId && row.state === "interrupted").map((row) => ({ ...row })),
+          file.rows
+            .filter((row) => row.botId === botId && (row.state === "interrupted" || row.state === "awaiting"))
+            .map((row) => ({ ...row })),
         );
-        rows.forEach(trackOnce);
+        for (const row of rows) {
+          // A wait still running may have seen the pause before this change:
+          // re-check the row once it finishes instead of dropping the wakeup.
+          if (tracking.has(row.requestId)) recheck.add(row.requestId);
+          else if (row.state === "interrupted") trackOnce(row);
+        }
       });
     },
 
