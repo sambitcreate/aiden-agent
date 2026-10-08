@@ -1,6 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.BottomSheetDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
@@ -55,7 +57,6 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -93,7 +94,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
@@ -115,7 +118,10 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
+import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
@@ -124,9 +130,17 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
+import androidx.annotation.StringRes
+import androidx.compose.ui.res.pluralStringResource
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
 private const val AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT = 20
@@ -189,6 +203,7 @@ private fun AidenWorkspaceHome(
     onNavigateToChat: (String) -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val client by coordinator.client.collectAsStateWithLifecycle()
@@ -261,10 +276,12 @@ private fun AidenWorkspaceHome(
         viewModel.hydrate(workspaces)
         if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.load()
     }
+    // Coming back to the app rereads stale data underneath what is already shown.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.revalidate() }
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
             if (
-                snackbarHostState.showSnackbar(it, actionLabel = "Retry") ==
+                snackbarHostState.showSnackbar(it, actionLabel = resources.getString(R.string.action_retry)) ==
                 SnackbarResult.ActionPerformed
             ) {
                 viewModel.refresh(workspaces)
@@ -301,11 +318,11 @@ private fun AidenWorkspaceHome(
         fullyRevealedWorkspaceIds = fullyRevealedWorkspaceIds.filter(validIds::contains)
     }
 
-    fun createChat(workspace: AidenWorkspace, status: String = "Opening chat…") {
+    fun createChat(workspace: AidenWorkspace, status: String = resources.getString(R.string.workspace_home_opening_chat)) {
         if (chatCreationBlocked) {
             scope.launch {
                 snackbarHostState.showSnackbar(
-                    chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                    chatLoadErrorMessage ?: resources.getString(R.string.workspace_home_chats_still_loading)
                 )
             }
             return
@@ -318,7 +335,7 @@ private fun AidenWorkspaceHome(
                 viewModel.accept(chat)
                 onNavigateToChat(chat.id)
             } catch (error: Exception) {
-                snackbarHostState.showSnackbar(error.message ?: "Aiden couldn't create the chat.")
+                snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_home_create_chat_failed))
             } finally {
                 creationStatus = null
             }
@@ -348,6 +365,7 @@ private fun AidenWorkspaceHome(
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
+                val newChatDescription = stringResource(R.string.workspace_home_new_chat_cd)
                 FloatingActionButton(
                     onClick = {
                         if (connectionState == AidenConnectionState.CONNECTED) showNewChatChoices = true
@@ -355,7 +373,7 @@ private fun AidenWorkspaceHome(
                     containerColor = palette.accent,
                     contentColor = Color.White,
                     shape = CircleShape,
-                    modifier = Modifier.semantics { contentDescription = "New Workspace Chat" }
+                    modifier = Modifier.semantics { contentDescription = newChatDescription }
                 ) {
                     Icon(Icons.Outlined.Add, contentDescription = null)
                 }
@@ -364,7 +382,7 @@ private fun AidenWorkspaceHome(
         containerColor = palette.canvas,
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0)
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        Box(Modifier.fillMaxSize().padding(padding).aidenReadableWidth()) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 104.dp)
@@ -373,7 +391,7 @@ private fun AidenWorkspaceHome(
                     item {
                         Surface(
                             color = palette.raised,
-                            shape = RoundedCornerShape(18.dp),
+                            shape = MaterialTheme.shapes.large,
                             modifier = Modifier.padding(horizontal = AidenUi.ScreenGutter, vertical = 6.dp)
                         ) {
                             Row(
@@ -383,12 +401,12 @@ private fun AidenWorkspaceHome(
                                 Icon(Icons.Outlined.WifiOff, null, tint = palette.secondary, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(10.dp))
                                 Text(
-                                    if (connectionState == AidenConnectionState.CONNECTING) "Connecting to Aiden Agent…" else "Offline — showing saved chats",
+                                    if (connectionState == AidenConnectionState.CONNECTING) stringResource(R.string.workspace_home_connecting) else stringResource(R.string.workspace_home_offline),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = palette.secondary,
                                     modifier = Modifier.weight(1f)
                                 )
-                                TextButton(onClick = coordinator::refreshClient) { Text("Retry") }
+                                TextButton(onClick = coordinator::refreshClient) { Text(stringResource(R.string.action_retry)) }
                             }
                         }
                     }
@@ -403,7 +421,7 @@ private fun AidenWorkspaceHome(
                                 index = 0,
                                 count = 3,
                                 icon = Icons.Outlined.CalendarMonth,
-                                title = "Scheduled Tasks",
+                                title = stringResource(R.string.workspace_home_scheduled_tasks),
                                 enabled = canReadSchedules &&
                                         (connectionState == AidenConnectionState.CONNECTED || scheduledTasks.isNotEmpty()),
                                 onClick = { showScheduledTasks = true }
@@ -412,7 +430,7 @@ private fun AidenWorkspaceHome(
                                 index = 1,
                                 count = 3,
                                 icon = Icons.Outlined.DataUsage,
-                                title = "Usage",
+                                title = stringResource(R.string.workspace_home_usage),
                                 enabled = connectionState == AidenConnectionState.CONNECTED || usage != null,
                                 onClick = {
                                     if (usage != null) showUsage = true
@@ -420,7 +438,7 @@ private fun AidenWorkspaceHome(
                                         viewModel.load(force = true)
                                         scope.launch {
                                             snackbarHostState.showSnackbar(
-                                                usageErrorMessage ?: "Loading Usage from your paired desktop…"
+                                                usageErrorMessage ?: resources.getString(R.string.workspace_home_usage_loading)
                                             )
                                         }
                                     }
@@ -430,7 +448,7 @@ private fun AidenWorkspaceHome(
                                 index = 2,
                                 count = 3,
                                 icon = Icons.Outlined.FolderOpen,
-                                title = "Manage Workspaces",
+                                title = stringResource(R.string.workspace_home_manage),
                                 showsChevron = false,
                                 onClick = onOpenDirectory
                             )
@@ -456,9 +474,9 @@ private fun AidenWorkspaceHome(
                         ) { organization ->
                             Text(
                                 if (organization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                    "Workspaces"
+                                    stringResource(R.string.workspace_directory_title)
                                 } else {
-                                    "Recents"
+                                    stringResource(R.string.workspace_home_recents)
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
@@ -480,39 +498,66 @@ private fun AidenWorkspaceHome(
                     }
                 }
 
-                if (chatListUnavailable) {
+                val projectionIsEmpty = if (
+                    sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
+                ) {
+                    sidebarProjection.sections.isEmpty()
+                } else {
+                    sidebarProjection.recents.isEmpty()
+                }
+                val listPresentation = aidenWorkspaceHomeListPresentation(
+                    projectionIsEmpty = projectionIsEmpty,
+                    isSearching = isSearching,
+                    isLoading = isLoading,
+                    connectionState = connectionState,
+                    hasCompletedWorkspaceRefresh = hasCompletedWorkspaceRefresh,
+                    chatListLoadState = chatListLoadState
+                )
+                if (listPresentation == AidenReadPresentation.FAILED) {
                     item {
                         AidenWorkspaceChatLoadErrorState(
-                            message = chatLoadErrorMessage ?: "Reconnect and try again.",
+                            message = chatLoadErrorMessage ?: stringResource(R.string.workspace_chats_reconnect),
                             onRetry = { viewModel.refresh(workspaces) },
                             modifier = Modifier.padding(top = 32.dp)
                         )
                     }
-                } else {
-                    val projectionIsEmpty = if (
-                        sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE
-                    ) {
-                        sidebarProjection.sections.isEmpty()
-                    } else {
-                        sidebarProjection.recents.isEmpty()
+                } else if (listPresentation == AidenReadPresentation.SKELETON) {
+                    item(key = "workspace-home-skeleton") {
+                        // Chat rows are text-only, inset to line up with the real rows.
+                        AidenSkeletonList(
+                            count = 6,
+                            leading = false,
+                            loadingDescription = stringResource(R.string.workspace_chats_loading),
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
                     }
-                    if (projectionIsEmpty && !isLoading) {
+                } else {
+                    // Saved chats stay on screen when a refresh fails; the error sits above them.
+                    if (chatListUnavailable && !projectionIsEmpty) {
+                        item(key = "chat-refresh-error") {
+                            AidenWorkspaceInlineRefreshError(
+                                message = chatLoadErrorMessage ?: stringResource(R.string.workspace_home_refresh_failed),
+                                onRetry = { viewModel.refresh(workspaces) }
+                            )
+                        }
+                    }
+                    if (listPresentation == AidenReadPresentation.EMPTY) {
                         item {
                             AidenEmptyState(
                                 icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.FolderOpen,
                                 title = if (isSearching) {
-                                    "No Matches"
+                                    stringResource(R.string.workspace_home_empty_search_title)
                                 } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                    "No Workspaces Yet"
+                                    stringResource(R.string.workspace_home_empty_workspaces_title)
                                 } else {
-                                    "No Chats Yet"
+                                    stringResource(R.string.workspace_home_empty_chats_title)
                                 },
                                 body = if (isSearching) {
-                                    "Try a different search term."
+                                    stringResource(R.string.workspace_home_empty_search_body)
                                 } else if (sidebarOrganization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                    "Add a workspace to begin."
+                                    stringResource(R.string.workspace_home_empty_workspaces_body)
                                 } else {
-                                    "Start a new Workspace chat to begin."
+                                    stringResource(R.string.workspace_home_empty_chats_body)
                                 },
                                 modifier = Modifier.padding(top = if (isSearching) 80.dp else 32.dp)
                             )
@@ -574,19 +619,13 @@ private fun AidenWorkspaceHome(
                                         modifier = Modifier.padding(bottom = 4.dp)
                                     )
                                 }
-                                TextButton(
-                                    onClick = viewModel::loadMoreChats,
-                                    enabled = !isLoadingMoreChats
-                                ) {
-                                    if (isLoadingMoreChats) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            strokeWidth = 2.dp,
-                                            color = palette.accent
-                                        )
-                                        Spacer(Modifier.width(8.dp))
+                                if (isLoadingMoreChats) {
+                                    // The next page arrives as rows, so it is previewed as rows.
+                                    AidenSkeletonList(count = 2, leading = false, loadingDescription = stringResource(R.string.workspace_home_loading_more))
+                                } else {
+                                    TextButton(onClick = viewModel::loadMoreChats) {
+                                        Text(if (chatPaginationErrorMessage == null) stringResource(R.string.workspace_home_load_more) else stringResource(R.string.action_retry))
                                     }
-                                    Text(if (chatPaginationErrorMessage == null) "Load more chats" else "Retry")
                                 }
                             }
                         }
@@ -594,17 +633,10 @@ private fun AidenWorkspaceHome(
                 }
             }
 
-            if (isLoading && chats.isEmpty()) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center).size(28.dp),
-                    strokeWidth = 2.dp,
-                    color = palette.accent
-                )
-            }
             creationStatus?.let { status ->
                 Surface(
                     color = palette.raised,
-                    shape = RoundedCornerShape(22.dp),
+                    shape = MaterialTheme.shapes.large,
                     shadowElevation = 4.dp,
                     modifier = Modifier.align(Alignment.Center)
                 ) {
@@ -612,9 +644,13 @@ private fun AidenWorkspaceHome(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        AidenActivityDot()
                         Spacer(Modifier.width(12.dp))
-                        Text(status, color = palette.foreground)
+                        Text(
+                            status,
+                            color = palette.foreground,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        )
                     }
                 }
             }
@@ -624,8 +660,9 @@ private fun AidenWorkspaceHome(
     if (showScheduledTasks) {
         ModalBottomSheet(
             onDismissRequest = { showScheduledTasks = false },
+            sheetState = rememberAidenFullSheetState(),
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            shape = BottomSheetDefaults.ExpandedShape,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
         ) {
@@ -642,7 +679,7 @@ private fun AidenWorkspaceHome(
         ModalBottomSheet(
             onDismissRequest = { showUsage = false },
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            shape = BottomSheetDefaults.ExpandedShape,
             sheetState = usageSheetState,
             dragHandle = null,
             sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
@@ -658,28 +695,28 @@ private fun AidenWorkspaceHome(
         ModalBottomSheet(
             onDismissRequest = { showNewChatChoices = false },
             containerColor = palette.canvas,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            shape = BottomSheetDefaults.ExpandedShape
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
             ) {
-                Text("New Workspace Chat", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.workspace_home_new_chat_cd), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
                 AidenNewChatChoice(
-                    "Existing Workspace",
-                    "Choose a workspace and open a new chat",
+                    stringResource(R.string.workspace_home_choice_existing),
+                    stringResource(R.string.workspace_home_choice_existing_detail),
                     Icons.Outlined.FolderOpen,
                     enabled = activeWorkspaces.isNotEmpty()
                 ) {
                     showNewChatChoices = false
                     showExistingWorkspacePicker = true
                 }
-                AidenNewChatChoice("New Workspace", "Create a reusable workspace and its first chat", Icons.Outlined.AddComment) {
+                AidenNewChatChoice(stringResource(R.string.workspace_menu_new), stringResource(R.string.workspace_home_choice_new_detail), Icons.Outlined.AddComment) {
                     showNewChatChoices = false
                     workspaceName = ""
                     showNewWorkspaceDialog = true
                 }
-                AidenNewChatChoice("Managed Scratch Workspace", "Create an isolated scratch workspace and chat", Icons.Outlined.FolderSpecial) {
+                AidenNewChatChoice(stringResource(R.string.workspace_home_choice_scratch), stringResource(R.string.workspace_home_choice_scratch_detail), Icons.Outlined.FolderSpecial) {
                     showNewChatChoices = false
                     showScratchConfirmation = true
                 }
@@ -690,7 +727,7 @@ private fun AidenWorkspaceHome(
     if (showExistingWorkspacePicker) {
         AlertDialog(
             onDismissRequest = { showExistingWorkspacePicker = false },
-            title = { Text("Existing Workspace") },
+            title = { Text(stringResource(R.string.workspace_home_choice_existing)) },
             text = {
                 AidenConnectedColumn(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     activeWorkspaces.forEachIndexed { index, workspace ->
@@ -735,7 +772,7 @@ private fun AidenWorkspaceHome(
                 if (chatCreationBlocked) {
                     scope.launch {
                         snackbarHostState.showSnackbar(
-                            chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                            chatLoadErrorMessage ?: resources.getString(R.string.workspace_home_chats_still_loading)
                         )
                     }
                     return@AidenWorkspaceNameDialog
@@ -743,14 +780,14 @@ private fun AidenWorkspaceHome(
                 val name = workspaceName.trim()
                 if (name.isEmpty()) return@AidenWorkspaceNameDialog
                 showNewWorkspaceDialog = false
-                creationStatus = "Creating workspace…"
+                creationStatus = resources.getString(R.string.workspace_home_creating_workspace)
                 scope.launch {
                     try {
                         val workspace = coordinator.createWorkspace(AidenWorkspaceCreate.Folderless(name = name))
-                        createChat(workspace, "Opening chat…")
+                        createChat(workspace, resources.getString(R.string.workspace_home_opening_chat))
                     } catch (error: Exception) {
                         creationStatus = null
-                        snackbarHostState.showSnackbar(error.message ?: "Aiden couldn't create the workspace.")
+                        snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_create_failed))
                     }
                 }
             }
@@ -759,29 +796,29 @@ private fun AidenWorkspaceHome(
     if (showScratchConfirmation) {
         AlertDialog(
             onDismissRequest = { showScratchConfirmation = false },
-            title = { Text("Managed Scratch Workspace") },
-            text = { Text("Create an isolated managed workspace and open its first chat?") },
+            title = { Text(stringResource(R.string.workspace_home_choice_scratch)) },
+            text = { Text(stringResource(R.string.workspace_home_scratch_body)) },
             confirmButton = {
                 AidenDialogConfirmButton(
-                    text = "Create",
+                    text = stringResource(R.string.action_create),
                     onClick = {
                         if (chatCreationBlocked) {
                             scope.launch {
                                 snackbarHostState.showSnackbar(
-                                    chatLoadErrorMessage ?: "Chats are still loading. Try again shortly."
+                                    chatLoadErrorMessage ?: resources.getString(R.string.workspace_home_chats_still_loading)
                                 )
                             }
                             return@AidenDialogConfirmButton
                         }
                         showScratchConfirmation = false
-                        creationStatus = "Preparing scratch workspace…"
+                        creationStatus = resources.getString(R.string.workspace_home_preparing_scratch)
                         scope.launch {
                             try {
                                 val workspace = coordinator.createWorkspace(AidenWorkspaceCreate.Scratch())
-                                createChat(workspace, "Opening chat…")
+                                createChat(workspace, resources.getString(R.string.workspace_home_opening_chat))
                             } catch (error: Exception) {
                                 creationStatus = null
-                                snackbarHostState.showSnackbar(error.message ?: "Aiden couldn't create the scratch workspace.")
+                                snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_home_create_scratch_failed))
                             }
                         }
                     }
@@ -802,12 +839,67 @@ internal fun AidenWorkspaceChatLoadErrorState(
 ) {
     AidenEmptyState(
         icon = Icons.Outlined.WifiOff,
-        title = "Chats Couldn't Load",
+        title = stringResource(R.string.workspace_home_chats_load_failed_title),
         body = message,
         modifier = modifier.semantics { error(message) },
         action = {
-            Button(onClick = onRetry) { Text("Try Again") }
+            Button(onClick = onRetry) { Text(stringResource(R.string.action_try_again)) }
         }
+    )
+}
+
+/** A compact refresh failure shown above saved rows instead of replacing them. */
+@Composable
+internal fun AidenWorkspaceInlineRefreshError(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = AidenTheme.palette
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = AidenUi.ScreenGutter, vertical = 4.dp)
+            .semantics { error(message) }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp)
+        ) {
+            Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry), color = palette.accent) }
+        }
+    }
+}
+
+/**
+ * The Workspace home list shows saved rows whenever it has any, placeholders only while
+ * a first read is pending, and the empty or error state once reads have settled.
+ */
+internal fun aidenWorkspaceHomeListPresentation(
+    projectionIsEmpty: Boolean,
+    isSearching: Boolean,
+    isLoading: Boolean,
+    connectionState: AidenConnectionState,
+    hasCompletedWorkspaceRefresh: Boolean,
+    chatListLoadState: AidenChatListLoadState
+): AidenReadPresentation {
+    // A search that matches nothing is an answer, not a pending read.
+    if (isSearching) return if (projectionIsEmpty) AidenReadPresentation.EMPTY else AidenReadPresentation.CONTENT
+    val readsSettled = when (connectionState) {
+        AidenConnectionState.OFFLINE, AidenConnectionState.NEEDS_PAIRING -> true
+        AidenConnectionState.CONNECTING -> false
+        AidenConnectionState.CONNECTED -> hasCompletedWorkspaceRefresh &&
+            chatListLoadState != AidenChatListLoadState.UNRESOLVED
+    }
+    return AidenReadPresentation.of(
+        hasContent = !projectionIsEmpty,
+        isFetching = isLoading,
+        hasSettled = readsSettled,
+        failed = chatListLoadState == AidenChatListLoadState.FAILED
     )
 }
 
@@ -843,18 +935,18 @@ private fun AidenWorkspaceHomeHeader(
     ) { searching ->
         if (!searching) {
             AidenProductTopBar(
-                title = "Workspaces",
+                title = stringResource(R.string.workspace_directory_title),
                 connectionState = connectionState,
                 productSwitcher = productSwitcher
             ) {
                 AidenProductTopBarAction(
                     icon = Icons.Outlined.Search,
-                    contentDescription = "Search Workspace chats",
+                    contentDescription = stringResource(R.string.workspace_home_search_cd),
                     onClick = onBeginSearch
                 )
                 AidenProductTopBarAction(
                     icon = Icons.Outlined.Person,
-                    contentDescription = "Profile and settings",
+                    contentDescription = stringResource(R.string.workspace_home_profile_cd),
                     onClick = onOpenSettings,
                     tint = palette.accent
                 )
@@ -915,7 +1007,7 @@ private fun AidenWorkspaceSearchField(
                         Box(contentAlignment = Alignment.CenterStart) {
                             if (query.isEmpty()) {
                                 Text(
-                                    "Search chats",
+                                    stringResource(R.string.workspace_home_search_placeholder),
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = palette.secondary
                                 )
@@ -928,16 +1020,17 @@ private fun AidenWorkspaceSearchField(
                         .focusRequester(focusRequester)
                         .onFocusChanged { focused = it.isFocused }
                 )
-                IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Close search") }
+                IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, stringResource(R.string.workspace_home_close_search)) }
             }
         }
     }
 }
 
-private val AidenWorkspaceSidebarOrganization.menuTitle: String
+@get:StringRes
+private val AidenWorkspaceSidebarOrganization.menuTitle: Int
     get() = when (this) {
-        AidenWorkspaceSidebarOrganization.WORKSPACE -> "By workspace"
-        AidenWorkspaceSidebarOrganization.RECENT -> "Recent only"
+        AidenWorkspaceSidebarOrganization.WORKSPACE -> R.string.workspace_home_organize_by_workspace
+        AidenWorkspaceSidebarOrganization.RECENT -> R.string.workspace_home_organize_recent
     }
 
 private val AidenWorkspaceSidebarOrganization.icon: ImageVector
@@ -955,6 +1048,7 @@ private fun AidenSidebarOrganizationMenu(
 ) {
     val palette = AidenTheme.palette
     val reduceMotion = aidenReduceMotion()
+    val organizeDescription = stringResource(R.string.workspace_home_organize_cd)
     val interaction = remember { MutableInteractionSource() }
     Box {
         IconButton(
@@ -962,7 +1056,7 @@ private fun AidenSidebarOrganizationMenu(
             interactionSource = interaction,
             modifier = Modifier
                 .tactilePress(interaction, targetScale = 0.9f)
-                .semantics { contentDescription = "Organize sidebar" }
+                .semantics { contentDescription = organizeDescription }
         ) {
             AnimatedContent(
                 targetState = selected,
@@ -986,7 +1080,7 @@ private fun AidenSidebarOrganizationMenu(
             AidenWorkspaceSidebarOrganization.entries.forEach { organization ->
                 val isSelected = organization == selected
                 DropdownMenuItem(
-                    text = { Text(organization.menuTitle) },
+                    text = { Text(stringResource(organization.menuTitle)) },
                     leadingIcon = {
                         Icon(
                             organization.icon,
@@ -996,7 +1090,7 @@ private fun AidenSidebarOrganizationMenu(
                     },
                     trailingIcon = {
                         if (isSelected) {
-                            Icon(Icons.Outlined.Check, contentDescription = "Selected", tint = palette.accent)
+                            Icon(Icons.Outlined.Check, contentDescription = stringResource(R.string.state_selected), tint = palette.accent)
                         }
                     },
                     onClick = { onSelect(organization) }
@@ -1078,17 +1172,18 @@ internal fun AidenWorkspaceSidebarSectionRow(
         section.chats.take(AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT)
     }
     val remainingChatCount = section.chats.size - visibleChats.size
+    val disclosureState = stringResource(if (expanded) R.string.state_expanded else R.string.state_collapsed)
     Column(Modifier.fillMaxWidth()) {
         Surface(
             onClick = onToggle,
             color = Color.Transparent,
-            shape = RoundedCornerShape(18.dp),
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 1.dp)
                 .testTag("workspace_disclosure_${section.workspace.id}")
                 .semantics {
-                    stateDescription = if (expanded) "Expanded" else "Collapsed"
+                    stateDescription = disclosureState
                 }
         ) {
             Row(
@@ -1160,7 +1255,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
                         onClick = onCreateChat,
                         enabled = canCreateChat,
                         color = Color.Transparent,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = MaterialTheme.shapes.large,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
@@ -1177,7 +1272,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
                             )
                             Spacer(Modifier.width(10.dp))
                             Text(
-                                "New chat",
+                                stringResource(R.string.workspace_home_new_chat),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = palette.secondary
                             )
@@ -1188,13 +1283,13 @@ internal fun AidenWorkspaceSidebarSectionRow(
                     Surface(
                         onClick = onRevealAllChats,
                         color = Color.Transparent,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = MaterialTheme.shapes.large,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = 44.dp, end = 14.dp, top = 1.dp, bottom = 1.dp)
                     ) {
                         Text(
-                            "Show $remainingChatCount more",
+                            pluralStringResource(R.plurals.workspace_home_show_more, remainingChatCount, remainingChatCount),
                             style = MaterialTheme.typography.bodyMedium,
                             color = palette.secondary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp)
@@ -1218,7 +1313,7 @@ private fun AidenWorkspaceChatRow(
     Surface(
         onClick = onClick,
         color = Color.Transparent,
-        shape = RoundedCornerShape(18.dp),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
             .padding(
@@ -1235,14 +1330,14 @@ private fun AidenWorkspaceChatRow(
             if (chat.forkedFrom != null) {
                 Icon(
                     Icons.AutoMirrored.Filled.CallSplit,
-                    contentDescription = "Forked chat",
+                    contentDescription = stringResource(R.string.workspace_home_forked_chat_cd),
                     tint = palette.secondary,
                     modifier = Modifier.padding(top = 3.dp, end = 6.dp).size(16.dp)
                 )
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    chat.title.ifBlank { "New Chat" },
+                    chat.title.ifBlank { stringResource(R.string.workspace_new_chat) },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
                     color = palette.foreground,
@@ -1277,7 +1372,7 @@ private fun AidenNewChatChoice(
     onClick: () -> Unit
 ) {
     val palette = AidenTheme.palette
-    Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp)) {
             Icon(icon, null, tint = if (enabled) palette.foreground else palette.secondary.copy(alpha = .45f))
             Spacer(Modifier.width(14.dp))
@@ -1306,9 +1401,9 @@ private fun AidenWorkspaceNameDialog(
     )
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New Workspace") },
+        title = { Text(stringResource(R.string.workspace_menu_new)) },
         text = {
-            Surface(color = fieldColor, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().height(54.dp)) {
+            Surface(color = fieldColor, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().height(54.dp)) {
                 BasicTextField(
                     value = name,
                     onValueChange = onNameChanged,
@@ -1321,7 +1416,7 @@ private fun AidenWorkspaceNameDialog(
                 )
             }
         },
-        confirmButton = { AidenDialogConfirmButton(text = "Create", onClick = onCreate, enabled = name.trim().isNotEmpty()) },
+        confirmButton = { AidenDialogConfirmButton(text = stringResource(R.string.action_create), onClick = onCreate, enabled = name.trim().isNotEmpty()) },
         dismissButton = { AidenDialogDismissButton(onClick = onDismiss) },
         shape = AidenShape.Dialog,
         containerColor = palette.raised

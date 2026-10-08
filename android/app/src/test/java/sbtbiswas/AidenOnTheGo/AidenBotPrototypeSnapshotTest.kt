@@ -22,7 +22,11 @@ class AidenBotPrototypeSnapshotTest {
 
     @Test
     fun testAllPresetThemePalettesAreDefined() {
-        assertEquals(9, AidenThemePresetID.values().size)
+        // Every fixed preset ships its own light and dark palettes; only the dynamic
+        // (Material You) preset is derived at runtime and borrows Aiden's as a fallback.
+        val fixed = AidenThemePresetID.entries.filterNot { it.isDynamic }
+        assertEquals(9, fixed.size)
+        assertEquals(fixed.toSet(), AidenThemeCatalog.palettes.filterValues { it.size == 2 }.keys)
 
         for (preset in AidenThemePresetID.values()) {
             val lightPalette = AidenThemeCatalog.palette(preset, false)
