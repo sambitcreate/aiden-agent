@@ -164,22 +164,6 @@ export function ensureTool(
   return shared;
 }
 
-/** Removes every completed or abandoned version directory except the pinned one. */
-export async function pruneOldToolVersions(baseDir: string, spec: ToolSpec): Promise<void> {
-  const toolDir = path.join(baseDir, "tools", spec.name);
-  let names: string[];
-  try {
-    names = await readdir(toolDir);
-  } catch {
-    return;
-  }
-  await Promise.all(
-    names
-      .filter((name) => name !== spec.version && VERSION_DIR_PATTERN.test(name))
-      .map((name) => rm(path.join(toolDir, name), { recursive: true, force: true })),
-  );
-}
-
 /** Completed installs on disk, read without downloading or starting either tool. */
 export async function installedToolVersions(baseDir: string, spec: ToolSpec): Promise<string[]> {
   let names: string[];
