@@ -1,0 +1,31 @@
+// The main process's one GitHub client: a credential source, the rate-limit
+// gate, the transport, and the pull request service built on them.
+
+import { logger } from "../../platform.js";
+import { GitHubPullRequestService } from "../github-pull-request.js";
+import { GitHubApi } from "./github-api.js";
+import { GitHubCredentialSource } from "./github-credentials.js";
+import { LocalRepositoryResolver } from "./github-local-repository.js";
+import { BatchedPullRequestReader } from "./github-pull-request-reader.js";
+import { GitHubRateLimitGate } from "./github-request-gate.js";
+
+const credentials = new GitHubCredentialSource();
+
+export const githubGate = new GitHubRateLimitGate({ log: (line) => logger.info("github", line) });
+
+export const githubApi = new GitHubApi({ credentials, gate: githubGate });
+
+const repositories = new LocalRepositoryResolver({
+  isGitHubHost: (host) => credentials.authorizesHost(host),
+});
+
+export const githubPullRequests = new GitHubPullRequestService({
+  reader: new BatchedPullRequestReader({ api: githubApi }),
+  repositories,
+});
+
+export const githubCurrentPullRequest = (
+  folderPath: string,
+  signal?: AbortSignal,
+  options?: { interactive?: boolean },
+) => githubPullRequests.currentPullRequest(folderPath, signal, options);

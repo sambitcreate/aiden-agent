@@ -94,6 +94,21 @@ export type {
 
 export type ChatPullRequestPendingIntent = ChatPullRequestPendingCreate;
 
+/** Whether a refreshed snapshot differs in anything a viewer would notice. */
+function snapshotChanged(
+  previous: ChatPullRequestSnapshot | undefined,
+  next: ChatPullRequestSnapshot,
+): boolean {
+  if (!previous) return true;
+  const { syncedAt: _previousSyncedAt, ...before } = previous;
+  const { syncedAt: _nextSyncedAt, ...after } = next;
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].some(
+    (key) =>
+      before[key as keyof typeof before] !== after[key as keyof typeof after],
+  );
+}
+
 function snapshotFromSummary(
   summary: GitHubPullRequestSummary,
 ): ChatPullRequestSnapshot {
@@ -230,6 +245,8 @@ export class ChatPullRequestService {
       | "discovered"
       | "none";
     message?: string;
+    /** Epoch ms until which GitHub reads are paused after a rate limit. */
+    rateLimitedUntil?: number;
   }> {
     const links = await this.deps.store.list(chatId);
     const context = await this.chatContext(chatId);
@@ -239,6 +256,7 @@ export class ChatPullRequestService {
       branch: context.branch,
     };
     let message: string | undefined;
+    let rateLimitedUntil: number | undefined;
     if (context.folderPath && context.branch) {
       const discovered = await this.deps.github.currentPullRequest(
         context.folderPath,
@@ -260,13 +278,18 @@ export class ChatPullRequestService {
         });
       } else if (discovered.availability !== "no-pull-request") {
         message = discovered.message;
+        if (discovered.availability === "rate-limited") rateLimitedUntil = discovered.retryAt;
       }
     }
     const resolved = resolveCurrentPullRequest(links, resolverContext);
-    return { ...resolved, ...(message ? { message } : {}) };
+    return {
+      ...resolved,
+      ...(message ? { message } : {}),
+      ...(rateLimitedUntil !== undefined ? { rateLimitedUntil } : {}),
+    };
   }
 
-  /** Link a pull request by pasted URL — canonical identity comes from `gh`. */
+  /** Link a pull request by pasted URL — canonical identity comes from GitHub. */
   async link(
     chatId: string,
     input: { url: string },
@@ -279,7 +302,7 @@ export class ChatPullRequestService {
       };
     }
     const cwd = await this.cwdFor(chatId);
-    const status = await this.deps.github.getPullRequestByUrl(cwd, input.url);
+    const status = await this.deps.github.getPullRequestByUrl(cwd, input.url, undefined, { interactive: true });
     if (status.availability !== "ready" || !status.pullRequest) {
       return {
         ok: false,
@@ -301,6 +324,8 @@ export class ChatPullRequestService {
       cwd,
       repoSelector(ref.host, ref.repository),
       ref.number,
+      undefined,
+      { interactive: true },
     );
     if (status.availability !== "ready" || !status.pullRequest) {
       return {
@@ -367,23 +392,34 @@ export class ChatPullRequestService {
         )
       : links;
     const cwd = await this.cwdFor(chatId);
+    // Issued together so the GitHub reader answers them in one request.
+    const statuses = await Promise.all(
+      targets.map((link) =>
+        this.deps.github.getPullRequest(
+          cwd,
+          repoSelector(link.host, link.repository),
+          link.number,
+          undefined,
+          { interactive: true },
+        ),
+      ),
+    );
     let changed = false;
-    for (const link of targets) {
-      const status = await this.deps.github.getPullRequest(
-        cwd,
-        repoSelector(link.host, link.repository),
-        link.number,
-      );
+    let rateLimitedUntil: number | undefined;
+    for (const [index, link] of targets.entries()) {
+      const status = statuses[index]!;
+      if (status.availability === "rate-limited") {
+        rateLimitedUntil = status.retryAt;
+        continue;
+      }
       if (status.availability !== "ready" || !status.pullRequest) continue;
-      await this.deps.store.updateSnapshot(
-        chatId,
-        link,
-        snapshotFromSummary(status.pullRequest),
-      );
-      changed = true;
+      const snapshot = snapshotFromSummary(status.pullRequest);
+      await this.deps.store.updateSnapshot(chatId, link, snapshot);
+      if (snapshotChanged(link.snapshot, snapshot)) changed = true;
     }
     if (changed) this.notify(chatId);
-    return this.list(chatId);
+    const list = await this.list(chatId);
+    return rateLimitedUntil !== undefined ? { ...list, rateLimitedUntil } : list;
   }
 
   /**
@@ -421,15 +457,25 @@ export class ChatPullRequestService {
       );
     };
 
-    if (context.branch) {
-      const forBranch = await this.deps.github.findForBranch(
-        context.folderPath,
-        context.branch,
-      );
+    // Both reads start together so they share one GitHub request.
+    const [forBranch, open] = await Promise.all([
+      context.branch
+        ? this.deps.github.listPullRequests(context.folderPath, {
+            state: "open",
+            headBranch: context.branch,
+          })
+        : undefined,
+      this.deps.github.listPullRequests(context.folderPath, {
+        state: "open",
+        limit: 30,
+      }),
+    ]);
+    if (forBranch) {
       if (forBranch.availability !== "ready") {
         return {
           availability: forBranch.availability,
           message: forBranch.message,
+          ...(forBranch.retryAt !== undefined ? { retryAt: forBranch.retryAt } : {}),
           pullRequests: [],
         };
       }
@@ -437,10 +483,6 @@ export class ChatPullRequestService {
         if (summary.state === "open") push(summary);
       }
     }
-    const open = await this.deps.github.listPullRequests(context.folderPath, {
-      state: "open",
-      limit: 30,
-    });
     if (open.availability !== "ready") {
       // Branch results are still useful if the wider list call failed.
       return views.length > 0
@@ -448,6 +490,7 @@ export class ChatPullRequestService {
         : {
             availability: open.availability,
             message: open.message,
+            ...(open.retryAt !== undefined ? { retryAt: open.retryAt } : {}),
             pullRequests: [],
           };
     }
@@ -490,6 +533,7 @@ export class ChatPullRequestService {
       return {
         availability: found.availability,
         message: found.message,
+        ...(found.retryAt !== undefined ? { retryAt: found.retryAt } : {}),
         matches: [],
         refreshed: [],
       };
@@ -500,7 +544,7 @@ export class ChatPullRequestService {
     const unverifiable: GitHubPullRequestSummary[] = [];
     for (const summary of found.pullRequests) {
       if (summary.state !== "open") continue;
-      // `gh pr list --head` matches the branch name, not the commit: only a PR
+      // The head lookup matches the branch name, not the commit: only a PR
       // whose head still points at the pushed SHA can be offered as this push's
       // result — a same-named PR from another source stays unoffered.
       if (expectedSha && summary.headSha === undefined) {
@@ -746,6 +790,8 @@ export class ChatPullRequestService {
       cwd,
       repoSelector(ref.host, ref.repository),
       ref.number,
+      undefined,
+      { interactive: true },
     );
     if (status.availability !== "ready" || !status.pullRequest) {
       return {
