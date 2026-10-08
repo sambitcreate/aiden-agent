@@ -231,6 +231,7 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-b-sheet bg-well">
         <div
           className="device-viewer-screen device-mini-player-screen"
+          data-typing-surface="device"
           tabIndex={0}
           role="application"
           aria-roledescription="simulator screen"
