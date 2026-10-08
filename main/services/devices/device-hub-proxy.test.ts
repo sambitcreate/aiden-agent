@@ -217,16 +217,16 @@ test("only allowlisted routes reach the hub, and never exec, tools, or traversal
       "/api/devices/",
       "/api/devices/boot",
       "/",
-      // serve-emu's input, install, logcat, and WebRTC routes are never forwarded.
+      // serve-emu's input, install, and WebRTC routes are never forwarded.
       "/vendor/serve-emu/api/tap?device=emulator-5554",
       "/vendor/serve-emu/api/key?device=emulator-5554",
       "/vendor/serve-emu/api/apps/install?device=emulator-5554",
-      "/vendor/serve-emu/api/logcat?device=emulator-5554",
       "/vendor/serve-emu/webrtc/offer?device=emulator-5554",
       "/vendor/serve-emu/",
       // A device-scoped serve-emu route needs exactly one valid `device`.
       "/vendor/serve-emu/api/fold",
       "/vendor/serve-emu/api/screenshot?device=-s",
+      "/vendor/serve-emu/api/logcat",
       "/vendor/serve-emu/api/accessibility?device=emulator-5554&device=emulator-5556",
     ]) {
       const [pathname, query] = path.split("?");
@@ -255,7 +255,10 @@ test("only allowlisted routes reach the hub, and never exec, tools, or traversal
     for (const path of [`/vendor/serve-sim/helper/${UDID}/ax`, "/vendor/serve-sim/api/event-log/events"]) {
       assert.equal((await send(proxy, `${path}?t=${token}`, { method: "POST" })).status, 405, path);
     }
-    for (const route of ["screenshot", "stream-mode", "stream-settings", "accessibility", "fold"]) {
+    // Android's event log is serve-emu's logcat stream: read-only, and only for the named emulator.
+    const logcat = `/vendor/serve-emu/api/logcat?device=emulator-5554&t=${token}`;
+    assert.equal((await send(proxy, logcat, { method: "POST" })).status, 405);
+    for (const route of ["screenshot", "stream-mode", "stream-settings", "accessibility", "fold", "logcat"]) {
       const path = `/vendor/serve-emu/api/${route}?device=emulator-5554`;
       assert.equal((await send(proxy, `${path}&t=${token}`)).status, 200, path);
     }

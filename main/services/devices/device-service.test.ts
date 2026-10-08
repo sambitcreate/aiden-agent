@@ -1156,6 +1156,24 @@ test("shutting an emulator down goes through the hub, never simctl", async () =>
   );
 });
 
+test("erase's shutdown of an emulator uses the hub too, and only for devices this Mac listed", async () => {
+  await withService(
+    async ({ service, hub, host }) => {
+      await service.refresh();
+      await assert.rejects(service.shutdownLocal({ hostId: "local", deviceId: "emulator-5560" }), /no longer available/u);
+      await assert.rejects(service.shutdownLocal({ hostId: "peer-mac", deviceId: "emulator-5554" }), /on this Mac/u);
+      assert.equal(hub.calls.filter((call) => call.url.endsWith("/api/devices/shutdown")).length, 0);
+      await service.shutdownLocal({ hostId: "local", deviceId: "emulator-5554" });
+      assert.deepEqual(
+        hub.calls.filter((call) => call.url.endsWith("/api/devices/shutdown")).map((call) => call.body),
+        [{ platform: "android", id: "emulator-5554", name: "Pixel_9_API_35" }],
+      );
+      assert.ok(!host.commands.some((command) => command[0] === "xcrun" && command.includes("shutdown")));
+    },
+    { consent: { streaming: true }, android: true },
+  );
+});
+
 const PEER_PHONE = "5C1E4B7A-0000-4000-8000-0000000000AA";
 
 function fakePeers(listings: Record<string, PeerSimulatorListing | null | Error>) {

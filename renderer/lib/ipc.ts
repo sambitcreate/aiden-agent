@@ -909,9 +909,9 @@ export const devicesApi = {
           : undefined;
       handler(value.chatId, target);
     }),
-  /** Shuts the simulator down if it is booted, then erases all of its content and settings. */
-  erase: (target: DeviceFeatureTarget) => invoke<{ wasBooted: boolean }>("devices:erase", target),
-  /** Host clipboard text onto the simulator's pasteboard. Send Cmd+V afterwards to paste it. */
+  /** Shuts the device down if it is booted, then erases it. `deviceId` is its id now (an emulator goes back to its AVD name). */
+  erase: (target: DeviceFeatureTarget) => invoke<{ wasBooted: boolean; deviceId: string }>("devices:erase", target),
+  /** Host clipboard text to the device: the simulator pasteboard (send Cmd+V afterwards), or typed into the emulator. */
   pasteClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-paste", target),
   /** The simulator's pasteboard text onto the host clipboard. */
   copyClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-copy", target),

@@ -13,11 +13,9 @@ import {
   type DeviceFeatureTarget,
   type DeviceRecordingInfo,
 } from "../../../renderer/shared/device-features.js";
-import { DEVICE_HOST_ID_PATTERN } from "../../../renderer/shared/devices.js";
+import { DEVICE_HOST_ID_PATTERN, DEVICE_ID_PATTERN } from "../../../renderer/shared/devices.js";
 import type { DeviceIpcEvent } from "./device-ipc.js";
 import type { ChooseSavePath, DeviceFeatures } from "./device-features.js";
-
-const DEVICE_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 
 export interface DeviceFeatureHandlerDeps {
   handle(channel: string, listener: (event: DeviceIpcEvent, ...args: unknown[]) => unknown): void;

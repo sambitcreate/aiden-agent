@@ -403,6 +403,7 @@
         "main/services/computer-use/status-core.test.ts",
         "main/services/context-lifecycle-service.test.ts",
         "main/services/devices/android-device-actions.test.ts",
+        "main/services/devices/android-device-features.test.ts",
         "main/services/devices/device-actions.test.ts",
         "main/services/devices/device-feature-actions.test.ts",
         "main/services/devices/device-feature-ipc.test.ts",
