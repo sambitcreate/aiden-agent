@@ -13,7 +13,12 @@ import {
   type SubagentModelRuntimeFacts,
   type SubagentModelSettings,
 } from "./subagent-model-selection.js";
-import { createSubagentChildModelResolver, subagentModelRuntimeFacts } from "./subagent-model-runtime.js";
+import {
+  createSubagentChildModelResolver,
+  MAX_SUBAGENT_MODEL_CANDIDATES,
+  subagentModelCandidatesFromSettings,
+  subagentModelRuntimeFacts,
+} from "./subagent-model-runtime.js";
 
 const sonnet: SubagentModelCandidate = {
   providerId: "anthropic",
@@ -158,6 +163,20 @@ test("a locked role applies last and overrides explicit arguments with a visible
   assert.match(value.warnings.join(" "), /locked/);
 });
 
+test("a lock-only role setting is kept and still ignores spawn arguments", () => {
+  const settings = parseSubagentModelSettings({ roles: { implementer: { locked: true } } });
+  assert.deepEqual(settings, { roles: { implementer: { locked: true } } });
+  const value = selected(
+    { role: "implementer", model: "openai/gpt-mini", effort: "low" },
+    policy(settings),
+  );
+  assert.deepEqual(
+    [value.providerId, value.modelId, value.effort, value.modelSource, value.effortSource],
+    ["anthropic", "claude-sonnet", "high", "inherited", "inherited"],
+  );
+  assert.match(value.warnings.join(" "), /locked by settings/);
+});
+
 test("a disconnected configured model is reported and the parent is used", () => {
   const value = selected({ role: "scout" }, policy({ defaultModel: "gone/model" }));
   assert.equal(value.modelId, "claude-sonnet");
@@ -220,12 +239,19 @@ test("model settings parsing drops invalid fields instead of rejecting the whole
       defaultEffort: "high",
       maxEffort: "turbo",
       allowedModels: ["openai/gpt-mini", 4, "openai/gpt-mini"],
-      roles: { scout: { model: "openai/gpt-mini", locked: true }, wizard: { model: "a/b" } },
+      roles: {
+        scout: { model: "openai/gpt-mini", locked: true },
+        implementer: { locked: true },
+        wizard: { model: "a/b" },
+      },
     }),
     {
       defaultEffort: "high",
       allowedModels: ["openai/gpt-mini"],
-      roles: { scout: { model: "openai/gpt-mini", locked: true } },
+      roles: {
+        scout: { model: "openai/gpt-mini", locked: true },
+        implementer: { locked: true },
+      },
     },
   );
   assert.equal(parseSubagentModelSettings("nope"), undefined);
@@ -269,4 +295,61 @@ test("the child resolver resolves each distinct model once and reuses the parent
   assert.equal(first.runtime, second.runtime);
   assert.deepEqual(resolved, ["openai/gpt-mini"]);
   await assert.rejects(resolve({ role: "scout", model: "openai/gpt-mini", effort: "high" }, signal), /Supported efforts: off/);
+});
+
+test("a large earlier catalog does not erase a later provider or its allowlisted model", () => {
+  const firstModels = Array.from({ length: 150 }, (_, index) => `catalog-${index}`);
+  const lateKey = "second/late-default";
+  const providers = [
+    {
+      id: "first",
+      label: "First",
+      needsKey: true,
+      hasKey: true,
+      models: firstModels,
+      defaultModel: "catalog-0",
+    },
+    {
+      id: "second",
+      label: "Second",
+      needsKey: true,
+      hasKey: true,
+      models: ["late-default"],
+      defaultModel: "late-default",
+    },
+  ];
+  const discovered = subagentModelCandidatesFromSettings(providers);
+  assert.ok(discovered.length <= MAX_SUBAGENT_MODEL_CANDIDATES);
+  assert.ok(discovered.some((candidate) => subagentModelKey(candidate) === lateKey));
+  assert.ok(discovered.some((candidate) => candidate.providerId === "first"));
+
+  const buriedKey = "first/catalog-149";
+  const settings: SubagentModelSettings = { allowedModels: [lateKey, buriedKey] };
+  const withAllowlist = subagentModelCandidatesFromSettings(providers, settings);
+  assert.ok(withAllowlist.some((candidate) => subagentModelKey(candidate) === lateKey));
+  assert.ok(withAllowlist.some((candidate) => subagentModelKey(candidate) === buriedKey));
+  const parent: SubagentModelCandidate = {
+    providerId: "first",
+    providerLabel: "First",
+    modelId: "catalog-0",
+    modelLabel: "catalog-0",
+  };
+  const listed = requestableSubagentModels({
+    parent: { ...parent, effort: "high" },
+    candidates: withAllowlist,
+    overridesAllowed: true,
+    settings,
+  });
+  assert.deepEqual(listed.map(subagentModelKey), ["first/catalog-0", lateKey, buriedKey]);
+  const planned = planSubagentModel(
+    {
+      parent: { ...parent, effort: "high" },
+      candidates: withAllowlist,
+      overridesAllowed: true,
+      settings: { defaultModel: lateKey },
+    },
+    { role: "scout" },
+  );
+  assert.equal(planned.ok, true);
+  assert.equal(planned.ok && planned.value.candidate.providerId, "second");
 });

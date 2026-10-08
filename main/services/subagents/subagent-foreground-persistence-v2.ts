@@ -332,7 +332,10 @@ export function createForegroundSubagentPersistenceV2(
           MAX_SUBAGENT_SUMMARY_CHARS,
           MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
         ),
-        maxTokens: cumulativeSubagentTokenBudget((childModel?.runtime ?? input.runtime).model.contextWindow),
+        // Generation-wide tree allowance stays on the parent runtime. Pi already
+        // enforces each child's own context window per request; a smaller child
+        // must not shrink the shared remaining budget or clamp larger siblings.
+        maxTokens: cumulativeSubagentTokenBudget(input.runtime.model.contextWindow),
         maxLaunches:
           parentAuthority?.budgets.maxLaunches ??
           MAX_SUBAGENT_LAUNCHES_PER_GENERATION,

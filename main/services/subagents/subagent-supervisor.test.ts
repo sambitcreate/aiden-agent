@@ -721,6 +721,112 @@ test("V2 siblings run their own approved models without sharing one runtime", as
   assert.equal(reparsed?.modelSelection, "requested");
 });
 
+function usageWithTokens(totalTokens: number): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "used" }],
+    api: "openai-completions",
+    provider: "phase2-provider",
+    model: "phase2-model",
+    usage: {
+      input: totalTokens,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  };
+}
+
+test("generation token budget stays independent of a smaller-context child model", async () => {
+  const generationId = "stable-generation-token-budget";
+  const parentRuntime = {
+    ...runtime(),
+    model: { ...runtime().model, contextWindow: 128_000 },
+  };
+  const persistence = createForegroundSubagentPersistenceV2({
+    store: {
+      selection: "v2",
+      async reserveRun() {},
+      releaseRunReservation() {},
+      async upsert(snapshot: unknown) { return snapshot as never; },
+    } as unknown as ProductionSubagentRunStore,
+    generationId,
+    chatId: TEST_SUPERVISOR_SCOPE.chatId,
+    workspace: {
+      id: TEST_SUPERVISOR_SCOPE.workspaceId,
+      name: "Workspace",
+      folderPath: "/workspace",
+      permission: "full",
+      createdAt: 1,
+      updatedAt: 2,
+    },
+    runtime: parentRuntime,
+    thinkingLevel: "high",
+    ownerDocumentId: "1:2:document-one",
+    permission: "full",
+    randomUUID: () => "00000000-0000-4000-8000-000000000001",
+  });
+  const launched: string[] = [];
+  const supervisor = new SubagentSupervisor({
+    generationId,
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: parentRuntime,
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    prepareRun: (input) => persistence.prepareRun(input),
+    selectChildModel: createSubagentChildModelResolver({
+      policy: modelPolicy(),
+      parentRuntime,
+      savedEffort: () => undefined,
+      resolveRuntime: async () => secondRuntime(),
+    }),
+    runChild: async (child) => {
+      launched.push(child.request.label);
+      child.telemetry?.usage(usageWithTokens(17_000));
+      return completed(child.request.label);
+    },
+  });
+
+  const first = await supervisor.execute(parseSubagentToolRequest({
+    tasks: [{ role: "scout", label: "Wide", task: "Use the parent model." }],
+  }));
+  assert.match(first, /## 1\. Wide[\s\S]*Status: completed/u);
+
+  const second = await supervisor.execute(parseSubagentToolRequest({
+    tasks: [{
+      role: "scout",
+      label: "Narrow",
+      task: "Use a smaller context window.",
+      model: "second-provider/second-model",
+    }],
+  }));
+  assert.match(second, /## 1\. Narrow[\s\S]*Status: completed/u);
+
+  const mixed = await supervisor.execute(parseSubagentToolRequest({
+    tasks: [
+      { role: "scout", label: "Wide sibling", task: "Keep the parent model." },
+      {
+        role: "scout",
+        label: "Narrow sibling",
+        task: "Share the batch with a smaller context window.",
+        model: "second-provider/second-model",
+      },
+    ],
+  }));
+  assert.match(mixed, /## 1\. Wide sibling[\s\S]*Status: completed/u);
+  assert.match(mixed, /## 2\. Narrow sibling[\s\S]*Status: completed/u);
+  assert.deepEqual(launched.slice(0, 2), ["Wide", "Narrow"]);
+  assert.equal(launched.length, 4);
+  assert.ok(launched.includes("Wide sibling"));
+  assert.ok(launched.includes("Narrow sibling"));
+});
+
 test("a refused child model launches, prepares, and projects nothing", async () => {
   const projector = new SubagentEventProjector({
     generationId: "refused-model",

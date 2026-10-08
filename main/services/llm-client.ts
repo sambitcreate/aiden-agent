@@ -279,7 +279,7 @@ import {
 import {
   createSubagentChildModelResolver,
   savedThinkingLevelFor,
-  subagentModelCandidatesFromProviders,
+  subagentModelCandidatesFromSettings,
 } from "./subagents/subagent-model-runtime.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import {
@@ -1126,6 +1126,9 @@ async function prepareGeneration(
   // Bot and Assistant runtimes are bound by their grant, so their children
   // always run on the parent model. Model choice never reaches capabilities.
   const subagentModelOverridesAllowed = !botBound && !assistantMode;
+  const subagentModelSettings = subagentModelOverridesAllowed
+    ? parseSubagentModelSettings(settings.subagentModels)
+    : undefined;
   const subagentModelPolicy: SubagentModelPolicy | undefined =
     allowSubagents && folderPath && workspace?.id
       ? {
@@ -1137,14 +1140,13 @@ async function prepareGeneration(
             effort: thinkingLevel,
           },
           candidates: subagentModelOverridesAllowed
-            ? subagentModelCandidatesFromProviders(
+            ? subagentModelCandidatesFromSettings(
                 await listConfiguredProviders().catch(() => []),
+                subagentModelSettings,
               )
             : [],
           overridesAllowed: subagentModelOverridesAllowed,
-          settings: subagentModelOverridesAllowed
-            ? parseSubagentModelSettings(settings.subagentModels)
-            : undefined,
+          settings: subagentModelSettings,
         }
       : undefined;
   const subagentModelOptions = subagentModelPolicy

@@ -183,7 +183,8 @@ test("a per-child model binds only runtime identity and effort under Full and As
     assert.notEqual(after.providerFingerprint, before.providerFingerprint);
     assert.notEqual(after.modelFingerprint, before.modelFingerprint);
     assert.equal(after.budgets.maxActive, 1);
-    assert.ok(after.budgets.maxTokens < before.budgets.maxTokens);
+    assert.equal(after.budgets.maxTokens, before.budgets.maxTokens);
+    assert.equal(after.budgets.maxTokens, cumulativeSubagentTokenBudget(parent.model.contextWindow));
     assert.equal(after.capabilities.workspaceWrite, true);
     assert.equal(
       typeof overridden.prepareWorkspaceWriteApproval,

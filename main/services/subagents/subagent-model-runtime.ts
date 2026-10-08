@@ -16,12 +16,14 @@ import {
   finalizeSubagentModel,
   planSubagentModel,
   isSubagentModelKey,
+  preferredSubagentModelKeys,
   subagentModelKey,
   type SubagentModelCandidate,
   type SubagentModelPolicy,
   type SubagentModelRequest,
   type SubagentModelRuntimeFacts,
   type SubagentModelSelection,
+  type SubagentModelSettings,
 } from "./subagent-model-selection.js";
 
 export interface SubagentModelRuntimeLike {
@@ -69,35 +71,73 @@ export function subagentModelRuntimeFacts(
   };
 }
 
-const MAX_SUBAGENT_MODEL_CANDIDATES = 128;
+export const MAX_SUBAGENT_MODEL_CANDIDATES = 128;
 
-/** Connected chat models in discovery order, each provider's default first. */
+function eligibleProviderCandidate(
+  provider: Pick<Provider, "id" | "label" | "models" | "defaultModel" | "modelMetadata">,
+  modelId: string,
+): SubagentModelCandidate | undefined {
+  const candidate = {
+    providerId: provider.id,
+    providerLabel: provider.label.trim() || provider.id,
+    modelId,
+    modelLabel: provider.modelMetadata?.[modelId]?.name?.trim() || modelId,
+  };
+  const key = subagentModelKey(candidate);
+  if (!isSubagentModelKey(key)) return undefined;
+  if (isNonChatModel({ model: modelId, metadataType: provider.modelMetadata?.[modelId]?.type })) {
+    return undefined;
+  }
+  return candidate;
+}
+
+/**
+ * Connected chat models, bounded without erasing later providers. Preferred
+ * keys (allowlist / configured defaults) are kept when they are connected.
+ */
 export function subagentModelCandidatesFromProviders(
   providers: readonly Pick<Provider, "id" | "label" | "needsKey" | "hasKey" | "models" | "defaultModel" | "modelMetadata">[],
+  prefer: readonly string[] = [],
 ): SubagentModelCandidate[] {
-  const candidates: SubagentModelCandidate[] = [];
-  const seen = new Set<string>();
+  const byKey = new Map<string, SubagentModelCandidate>();
+  const queues = new Map<string, SubagentModelCandidate[]>();
   for (const provider of providers) {
     if (provider.needsKey && !provider.hasKey) continue;
     const models = [...provider.models].sort(
       (left, right) => Number(right === provider.defaultModel) - Number(left === provider.defaultModel),
     );
+    const queue: SubagentModelCandidate[] = [];
     for (const modelId of models) {
-      const candidate = {
-        providerId: provider.id,
-        providerLabel: provider.label.trim() || provider.id,
-        modelId,
-        modelLabel: provider.modelMetadata?.[modelId]?.name?.trim() || modelId,
-      };
+      const candidate = eligibleProviderCandidate(provider, modelId);
+      if (!candidate) continue;
       const key = subagentModelKey(candidate);
-      if (seen.has(key) || !isSubagentModelKey(key)) continue;
-      if (isNonChatModel({ model: modelId, metadataType: provider.modelMetadata?.[modelId]?.type })) continue;
-      seen.add(key);
-      candidates.push(candidate);
-      if (candidates.length >= MAX_SUBAGENT_MODEL_CANDIDATES) return candidates;
+      if (byKey.has(key)) continue;
+      byKey.set(key, candidate);
+      queue.push(candidate);
     }
+    if (queue.length > 0) queues.set(provider.id, queue);
+  }
+  const candidates: SubagentModelCandidate[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: SubagentModelCandidate | undefined) => {
+    if (!candidate || candidates.length >= MAX_SUBAGENT_MODEL_CANDIDATES) return;
+    const key = subagentModelKey(candidate);
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+  for (const key of prefer) add(byKey.get(key));
+  while (candidates.length < MAX_SUBAGENT_MODEL_CANDIDATES && [...queues.values()].some((queue) => queue.length > 0)) {
+    for (const queue of queues.values()) add(queue.shift());
   }
   return candidates;
+}
+
+export function subagentModelCandidatesFromSettings(
+  providers: readonly Pick<Provider, "id" | "label" | "needsKey" | "hasKey" | "models" | "defaultModel" | "modelMetadata">[],
+  settings?: SubagentModelSettings,
+): SubagentModelCandidate[] {
+  return subagentModelCandidatesFromProviders(providers, preferredSubagentModelKeys(settings));
 }
 
 export interface SubagentChildModel<Runtime> {

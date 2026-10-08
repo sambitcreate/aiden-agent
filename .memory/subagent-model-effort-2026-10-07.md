@@ -23,7 +23,8 @@ Started 2026-10-07 on `cursor/subagent-model-effort-3f30` (PR #379) from main
 - **Per-child runtime:** the supervisor resolves every child before `prepareRun`. Each child gets its own runtime, effort, scheduler deployment class, and context clone.
   - Depth-2 children inherit their depth-1 parent's choice.
   - The sibling check no longer requires one provider/model fingerprint.
-- **Run grant:** the authority binds the child's provider/model fingerprints, `thinkingLevel`, token budget, and `maxActive`. Capabilities, approvals, permission, workspace, and the root/parent ceilings are computed exactly as before. The Full/Ask invariance test lives in `subagent-foreground-persistence-v2.test.ts`.
+- **Run grant:** the authority binds the child's provider/model fingerprints, `thinkingLevel`, and `maxActive`. The shared generation token budget stays on the parent context window so a smaller-context child cannot exhaust or clamp the tree ledger. Capabilities, approvals, permission, workspace, and the root/parent ceilings are computed exactly as before. The Full/Ask invariance test lives in `subagent-foreground-persistence-v2.test.ts`.
+- **Candidate inventory:** discovery is capped at 128 with provider round-robin, and configured/allowlisted keys are kept when they are connected so a large earlier catalog cannot hide a later provider.
 - **Persistence:** run snapshots carry optional `providerId`, `thinkingLevel`, and `modelSelection`. Older records still parse.
   - An older app build will refuse a store containing the new keys, because its strict parsers don't know them. The store is preserved, not deleted.
   - Children have no on-disk Pi journal; the snapshot plus `authority.thinkingLevel` is the record. The V2 manifest is unchanged.

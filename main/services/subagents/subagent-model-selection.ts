@@ -145,11 +145,25 @@ export function parseSubagentModelSettings(value: unknown): SubagentModelSetting
       if (isSubagentModelKey(entry.model)) setting.model = entry.model;
       if (isGenerationThinkingLevel(entry.effort)) setting.effort = entry.effort;
       if (entry.locked === true) setting.locked = true;
-      if (setting.model !== undefined || setting.effort !== undefined) parsed[role] = setting;
+      if (setting.model !== undefined || setting.effort !== undefined || setting.locked === true) {
+        parsed[role] = setting;
+      }
     }
     if (Object.keys(parsed).length > 0) settings.roles = parsed;
   }
   return Object.keys(settings).length > 0 ? settings : undefined;
+}
+
+/** Configured keys that must stay resolvable even when discovery is capped. */
+export function preferredSubagentModelKeys(settings?: SubagentModelSettings): string[] {
+  if (!settings) return [];
+  const keys: string[] = [];
+  if (settings.defaultModel) keys.push(settings.defaultModel);
+  if (settings.allowedModels) keys.push(...settings.allowedModels);
+  for (const role of Object.values(settings.roles ?? {})) {
+    if (role?.model) keys.push(role.model);
+  }
+  return [...new Set(keys)];
 }
 
 /** The exact models an agent may request: parent first, bounded, never unconnected. */
