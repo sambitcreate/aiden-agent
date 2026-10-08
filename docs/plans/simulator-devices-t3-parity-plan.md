@@ -31,6 +31,7 @@ Each workstream is implemented in its own worktree and merged into a single PR.
 - Agent control of simulators on paired Macs.
 - Real-Mac and physical-device acceptance for every workstream.
 - Onboarding feature-tour tile for devices.
+- SSH hub forward exposure (security). `ssh -L 127.0.0.1:<port>:127.0.0.1:<hub>` exposes the remote hub's unauthenticated routes, including serve-sim's shell-exec route, to every local process and user on this Mac while the tunnel is up. The local hub has the same posture. Mitigation: forward to a UNIX socket in a `0700` folder under userData and teach the hub consumers to dial it. That means the token proxy (`http.request` `socketPath` and `net.connect({ path })` for upgrades), the device service's hub calls (an undici dispatcher with `socketPath`), and the `/readyz` check. Alternatively, put an authenticating loopback shim in front of each forward. The agent-device daemon forward can stay TCP because the daemon checks its own token. Documented in `docs/devices.md` (Internals → SSH hosts).
 
 ## Status
 
