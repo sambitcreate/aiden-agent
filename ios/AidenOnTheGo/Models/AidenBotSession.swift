@@ -145,16 +145,26 @@ enum AidenBotSessionNotice: String, Codable, Sendable {
     case sessionReset = "session_reset"
 }
 
+/// A turn that ended without a reply. `retryText` is the user text a Retry
+/// sends again as a new message; it is absent when there is nothing to resend.
+struct AidenBotFailedTurn: Equatable, Sendable {
+    let id: String
+    let createdAt: AidenRemoteTimestamp?
+    let retryText: String?
+}
+
 enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case message(AidenBotSessionMessage)
     case connectCard(AidenBotConnectCard)
     case notice(id: String, notice: AidenBotSessionNotice)
+    case failedTurn(AidenBotFailedTurn)
 
     var id: String {
         switch self {
         case let .message(message): message.id
         case let .connectCard(card): card.id
         case let .notice(id, _): id
+        case let .failedTurn(turn): turn.id
         }
     }
 
@@ -211,6 +221,17 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case "notice":
             try AidenBotWire.requireOnlyKeys(decoder, allowed: ["type", "id", "notice"])
             self = .notice(id: id, notice: try values.decode(AidenBotSessionNotice.self, forKey: .notice))
+        case "failed_turn":
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["type", "id", "createdAt", "retryText"])
+            self = .failedTurn(AidenBotFailedTurn(
+                id: id,
+                createdAt: try AidenBotWire.optional(AidenRemoteTimestamp.self, from: values, forKey: .createdAt),
+                retryText: try AidenBotWire.optionalString(
+                    values,
+                    forKey: .retryText,
+                    maxLength: AidenBotSessionWire.maxTextLength
+                )
+            ))
         default:
             throw AidenBotContractError.invalidField("entry.type")
         }
@@ -239,12 +260,17 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
             try values.encode("notice", forKey: .type)
             try values.encode(id, forKey: .id)
             try values.encode(notice, forKey: .notice)
+        case let .failedTurn(turn):
+            try values.encode("failed_turn", forKey: .type)
+            try values.encode(turn.id, forKey: .id)
+            try values.encodeIfPresent(turn.createdAt, forKey: .createdAt)
+            try values.encodeIfPresent(turn.retryText, forKey: .retryText)
         }
     }
 
     private enum CodingKeys: String, CodingKey {
         case type, id, role, text, createdAt, label, interrupted
-        case pluginId, name, iconId, reason, status, notice
+        case pluginId, name, iconId, reason, status, notice, retryText
     }
 }
 

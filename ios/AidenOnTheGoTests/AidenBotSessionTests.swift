@@ -11,6 +11,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _streamRequests = 0
     private var _resumeKeys: [UUID] = []
     private var _sendKeys: [UUID] = []
+    private var _sendTexts: [String] = []
+    private var _sendErrors: [Error] = []
     private var _connectionKeys: [UUID] = []
     private var _resumeResults: [Result<AidenBotSessionStateView, Error>] = []
     private var _connectionError: Error?
@@ -27,11 +29,13 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     func queueStream(_ events: [AidenBotSessionEvent]) { locked { _streams.append(events) } }
     func queueResume(_ result: Result<AidenBotSessionStateView, Error>) { locked { _resumeResults.append(result) } }
     func failConnections(with error: Error) { locked { _connectionError = error } }
+    func failNextSend(with error: Error) { locked { _sendErrors.append(error) } }
 
     var sessionRequests: Int { locked { _sessionRequests } }
     var streamRequests: Int { locked { _streamRequests } }
     var resumeKeys: [UUID] { locked { _resumeKeys } }
     var sendKeys: [UUID] { locked { _sendKeys } }
+    var sendTexts: [String] { locked { _sendTexts } }
     var connectionKeys: [UUID] { locked { _connectionKeys } }
 
     func releaseResume() {
@@ -71,7 +75,12 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
         request: AidenBotMessageRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotMessageReceipt {
-        locked { _sendKeys.append(idempotencyKey) }
+        let error = locked { () -> Error? in
+            _sendKeys.append(idempotencyKey)
+            _sendTexts.append(request.text)
+            return _sendErrors.isEmpty ? nil : _sendErrors.removeFirst()
+        }
+        if let error { throw error }
         return try AidenRemoteJSONDecoder.decode(
             AidenBotMessageReceipt.self,
             from: Data(#"{"submissionId":"17","deduped":false,"state":"running","interrupted":false}"#.utf8)
@@ -437,6 +446,150 @@ final class AidenBotSessionTests: XCTestCase {
         await model.requestConnection(pluginId: "unknown-app")
         XCTAssertEqual(transport.connectionKeys.count, 2)
         XCTAssertNotEqual(transport.connectionKeys[0], transport.connectionKeys[1], "A definitive 404 does not pin the key.")
+    }
+
+    // MARK: Failed turns
+
+    private func failedTurn(_ id: String, retryText: String?) -> AidenBotSessionEntry {
+        .failedTurn(AidenBotFailedTurn(id: id, createdAt: nil, retryText: retryText))
+    }
+
+    func testRetrySendsTheFailedTextAsANewSubmission() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 1, entries: [
+            message("m1", .user, "Plan my week, please."),
+            failedTurn("m1:failed", retryText: "Plan my week, please."),
+        ]))
+        // The original message went out under its own key earlier.
+        _ = await model.send("Plan my week, please.")
+        let originalKey = try XCTUnwrap(transport.sendKeys.first)
+
+        XCTAssertEqual(model.retryableFailedTurn?.id, "m1:failed")
+        let retried = await model.retry()
+
+        XCTAssertTrue(retried)
+        XCTAssertEqual(transport.sendTexts.last, "Plan my week, please.")
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertNotEqual(transport.sendKeys[1], originalKey, "A Retry never reuses the original message's key.")
+        XCTAssertEqual(model.state, .running)
+    }
+
+    func testAmbiguousRetryFailureReusesItsKeyAndAnotherFailedTurnGetsANewOne() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 1, entries: [
+            failedTurn("t1:failed", retryText: "First"),
+        ]))
+        transport.failNextSend(with: URLError(.networkConnectionLost))
+        transport.failNextSend(with: URLError(.networkConnectionLost))
+
+        let lost = await model.retry()
+        XCTAssertFalse(lost)
+        XCTAssertNotNil(model.errorMessage)
+        _ = await model.retry()
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "Tapping Retry again replays the same request.")
+
+        await model.apply(event(seq: 2, .entry(failedTurn("t2:failed", retryText: "Second"))))
+        _ = await model.retry()
+        XCTAssertEqual(transport.sendTexts.last, "Second")
+        XCTAssertNotEqual(transport.sendKeys[2], transport.sendKeys[1], "A different failed turn is a new request.")
+    }
+
+    func testOnlyTheNewestFailedTurnWithTextCanBeRetried() async throws {
+        let transport = FakeBotSessionTransport()
+        let superseded = await loadedModel(transport, try session(seq: 1, entries: [
+            failedTurn("t1:failed", retryText: "Hello"),
+            message("m2", .user, "Something else"),
+        ]))
+        XCTAssertNil(superseded.retryableFailedTurn)
+        let sentSuperseded = await superseded.retry()
+        XCTAssertFalse(sentSuperseded)
+
+        let noText = await loadedModel(transport, try session(seq: 1, entries: [
+            failedTurn("t2:failed", retryText: nil),
+        ]))
+        XCTAssertNil(noText.retryableFailedTurn)
+        let sentNoText = await noText.retry()
+        XCTAssertFalse(sentNoText)
+        XCTAssertTrue(transport.sendKeys.isEmpty)
+    }
+
+    func testFailedTurnDecoderMatchesTheSharedFixtureAndRejectsWhatTheHostRejects() throws {
+        let fixture = try sharedFixture()
+        let turns = try XCTUnwrap(fixture["botSessionFailedTurns"] as? [[String: Any]])
+        XCTAssertEqual(turns.count, 2)
+        let decoded = try turns.map {
+            try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: JSONSerialization.data(withJSONObject: $0))
+        }
+        guard case let .failedTurn(first) = decoded[0], case let .failedTurn(second) = decoded[1] else {
+            return XCTFail("Both fixture entries are failed turns.")
+        }
+        XCTAssertEqual(first.retryText, "Plan my week, please.")
+        XCTAssertNotNil(first.createdAt)
+        XCTAssertEqual(second.id, turns[1]["id"] as? String)
+        XCTAssertNil(second.retryText)
+        XCTAssertNil(second.createdAt)
+
+        // Round trip keeps the shape the host accepts.
+        let reencoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded[1])) as? [String: Any]
+        XCTAssertEqual(Set((reencoded ?? [:]).keys), ["type", "id"])
+        XCTAssertEqual(try AidenRemoteJSONDecoder.decode(
+            AidenBotSessionEntry.self,
+            from: JSONEncoder().encode(decoded[0])
+        ), decoded[0])
+
+        var emptyText = turns[0]
+        emptyText["retryText"] = ""
+        XCTAssertFalse(decodes(AidenBotSessionEntry.self, emptyText))
+        var extraKey = turns[0]
+        extraKey["errorMessage"] = "Model overloaded"
+        XCTAssertFalse(decodes(AidenBotSessionEntry.self, extraKey))
+        var badID = turns[1]
+        badID["id"] = ""
+        XCTAssertFalse(decodes(AidenBotSessionEntry.self, badID))
+        var tooLong = turns[0]
+        tooLong["retryText"] = String(repeating: "a", count: AidenBotSessionWire.maxTextLength + 1)
+        XCTAssertFalse(decodes(AidenBotSessionEntry.self, tooLong))
+
+        // The older entry kinds still decode beside it.
+        XCTAssertTrue(decodes(AidenBotSessionEntry.self, try object(#"{"type":"message","id":"m1","role":"user","text":"Hi"}"#)))
+        XCTAssertTrue(decodes(AidenBotSessionEntry.self, try object(#"{"type":"notice","id":"n1","notice":"session_reset"}"#)))
+        XCTAssertTrue(decodes(AidenBotSessionEntry.self, try object(
+            #"{"type":"connect_card","id":"c1","pluginId":"gmail","name":"Gmail","iconId":"gmail","reason":"To read mail","status":"pending"}"#
+        )))
+    }
+
+    // MARK: Files in the chat menu
+
+    private func conversation(chatID: String, botID: String, updatedAt: String) throws -> AidenBotConversationItem {
+        let object: [String: Any] = [
+            "chatId": chatID,
+            "botId": botID,
+            "title": "",
+            "activityState": "idle",
+            "canRespondToApproval": false,
+            "createdAt": "2026-08-18T17:00:00.000Z",
+            "updatedAt": updatedAt,
+            "revision": "rev-\(chatID)",
+        ]
+        return try AidenRemoteJSONDecoder.decode(
+            AidenBotConversationItem.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+    }
+
+    func testFilesOpenThisBotsCanonicalConversation() throws {
+        let conversations = [
+            try conversation(chatID: "chat_other", botID: "bot_other", updatedAt: "2026-08-19T12:00:00.000Z"),
+            try conversation(chatID: "chat_old", botID: botID, updatedAt: "2026-08-18T18:00:00.000Z"),
+            try conversation(chatID: "chat_new", botID: botID, updatedAt: "2026-08-19T09:00:00.000Z"),
+        ]
+        XCTAssertEqual(aidenBotSessionConversationChatID(botID: botID, conversations: conversations), "chat_new")
+        XCTAssertNil(
+            aidenBotSessionConversationChatID(botID: botID, conversations: [conversations[0]]),
+            "Another Bot's conversation is never opened."
+        )
+        XCTAssertNil(aidenBotSessionConversationChatID(botID: botID, conversations: []))
     }
 
     // MARK: Feature gating

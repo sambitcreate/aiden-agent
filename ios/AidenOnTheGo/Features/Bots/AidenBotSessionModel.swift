@@ -90,6 +90,8 @@ enum AidenBotSessionCopy {
     static let finishOnMacReadOnly = "Finish this on your Mac."
     static let checkYourMac = "Check your Mac to finish."
     static let connected = "Connected ✓"
+    static let failedTurn = "I couldn't finish that reply."
+    static let retry = "Retry"
 
     static func connectTitle(_ name: String) -> String { "Connect \(name)" }
 }
@@ -106,7 +108,7 @@ func aidenBotSessionFailureIsAmbiguous(_ error: Error) -> Bool {
 @Observable
 final class AidenBotSessionModel {
     enum Action: Hashable, Sendable {
-        case send, resume, dismiss, stop, answerQuestion
+        case send, resume, dismiss, stop, answerQuestion, retry
     }
 
     let botID: String
@@ -128,6 +130,8 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var retainedMessage: (text: String, key: UUID)?
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     @ObservationIgnored private var connectionKeys: [String: UUID] = [:]
+    /// The key of a Retry that failed ambiguously, by failed-turn id.
+    @ObservationIgnored private var retainedRetry: (turnID: String, key: UUID)?
 
     init(botID: String, transport: any AidenBotSessionTransport) {
         self.botID = botID
@@ -321,6 +325,44 @@ final class AidenBotSessionModel {
             return true
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedMessage = nil }
+            errorMessage = "That message wasn’t sent. Please try again."
+            return false
+        }
+    }
+
+    /// The newest entry when it is a failed turn that can be sent again.
+    var retryableFailedTurn: AidenBotFailedTurn? {
+        guard case let .failedTurn(turn) = entries.last,
+              let text = turn.retryText,
+              (try? AidenBotMessageRequest(text: text)) != nil else { return nil }
+        return turn
+    }
+
+    /// Sends a failed turn's text again as a new message. A Retry is its own
+    /// submission with its own key, never the original message's; a Retry
+    /// that failed ambiguously is tapped again under the same key.
+    @discardableResult
+    func retry() async -> Bool {
+        guard canSend, !inFlight.contains(.retry), let turn = retryableFailedTurn,
+              let text = turn.retryText, let request = try? AidenBotMessageRequest(text: text) else { return false }
+        let key: UUID
+        if let retainedRetry, retainedRetry.turnID == turn.id {
+            key = retainedRetry.key
+        } else {
+            key = UUID()
+            retainedRetry = (turn.id, key)
+        }
+        inFlight.insert(.retry)
+        defer { inFlight.remove(.retry) }
+        do {
+            let receipt = try await transport.sendBotMessage(botId: botID, request: request, idempotencyKey: key)
+            retainedRetry = nil
+            stateView = receipt.stateView
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedRetry = nil }
             errorMessage = "That message wasn’t sent. Please try again."
             return false
         }

@@ -44,10 +44,10 @@ Status: implemented on PR #377 (`feature/bot-ui-durable-sessions-2f4474`). Physi
 ## Known follow-ups
 - **iOS simulator flake:** on Xcode-beta iOS 27, `AidenRemoteClientTests` failed to launch the host in parallel mode and passed serially. Record the run link on the PR.
 - Monthly routines are limited to days 1–28.
-- The Updates fold shows narration only.
+- The Updates fold shows narration only (one line per reply on desktop).
 - Telegram turns and routine turns that hit an approval-gated tool wait for an answer on desktop or phone.
 - Android has no Generate (Image Playground) option.
-- "Meet Your First Bot" exists as a native carousel on iOS and Android and as the desktop empty state. The desktop onboarding step is not added yet.
+- Phones show no inline file chips: Remote session entries carry no file metadata.
 - Subagents on durable Bots are read-only children. Write, shell, web, MCP and delegation lanes are not ported, and Form Fill is not offered.
 - Playwright e2e for preset, then Start Chat, then quick reply is not written yet.
 - Dead but present: `BotDefinition.archivedAt` in `renderer/shared/bots.ts`, the `includeArchived` query, `bot-archived-file-read-authority.ts`, and the capability `authorityStatus` field.
