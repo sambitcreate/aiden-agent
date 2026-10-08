@@ -560,7 +560,10 @@ export function OnboardingFlow() {
         onboardingSnapshotRef.current = snapshot;
         readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
         setProviderSkipped(false);
+        // Only a first run that is still open can reach the Bots step; completed
+        // launches never read the Bot store here.
         const botsVisible =
+          shouldOpenOnboarding(snapshot.outcome) &&
           capabilitiesRef.current.bots &&
           (await botsApi.list().then(
             (bots) => bots.length === 0,
