@@ -163,6 +163,8 @@ export interface BotApplicationDependencies {
 
 export interface CreateBotApplicationInput {
   audienceId: string;
+  /** A pre-minted id (Start Chat saves it under its key first); omitted mints one. */
+  botId?: string;
   bot: BotCreateInput;
   /** Omitted means the foreground Full Access default. */
   access?: BotAccessUpdate;
@@ -266,8 +268,13 @@ function copiedChatIds(operation: BotLifecycleOperation): {
   };
 }
 
+/** A fresh Bot id. */
+export function newBotId(): string {
+  return `bot:${randomUUID()}`;
+}
+
 export function createBotApplicationService(deps: BotApplicationDependencies) {
-  const mintBotId = deps.mintBotId ?? (() => `bot:${randomUUID()}`);
+  const mintBotId = deps.mintBotId ?? newBotId;
   const mintChatId = deps.mintChatId ?? (() => randomUUID());
   const mintOperationId = deps.mintOperationId ?? mintBotLifecycleOperationId;
   let initializePromise: Promise<void> | undefined;
@@ -1170,8 +1177,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
     async createBot(input: CreateBotApplicationInput): Promise<BotDefinition> {
       await ensureOperational();
-      const botId = mintBotId();
+      const botId = input.botId ?? mintBotId();
       return runBotMutation(botId, async () => {
+        if (input.botId !== undefined && (await deps.botStore.storedIds()).includes(botId)) {
+          throw new Error("A bot with this identity already exists.");
+        }
         const reservation = deps.managedWorkspace.reserve(botId);
         const operationId = mintOperationId();
         let operation = await beginPending({

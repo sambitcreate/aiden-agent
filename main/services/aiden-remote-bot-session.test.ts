@@ -632,9 +632,9 @@ test("Start Chat from phones with different request keys and the Mac makes one B
   const sent: string[] = [];
   const store = new Map<string, BotDefinition>();
   const keys = new Map<string, string>();
-  const make = async (input: { name: string }, audience: string) => {
+  const make = async (input: { name: string }, audience: string, botId: string) => {
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const made = { ...bot(`bot_preset_${created.length + 1}`), name: input.name };
+    const made = { ...bot(botId), name: input.name };
     created.push(audience);
     store.set(made.id, made);
     return made;
@@ -644,14 +644,11 @@ test("Start Chat from phones with different request keys and the Mac makes one B
       const id = keys.get(key);
       return id ? store.get(id) ?? null : null;
     },
-    async createBot(input, _access, key) {
-      const made = await make(input, "desktop");
-      keys.set(key, made.id);
-      return made;
-    },
-    async rememberCreation(key, botId) {
+    mintBotId: () => `bot_preset_${keys.size + created.length + 1}`,
+    async reserveCreation(key, botId) {
       keys.set(key, botId);
     },
+    createBot: (input, _access, botId) => make(input, "desktop", botId),
     session: {
       state: async () => ({ kind: "idle" }),
       send: async (botId) => { sent.push(botId); return { submissionId: "1", deduped: false }; },
@@ -668,7 +665,7 @@ test("Start Chat from phones with different request keys and the Mac makes one B
     presets: {
       list: () => BOT_PRESETS,
       create: async (presetId, { audienceId }) => {
-        const result = await starter.startFromPreset(presetId, { createBot: (input) => make(input, audienceId) });
+        const result = await starter.startFromPreset(presetId, { createBot: (input, botId) => make(input, audienceId, botId) });
         return { botId: result.bot.id, created: result.created };
       },
     },
