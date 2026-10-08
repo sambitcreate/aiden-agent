@@ -2,7 +2,7 @@ import { app, ipcMain } from "../platform.js";
 import * as path from "node:path";
 import { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import { ChatPullRequestService } from "./chat-pull-request-service.js";
-import { githubPullRequests } from "./github-pull-request.js";
+import { githubPullRequests } from "./github/github-runtime-main.js";
 import { gitInfo } from "./git.js";
 import { chatStore } from "./chat-store.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
