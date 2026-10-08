@@ -521,3 +521,23 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   await expect(toggle()).not.toBeChecked();
   expect(aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions")).toHaveLength(0);
 });
+
+
+test("composer context usage visibility updates immediately from Appearance", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.locator("textarea").fill("Check composer context preference");
+  await page.locator("textarea").press("Enter");
+  const meter = page.getByRole("button", { name: /^Context usage,/ });
+  await expect(meter).toBeVisible();
+  for (const enabled of [false, true]) {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+    const preference = page.getByRole("switch", { name: "Show context usage in composer" });
+    await preference.click();
+    await expect(preference).toBeChecked({ checked: enabled });
+    await page.getByRole("button", { name: "Back to app" }).click();
+    if (enabled) await expect(meter).toBeVisible();
+    else await expect(meter).toHaveCount(0);
+  }
+});

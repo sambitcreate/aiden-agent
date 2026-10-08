@@ -34,3 +34,12 @@ Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain 
 ## Checks
 
 `npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (window/zoom/panel states, scrolling, keyboard movement, and save). Keep layout assertions tied to rendered geometry rather than only source strings.
+
+## Composer context usage
+
+Appearance → Chat has a trailing “Show context usage in composer” switch,
+backed by `AppearanceConfig.showComposerContextUsage` (default true for new and
+legacy settings). It uses the normal live-preview/save path. This is separate
+from `autoHideComposerContext`, which controls the workspace strip. Hiding the
+meter changes only presentation; Context remains in the workspace launcher and
+the runtime continues context accounting and compaction.

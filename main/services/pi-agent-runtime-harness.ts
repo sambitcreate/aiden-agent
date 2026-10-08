@@ -1,10 +1,11 @@
-import { Agent, runToolCall, type AgentToolCallOutcome, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
+import { Agent, runToolCall, type AgentToolCallOutcome, type AgentTurnDecision, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
 import { type AgentHarnessResources, type AgentHarnessStreamOptions, type AgentHarnessStreamOptionsPatch, formatSkillsForSystemPrompt } from "./pi-legacy-harness.js";
 import {
   getCurrentSystemPrompt,
   getCurrentSystemMessage,
   type AssistantMessage,
   type ImageContent,
+  type ToolResultMessage,
   type Model,
   type Models,
   type ProviderResponse,
@@ -52,6 +53,7 @@ export type PiHarnessFaultSource =
   | "extension_context"
   | "extension_before_tool"
   | "extension_after_tool"
+  | "extension_finish_turn"
   | "extension_before_provider"
   | "extension_provider_payload"
   | "extension_after_provider"
@@ -71,6 +73,17 @@ export interface PiHarnessFault {
   source: PiHarnessFaultSource;
   extensionId?: string;
   error: Error;
+}
+
+/** A frozen view of one finished turn, offered to extensions. */
+export interface PiExtensionTurn {
+  readonly message: AssistantMessage;
+  readonly toolResults: readonly ToolResultMessage[];
+}
+
+/** Extensions may only end a run; they can never force another request. */
+export interface PiExtensionTurnDecision {
+  action: "end";
 }
 
 export interface PiAgentRuntimeExtension {
@@ -95,6 +108,14 @@ export interface PiAgentRuntimeExtension {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /**
+   * Turn-end vote composed by the harness. Error and aborted responses never
+   * reach it; any extension returning `{ action: "end" }` ends the run.
+   */
+  finishTurn?: (
+    turn: PiExtensionTurn,
+    signal?: AbortSignal,
+  ) => Promise<PiExtensionTurnDecision | undefined> | PiExtensionTurnDecision | undefined;
   beforeProviderRequest?: (
     context: PiProviderRequestContext,
     signal?: AbortSignal,
@@ -341,6 +362,7 @@ function snapshotExtension(extension: PiAgentRuntimeExtension): PiAgentRuntimeEx
       : { transformContext: extension.transformContext }),
     ...(extension.beforeToolCall === undefined ? {} : { beforeToolCall: extension.beforeToolCall }),
     ...(extension.afterToolCall === undefined ? {} : { afterToolCall: extension.afterToolCall }),
+    ...(extension.finishTurn === undefined ? {} : { finishTurn: extension.finishTurn }),
     ...(extension.beforeProviderRequest === undefined
       ? {}
       : { beforeProviderRequest: extension.beforeProviderRequest }),
@@ -1076,6 +1098,36 @@ export class PiAgentRuntimeHarness {
         }
       : agentOptions.streamFn;
 
+    const finishTurnExtensions = extensions.filter((extension) => extension.finishTurn !== undefined);
+    const hostFinishTurn = agentOptions.finishTurn;
+    const finishTurn: AgentOptions["finishTurn"] =
+      finishTurnExtensions.length === 0
+        ? hostFinishTurn
+        : async (turn, signal) => {
+            const hostDecision = hostFinishTurn
+              ? ((await hostFinishTurn(turn, signal)) as AgentTurnDecision | undefined)
+              : undefined;
+            // Pi treats error and aborted responses as hard exits; extensions never vote on them.
+            if (turn.message.stopReason === "error" || turn.message.stopReason === "aborted") {
+              return hostDecision;
+            }
+            const view: PiExtensionTurn = cloneAndDeepFreeze({
+              message: turn.message,
+              toolResults: turn.toolResults,
+            });
+            let end = false;
+            for (const extension of finishTurnExtensions) {
+              try {
+                if ((await extension.finishTurn!(view, signal))?.action === "end") end = true;
+              } catch (error) {
+                this.policyFault ??= toError(error);
+                reportExtensionFault("extension_finish_turn", extension.id, error);
+                throw new PiAgentRuntimeHostError("A Pi runtime turn extension failed.", "policy");
+              }
+            }
+            return end ? ({ action: "end" } as const) : hostDecision;
+          };
+
     this.agent = new Agent({
       ...agentOptions,
       ...(providerStreamFn ? { streamFn: providerStreamFn } : {}),
@@ -1083,6 +1135,7 @@ export class PiAgentRuntimeHarness {
       // Aiden tools share workspace, scheduler, and external-service state.
       // Pi defaults to parallel execution, so the host must state this policy.
       toolExecution: "sequential",
+      finishTurn,
       transformContext:
         options.transformContext || extensions.some((extension) => extension.transformContext)
           ? async (messages, signal) => {

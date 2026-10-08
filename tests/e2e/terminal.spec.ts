@@ -57,7 +57,22 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   await drawer.getByRole("button", { name: "Clear terminal view" }).click();
   await expect(drawer.getByRole("log", { name: "Terminal output" })).not.toContainText("585987");
 
-  await hideTerminal.click();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.evaluate(() => { document.documentElement.dataset.reduceMotion = "false"; });
+  // Observe the actual close commit: the exiting drawer must still occupy space
+  // while already preventing keyboard input, then release that space below.
+  const exitState = await hideTerminal.evaluate((button) => new Promise<{ height: number; inert: boolean }>((resolve) => {
+    const surface = button.closest<HTMLElement>(".terminal-drawer")!;
+    const observer = new MutationObserver(() => {
+      if (surface.dataset.state !== "closed") return;
+      observer.disconnect();
+      resolve({ height: surface.getBoundingClientRect().height, inert: surface.inert });
+    });
+    observer.observe(surface, { attributes: true, attributeFilter: ["data-state"] });
+    (button as HTMLButtonElement).click();
+  }));
+  expect(exitState.height).toBeGreaterThan(0);
+  expect(exitState.inert).toBe(true);
   await expect(page.getByRole("button", { name: "Show terminal" })).toBeVisible();
-  await expect(page.locator(".terminal-drawer")).toHaveCount(0);
+  await expect(page.locator(".terminal-drawer")).toBeHidden();
 });

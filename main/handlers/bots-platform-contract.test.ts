@@ -21,11 +21,12 @@ test("ordinary chat paths cannot activate Bot services on unsupported hosts", ()
     chatHandlers,
     /copyBotChat: async \(source\) => \{\s+if \(!hostPlatformCapabilities\(\)\.bots\)/u,
   );
+  const rendererChatMutations = readFileSync(new URL("./chat-renderer-mutations.ts", import.meta.url), "utf8");
   assert.match(
-    chatHandlers,
-    /const result = chat\?\.botId && hostPlatformCapabilities\(\)\.bots\s+\? await botApplicationService\.deleteChat\(\{ botId: chat\.botId, chatId \}\)\s+: await chatApplicationService\.remove\(chatId\)/u,
+    rendererChatMutations,
+    /const result = chat\?\.botId && hostPlatformCapabilities\(\)\.bots\s+\? await botApplicationService\.deleteChat\(\{ botId: chat\.botId, chatId \}\)\s+: await chatApplicationService\.remove\(chatId\b/u,
   );
-  assert.match(chatHandlers, /await memoryStore\.deleteScope\(\{ kind: "bot", id: chat\.botId \}\)/u);
+  assert.match(rendererChatMutations, /await memoryStore\.deleteScope\(\{ kind: "bot", id: chat\.botId \}\)/u);
   assert.match(
     llmClient,
     /if \(chat\.botId && !hostPlatformCapabilities\(\)\.bots\) \{\s+throw new Error\("Bot chats are not available on this platform\."\)/u,
