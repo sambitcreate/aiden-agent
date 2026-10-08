@@ -1,6 +1,7 @@
 // Starts design runs on a project's hidden chat through llmClient.start
 // (ADR-DS §1). The renderer never calls chat:start for a project chat.
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+import { own } from "../../../renderer/shared/design/own.js";
 import { RENDER_ARTIFACT_TOOL_NAME } from "../../../renderer/shared/generative-ui.js";
 import type {
   DesignContextChip,
@@ -72,8 +73,8 @@ function runModel(input: DesignRunStartRequest, plan: DesignRunPlan): DesignMode
 
 function contextTargets(snapshot: DesignProjectSnapshot, chips: readonly DesignContextChip[]): DesignContextTarget[] {
   return chips.map((chip) => {
-    const screen = snapshot.screens[chip.screenId];
-    const revision = snapshot.revisions[chip.revisionId];
+    const screen = own(snapshot.screens, chip.screenId);
+    const revision = own(snapshot.revisions, chip.revisionId);
     if (!screen || !revision || revision.screenId !== screen.id) {
       throw new Error("A selected Screen changed. Select it again and retry.");
     }

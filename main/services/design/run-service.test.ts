@@ -525,6 +525,19 @@ test("a second run on a busy project is refused without a provider request", asy
   assert.deepEqual(f.store.get(project.id)!.runs, {});
 });
 
+test("a context chip naming an inherited key, not a Screen, is refused before any provider request", async (t) => {
+  const f = await fixture(t, [fauxAssistantMessage("unused")]);
+  const project = await f.store.create();
+  const refused = await f.service.start({
+    ...startInput(project.id, explore(2)),
+    chips: [{ kind: "screen", screenId: "toString", revisionId: "constructor" }],
+  });
+  assert.equal(refused.accepted, false);
+  assert.match(refused.error ?? "", /A selected Screen changed/u);
+  assert.equal(f.generation.state.starts, 0);
+  assert.deepEqual(f.store.get(project.id)!.runs, {});
+});
+
 test("an agent-backed model is refused before any chat write or provider request", async (t) => {
   const f = await fixture(t, [fauxAssistantMessage("unused")]);
   const project = await f.store.create();
