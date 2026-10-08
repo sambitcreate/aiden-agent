@@ -62,6 +62,36 @@ test("any other contributed tool refuses to build a design harness before a prov
   }
 });
 
+test("an extension without tools refuses to build a design harness before a provider request", () => {
+  const memory: PiAgentRuntimeExtension = { id: "aiden.memory", transformContext: async (messages) => messages };
+  const instructions: PiAgentRuntimeExtension = { id: "aiden.agents-instructions", systemPrompt: "Follow AGENTS.md." };
+  const cases: Array<[string, ReturnType<typeof harnessOptions>]> = [
+    ["a context transform", harnessOptions({ extensions: [designExtension, memory] })],
+    ["a system prompt", harnessOptions({ extensions: [designExtension, instructions] })],
+    [
+      "a contribution snapshot",
+      harnessOptions({ contributions: resolvePiAgentRuntimeContributionSnapshot("", [], {}, [designExtension, memory]) }),
+    ],
+    ["no design extension", harnessOptions({ extensions: [] })],
+  ];
+  for (const [label, { core, options }] of cases) {
+    assert.throws(() => createGenerationHarness(design, options), /design profile cannot compose/u, label);
+    assert.equal(core.state.callCount, 0, label);
+  }
+});
+
+test("skills or prompt templates refuse to build a design harness", () => {
+  const skill = { name: "deploy", description: "Deploy the app", content: "Run the deploy script.", filePath: "/skills/deploy/SKILL.md" };
+  const cases: Array<[string, ReturnType<typeof harnessOptions>]> = [
+    ["a base skill", harnessOptions({ extensions: [designExtension], resources: { skills: [skill] } })],
+    ["an extension skill", harnessOptions({ extensions: [{ ...designExtension, resources: { skills: [skill] } }] })],
+  ];
+  for (const [label, { core, options }] of cases) {
+    assert.throws(() => createGenerationHarness(design, options), /design profile cannot compose/u, label);
+    assert.equal(core.state.callCount, 0, label);
+  }
+});
+
 test("the default profile builds with any tool set", () => {
   const { options } = harnessOptions({ extensions: [designExtension] }, [tool("bash"), tool("read")]);
   assert.ok(createGenerationHarness({ kind: "default" }, options) instanceof PiAgentRuntimeHarness);

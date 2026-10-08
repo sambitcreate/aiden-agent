@@ -21,6 +21,7 @@ test("a design-owned chat runs only with its own project's binding", () => {
     projectId: "project-1",
     runId: "run-1",
     toolAllowlist: ["render_artifact"],
+    extensionIds: ["aiden.design.render"],
   });
   // A renderer chat:start carries no binding, so the hidden chat never becomes a workspace chat.
   assert.throws(() => resolveGenerationProfile({ owner }, {}), /belongs to a Design project/u);
@@ -41,7 +42,13 @@ test("the design profile admits render_artifact and nothing else", () => {
 });
 
 test("a design run composes only its own extension, even when advisor and codemode are offered", () => {
-  const design: GenerationProfile = { kind: "design", projectId: "project-1", runId: "run-1", toolAllowlist: ["render_artifact"] };
+  const design: GenerationProfile = {
+    kind: "design",
+    projectId: "project-1",
+    runId: "run-1",
+    toolAllowlist: ["render_artifact"],
+    extensionIds: ["aiden.design.render"],
+  };
   const designExtension = { id: "design" };
   assert.deepEqual(
     selectRuntimeExtensions(design, { base: [designExtension], advisor: { id: "advisor" }, codemode: { id: "codemode" } }),

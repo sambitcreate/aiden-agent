@@ -1,10 +1,11 @@
 // Pure capability profile for one generation. A design-owned chat can only run
-// with the matching main-built binding, and a design profile exposes exactly
-// its allowlisted tools. Callers resolve the profile before composing tools and
-// pass the final tool names to assertGenerationProfileTools.
+// with the matching main-built binding, and a design profile composes exactly
+// its own extension and exposes exactly its allowlisted tools. Callers resolve
+// the profile first; createGenerationHarness checks the final composition.
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import { RENDER_ARTIFACT_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
+import { DESIGN_RENDER_EXTENSION_ID } from "./design/design-render-extension.js";
 import type { DesignRunOutcome } from "./design/store-core.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 
@@ -23,7 +24,14 @@ export interface DesignRunBinding {
 
 export type GenerationProfile =
   | { kind: "default" }
-  | { kind: "design"; projectId: string; runId: string; toolAllowlist: readonly string[] };
+  | {
+      kind: "design";
+      projectId: string;
+      runId: string;
+      toolAllowlist: readonly string[];
+      /** Every extension the run composes, exactly: none may be added or left out. */
+      extensionIds: readonly string[];
+    };
 
 export function resolveGenerationProfile(
   chat: { owner?: ChatOwnerV1 },
@@ -42,6 +50,7 @@ export function resolveGenerationProfile(
     projectId: run.projectId,
     runId: run.runId,
     toolAllowlist: [RENDER_ARTIFACT_TOOL_NAME],
+    extensionIds: [DESIGN_RENDER_EXTENSION_ID],
   };
 }
 
@@ -56,6 +65,29 @@ export function selectRuntimeExtensions<E>(
 ): E[] {
   if (profile.kind === "design") return [...parts.base];
   return [...parts.base, ...(parts.advisor ? [parts.advisor] : []), ...(parts.codemode ? [parts.codemode] : [])];
+}
+
+/**
+ * Tool names alone miss an extension that only rewrites context, adds to the
+ * system prompt or brings skills. A non-default profile therefore composes its
+ * own extensions exactly, and no skill or prompt template.
+ */
+export function assertGenerationProfileComposition(
+  profile: GenerationProfile,
+  composition: { extensionIds: readonly string[]; resourceNames: readonly string[] },
+): void {
+  if (profile.kind === "default") return;
+  const expected = new Set(profile.extensionIds);
+  const present = new Set(composition.extensionIds);
+  const problems = [
+    ...[...present].filter((id) => !expected.has(id)).sort(),
+    ...[...expected].filter((id) => !present.has(id)).sort().map((id) => `missing ${id}`),
+    ...(composition.extensionIds.length !== present.size ? ["a duplicated extension"] : []),
+    ...composition.resourceNames.map((name) => `the resource ${name}`),
+  ];
+  if (problems.length > 0) {
+    throw new Error(`The ${profile.kind} profile cannot compose: ${problems.join(", ")}.`);
+  }
 }
 
 export function assertGenerationProfileTools(profile: GenerationProfile, toolNames: readonly string[]): void {

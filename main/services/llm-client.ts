@@ -2422,7 +2422,8 @@ export const llmClient = {
       // contributions enter Bot prompts and schemas.
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
         generationProfile.kind === "design"
-          ? [...generationExtensions]
+          ? // Exactly the binding's extension; an empty base fails the composition check.
+            designRun ? [designRun.extension] : []
           : preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
