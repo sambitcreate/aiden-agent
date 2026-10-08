@@ -261,6 +261,15 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Ask a question" };
     case "todo":
       return { label: "Update task list" };
+    // Simulator device tools: compact rows for what the user sees open, close, or get captured.
+    case "device_list":
+      return { label: "List simulators" };
+    case "device_open":
+      return { label: "Open simulator" };
+    case "device_screenshot":
+      return { label: "Screenshot simulator" };
+    case "device_close":
+      return { label: values.shutdown === true ? "Shut down simulator" : "Close simulator" };
     // Activity an ACP agent (for example, Google Antigravity) ran itself.
     case "delete_file":
       return { label: "Delete file", target: path };

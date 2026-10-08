@@ -4153,6 +4153,10 @@ final class AidenChatTests: XCTestCase {
             "browser_wait_for": "Waited for page",
             "browser_recording_start": "Started browser recording",
             "browser_recording_stop": "Stopped browser recording",
+            "device_list": "Listed simulators",
+            "device_open": "Opened simulator",
+            "device_screenshot": "Took simulator screenshot",
+            "device_close": "Closed simulator",
         ]
         for (name, expected) in browserLabels {
             let browserStep = AidenAgentStep(
