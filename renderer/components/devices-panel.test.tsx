@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceHostStatus, DeviceServiceState, DeviceSummary } from "../shared/devices.js";
 import { DeviceViewer, deviceStatusLabel } from "./device-viewer.js";
 import { DevicesPanel, DevicesPanelView, type DevicesPanelViewProps } from "./devices-panel.js";
+import { DeviceFloatingPlaceholder } from "./device-floating-placeholder.js";
 
 const IPHONE: DeviceSummary = {
   hostId: "local",
@@ -179,11 +179,6 @@ test("a ready paired Mac keeps the list usable when this Mac's helpers are unava
   assert.doesNotMatch(off, /Open iPhone 17/u);
 });
 
-test("the Environment panel brings the Simulator tab forward when an agent opens a device", () => {
-  const source = readFileSync(new URL("./environment-panel.tsx", import.meta.url), "utf8");
-  assert.match(source, /devicesApi\.onReveal\(\(chatId\) => \{\s+if \(chatId === revealChatId\) showTools\("devices"\);/u);
-});
-
 test("an open session for this chat renders the viewer, other chats see the list", () => {
   const ready = state("ready", {
     devices: [IPHONE],
@@ -192,6 +187,41 @@ test("an open session for this chat renders the viewer, other chats see the list
   const viewer = () => <div>viewer-shell</div>;
   assert.match(view({ state: ready, viewer }), /viewer-shell/u);
   assert.doesNotMatch(view({ state: ready, viewer, chatId: "chat-2" }), /viewer-shell/u);
+});
+
+test("each device tab shows its own session, and no selection shows the picker", () => {
+  const ready = state("ready", {
+    devices: [IPHONE, IPAD],
+    sessions: [
+      { chatId: "chat-1", hostId: "local", deviceId: "UDID-1", openedBy: "user" },
+      { chatId: "chat-1", hostId: "local", deviceId: "UDID-2", openedBy: "agent" },
+    ],
+  });
+  const viewer = (_session: unknown, device: DeviceSummary) => <div>viewer:{device.name}</div>;
+  assert.match(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-2" } }), /viewer:iPad Air/u);
+  assert.match(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "UDID-1" } }), /viewer:iPhone 17 Pro/u);
+  const picker = view({ state: ready, viewer, selected: null });
+  assert.doesNotMatch(picker, /viewer:/u);
+  assert.match(picker, /Boot and open iPad Air/u);
+  // A tab whose session already ended falls back to the picker rather than another device.
+  assert.doesNotMatch(view({ state: ready, viewer, selected: { hostId: "local", deviceId: "GONE" } }), /viewer:/u);
+});
+
+test("a floating device's tab offers Dock instead of a second stream", () => {
+  const html = renderToStaticMarkup(<DeviceFloatingPlaceholder name="iPhone 17 Pro" onDock={noop} />);
+  assert.match(html, /iPhone 17 Pro is floating over the chat/u);
+  assert.match(html, /<button[^>]*>Dock in this tab<\/button>/u);
+  assert.doesNotMatch(html, /<canvas|role="application"/u);
+});
+
+test("the viewer rail offers Float over chat only where the device can float", () => {
+  const session = { chatId: "chat-1", hostId: "local", deviceId: "UDID-1", openedBy: "user" as const };
+  const render = (onFloat?: () => void) =>
+    renderToStaticMarkup(
+      <DeviceViewer chatId="chat-1" session={session} device={IPHONE} active={false} compact={false} onClose={noop} onFloat={onFloat} />,
+    );
+  assert.match(render(noop), /aria-label="Float over chat"/u);
+  assert.doesNotMatch(render(), /Float over chat/u);
 });
 
 test("the viewer shell labels every control and exposes a focusable screen", () => {

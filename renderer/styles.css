@@ -2419,6 +2419,53 @@ textarea {
   margin-inline: auto;
 }
 
+/* Quick View docks beside the chat on narrower windows: the centered column
+   moves left only as far as the card needs, and narrows only once it reaches
+   the left edge. The workbench sets the inset and the column's maximum in px
+   (Full width has none); the inset is 0 when the card fits or when the chat
+   would get too narrow, so the card floats over it as before. */
+[data-chat-card-inset] .chat-content-column {
+  max-width: min(var(--chat-card-max-width), calc(100% - var(--chat-card-inset-end, 0px)));
+  margin-left: max(0px, calc((100% - var(--chat-card-inset-end, 0px) - var(--chat-card-max-width)) / 2));
+  margin-right: auto;
+}
+
+:root[data-reduce-motion="false"] [data-chat-card-inset] .chat-content-column {
+  transition: margin-left 300ms ease-out, max-width 300ms ease-out;
+}
+
+/* ── Floating device player ─────────────────────────────────────────────── */
+.device-mini-player-screen {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0 0 var(--radius-sheet) var(--radius-sheet);
+  box-shadow: none;
+}
+
+.device-mini-player-screen:focus-visible {
+  outline-offset: -2px;
+}
+
+:root[data-reduce-motion="false"] .device-mini-player {
+  animation: device-mini-player-enter 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+:root[data-reduce-motion="false"] .device-mini-player-settle {
+  transition: left 150ms ease-out, top 150ms ease-out, width 150ms ease-out, height 150ms ease-out;
+}
+
+@keyframes device-mini-player-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* ── Dictation pill window (renderer/pill) ─────────────────────────────── */
 /* The pill BrowserWindow is fully transparent; only the pill surface paints. */
 .aiden-pill-window,
