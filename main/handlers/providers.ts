@@ -1,6 +1,6 @@
 import { stopAllPiCacheWarmers } from "../services/pi-cache-warming.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
-import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
+import { customModelThinkingLevels, parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
@@ -469,8 +469,13 @@ export function registerProviderHandlers(): void {
       if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
         throw new Error("Invalid provider thinking selection.");
       }
-      const metadata = providerRegistry.builtinProvider(providerId)?.modelMetadata?.[modelId];
-      if (!metadata?.thinkingLevels?.includes(levelValue)) {
+      const builtin = providerRegistry.builtinProvider(providerId);
+      const custom = builtin ? undefined : await configStore.getProvider(providerId);
+      const levels = builtin?.modelMetadata?.[modelId]?.thinkingLevels ??
+        (custom?.kind === "openai" && custom.models.includes(modelId)
+          ? customModelThinkingLevels(custom.modelMetadata?.[modelId]?.overrides)
+          : undefined);
+      if (!levels?.includes(levelValue)) {
         throw new Error("This thinking level is not supported by the selected model.");
       }
       return configStore.setProviderThinkingLevel(providerId, modelId, levelValue);

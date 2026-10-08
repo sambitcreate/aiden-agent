@@ -632,6 +632,7 @@ export function ProviderEditor({
             info={modelInfo.data}
             disabled={saving || testing}
             modelsStale={modelsStale}
+            supportsEffortControl={kind === "openai"}
             onAdd={(id) => {
               if (modelsStale) {
                 const retained = [...new Set([...manualModels, id])];

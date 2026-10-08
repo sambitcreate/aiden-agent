@@ -275,6 +275,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -309,6 +310,8 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 

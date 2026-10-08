@@ -162,6 +162,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -193,12 +194,16 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 
 export interface GitHubPullRequestListStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequests?: GitHubPullRequestSummary[];
 }
 
@@ -211,6 +216,8 @@ export interface GitHubRepositoryRef {
 export interface GitHubRepositoryStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   repository?: GitHubRepositoryRef;
 }
 
@@ -710,6 +717,8 @@ export interface AppSettings {
   /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
+  /** Per-subagent model and effort defaults; parsed leniently, absent means children inherit. */
+  subagentModels?: import("./subagents/subagent-model-selection.js").SubagentModelSettings;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
   /** Global skill discovery/invocation gate. Omitted means enabled. */

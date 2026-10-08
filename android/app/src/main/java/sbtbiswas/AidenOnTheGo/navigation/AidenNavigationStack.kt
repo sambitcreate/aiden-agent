@@ -3,6 +3,20 @@ package sbtbiswas.AidenOnTheGo.navigation
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.saveable.Saver
 
+/** Pages inside Settings. [token] is the saved-state spelling and must stay stable. */
+enum class AidenSettingsPage(val token: String) {
+    ROOT("root"),
+    APPEARANCE("appearance"),
+    VOICE("voice"),
+    PROVIDERS("providers"),
+    ADD_PROVIDER("add-provider"),
+    ABOUT("about");
+
+    companion object {
+        fun fromToken(token: String): AidenSettingsPage? = entries.firstOrNull { it.token == token }
+    }
+}
+
 @Immutable
 sealed class AidenScreen {
     data object ProductShell : AidenScreen()
@@ -11,6 +25,9 @@ sealed class AidenScreen {
     data class BotEditor(val botId: String?) : AidenScreen()
     data class WorkspaceFiles(val workspaceId: String) : AidenScreen()
     data class WorkspaceGit(val workspaceId: String) : AidenScreen()
+    data class Settings(val page: AidenSettingsPage = AidenSettingsPage.ROOT) : AidenScreen()
+    data object Installations : AidenScreen()
+    data object PairDesktop : AidenScreen()
 
     /**
      * Stable identity for saved per-entry UI state. Voice start is a one-shot
@@ -28,6 +45,9 @@ sealed class AidenScreen {
             is BotEditor -> screen.botId?.let { "bot-edit$SEPARATOR$it" } ?: "bot-new"
             is WorkspaceFiles -> "files$SEPARATOR${screen.workspaceId}"
             is WorkspaceGit -> "git$SEPARATOR${screen.workspaceId}"
+            is Settings -> if (screen.page == AidenSettingsPage.ROOT) "settings" else "settings$SEPARATOR${screen.page.token}"
+            Installations -> "installations"
+            PairDesktop -> "pair"
         }
 
         fun decode(token: String): AidenScreen? {
@@ -36,12 +56,16 @@ sealed class AidenScreen {
             return when {
                 kind == "shell" -> ProductShell
                 kind == "bot-new" -> BotEditor(null)
+                kind == "settings" && id.isEmpty() -> Settings()
+                kind == "installations" -> Installations
+                kind == "pair" -> PairDesktop
                 id.isEmpty() -> null
                 kind == "chat" -> ChatDetail(id)
                 kind == "bot" -> BotProfile(id)
                 kind == "bot-edit" -> BotEditor(id)
                 kind == "files" -> WorkspaceFiles(id)
                 kind == "git" -> WorkspaceGit(id)
+                kind == "settings" -> AidenSettingsPage.fromToken(id)?.let(::Settings)
                 else -> null
             }
         }

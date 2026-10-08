@@ -44,12 +44,18 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonList
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalResources
+import sbtbiswas.AidenOnTheGo.R
+import androidx.compose.ui.res.pluralStringResource
 
 private val AidenFileTreeStep = 14.dp
 
@@ -71,6 +77,7 @@ fun AidenWorkspaceEnvironmentScreen(
 @Composable
 private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRemoteCoordinator, onNavigateBack: () -> Unit, initialReference: String?) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client = coordinator.client.collectAsStateWithLifecycle().value
     val connectionState = coordinator.connectionState.collectAsStateWithLifecycle().value
@@ -110,6 +117,14 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     fun refreshFiles() {
         if (client != null) {
             if (isLoading) return
+            // Show the saved tree at once while the desktop answers. It stays read-only
+            // (its folder cursors may be stale) until the fresh index replaces it.
+            if (fileIndex == null && activeInstanceId != null) {
+                cache.load(activeInstanceId, workspaceId)?.let { snapshot ->
+                    fileIndex = snapshot.index
+                    isOfflineIndex = true
+                }
+            }
             requestRevision += 1
             val revision = requestRevision
             isLoading = true
@@ -169,7 +184,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 val paths = previous.entries.map { it.displayPath }.toSet()
                 val entries = previous.entries + page.entries.filter { it.displayPath !in paths }
                 if (entries.size > 4_000) {
-                    errorMessage = "The loaded tree reached 4,000 entries. Refresh Files to browse another folder."
+                    errorMessage = resources.getString(R.string.files_tree_limit)
                     return@launch
                 }
                 fileIndex = previous.copy(entries = entries, truncated = previous.truncated || page.truncated)
@@ -214,7 +229,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 isEditing = false
                 isOfflineDocument = !online
             } else {
-                errorMessage = "This workspace file could not be opened. Browse Files to locate it."
+                errorMessage = resources.getString(R.string.files_open_failed)
             }
         }
     }
@@ -339,7 +354,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             }
                         }
                     } else {
-                        Text("Workspace Files", fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.files_title), fontWeight = FontWeight.Bold)
                     }
                 },
                 navigationIcon = {
@@ -356,7 +371,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             }
                         }
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                     }
                 },
                 actions = {
@@ -364,7 +379,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     if (doc != null) {
                         if (!isEditing) {
                             AidenTonalButton(
-                                text = "Edit",
+                                text = stringResource(R.string.action_edit),
                                 onClick = { isEditing = true },
                                 enabled = availability().canEditDocument && client != null,
                                 contentPadding = PaddingValues(horizontal = 16.dp),
@@ -382,7 +397,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                         }
                     } else {
                         IconButton(onClick = { refreshFiles() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = palette.foreground)
+                            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.action_refresh), tint = palette.foreground)
                         }
                     }
                 },
@@ -398,9 +413,10 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .aidenReadableWidth()
         ) {
-            // Offline or Truncated Banner
-            if (if (selectedFile != null) isOfflineDocument else isOfflineIndex) {
+            // Offline or Truncated Banner. A saved tree being revalidated is not "offline" yet.
+            if (if (selectedFile != null) isOfflineDocument else isOfflineIndex && !isLoading) {
                 Surface(
                     color = palette.warning.copy(alpha = 0.15f),
                     modifier = Modifier.fillMaxWidth()
@@ -412,7 +428,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                         Icon(Icons.Default.CloudOff, contentDescription = null, tint = palette.warning, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Showing offline snapshot. Editing is disabled.",
+                            text = stringResource(R.string.files_offline_banner),
                             style = MaterialTheme.typography.bodySmall,
                             color = palette.foreground
                         )
@@ -433,7 +449,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             Icon(Icons.Default.Info, contentDescription = null, tint = palette.accent, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "File list is truncated at ${idx.maxEntries} entries.",
+                                text = pluralStringResource(R.plurals.files_truncated_banner, idx.maxEntries, idx.maxEntries),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = palette.foreground
                             )
@@ -512,19 +528,19 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 TextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search loaded files…") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = palette.secondary) },
+                    placeholder = { Text(stringResource(R.string.files_search_placeholder)) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = stringResource(R.string.action_search), tint = palette.secondary) },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
                             IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = palette.secondary)
+                                Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.action_clear), tint = palette.secondary)
                             }
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .clip(RoundedCornerShape(12.dp)),
+                        .clip(MaterialTheme.shapes.medium),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = palette.raised,
                         unfocusedContainerColor = palette.raised,
@@ -540,7 +556,11 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(AidenShape.GroupGap)
                 ) {
-                    if (filteredEntries.isEmpty() && !isLoading) {
+                    if (fileIndex == null && isLoading) {
+                        item(key = "files-skeleton") {
+                            AidenSkeletonList(count = 8, supporting = false, loadingDescription = stringResource(R.string.files_loading))
+                        }
+                    } else if (filteredEntries.isEmpty() && !isLoading) {
                         item {
                             Box(
                                 modifier = Modifier
@@ -551,7 +571,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Icon(Icons.Default.FolderOpen, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(48.dp))
                                     Spacer(modifier = Modifier.height(12.dp))
-                                    Text("No matching files found", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                                    Text(stringResource(R.string.files_no_matches), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                                 }
                             }
                         }
@@ -562,7 +582,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                             item(key = "page:$path") {
                                 TextButton(onClick = { loadPage(fileIndex?.entries?.firstOrNull { it.displayPath == path }) },
                                     enabled = path !in loadingFolders && availability().canLoadPage && !isLoading) {
-                                    Text(if (path.isEmpty()) "Load more files" else "Load more in $path")
+                                    Text(if (path.isEmpty()) stringResource(R.string.files_load_more) else stringResource(R.string.files_load_more_in, path))
                                 }
                             }
                         }
@@ -585,10 +605,10 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     // Discard Confirmation Dialog
     if (showDiscardConfirmDialog) {
         AidenWorkspaceAlertDialog(
-            title = "Discard Changes?",
+            title = stringResource(R.string.files_discard_title),
             onDismissRequest = { showDiscardConfirmDialog = false },
-            confirmText = "Discard",
-            dismissText = "Keep Editing",
+            confirmText = stringResource(R.string.action_discard),
+            dismissText = stringResource(R.string.files_keep_editing),
             destructive = true,
             onConfirm = {
                 showDiscardConfirmDialog = false
@@ -597,7 +617,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 selectedFile = null
             }
         ) {
-            Text("You have unsaved changes in this file. Are you sure you want to discard them?")
+            Text(stringResource(R.string.files_discard_body))
         }
     }
 
@@ -605,9 +625,9 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
     if (showConflictDialog && selectedFile != null) {
         val doc = selectedFile!!
         AidenWorkspaceAlertDialog(
-            title = "Conflict Detected",
+            title = stringResource(R.string.files_conflict_title),
             onDismissRequest = { showConflictDialog = false },
-            confirmText = "Reload from desktop",
+            confirmText = stringResource(R.string.files_conflict_reload),
             onConfirm = {
                 showConflictDialog = false
                 scope.launch {
@@ -623,7 +643,7 @@ private fun AidenWorkspaceFilesContent(workspaceId: String, coordinator: AidenRe
                 }
             }
         ) {
-            Text("This file on your paired desktop was modified since you opened it. Would you like to reload the latest version from your desktop?")
+            Text(stringResource(R.string.files_conflict_body))
         }
     }
 }
@@ -660,7 +680,7 @@ private fun AidenDiscardSavePair(
                 .semantics { role = Role.Button }
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 14.dp)) {
-                Text("Discard", style = MaterialTheme.typography.labelLarge, color = palette.foreground)
+                Text(stringResource(R.string.action_discard), style = MaterialTheme.typography.labelLarge, color = palette.foreground)
             }
         }
         Surface(
@@ -668,7 +688,7 @@ private fun AidenDiscardSavePair(
             enabled = saveEnabled,
             shape = aidenGroupItemShape(1, 2, outer, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
             color = if (saveEnabled || saving) palette.accent else palette.accent.copy(alpha = 0.4f),
-            contentColor = Color.White,
+            contentColor = palette.onAccent,
             interactionSource = saveInteraction,
             modifier = Modifier
                 .fillMaxHeight()
@@ -676,11 +696,13 @@ private fun AidenDiscardSavePair(
                 .semantics { role = Role.Button }
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 16.dp)) {
-                if (saving) {
-                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                } else {
-                    Text("Save", style = MaterialTheme.typography.labelLarge, color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                // Saving waits for the desktop's version check, so it holds a pending label.
+                Text(
+                    if (saving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = palette.onAccent,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
@@ -711,6 +733,7 @@ internal fun AidenWorkspaceFileTreeRow(
         animationSpec = AidenMotion.spatial(reduceMotion),
         label = "tree_chevron"
     )
+    val disclosureState = stringResource(if (expanded) R.string.state_expanded else R.string.state_collapsed)
     val interaction = remember { MutableInteractionSource() }
     Surface(
         onClick = onClick,
@@ -721,7 +744,7 @@ internal fun AidenWorkspaceFileTreeRow(
         modifier = modifier
             .fillMaxWidth()
             .tactilePress(interaction, targetScale = 0.985f)
-            .semantics { if (isDirectory) stateDescription = if (expanded) "Expanded" else "Collapsed" }
+            .semantics { if (isDirectory) stateDescription = disclosureState }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -781,7 +804,7 @@ internal fun AidenWorkspaceFileTreeRow(
             entry.language?.let { lang ->
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = RoundedCornerShape(6.dp)
+                    shape = MaterialTheme.shapes.small
                 ) {
                     Text(
                         text = lang,

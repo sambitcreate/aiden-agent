@@ -22,6 +22,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSplitButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Approval banner actions: a tonal Deny and a primary one-time allow. When the host
@@ -36,14 +38,14 @@ internal fun AidenApprovalActions(
 ) {
     val palette = AidenTheme.palette
     val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
-    val allowLabel = if (isAutomation) "Approve task" else "Allow once"
+    val allowLabel = if (isAutomation) stringResource(R.string.chat_approval_approve_task) else stringResource(R.string.chat_approval_allow_once)
     val broaderScopes = approval.scopes.filter { it != AidenApprovalScope.ONCE }
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.End
     ) {
         AidenTonalButton(
-            text = if (isAutomation) "Cancel" else "Deny",
+            text = if (isAutomation) stringResource(R.string.action_cancel) else stringResource(R.string.chat_approval_deny),
             onClick = { onRespond(AidenApprovalDecision.DENY, AidenApprovalScope.ONCE) },
             enabled = enabled
         )
@@ -63,7 +65,7 @@ internal fun AidenApprovalActions(
             onClick = { onRespond(AidenApprovalDecision.ALLOW, AidenApprovalScope.ONCE) },
             menuExpanded = scopeMenuOpen && enabled,
             onMenuExpandedChange = { scopeMenuOpen = it },
-            menuContentDescription = "More allow options",
+            menuContentDescription = stringResource(R.string.chat_approval_more_options),
             enabled = enabled,
             containerColor = palette.accent
         ) {

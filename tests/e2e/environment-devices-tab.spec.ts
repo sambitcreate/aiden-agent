@@ -13,10 +13,13 @@ test.describe("Simulator tool", () => {
     await expect(aiden.page.locator("#environment-devices-panel")).toHaveCount(0);
   });
 
-  test("opens from the launcher, supports keyboard tab navigation, and hides without the flag", async ({ aiden }) => {
+  test("opens from the launcher, supports keyboard tab navigation, and respects the kill switch", async ({ aiden }) => {
     test.skip(process.platform !== "darwin", "iOS Simulator devices are macOS-only");
     let page = aiden.page;
     await finishLmStudioOnboarding(page);
+    // The onboarding toast can cover the tab strip and pause on hover.
+    await page.mouse.move(1, 1);
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
     const tools = () => page.getByRole("complementary", { name: "Environment work surface" });
     const tab = (name: string) => tools().getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name, exact: true });
     await page.locator("[data-environment-toggle]").click();
@@ -38,7 +41,8 @@ test.describe("Simulator tool", () => {
     await expect(tab("New tab")).toHaveAttribute("aria-selected", "true");
     await tab("Simulator").click();
     await expect(page.locator("#environment-devices-panel")).toBeVisible();
-    page = await aiden.relaunch(undefined, {});
+
+    page = await aiden.relaunch(undefined, { AIDEN_EXPERIMENTAL_DEVICES: "0" });
     await expect(tools()).toBeVisible();
     await expect(tab("Simulator")).toHaveCount(0);
     await expect(page.locator("#environment-devices-panel")).toHaveCount(0);
