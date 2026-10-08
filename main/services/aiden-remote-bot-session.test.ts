@@ -401,7 +401,7 @@ test("a routine label cut at the wire bound never splits an emoji, so the sessio
     user(2, "Cook something \uD83D"),
   ] as never);
   const session = parseAidenRemoteBotSession({
-    botId: BOT_ID, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries, hasOlder: false,
+    botId: BOT_ID, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries, hasOlder: false, question: null,
   });
   const message = session.entries[0];
   assert.equal(message?.type, "message");

@@ -183,7 +183,7 @@ class AidenBotRevision25ClientTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body))
         val received = client.botSessionEvents("bot_fixture_01").toList()
         assertEquals(events.size, received.size)
-        assertEquals(listOf("snapshot", "partial", "entry", "state", "closed", "state"), received.map { it.type })
+        assertEquals(listOf("snapshot", "partial", "entry", "state", "closed", "state", "question", "question"), received.map { it.type })
         assertEquals("/api/aiden/v1/bots/bot_fixture_01/session/events", server.takeRequest().path)
 
         server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body))
