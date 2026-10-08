@@ -525,6 +525,17 @@ test("a second run on a busy project is refused without a provider request", asy
   assert.deepEqual(f.store.get(project.id)!.runs, {});
 });
 
+test("an agent-backed model is refused before any chat write or provider request", async (t) => {
+  const f = await fixture(t, [fauxAssistantMessage("unused")]);
+  const project = await f.store.create();
+  const refused = await f.service.start({ ...startInput(project.id, explore(2)), providerId: "antigravity", model: "agent-model" });
+  assert.equal(refused.accepted, false);
+  assert.match(refused.error ?? "", /Choose another model/u);
+  assert.equal(f.generation.state.starts, 0);
+  assert.deepEqual(f.store.get(project.id)!.runs, {});
+  assert.deepEqual((await f.chatStore.get(project.chatId))?.messages, []);
+});
+
 test("a provider start that fails before accepting the turn records a failed run and frees the chat", async (t) => {
   const f = await fixture(t, [], { failStart: new Error("The selected model is unavailable.") });
   const project = await f.store.create();

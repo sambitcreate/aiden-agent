@@ -1,5 +1,6 @@
 // Starts design runs on a project's hidden chat through llmClient.start
 // (ADR-DS §1). The renderer never calls chat:start for a project chat.
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { RENDER_ARTIFACT_TOOL_NAME } from "../../../renderer/shared/generative-ui.js";
 import type {
   DesignContextChip,
@@ -107,6 +108,10 @@ export class DesignRunService {
       // A Resume's cap, set and titles are recomputed from the manifest now, at click time.
       plan = planDesignRun(snapshot, input.request);
       model = runModel(input, plan);
+      // An agent runtime hosts only interactive chat turns and would fail at its first request.
+      if (isAcpHarnessProvider(model.providerId)) {
+        return { accepted: false, error: "Agent-backed models cannot render designs. Choose another model." };
+      }
       const base =
         plan.baseRevisionId === undefined
           ? undefined
