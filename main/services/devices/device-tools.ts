@@ -13,7 +13,9 @@ import path from "node:path";
 import { Type, validateToolArguments } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
+  DEVICE_PLATFORM_LABELS,
   LOCAL_DEVICE_HOST_ID,
+  type DevicePlatform,
   type DeviceServiceState,
   type DeviceSession,
   type DeviceSummary,
@@ -27,10 +29,10 @@ export const isDeviceToolName = (name: string): boolean => deviceToolNames.has(n
 
 /** The always-on prompt block. Driving guidance lives in the `device_open` result. */
 export const DEVICE_AGENT_GUIDANCE = [
-  "For iOS Simulator work use the device tools: device_list, then device_open, which shows the device in the Simulator tab and returns the agent-device command to drive it.",
-  "Verify results with device_screenshot. Close devices you opened with device_close when the task is done.",
+  "For iOS Simulator and Android Emulator work use the device tools: device_list, then device_open, which shows the device in the Simulator tab and returns the agent-device command to drive it.",
+  "Verify results with device_screenshot. Close devices you opened with device_close when the task is done. If device_list reports a platform as unavailable, tell the user why.",
   "Prefer the device tools and agent-device for anything on the device the user is watching. Shell tools such as xcrun simctl, xcodebuild, or adb are fine for builds, installs, logs, port forwarding, and diagnostics the device tools don't cover.",
-  "Never shut down or erase a simulator the user is watching or stop serve-sim unless the user asks; the Simulator tab needs them.",
+  "Never shut down or erase a simulator or emulator the user is watching, or stop serve-sim or serve-emu, unless the user asks; the Simulator tab needs them.",
 ].join("\n");
 
 export const DEVICE_ACCESS_OFF =
@@ -59,7 +61,8 @@ export function canUseDeviceTools(input: {
 export function deviceToolApprovalSummary(name: string, args: Record<string, unknown> = {}): string {
   const target = typeof args.deviceId === "string" ? ` ${args.deviceId}` : "";
   if (name === "device_open") {
-    return `Open simulator${target || " (a booted one, or the first available)"} in the Simulator tab and let the agent drive it. This may boot it.`;
+    const kind = args.platform === "android" ? "emulator" : "simulator";
+    return `Open ${kind}${target || " (a booted one, or the first available)"} in the Simulator tab and let the agent drive it. This may boot it.`;
   }
   if (name === "device_close") {
     return args.shutdown === true
@@ -73,9 +76,11 @@ const SHELL_SAFE = /^[a-zA-Z0-9_./:=@-]+$/u;
 export const shellQuote = (value: string): string =>
   SHELL_SAFE.test(value) ? value : `'${value.split("'").join(`'"'"'`)}'`;
 
-/** The flags that pin every agent-device command to one device. */
-export function agentDeviceTargetArgs(device: Pick<DeviceSummary, "id">): string[] {
-  return ["--platform", "ios", "--udid", device.id];
+/** The flags that pin every agent-device command to one device. Adapted from t3code @ a6ec88f7 (MIT). */
+export function agentDeviceTargetArgs(device: Pick<DeviceSummary, "id" | "platform">): string[] {
+  return device.platform === "android"
+    ? ["--platform", "android", "--serial", device.id]
+    : ["--platform", "ios", "--udid", device.id];
 }
 
 /**
@@ -83,12 +88,29 @@ export function agentDeviceTargetArgs(device: Pick<DeviceSummary, "id">): string
  * device never pay for it.
  */
 export function agentDeviceQuickStart(
-  device: Pick<DeviceSummary, "name" | "version">,
+  device: Pick<DeviceSummary, "name" | "version" | "platform">,
   targetArgs: readonly string[],
   command = "agent-device",
 ): string {
   const executable = shellQuote(command);
   const target = targetArgs.map(shellQuote).join(" ");
+  if (device.platform === "android") {
+    return [
+      `The user is watching ${device.name} (${device.version}) in the Simulator tab.`,
+      `Drive it with ${executable}. Use this exact executable path; login shells may reset PATH. Always pass ${target}.`,
+      "Typical loop:",
+      `  ${executable} open <package-id> ${target}     # or: open <app> <deep-link-url>`,
+      `  ${executable} snapshot -i ${target}           # accessibility tree with @eN refs`,
+      `  ${executable} click @e3 ${target}`,
+      `  ${executable} fill @e5 "text" ${target}`,
+      `  ${executable} screenshot /tmp/shot.png ${target}   # or call device_screenshot`,
+      `  ${executable} install <app> <path-to-.apk> ${target}`,
+      `Prefer snapshot refs over coordinates. Run ${executable} help for workflow guides and ${executable} <command> --help for flags.`,
+      `Prefer ${executable} for taps, typing, and screenshots on this device. adb is fine for builds, installs, logs, port forwarding (adb reverse for Metro), and diagnostics it does not cover; target the same serial with adb -s, and do not shut down or wipe this emulator or stop serve-emu, which the Simulator tab needs.`,
+      "Keep the returned --config and --session flags on every command.",
+      "The Android snapshot helper installs itself on first use.",
+    ].join("\n");
+  }
   return [
     `The user is watching ${device.name} (${device.version}) in the Simulator tab.`,
     `Drive it with ${executable}. Use this exact executable path; login shells may reset PATH. Always pass ${target}.`,
@@ -116,9 +138,13 @@ export function pngDimensions(png: Uint8Array): { width: number; height: number 
 }
 
 /** Picks the explicit device, else a booted one, else the first listed. */
+/**
+ * Picks the explicit device, else a booted one, else the first listed.
+ * Without an id, a host with both platforms needs `platform`.
+ */
 export function pickDevice(
   devices: readonly DeviceSummary[],
-  input: { deviceId?: string; hostId?: string },
+  input: { deviceId?: string; hostId?: string; platform?: DevicePlatform },
 ): DeviceSummary {
   const hostId = input.hostId ?? LOCAL_DEVICE_HOST_ID;
   if (input.deviceId !== undefined) {
@@ -126,8 +152,19 @@ export function pickDevice(
     if (match) return match;
     throw new Error(`No device ${input.deviceId} on host ${hostId}. Call device_list for current ids.`);
   }
-  const candidates = devices.filter((device) => device.hostId === hostId);
-  if (candidates.length === 0) throw new Error("No simulators were found. Call device_list to see why.");
+  const candidates = devices.filter(
+    (device) => device.hostId === hostId && (input.platform === undefined || device.platform === input.platform),
+  );
+  if (candidates.length === 0) {
+    throw new Error(
+      input.platform === undefined
+        ? "No simulators or emulators were found. Call device_list to see why."
+        : `No ${DEVICE_PLATFORM_LABELS[input.platform]} devices were found on host ${hostId}. Call device_list to see why.`,
+    );
+  }
+  if (input.platform === undefined && new Set(candidates.map((device) => device.platform)).size > 1) {
+    throw new Error("Both iOS and Android devices are available; pass platform or deviceId.");
+  }
   return candidates.find((device) => device.booted) ?? candidates[0]!;
 }
 
@@ -162,9 +199,16 @@ const text = (value: unknown): AgentToolResult<null> => ({
   details: null,
 });
 const id = (description: string) =>
-  Type.Optional(Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9-]+$", description }));
+  Type.Optional(
+    Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$", description }),
+  );
 const hostId = id("Device host. Defaults to this Mac (\"local\").");
-const deviceId = id("Simulator UDID from device_list.");
+const deviceId = id("Simulator UDID or emulator serial (or AVD name while it is off) from device_list.");
+const platform = Type.Optional(
+  Type.Union([Type.Literal("ios"), Type.Literal("android")], {
+    description: "ios or android. Needed when deviceId is omitted and both platforms are available.",
+  }),
+);
 
 /** Agents see and drive this Mac's simulators only; paired Macs stay user-driven. */
 function requireState(state: DeviceServiceState): DeviceServiceState {
@@ -184,25 +228,25 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
     [
       "device_list",
       "List devices",
-      "List iOS Simulators on this Mac, whether each is booted, and which are already open in this chat's Simulator tab. Call this before device_open when you do not know a device id.",
+      "List iOS Simulators and Android Emulators on this Mac, which platforms this Mac can run (with the reason when one cannot), whether each device is booted, and which are already open in this chat's Simulator tab. Call this before device_open when you do not know a device id.",
       Type.Object({ hostId }, { additionalProperties: false }),
     ],
     [
       "device_open",
       "Open device",
-      "Open an iOS Simulator for this chat: boots it if needed, starts its live stream, and shows it in the user's Simulator tab so they can watch. Returns the agent-device CLI invocation pinned to the device; drive the device with that CLI afterwards.",
-      Type.Object({ hostId, deviceId }, { additionalProperties: false }),
+      "Open an iOS Simulator or Android Emulator for this chat: boots it if needed, starts its live stream, and shows it in the user's Simulator tab so they can watch. Returns the agent-device CLI invocation pinned to the device; drive the device with that CLI afterwards. A booted Android emulator's id becomes its serial.",
+      Type.Object({ hostId, deviceId, platform }, { additionalProperties: false }),
     ],
     [
       "device_screenshot",
       "Screenshot device",
-      "Capture the current screen of an open simulator as a PNG. Use it to see what the user sees; for taps and text use the agent-device CLI.",
+      "Capture the current screen of an open simulator or emulator as a PNG. Use it to see what the user sees; for taps and text use the agent-device CLI.",
       Type.Object({ hostId, deviceId }, { additionalProperties: false }),
     ],
     [
       "device_close",
       "Close device",
-      "Remove a simulator from this chat's Simulator tab. Pass shutdown=true to also power it off.",
+      "Remove a simulator or emulator from this chat's Simulator tab. Pass shutdown=true to also power it off.",
       Type.Object({ hostId, deviceId, shutdown: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
     ],
   ] as const;
@@ -216,18 +260,22 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
     live();
     const requestedHost = typeof args.hostId === "string" ? args.hostId : undefined;
     const requestedDevice = typeof args.deviceId === "string" ? args.deviceId : undefined;
+    const requestedPlatform = args.platform === "ios" || args.platform === "android" ? args.platform : undefined;
 
     if (name === "device_list") {
       const state = requireState(await port.refreshLocal());
+      const platforms = state.hosts.find((host) => host.id === LOCAL_DEVICE_HOST_ID)?.platforms;
       return text({
         hostStatus: state.hostStatus,
         ...(state.unavailableReason ? { unavailableReason: state.unavailableReason } : {}),
+        ...(platforms ? { platforms } : {}),
         devices: state.devices
           .filter((device) => !requestedHost || device.hostId === requestedHost)
-          .map(({ hostId: host, id: udid, name: deviceName, version, booted, kind }) => ({
+          .map(({ hostId: host, id: udid, name: deviceName, platform: devicePlatform, version, booted, kind }) => ({
             hostId: host,
             id: udid,
             name: deviceName,
+            platform: devicePlatform,
             version,
             booted,
             kind,
@@ -242,7 +290,11 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       let state = requireState(port.state());
       if (state.devices.length === 0) state = requireState(await port.refreshLocal());
       live();
-      const target = pickDevice(state.devices, { deviceId: requestedDevice, hostId: requestedHost });
+      const target = pickDevice(state.devices, {
+        deviceId: requestedDevice,
+        hostId: requestedHost,
+        platform: requestedPlatform,
+      });
       // Consent and agent readiness resolve before anything boots or a session registers.
       const agent = await port.agentTarget({ chatId, hostId: target.hostId, deviceId: target.id });
       live();
@@ -265,7 +317,14 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
         target;
       const targetArgs = [...agentDeviceTargetArgs(device), ...agent.args];
       return text({
-        device: { hostId: device.hostId, id: device.id, name: device.name, version: device.version, booted: device.booted },
+        device: {
+          hostId: device.hostId,
+          id: device.id,
+          name: device.name,
+          platform: device.platform,
+          version: device.version,
+          booted: device.booted,
+        },
         agentDevice: { command: agent.command, targetArgs },
         quickStart: agentDeviceQuickStart(device, targetArgs, agent.command),
       });
@@ -305,7 +364,7 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       const directory = context.screenshotDir
         ? await context.screenshotDir()
         : await mkdtemp(path.join(tmpdir(), "aiden-device-shot-"));
-      const file = path.join(directory, `simulator-${Date.now()}.png`);
+      const file = path.join(directory, `${device?.platform === "android" ? "emulator" : "simulator"}-${Date.now()}.png`);
       await writeFile(file, png, { mode: 0o600 });
       return text({ ...summary, path: file, note: "This model cannot view images; the screenshot was saved to path." });
     }

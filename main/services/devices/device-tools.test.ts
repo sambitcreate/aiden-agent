@@ -150,7 +150,12 @@ test("the system prompt prefers device tools but leaves shell simulator tooling 
     assert.ok(withDevices.includes(purpose), purpose);
   }
   // The shell escape hatch never extends to tearing down the watched device, even before device_open.
-  assert.match(withDevices, /Never shut down or erase a simulator the user is watching or stop serve-sim unless the user asks/u);
+  assert.match(
+    withDevices,
+    /Never shut down or erase a simulator or emulator the user is watching, or stop serve-sim or serve-emu, unless the user asks/u,
+  );
+  // Android Emulators are named alongside iOS Simulators, so agents reach for the same tools.
+  assert.match(withDevices, /iOS Simulator and Android Emulator work use the device tools/u);
 });
 
 test("device_open's quick start allows simctl for gaps without letting the agent tear down the watched device", () => {
@@ -185,7 +190,97 @@ test("pickDevice honours an explicit id, else prefers a booted simulator", () =>
   assert.equal(pickDevice([IPHONE], {}).id, "UDID-1");
   assert.equal(pickDevice([IPHONE, BOOTED], { deviceId: "UDID-1" }).id, "UDID-1");
   assert.throws(() => pickDevice([IPHONE], { deviceId: "nope" }), /No device nope on host local/u);
-  assert.throws(() => pickDevice([], {}), /No simulators were found/u);
+  assert.throws(() => pickDevice([], {}), /No simulators or emulators were found/u);
+});
+
+const EMULATOR: DeviceSummary = {
+  hostId: "local",
+  id: "emulator-5554",
+  name: "Pixel_9_API_35",
+  platform: "android",
+  version: "Android 15.0",
+  booted: true,
+  kind: "other",
+};
+const AVD: DeviceSummary = { ...EMULATOR, id: "Pixel_Fold_API_35", name: "Pixel_Fold_API_35", booted: false };
+
+test("pickDevice needs a platform when both are listed and no id is given", () => {
+  assert.throws(() => pickDevice([IPHONE, EMULATOR], {}), /Both iOS and Android devices are available; pass platform or deviceId/u);
+  assert.equal(pickDevice([IPHONE, AVD, EMULATOR], { platform: "android" }).id, "emulator-5554");
+  assert.equal(pickDevice([IPHONE, EMULATOR], { platform: "ios" }).id, "UDID-1");
+  assert.equal(pickDevice([IPHONE, AVD], { deviceId: "Pixel_Fold_API_35" }).id, "Pixel_Fold_API_35");
+  assert.throws(() => pickDevice([IPHONE], { platform: "android" }), /No Android devices were found on host local/u);
+});
+
+test("Android devices are pinned by serial and get adb guidance, not simctl", () => {
+  assert.deepEqual(agentDeviceTargetArgs(EMULATOR), ["--platform", "android", "--serial", "emulator-5554"]);
+  const target = [...agentDeviceTargetArgs(EMULATOR), "--config", "/c.json", "--session", "aiden-1"];
+  const text = agentDeviceQuickStart(EMULATOR, target);
+  assert.match(text, /watching Pixel_9_API_35 \(Android 15\.0\) in the Simulator tab/u);
+  assert.match(text, /agent-device snapshot -i --platform android --serial emulator-5554 --config \/c\.json/u);
+  assert.match(text, /<path-to-\.apk>/u);
+  assert.match(text, /adb is fine for builds, installs, logs, port forwarding/u);
+  assert.match(text, /do not shut down or wipe this emulator or stop serve-emu/u);
+  assert.doesNotMatch(text, /simctl|XCTest/u);
+});
+
+test("device_open on an Android AVD returns the booted serial and Android target args", async () => {
+  const { port, calls } = fakePort({ devices: [IPHONE, AVD] });
+  // Booting an AVD changes its id to the emulator serial, as the device service reports.
+  port.open = async (input) => {
+    calls.push(`open:${input.deviceId}`);
+    const session: DeviceSession = { chatId: input.chatId, hostId: input.hostId, deviceId: "emulator-5556", openedBy: "agent" };
+    const booted = { ...AVD, id: "emulator-5556", booted: true };
+    const current = port.state();
+    const next = { ...current, devices: [IPHONE, booted], sessions: [...current.sessions, session] };
+    port.state = () => next;
+    return session;
+  };
+  const run = tools(port);
+  await assert.rejects(run("device_open"), /pass platform or deviceId/u);
+  const result = json(await run("device_open", { platform: "android" }));
+  assert.deepEqual(result.device, {
+    hostId: "local",
+    id: "emulator-5556",
+    name: "Pixel_Fold_API_35",
+    platform: "android",
+    version: "Android 15.0",
+    booted: true,
+  });
+  const agent = result.agentDevice as { targetArgs: string[] };
+  assert.deepEqual(agent.targetArgs.slice(0, 4), ["--platform", "android", "--serial", "emulator-5556"]);
+  assert.match(String(result.quickStart), /--serial emulator-5556/u);
+  assert.ok(calls.includes("open:Pixel_Fold_API_35"));
+});
+
+test("device_list reports each platform's availability and every device's platform", async () => {
+  const { port } = fakePort({
+    devices: [IPHONE, EMULATOR],
+    hosts: [
+      {
+        id: "local",
+        kind: "local",
+        name: "This Mac",
+        status: "ready",
+        platforms: [
+          { platform: "ios", available: true },
+          { platform: "android", available: false, reason: "Android SDK not found." },
+        ],
+      },
+    ],
+  });
+  const listed = json(await tools(port)("device_list"));
+  assert.deepEqual(listed.platforms, [
+    { platform: "ios", available: true },
+    { platform: "android", available: false, reason: "Android SDK not found." },
+  ]);
+  assert.deepEqual(
+    (listed.devices as { id: string; platform: string }[]).map((device) => [device.id, device.platform]),
+    [
+      ["UDID-1", "ios"],
+      ["emulator-5554", "android"],
+    ],
+  );
 });
 
 test("device_open resolves agent access before booting, then reveals the tab", async () => {
