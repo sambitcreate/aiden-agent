@@ -24,7 +24,7 @@ import {
 } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect, isIP, type Socket } from "node:net";
-import type { Duplex } from "node:stream";
+import type { Duplex, Transform } from "node:stream";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
 import { DEVICE_ID_PATTERN, LOCAL_DEVICE_HOST_ID, type DeviceStreamGrant } from "../../../renderer/shared/devices.js";
 
@@ -280,6 +280,8 @@ export function upgradeRequestHead(
 /**
  * Pipes an accepted client upgrade to an upstream socket once it is ready.
  * Frames are opaque: H.264 access units one way, input packets the other.
+ * `inbound`, when given, sits between the client and the upstream and sees
+ * every client byte (including `head`) before the upstream does.
  */
 export function pipeUpgrade(input: {
   client: Duplex;
@@ -288,6 +290,7 @@ export function pipeUpgrade(input: {
   requestHead: string;
   head: Buffer;
   track?: Set<Duplex>;
+  inbound?: Transform;
 }): void {
   const { client, upstream, track } = input;
   track?.add(client);
@@ -304,9 +307,18 @@ export function pipeUpgrade(input: {
   upstream.once("close", teardown);
   upstream.once(input.readyEvent, () => {
     upstream.write(input.requestHead);
-    if (input.head.length > 0) upstream.write(input.head);
+    const inbound = input.inbound;
+    if (!inbound) {
+      if (input.head.length > 0) upstream.write(input.head);
+      upstream.pipe(client);
+      client.pipe(upstream);
+      return;
+    }
+    inbound.once("error", teardown);
+    inbound.pipe(upstream);
+    if (input.head.length > 0) inbound.write(input.head);
     upstream.pipe(client);
-    client.pipe(upstream);
+    client.pipe(inbound);
   });
 }
 

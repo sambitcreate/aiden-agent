@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import type { PathLike } from "node:fs";
+import fsPromises, { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -86,6 +88,37 @@ test("writing creates folders inside the root and refuses symlinks that lead out
     );
     assert.equal(await readFile(path.join(dirs.outside, "target.png"), "utf8"), "keep");
   } finally {
+    await dirs.cleanup();
+  }
+});
+
+test("a link swapped in for a missing folder while writing creates nothing outside the root", async () => {
+  const dirs = await roots();
+  const original = fsPromises.mkdir;
+  const swapped = path.join(dirs.workspace, "a");
+  try {
+    const allowed = { workspace: dirs.workspace, downloads: dirs.downloads };
+    const file = resolveDeviceSavePath("a/b/c/shot.png", allowed, "d.png");
+    // Another process replaces the missing `a` with a link out of the workspace
+    // after the path was checked, just before the folder is created.
+    const racing = (async (folder: PathLike, options?: unknown) => {
+      if (String(folder).startsWith(swapped)) await symlink(dirs.outside, swapped).catch(() => undefined);
+      return original(folder, options as never);
+    }) as typeof fsPromises.mkdir;
+    fsPromises.mkdir = racing;
+    syncBuiltinESMExports();
+    await assert.rejects(writeDeviceSaveFile(file, allowed, PNG), /leads outside/u);
+    assert.deepEqual(await readdir(dirs.outside), [], "no stray folder was created outside the workspace");
+
+    // A link that stays inside the workspace is refused too: no folder below the root may be a link.
+    await rm(swapped);
+    await mkdir(path.join(dirs.workspace, "real"));
+    await symlink(path.join(dirs.workspace, "real"), swapped);
+    await assert.rejects(writeDeviceSaveFile(file, allowed, PNG), /through a link/u);
+    assert.deepEqual(await readdir(path.join(dirs.workspace, "real")), []);
+  } finally {
+    fsPromises.mkdir = original;
+    syncBuiltinESMExports();
     await dirs.cleanup();
   }
 });

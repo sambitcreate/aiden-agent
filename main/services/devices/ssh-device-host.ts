@@ -254,7 +254,16 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
   let hubTunnel: Tunnel | null = null;
   let agentDevice: AgentDeviceEndpoint | null = null;
   let agentTunnel: Tunnel | null = null;
-  let stopped = false;
+  /**
+   * Bumped by every `stop()`. Each connect captures it when it is called, so a
+   * connect that was already queued behind the lock when the user removed,
+   * edited, or disconnected the host finds it stale and gives up instead of
+   * opening a tunnel nobody owns. The service reuses this object after a
+   * disconnect, so `stop()` cannot be permanent; a later call simply captures
+   * the new generation.
+   */
+  let generation = 0;
+  const isStale = (captured: number) => captured !== generation;
   /** A start script ran on the host, so `stop` must clean up there. */
   let activated = false;
   let lastProbe: SshHostProbe | null = null;
@@ -359,25 +368,30 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
     };
   }
 
-  async function connect(allowInstall: boolean): Promise<DeviceHostReady> {
+  function disconnectedError(): Error {
+    return new Error(`${label} was disconnected while connecting.`);
+  }
+
+  async function connect(allowInstall: boolean, captured: number): Promise<DeviceHostReady> {
+    if (isStale(captured)) throw disconnectedError();
     activated = true;
     const result = await bootstrap("start", allowInstall);
     const started = parseSshStarted(result.stdout);
     if (!started) throw new Error(`${label} started its device hub but reported no port Aiden could use.`);
     lastProbe = { nodePath: started.nodePath, nodeVersion: started.nodeVersion, platforms: started.platforms, ...(started.tools ? { tools: started.tools } : {}) };
     const tunnel = await forward(started.hubPort, "/readyz");
-    if (stopped) {
+    if (isStale(captured)) {
       closeTunnel(tunnel);
-      throw new Error(`${label} was disconnected while connecting.`);
+      throw disconnectedError();
     }
     hubTunnel = tunnel;
     ready = readyFrom(started, tunnel);
-    tunnel.process.onExit(() => void onHubTunnelExit(tunnel));
+    tunnel.process.onExit(() => void onHubTunnelExit(tunnel, captured));
     return ready;
   }
 
-  async function onHubTunnelExit(exited: Tunnel): Promise<void> {
-    if (stopped || hubTunnel !== exited) return;
+  async function onHubTunnelExit(exited: Tunnel, captured: number): Promise<void> {
+    if (isStale(captured) || hubTunnel !== exited) return;
     hubTunnel = null;
     ready = null;
     closeTunnel(agentTunnel);
@@ -388,18 +402,18 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
       emitHealth("restarting", `Reconnecting to ${label}…`);
       delay = nextSshReconnectDelay(delay);
       await deps.sleep(delay);
-      if (stopped || ready) return;
+      if (isStale(captured) || ready) return;
       try {
         // A reconnect never installs: a version that went missing needs the user's Update.
         await withLock(async () => {
-          if (stopped || ready) return;
-          await connect(false);
+          if (isStale(captured) || ready) return;
+          await connect(false, captured);
         });
-        if (stopped) return;
+        if (isStale(captured)) return;
         emitHealth("ready");
         return;
       } catch (error) {
-        if (stopped) return;
+        if (isStale(captured)) return;
         if (error instanceof DeviceToolsMissingError || attempt === SSH_RECONNECT_ATTEMPTS) {
           emitHealth("failed", error instanceof Error ? error.message : String(error));
           return;
@@ -423,9 +437,13 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
     }
   }
 
-  const ensureReady: DeviceHost["ensureReady"] = (onPhase, options = {}) =>
-    withLock(async () => {
-      stopped = false;
+  function ensureReadyAt(
+    captured: number,
+    onPhase: Parameters<DeviceHost["ensureReady"]>[0],
+    options: NonNullable<Parameters<DeviceHost["ensureReady"]>[1]> = {},
+  ): Promise<DeviceHostReady> {
+    return withLock(async () => {
+      if (isStale(captured)) throw disconnectedError();
       if (ready && hubTunnel) {
         if (await forwardAlive(hubTunnel)) return ready;
         // The hub on the host died while ssh stayed up; start it again.
@@ -442,8 +460,11 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
       } else {
         onPhase?.("starting", `Connecting to ${label}…`);
       }
-      return connect(options.allowInstall === true);
+      return connect(options.allowInstall === true, captured);
     });
+  }
+
+  const ensureReady: DeviceHost["ensureReady"] = (onPhase, options = {}) => ensureReadyAt(generation, onPhase, options);
 
   return {
     id: config.id,
@@ -470,8 +491,10 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
     },
     ensureReady,
     async ensureAgentReady(onPhase, options = {}): Promise<DeviceHostAgentReady> {
-      const hubReady = await ensureReady(onPhase, options);
+      const captured = generation;
+      const hubReady = await ensureReadyAt(captured, onPhase, options);
       return withLock(async () => {
+        if (isStale(captured)) throw new Error(`${label} was disconnected while agent tools started.`);
         const current = ready ?? hubReady;
         if (agentDevice && agentTunnel && agentTunnel.process.exitCode === null) return { ...current, agentDevice };
         closeTunnel(agentTunnel);
@@ -490,7 +513,7 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
         }
         lastProbe = { nodePath: started.nodePath, nodeVersion: started.nodeVersion, platforms: started.platforms, ...(started.tools ? { tools: started.tools } : {}) };
         const tunnel = await forward(started.daemonPort, "/health");
-        if (stopped) {
+        if (isStale(captured)) {
           closeTunnel(tunnel);
           throw new Error(`${label} was disconnected while agent tools started.`);
         }
@@ -519,8 +542,9 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
         if (hadAgent) await bootstrap("stop-agent").catch(() => undefined);
       }),
     async stop() {
-      // Marked first, so a reconnect loop or an in-flight connect gives up without waiting for the lock.
-      stopped = true;
+      // Bumped first, so a reconnect loop, an in-flight connect, and every connect already
+      // queued behind the lock give up without waiting for it, closing whatever they opened.
+      generation += 1;
       const tunnels = [hubTunnel, agentTunnel];
       hubTunnel = null;
       agentTunnel = null;

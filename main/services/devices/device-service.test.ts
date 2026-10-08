@@ -1363,6 +1363,44 @@ test("a streaming revoke during a peer refresh or open is never undone", async (
   });
 });
 
+test("a paired Mac may rename only a stopped AVD, and only to an emulator serial nobody else has", async () => {
+  const android = (id: string, booted: boolean, name = id) =>
+    ({ id, name, platform: "android", version: "Android 15.0", booted, kind: "other" }) as const;
+  const listing: PeerSimulatorListing = {
+    sharing: true,
+    status: "ready",
+    devices: [
+      READY_LISTING.devices[0]!,
+      android("Pixel_9_API_35", false, "Pixel 9"),
+      android("emulator-5554", true, "Pixel Fold"),
+    ],
+  };
+  const cases: Array<{ deviceId: string; answer: ReturnType<typeof android> | null; accepted: boolean; why: string }> = [
+    { deviceId: "Pixel_9_API_35", answer: android("emulator-5556", true, "Pixel 9"), accepted: true, why: "a stopped AVD boots under its serial" },
+    { deviceId: "Pixel_9_API_35", answer: android("emulator-5554", true, "Pixel 9"), accepted: false, why: "the serial belongs to another listed device" },
+    { deviceId: "Pixel_9_API_35", answer: android("Pixel_Tablet_API_36", true), accepted: false, why: "not an emulator serial" },
+    { deviceId: "emulator-5554", answer: android("emulator-5560", true, "Pixel Fold"), accepted: false, why: "a running emulator keeps its id" },
+    { deviceId: PEER_PHONE, answer: android("emulator-5556", true), accepted: false, why: "an iOS simulator is not an AVD" },
+  ];
+  for (const { deviceId, answer, accepted, why } of cases) {
+    await withPeers({ studio: listing }, { streaming: true }, async ({ service, peers }) => {
+      await service.refreshPeers();
+      peers.port.open = async () => answer!;
+      const before = service.state().devices.filter((device) => device.hostId === "studio");
+      const opening = service.open({ chatId: "c", hostId: "studio", deviceId, openedBy: "user" });
+      if (!accepted) {
+        await assert.rejects(opening, /answered with a different device/u, why);
+        assert.deepEqual(service.state().sessions, [], why);
+        assert.deepEqual(service.state().devices.filter((device) => device.hostId === "studio"), before, why);
+        return;
+      }
+      assert.equal((await opening).deviceId, answer!.id, why);
+      const ids = service.state().devices.filter((device) => device.hostId === "studio").map((device) => device.id);
+      assert.deepEqual(ids, [PEER_PHONE, "emulator-5556", "emulator-5554"], why);
+    });
+  }
+});
+
 test("closing a paired Mac's simulator while it is still opening wins over the open", async () => {
   for (const closeWith of ["session", "chat"] as const) {
     await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers }) => {
@@ -1495,7 +1533,7 @@ test("phones reach this Mac's simulators only through their own consent", async 
 
 test("phones see shared Android emulators but open only iOS Simulators", async () => {
   await withService(
-    async ({ service, hub }) => {
+    async ({ service, hub, host }) => {
       await service.load();
       await service.grantConsent("mobileSharing");
       const mobile = service.shareHost("mobile");
@@ -1511,6 +1549,25 @@ test("phones see shared Android emulators but open only iOS Simulators", async (
       const iphone = listing.devices.find((device) => device.platform === "ios");
       assert.ok(iphone);
       assert.equal((await mobile.open(iphone.id)).id, iphone.id);
+
+      // A phone cannot shut an emulator down or change any device either.
+      const deniedBefore = hub.calls.length;
+      const commandsBefore = host.commands.length;
+      const denied = (error: unknown) => (error as { code?: string }).code === "capability_denied";
+      await assert.rejects(mobile.shutdown("emulator-5554"), denied);
+      await assert.rejects(mobile.action({ hostId: "local", deviceId: iphone.id, type: "setAppearance", value: "dark" }), denied);
+      assert.equal(hub.calls.length, deniedBefore, "refused phone mutations never reach the hub");
+      assert.equal(host.commands.length, commandsBefore, "refused phone mutations never run a device command");
+      assert.equal(
+        (await mobile.list()).devices.find((device) => device.id === "emulator-5554")?.booted,
+        true,
+        "the emulator is still running",
+      );
+
+      // A paired Mac still shuts it down.
+      await service.grantConsent("peerSharing");
+      await service.shareHost().shutdown("emulator-5554");
+      assert.ok(hub.calls.some((call) => call.url.endsWith("/api/devices/shutdown")));
     },
     { consent: { streaming: true }, android: true },
   );

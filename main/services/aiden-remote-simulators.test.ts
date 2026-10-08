@@ -594,3 +594,138 @@ test("Android listings and opens use AVD names and serials as device ids", async
   });
   assert.equal((await call(origin, "POST", "/simulators/open", { deviceId: "-s" })).status, 400);
 });
+
+/** A client frame, masked as a phone's WebSocket sends it unless told otherwise. */
+function clientFrame(opcode: number, payload: Buffer, options: { fin?: boolean; masked?: boolean } = {}): Buffer {
+  const key = Buffer.from([0x5a, 0x13, 0xc4, 0x7e]);
+  const masked = options.masked ?? true;
+  const maskBit = masked ? 0x80 : 0;
+  const length =
+    payload.length < 126
+      ? Buffer.from([payload.length | maskBit])
+      : Buffer.from([126 | maskBit, payload.length >> 8, payload.length & 0xff]);
+  const body = masked ? Buffer.from(payload.map((byte, index) => byte ^ key[index % 4]!)) : payload;
+  const first = ((options.fin ?? true) ? 0x80 : 0) | opcode;
+  return Buffer.concat([Buffer.from([first]), length, masked ? key : Buffer.alloc(0), body]);
+}
+
+const inputFrame = (tag: number, json: unknown) =>
+  clientFrame(0x2, Buffer.concat([Buffer.from([tag]), Buffer.from(JSON.stringify(json))]));
+
+async function waitUntil(condition: () => boolean, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 200 && !condition(); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(condition(), what);
+}
+
+/** A hub whose input socket records every byte a client sends after the upgrade. */
+async function recordingHub(t: { after(fn: () => void): void }) {
+  const sockets: Array<{ headers: IncomingMessage["headers"]; bytes: Buffer; closed: boolean }> = [];
+  const hub = createServer();
+  hub.on("upgrade", (req, socket, head) => {
+    const record = { headers: req.headers, bytes: Buffer.from(head), closed: false };
+    sockets.push(record);
+    socket.on("data", (chunk: Buffer) => (record.bytes = Buffer.concat([record.bytes, chunk])));
+    // Like a WebSocket server, the hub closes its side once the relay closes.
+    socket.on("end", () => socket.end());
+    socket.on("close", () => (record.closed = true));
+    socket.on("error", () => undefined);
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+  });
+  const origin = await listen(hub);
+  t.after(() => hub.close());
+  return { origin, sockets };
+}
+
+async function openInputSocket(origin: string) {
+  const url = new URL(origin);
+  const socket = connect({ host: url.hostname, port: Number(url.port) });
+  const state = { received: Buffer.alloc(0), closed: false };
+  socket.on("data", (chunk: Buffer) => (state.received = Buffer.concat([state.received, chunk])));
+  socket.on("close", () => (state.closed = true));
+  socket.on("error", () => undefined);
+  socket.write(
+    `GET /simulators/hub/vendor/serve-sim/helper/ws?device=${UDID} HTTP/1.1\r\nHost: ${url.host}\r\n` +
+      "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+      "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n\r\n",
+  );
+  await waitUntil(() => state.received.includes("\r\n\r\n"), "the upgrade was answered");
+  assert.match(state.received.toString("latin1"), /^HTTP\/1\.1 101 /u);
+  state.received = state.received.subarray(state.received.indexOf("\r\n\r\n") + 4);
+  return { socket, state };
+}
+
+test("a phone's input socket carries only touch, button, orientation and keyboard-mode messages", async (t) => {
+  const hub = await recordingHub(t);
+  const phones = fakeHost({ hub: hub.origin });
+  const relay = new AidenRemoteSimulatorRelay((audience) => (audience === "mobile" ? phones.host : null));
+  const { server, origin } = await front(relay, { deviceId: "phone-1", audience: "mobile" });
+  t.after(() => server.close());
+
+  const { socket, state } = await openInputSocket(origin);
+  await waitUntil(() => hub.sockets.length === 1, "the hub saw the upgrade");
+  assert.equal(hub.sockets[0]!.headers["sec-websocket-extensions"], undefined, "no extension rewrites a phone's frames");
+
+  const longTouch = inputFrame(0x03, { type: "move", x: 0.5, y: 0.5, padding: "x".repeat(180) });
+  const rest = [
+    inputFrame(0x0d, { enabled: false }),
+    inputFrame(0x03, { type: "begin", x: 0.25, y: 0.75 }),
+    inputFrame(0x04, { button: "home" }),
+    inputFrame(0x07, { orientation: "landscape_left" }),
+    clientFrame(0x9, Buffer.from("ping")),
+  ];
+  // A frame split before its tag byte still reaches a verdict.
+  socket.write(longTouch.subarray(0, 5));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  socket.write(longTouch.subarray(5));
+  for (const frame of rest) socket.write(frame);
+  const expected = Buffer.concat([longTouch, ...rest]);
+  await waitUntil(() => hub.sockets[0]!.bytes.length >= expected.length, "the hub received every allowed frame");
+  assert.deepEqual(hub.sockets[0]!.bytes, expected, "allowed frames pass byte for byte");
+
+  // A keyboard key (0x06) is desktop-only: the phone is closed with 1008 and the hub never sees it.
+  socket.write(Buffer.concat([inputFrame(0x06, { usage: 4, down: true }), inputFrame(0x03, { type: "end", x: 0, y: 0 })]));
+  await waitUntil(() => state.closed, "the phone was closed");
+  await waitUntil(() => hub.sockets[0]!.closed, "the hub socket was closed");
+  assert.equal(state.received[0], 0x88, "the phone got a close frame");
+  assert.equal(state.received.readUInt16BE(2), 1008);
+  assert.deepEqual(hub.sockets[0]!.bytes, expected, "nothing from the violation on reached the hub");
+
+  // Text, unmasked and empty messages are violations too.
+  for (const frame of [
+    clientFrame(0x1, Buffer.from('{"type":"begin"}')),
+    clientFrame(0x2, Buffer.from([0x03, 0x7b, 0x7d]), { masked: false }),
+    clientFrame(0x2, Buffer.alloc(0)),
+  ]) {
+    const before = hub.sockets.length;
+    const next = await openInputSocket(origin);
+    await waitUntil(() => hub.sockets.length === before + 1, "the hub saw the upgrade");
+    next.socket.write(frame);
+    await waitUntil(() => next.state.closed, "the phone was closed");
+    assert.equal(next.state.received.readUInt16BE(2), 1008);
+    assert.equal(hub.sockets[before]!.bytes.length, 0);
+  }
+});
+
+test("a paired Mac's input socket stays an opaque pipe", async (t) => {
+  const hub = await recordingHub(t);
+  const desktops = fakeHost({ hub: hub.origin });
+  const { server, origin } = await front(new AidenRemoteSimulatorRelay(() => desktops.host));
+  t.after(() => server.close());
+
+  const { socket, state } = await openInputSocket(origin);
+  await waitUntil(() => hub.sockets.length === 1, "the hub saw the upgrade");
+  assert.equal(hub.sockets[0]!.headers["sec-websocket-extensions"], "permessage-deflate; client_max_window_bits");
+  const frames = Buffer.concat([
+    inputFrame(0x06, { usage: 4, down: true }),
+    inputFrame(0x05, { touches: [] }),
+    clientFrame(0x1, Buffer.from("text")),
+  ]);
+  socket.write(frames);
+  await waitUntil(() => hub.sockets[0]!.bytes.length >= frames.length, "the hub received every frame");
+  assert.deepEqual(hub.sockets[0]!.bytes, frames);
+  assert.equal(state.closed, false);
+  socket.destroy();
+});

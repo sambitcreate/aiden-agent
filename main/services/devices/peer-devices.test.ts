@@ -225,6 +225,13 @@ test("opening a paired Mac's AVD accepts the emulator serial it boots under", as
     ),
   );
   assert.equal((await peers.open("a", "Pixel_9_API_35")).id, "emulator-5554");
+  // Any other Android id is not a serial an AVD boots under.
+  const renamed = createPeerDevices(
+    registry(() => ({
+      device: { id: "Pixel_Tablet_API_36", name: "Pixel Tablet", platform: "android", version: "Android 16.0", booted: true, kind: "other" },
+    })),
+  );
+  await assert.rejects(renamed.open("a", "Pixel_9_API_35"), PeerTransportError);
   // An iOS simulator must come back under the UDID that was asked for.
   const ios = createPeerDevices(registry(() => ({ device: { ...SIMULATOR, id: "99999999-2222-3333-4444-555555555555" } })));
   await assert.rejects(ios.open("a", UDID), PeerTransportError);
