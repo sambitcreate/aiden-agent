@@ -3,8 +3,9 @@
  *
  * The Device tools drawer for one open iOS simulator or Android emulator: the
  * settings the device reports, one control per typed action the platform
- * supports, and the frontmost app. The accessibility overlay, event log, and
- * host diagnostics are deferred (see the Phase 3.5 plan).
+ * supports, and the frontmost app. Callers mount the power-feature sections
+ * (accessibility overlay, event log, clipboard, erase) as children, and host
+ * diagnostics close the drawer.
  */
 import * as React from "react";
 import { X } from "lucide-react";
