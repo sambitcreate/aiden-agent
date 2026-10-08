@@ -1149,8 +1149,10 @@ class AidenChatViewModel(
         if (_isStarting.value) return
         val generation = transcriptGeneration
         val client = activeClient() ?: return
+        // Published before the launch so a chat with nothing saved shows its transcript
+        // placeholders on the first frame rather than a blank screen.
+        _isLoading.value = true
         viewModelScope.launch {
-            _isLoading.value = true
             try {
                 val writeToken = chatCache.reserveChatWrite()
                 val latest = fetchLatestTranscript(client)

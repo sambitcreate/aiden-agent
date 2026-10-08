@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,7 +22,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
-import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.toModelPickerProvider
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
@@ -29,6 +34,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.LocalResources
 
 fun aidenBotCustomAccessIsDirty(
     draft: AidenBotCustomAccessDraft?,
@@ -65,23 +71,26 @@ fun aidenBotVisibleFileScopeOptions(
     return options.filter { it.available || selectedIDs.contains(it.id) }
 }
 
+@Composable
 fun aidenBotCapabilityOptionTitle(
     option: AidenBotCapabilityOption,
     isSelected: Boolean
 ): String {
     if (option.available) return option.label
+    // "Invalid skill" is the desktop's placeholder label for a removed skill.
     if (isSelected && option.label == "Invalid skill") {
-        return "Previously selected skill — unavailable"
+        return stringResource(R.string.bot_access_previous_skill_unavailable)
     }
-    return "${option.label} — Unavailable"
+    return stringResource(R.string.bot_access_option_unavailable, option.label)
 }
 
+@Composable
 fun aidenBotFileScopeOptionTitle(
     option: AidenBotFileScopeOption,
     isSelected: Boolean
 ): String {
     if (option.available) return option.label
-    return "${option.label} — Unavailable"
+    return stringResource(R.string.bot_access_option_unavailable, option.label)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,10 +102,16 @@ fun AidenBotCustomAccessFlowScreen(
     onAccessSaved: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
 
-    var bots by remember { mutableStateOf<List<AidenBotSummary>>(emptyList()) }
+    // The Bot switcher renders from the saved list while the desktop's list arrives.
+    var bots by remember {
+        mutableStateOf(
+            coordinator.botCache.botList.value?.bots.orEmpty().filter { it.health != AidenBotHealth.ARCHIVED }
+        )
+    }
     var selectedBotId by remember { mutableStateOf(botId) }
     var selectedBotDetail by remember { mutableStateOf<AidenBotDetail?>(null) }
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
@@ -104,6 +119,7 @@ fun AidenBotCustomAccessFlowScreen(
     var cleanDraft by remember { mutableStateOf<AidenBotCustomAccessDraft?>(null) }
 
     var isLoading by remember { mutableStateOf(true) }
+    var isLoadingBot by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
     var isConfirmingDiscard by remember { mutableStateOf(false) }
@@ -113,6 +129,7 @@ fun AidenBotCustomAccessFlowScreen(
 
     fun loadBot(targetBotId: String) {
         val cl = client ?: return
+        isLoadingBot = true
         scope.launch {
             try {
                 val bot = cl.bot(targetBotId)
@@ -124,6 +141,8 @@ fun AidenBotCustomAccessFlowScreen(
                 cleanDraft = d?.copy()
             } catch (e: Exception) {
                 saveError = e.message
+            } finally {
+                isLoadingBot = false
             }
         }
     }
@@ -149,7 +168,7 @@ fun AidenBotCustomAccessFlowScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Custom Access", fontWeight = FontWeight.Bold) },
+                title = { Text(stringResource(R.string.bot_access_title), fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (isDirty) {
@@ -159,7 +178,7 @@ fun AidenBotCustomAccessFlowScreen(
                             onNavigateBack()
                         }
                     }) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.foreground)
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = palette.foreground)
                     }
                 },
                 actions = {
@@ -188,12 +207,12 @@ fun AidenBotCustomAccessFlowScreen(
                                             val freshCat = cl.botCapabilityCatalog(detail.id)
                                             selectedBotDetail = fresh
                                             catalog = freshCat
-                                            saveError = "Access policy was changed on your paired desktop. Review the latest policy and try again."
+                                            saveError = resources.getString(R.string.bot_access_conflict)
                                         } catch (_: Exception) {
-                                            saveError = e.message ?: "Conflict updating access"
+                                            saveError = e.message ?: resources.getString(R.string.bot_access_conflict_fallback)
                                         }
                                     } else {
-                                        saveError = e.message ?: "Failed to save access policy"
+                                        saveError = e.message ?: resources.getString(R.string.bot_access_save_failed)
                                     }
                                 } finally {
                                     isSaving = false
@@ -202,7 +221,7 @@ fun AidenBotCustomAccessFlowScreen(
                         },
                         enabled = draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true && !isSaving
                     ) {
-                        Text(if (isSaving) "Saving…" else "Save", color = if (draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true) palette.accent else palette.secondary, fontWeight = FontWeight.Bold)
+                        Text(if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save), color = if (draft?.let { d -> catalog?.let { c -> d.isSaveable(c) } } == true) palette.accent else palette.secondary, fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.canvas, titleContentColor = palette.foreground)
@@ -213,11 +232,18 @@ fun AidenBotCustomAccessFlowScreen(
         val curDraft = draft
         val cat = catalog
 
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = palette.accent)
+        if (curDraft == null || cat == null) {
+            if (!isLoading && !isLoadingBot && (saveError != null || bots.isEmpty())) {
+                AidenEmptyState(
+                    icon = Icons.Default.CloudOff,
+                    title = if (bots.isEmpty() && saveError == null) stringResource(R.string.bot_access_no_bots_title) else stringResource(R.string.bot_access_load_failed_title),
+                    body = saveError ?: stringResource(R.string.bot_access_no_bots_body),
+                    modifier = Modifier.fillMaxSize().padding(padding)
+                )
+            } else {
+                AidenBotFormSkeleton(loadingDescription = stringResource(R.string.bot_access_loading), modifier = Modifier.padding(padding))
             }
-        } else if (curDraft != null && cat != null) {
+        } else {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -229,10 +255,10 @@ fun AidenBotCustomAccessFlowScreen(
                 // Bot Switcher Picker Row
                 if (bots.size > 1) {
                     item {
-                        Text("Select Bot", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_access_select_bot), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(bots) { b ->
+                            items(bots, key = { it.id }) { b ->
                                 FilterChip(
                                     border = null,
                                     selected = selectedBotId == b.id,
@@ -256,65 +282,28 @@ fun AidenBotCustomAccessFlowScreen(
 
                 // AI Model Provider / Model section
                 item {
-                    Text("AI Model", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                    Text(stringResource(R.string.model_picker_bot_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            cat.providers.forEach { provider ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    AidenProviderIcon(providerId = provider.id, providerLabel = provider.label, size = 22.dp)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(provider.label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                }
-                                provider.models.forEach { model ->
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable {
-                                                draft = curDraft.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            }
-                                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                                    ) {
-                                        RadioButton(
-                                            selected = curDraft.providerID == provider.id && curDraft.modelID == model.id,
-                                            onClick = {
-                                                draft = curDraft.copy(
-                                                    providerID = provider.id,
-                                                    modelID = model.id
-                                                )
-                                            },
-                                            colors = RadioButtonDefaults.colors(selectedColor = palette.accent)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(model.label, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
-                                        if (!model.available) {
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text("(Unavailable)", style = MaterialTheme.typography.labelSmall, color = palette.danger)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    val pickerProviders = remember(cat.providers) { cat.providers.map { it.toModelPickerProvider() } }
+                    AidenModelPickerField(
+                        title = stringResource(R.string.model_picker_bot_title),
+                        providers = pickerProviders,
+                        selection = AidenModelRoute(curDraft.providerID, curDraft.modelID),
+                        onSelect = { entry ->
+                            draft = curDraft.copy(providerID = entry.provider.id, modelID = entry.model.id)
+                        },
+                        containerColor = palette.raised
+                    )
                 }
 
                 // File Scopes Section
                 item {
-                    Text("Desktop Files", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                    Text(stringResource(R.string.bot_access_desktop_files), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             val visibleScopes = aidenBotVisibleFileScopeOptions(cat.fileScopes, curDraft.fileScopeIDs)
@@ -323,7 +312,7 @@ fun AidenBotCustomAccessFlowScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .clip(MaterialTheme.shapes.small)
                                         .clickable {
                                             val next = if (curDraft.fileScopeIDs.contains(scopeItem.id))
                                                 curDraft.fileScopeIDs - scopeItem.id
@@ -361,20 +350,20 @@ fun AidenBotCustomAccessFlowScreen(
 
                 // Terminal Shell section
                 item {
-                    Text("Terminal & Shell", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                    Text(stringResource(R.string.bot_access_terminal_shell), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                     Spacer(modifier = Modifier.height(6.dp))
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = palette.raised),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(16.dp)
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Execute Shell Commands", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
-                                Text("Allows bot to run terminal commands on the paired desktop", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                                Text(stringResource(R.string.bot_access_shell_title), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground)
+                                Text(stringResource(R.string.bot_access_shell_body), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                             }
                             Switch(
                                 checked = curDraft.shellEnabled,
@@ -389,12 +378,12 @@ fun AidenBotCustomAccessFlowScreen(
                 // MCP Connections section
                 if (cat.connections.isNotEmpty()) {
                     item {
-                        Text("MCP Connections", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_editor_mcp_connections), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val visibleConnections = aidenBotVisibleCapabilityOptions(cat.connections, curDraft.connectionIDs)
@@ -403,7 +392,7 @@ fun AidenBotCustomAccessFlowScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(MaterialTheme.shapes.small)
                                             .clickable {
                                                 val next = if (curDraft.connectionIDs.contains(conn.id))
                                                     curDraft.connectionIDs - conn.id
@@ -437,12 +426,12 @@ fun AidenBotCustomAccessFlowScreen(
                 // Skills section
                 if (cat.skills.isNotEmpty()) {
                     item {
-                        Text("Skills", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_access_skills), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val visibleSkills = aidenBotVisibleCapabilityOptions(cat.skills, curDraft.skillIDs)
@@ -451,7 +440,7 @@ fun AidenBotCustomAccessFlowScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(MaterialTheme.shapes.small)
                                             .clickable {
                                                 val next = if (curDraft.skillIDs.contains(skill.id))
                                                     curDraft.skillIDs - skill.id
@@ -485,12 +474,12 @@ fun AidenBotCustomAccessFlowScreen(
                 // Other capabilities section
                 if (cat.otherCapabilities.isNotEmpty()) {
                     item {
-                        Text("Other Capabilities", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
+                        Text(stringResource(R.string.bot_access_other), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = palette.secondary)
                         Spacer(modifier = Modifier.height(6.dp))
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val visibleOthers = aidenBotVisibleCapabilityOptions(cat.otherCapabilities, curDraft.otherCapabilityIDs)
@@ -499,7 +488,7 @@ fun AidenBotCustomAccessFlowScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(MaterialTheme.shapes.small)
                                             .clickable {
                                                 val next = if (curDraft.otherCapabilityIDs.contains(cap.id))
                                                     curDraft.otherCapabilityIDs - cap.id
@@ -542,11 +531,11 @@ fun AidenBotCustomAccessFlowScreen(
     if (isConfirmingDiscard) {
         AlertDialog(
             onDismissRequest = { isConfirmingDiscard = false },
-            title = { Text("Discard access changes?") },
-            text = { Text("Your unsaved Custom Access changes will be lost.") },
+            title = { Text(stringResource(R.string.bot_access_discard_title)) },
+            text = { Text(stringResource(R.string.bot_access_discard_body)) },
             confirmButton = {
                 AidenDialogConfirmButton(
-                    text = "Discard Changes",
+                    text = stringResource(R.string.bot_access_discard_confirm),
                     destructive = true,
                     onClick = {
                         isConfirmingDiscard = false
@@ -561,7 +550,7 @@ fun AidenBotCustomAccessFlowScreen(
                 )
             },
             dismissButton = {
-                AidenDialogDismissButton(text = "Keep Editing", onClick = { isConfirmingDiscard = false })
+                AidenDialogDismissButton(text = stringResource(R.string.files_keep_editing), onClick = { isConfirmingDiscard = false })
             },
             shape = AidenShape.Dialog,
             containerColor = palette.raised
