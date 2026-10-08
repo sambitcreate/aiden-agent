@@ -85,6 +85,20 @@ test("the hovered element shows its label and role, or says it is unlabeled", ()
   assert.match(top, /data-placement="below"/u);
 });
 
+test("a hovered label near the right edge stays inside the screen however wide it grows", () => {
+  // On a real simulator, Settings' label in the last icon column was cut off by the screen edge.
+  for (const x of [0, 0.3, 0.55, 0.77, 0.95]) {
+    const html = renderToStaticMarkup(
+      <DeviceAxLabel element={{ id: "s", label: "Settings", role: "Button", x, y: 0.4, width: 0.04, height: 0.05 }} />,
+    );
+    const left = Number(/left:([\d.]+)%/u.exec(html)?.[1]);
+    const maxWidth = Number(/max-width:([\d.]+)%/u.exec(html)?.[1]);
+    assert.ok(maxWidth > 0, `x=${x} has a bounded width`);
+    assert.ok(left + maxWidth <= 100, `x=${x}: ${left}% + ${maxWidth}% overflows`);
+    assert.ok(left <= x * 100, `x=${x}: the label starts at or before its element`);
+  }
+});
+
 test("an open event log offers filter, pause, clear, and copy around a labelled log", () => {
   const html = renderToStaticMarkup(
     <DeviceEventLogSection hostId="local" deviceId={UDID} grants={grants} defaultOpen />,
