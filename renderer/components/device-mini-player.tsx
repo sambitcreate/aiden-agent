@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, GripHorizontal, House, PanelRight, RotateCw, Square, X } from "lucide-react";
 import { Button, Text } from "./ui";
 import { useDeviceStream } from "../lib/use-device-stream";
+import { DEVICE_SCREEN_CONTAINER_STYLE, deviceDisplayRotation, rotatedMediaStyle } from "../lib/device-display-rotation";
 import { useFloatingContainerBounds } from "../lib/use-floating-container-bounds";
 import { useDeviceServiceState } from "../lib/use-device-service-state";
 import {
@@ -73,7 +74,14 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
   const geometry = useDeviceMiniPlayerGeometry();
   const stream = useDeviceStream({ hostId: device.hostId, deviceId: device.id, platform: device.platform, active });
   const android = device.platform === "android";
-  const source = deviceMiniPlayerSource(device.kind, stream.screen);
+  // A portrait framebuffer reporting landscape is drawn turned, as in the full viewer.
+  const displayRotation = deviceDisplayRotation(device.platform, stream.screen);
+  const displayedScreen =
+    stream.screen && (displayRotation === 90 || displayRotation === -90)
+      ? { width: stream.screen.height, height: stream.screen.width }
+      : stream.screen;
+  const source = deviceMiniPlayerSource(device.kind, displayedScreen);
+  const mediaStyle = rotatedMediaStyle(displayRotation);
   const stored = deviceMiniPlayerFrame({ source, container, geometry });
   const [live, setLive] = React.useState<DeviceMiniPlayerFrame | null>(null);
   const frame = live ?? stored;
@@ -232,6 +240,7 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
         <div
           className="device-viewer-screen device-mini-player-screen"
           data-typing-surface="device"
+          style={DEVICE_SCREEN_CONTAINER_STYLE}
           tabIndex={0}
           role="application"
           aria-roledescription="simulator screen"
@@ -245,8 +254,8 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
           onBlur={stream.releaseKeys}
           onContextMenu={(event) => event.preventDefault()}
         >
-          <canvas ref={stream.canvasRef} hidden={Boolean(stream.mjpegUrl)} aria-hidden />
-          {stream.mjpegUrl ? <img ref={stream.attachImage} alt="" draggable={false} /> : null}
+          <canvas ref={stream.canvasRef} hidden={Boolean(stream.mjpegUrl)} style={mediaStyle} aria-hidden />
+          {stream.mjpegUrl ? <img ref={stream.attachImage} alt="" draggable={false} style={mediaStyle} /> : null}
           {stream.status === "error" ? (
             <div className="device-viewer-overlay">
               <Text variant="small" color="secondary">
