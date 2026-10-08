@@ -519,8 +519,21 @@ test("copying from an emulator is refused with the reason, and nothing reaches t
 test("a target naming the wrong platform is refused before anything runs", async () => {
   const h = androidHarness();
   await assert.rejects(h.features.pasteFromHost({ ...h.target, platform: "ios" }), /no longer available/u);
+  await assert.rejects(h.features.copyToHost({ ...h.target, platform: "ios" }), /no longer available/u);
   await assert.rejects(h.features.startRecording("chat-1", { ...h.target, platform: "ios" }), /no longer available/u);
   assert.equal(h.posts.length + h.children.length, 0);
+  assert.deepEqual(h.commands, [], "no simctl or adb ran for a mislabelled emulator");
+});
+
+test("an erase mislabelled as iOS never runs simctl on an emulator and leaves its recording alone", async () => {
+  const h = androidHarness();
+  const recording = await h.features.startRecording("chat-1", h.target);
+  await assert.rejects(h.features.erase({ ...h.target, platform: "ios" }), /no longer available/u);
+  // The listing says Android, so the renderer's claim is refused before any side effect.
+  assert.equal(h.features.recordings().find((info) => info.id === recording.id)?.status, "recording");
+  assert.deepEqual(h.children[0]!.signals, []);
+  assert.equal(h.commands.some((line) => line.startsWith("xcrun") || line.includes("pkill")), false);
+  assert.deepEqual(h.events, [], "no shutdown and no refresh");
 });
 
 test("erasing an emulator ends its recordings, shuts it down through the hub, and returns its AVD id", async () => {

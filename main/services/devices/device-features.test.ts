@@ -150,6 +150,19 @@ test("erase stops the simulator's recordings, shuts it down, erases it, and refr
   assert.deepEqual(h.events, ["run:shutdown", "run:erase", "refresh"]);
 });
 
+test("a simulator labelled Android is refused before its recording ends or any command runs", async () => {
+  const h = harness();
+  const recording = await h.features.startRecording("chat-1", TARGET);
+  const mislabelled = { ...TARGET, platform: "android" as const };
+  await assert.rejects(h.features.erase(mislabelled), /no longer available/u);
+  await assert.rejects(h.features.pasteFromHost(mislabelled), /no longer available/u);
+  await assert.rejects(h.features.copyToHost(mislabelled), /no longer available/u);
+  await assert.rejects(h.features.startRecording("chat-2", mislabelled), /no longer available/u);
+  assert.equal(h.features.recordings().find((info) => info.id === recording.id)?.status, "recording");
+  assert.deepEqual(h.children[0]!.signals, []);
+  assert.deepEqual(h.events, []);
+});
+
 test("erase is refused for a simulator the listing does not have, and only for this Mac", async () => {
   const h = harness();
   await assert.rejects(h.features.erase({ ...TARGET, deviceId: "5C1E4B7A-0000-4000-8000-0000000000FF" }), /no longer available/u);
