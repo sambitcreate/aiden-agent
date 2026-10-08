@@ -17,7 +17,7 @@ A vector rebuild of the app-icon ghost as one Rive rig, plus rendered exports.
 | `exports/stills/` | 2160px transparent PNG poses |
 | `exports/frames/` | 1080px transparent PNG sequences, 60fps, for compositing (local only) |
 
-The ProRes masters, the frame sequences, and `.render/` are gitignored; run `render.py` to regenerate them. CI ignores `marketing/` entirely (`scripts/ci-changes.mjs`), and pushes to `main` that change only this folder do not cut a release.
+The ProRes masters, the frame sequences, and `.render/` are gitignored; run `render.py` to regenerate them. A pull request that changes only `marketing/` skips the build, test, and platform jobs (`scripts/ci-changes.mjs`); the change-detection and CI-policy jobs still run. Pushes to `main` keep their full baseline validation (`FORCE_FULL`), but a `main` push that changes only this folder does not cut a release.
 
 Every clip is a seamless loop: `hello` (wave, then float), `idle`, `thinking`, `celebrate`, `lookaround`.
 
