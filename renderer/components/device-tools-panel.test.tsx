@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceControls } from "../lib/device-controls.js";
+import type { DuoControlState } from "../lib/device-duo-control.js";
 import type { DeviceScreenSize } from "../lib/device-stream.js";
-import { DeviceDuoControls, selectedDuoPose } from "./device-duo-controls.js";
+import { DeviceDuoControls, duoFoldCommands, duoFoldLabel } from "./device-duo-controls.js";
 import { DeviceToolsPanel, parseCoordinates } from "./device-tools-panel.js";
 
 const noop = () => undefined;
@@ -60,20 +61,63 @@ test("coordinates must both be finite and within range", () => {
   assert.equal(parseCoordinates("north", "0"), null);
 });
 
-test("Duo pose buttons follow the reported hinge angle and stance", () => {
-  assert.equal(selectedDuoPose({ hingeAngle: 180, hingePose: "open" }, "open"), true);
-  assert.equal(selectedDuoPose({ hingeAngle: 180, hingePose: "open" }, "book"), false);
-  assert.equal(selectedDuoPose({ hingeAngle: 90, hingePose: "laptop" }, "laptop"), true);
-  assert.equal(selectedDuoPose({ hingeAngle: 90, hingePose: "laptop" }, "book"), false);
-  assert.equal(selectedDuoPose({ hingeAngle: 45 }, "book"), true);
-  assert.equal(selectedDuoPose({}, "closed"), false);
+const idle = { pending: false, requested: null, error: null };
+const duo = (screen: Partial<DeviceScreenSize>, state: DuoControlState = idle) =>
+  renderToStaticMarkup(
+    <DeviceDuoControls
+      screen={{ width: 1, height: 1, orientation: "portrait", supportsHingeAngle: true, ...screen }}
+      state={state}
+      enabled
+      onCommand={noop}
+    />,
+  );
+const button = (html: string, label: string) => html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>.*?</button>`, "u"))?.[0] ?? "";
+
+test("a half fold reads as a book when the phone is held upright and as a laptop when it is held sideways", () => {
+  // The inner display is mounted a quarter turn, so landscape_left is an upright phone.
+  const upright = duo({ screenId: 3, orientation: "landscape_left", hingeAngle: 90 });
+  assert.match(button(upright, "Book"), /aria-pressed="true"/u);
+  assert.doesNotMatch(upright, /aria-label="Laptop"/u);
+  assert.doesNotMatch(button(upright, "Closed"), /data-rotated/u);
+  const sideways = duo({ screenId: 3, orientation: "portrait_upside_down", hingeAngle: 90 });
+  assert.match(button(sideways, "Laptop"), /aria-pressed="true"/u);
+  // The fold glyphs turn with the phone; the stance glyphs do not.
+  for (const label of ["Closed", "Laptop", "Open"]) assert.match(button(sideways, label), /data-rotated/u, label);
+  for (const label of ["Laptop stand", "Tent stand"]) assert.doesNotMatch(button(sideways, label), /data-rotated/u, label);
+  assert.equal(duoFoldLabel("half", true), "Book");
+  assert.equal(duoFoldLabel("half", false), "Laptop");
+});
+
+test("a stand is pressed on its own, and folds wait while a stand is landing", () => {
+  const laptop = duo({ screenId: 3, orientation: "portrait", hingeAngle: 90, hingePose: "laptop" });
+  assert.match(button(laptop, "Laptop stand"), /aria-pressed="true"/u);
+  // A sideways laptop stand's half fold is labelled Laptop; no fold shape claims the stand.
+  for (const label of ["Closed", "Laptop", "Open"]) assert.match(button(laptop, label), /aria-pressed="false"/u, label);
+  for (const label of ["Closed", "Open"]) assert.doesNotMatch(button(laptop, label), /\sdisabled=""/u);
+  const landing = duo(
+    { screenId: 3, orientation: "portrait", hingeAngle: 90, hingePose: "laptop" },
+    { pending: true, requested: { control: "pose", value: "laptop" }, error: null },
+  );
+  for (const label of ["Closed", "Open"]) assert.match(button(landing, label), /\sdisabled=""/u, label);
+  assert.doesNotMatch(button(landing, "Tent stand"), /\sdisabled=""/u);
+});
+
+test("leaving a stand turns the phone back to how it was held before the hinge moves", () => {
+  assert.deepEqual(duoFoldCommands(180, { stand: false, standVertical: true, screenId: 3 }), [{ control: "angle", value: 180 }]);
+  assert.deepEqual(duoFoldCommands(0, { stand: true, standVertical: true, screenId: 3 }), [
+    { control: "orientation", value: "landscape_left" },
+    { control: "angle", value: 0 },
+  ]);
+  assert.deepEqual(duoFoldCommands(90, { stand: true, standVertical: false, screenId: 1 }), [
+    { control: "orientation", value: "landscape_left" },
+    { control: "angle", value: 90 },
+  ]);
 });
 
 test("Duo controls render both groups and surface a failed command", () => {
-  const screen: DeviceScreenSize = { width: 1, height: 1, orientation: "portrait", supportsHingeAngle: true, hingeAngle: 0 };
   const html = renderToStaticMarkup(
     <DeviceDuoControls
-      screen={screen}
+      screen={{ width: 1, height: 1, orientation: "portrait", supportsHingeAngle: true, hingeAngle: 0 }}
       state={{ pending: false, requested: null, error: "Device is disconnected." }}
       enabled={false}
       onCommand={noop}
@@ -81,7 +125,7 @@ test("Duo controls render both groups and surface a failed command", () => {
   );
   assert.match(html, /role="group" aria-label="Fold shape"/u);
   assert.match(html, /role="group" aria-label="Device stance"/u);
-  assert.match(html, /aria-label="Closed pose" aria-pressed="true"/u);
-  assert.match(html, /aria-label="Book \/ bookshelf pose"/u);
+  assert.match(button(html, "Closed"), /aria-pressed="true"/u);
+  assert.match(button(html, "Closed"), /\sdisabled=""/u);
   assert.match(html, /role="alert"[^>]*>.*Device is disconnected\./u);
 });

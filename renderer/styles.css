@@ -77,8 +77,11 @@
 .device-viewer-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; background: var(--surface-popover); text-align: center; }
 .device-viewer-rail { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--border-separator); }
 .device-duo-controls { position: absolute; top: 50%; right: 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateY(-50%); }
-.device-duo-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; border: 1px solid var(--border-separator); border-radius: var(--radius-pill); background: var(--surface-popover); }
+.device-duo-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-popover); box-shadow: var(--elevation-popover); }
 .device-duo-group svg { width: 18px; height: 18px; }
+/* A horizontal phone turns the fold glyphs a quarter, as the device does. */
+.device-duo-glyph { transition: transform 180ms ease-out; }
+.device-duo-glyph[data-rotated] { transform: rotate(90deg); }
 .device-duo-error { display: inline-flex; color: var(--status-red); }
 .device-duo-error > svg { width: 16px; height: 16px; }
 .device-viewer-tools { flex: 0 1 auto; max-height: 55%; min-height: 0; overflow-y: auto; border-top: 1px solid var(--border-separator); }

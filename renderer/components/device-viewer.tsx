@@ -10,6 +10,7 @@ import {
   Rotate3d,
   RotateCw,
   SlidersHorizontal,
+  Smartphone,
   Sun,
   X,
 } from "lucide-react";
@@ -32,7 +33,7 @@ import {
   type DeviceStreamClient,
   type DeviceStreamStatus,
 } from "../lib/device-stream";
-import type { DuoControlState } from "../lib/device-duo-control";
+import type { DuoCommand, DuoControlState } from "../lib/device-duo-control";
 import { useDeviceControls } from "../lib/device-controls";
 import { COMPOSER_IMAGE_UNAVAILABLE, composerImageAttach } from "../lib/composer-attach";
 import {
@@ -42,8 +43,10 @@ import {
   writeFramePreference,
   type DeviceFramePreference,
 } from "../lib/device-3d/frame-mode";
+import { isDuoDevice, resolveDeviceModelId } from "../lib/device-3d/model-registry";
 import { resolveDeviceShape } from "../lib/device-3d/shape-profile";
 import { DeviceDuoControls } from "./device-duo-controls";
+import { DeviceDuoViewport } from "./device-duo-viewport";
 import { DevicePhoneViewport } from "./device-phone-viewport";
 import { DEVICE_TEXT_SIZE_OPTIONS, DeviceToolsPanel } from "./device-tools-panel";
 import type { DeviceSession, DeviceStreamGrant, DeviceSummary } from "../shared/devices";
@@ -101,7 +104,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const toolsRef = React.useRef<HTMLDivElement | null>(null);
   const frameBlockerId = React.useId();
   const [framePreference, setFramePreference] = React.useState<DeviceFramePreference>(() => readFramePreference());
-  const [webglUnavailable, setWebglUnavailable] = React.useState(false);
+  const [frameFailed, setFrameFailed] = React.useState(false);
   /** Sticky once a frame lands, so the 3D frame never loads for a stream that turns out flat-only. */
   const [framed, setFramed] = React.useState(false);
   const framedRef = React.useRef(false);
@@ -111,6 +114,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const pressedKeysRef = React.useRef(new Set<string>());
   const stageFocusedRef = React.useRef(false);
   const [resetPose, setResetPose] = React.useState<(() => void) | null>(null);
+  /** Cancels a captured 3D touch or pinch before a command moves the device under it. */
+  const cancelFrameInputRef = React.useRef<(() => void) | null>(null);
   const [duoState, setDuoState] = React.useState<DuoControlState>({
     pending: false,
     requested: null,
@@ -190,6 +195,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         onMjpegFallback: setMjpegUrl,
         onInputConnected: (connected) => setInputConnected(connected),
         onDuoControl: setDuoState,
+        onDuoUnavailable: () => onFrameUnavailableRef.current(),
       },
     );
     clientRef.current = client;
@@ -267,10 +273,13 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   }, []);
 
   const aspect = screen ? screen.width / screen.height : defaultAspect(device);
+  const model = resolveDeviceModelId(device.platform, device.name);
+  const duo = isDuoDevice(device.platform, device.name, screen);
   const blocker = frameBlocker({
     mjpeg: Boolean(mjpegUrl),
-    hinged: Boolean(screen?.supportsHingeAngle),
-    webglUnavailable,
+    // A Duo whose hub reports no hinge fields cannot drive the articulated body.
+    duoWithoutHinge: duo && screen !== null && !screen.supportsHingeAngle,
+    frameFailed,
   });
   const frame3d = active && framePreference === "3d" && blocker === null && screen !== null && framed;
   // Switching surfaces unmounts or hides the focused one: release its keys and keep focus on the device.
@@ -286,11 +295,15 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   }, [frame3d, releaseKeys]);
   const profile = React.useMemo(
     () =>
-      resolveDeviceShape(
-        device.kind,
-        screen ? Math.min(screen.width, screen.height) / Math.max(1, Math.max(screen.width, screen.height)) : NaN,
-      ),
-    [device.kind, screen],
+      resolveDeviceShape({
+        platform: device.platform,
+        kind: device.kind,
+        name: device.name,
+        portraitAspect: screen
+          ? Math.min(screen.width, screen.height) / Math.max(1, Math.max(screen.width, screen.height))
+          : Number.NaN,
+      }),
+    [device.platform, device.kind, device.name, screen],
   );
   const onFrameListener = React.useCallback((listener: (() => void) | null) => {
     frameListenerRef.current = listener;
@@ -298,10 +311,28 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const onResetReady = React.useCallback((reset: (() => void) | null) => {
     setResetPose(() => reset);
   }, []);
+  const frameFailedRef = React.useRef(false);
   const onFrameUnavailable = React.useCallback(() => {
-    setWebglUnavailable(true);
-    toast.info("The 3D frame is unavailable, so the flat screen is shown.");
+    // One fallback, one toast, however many parts of the 3D view report it.
+    if (frameFailedRef.current) return;
+    frameFailedRef.current = true;
+    setFrameFailed(true);
+    toast.info("The 3D view is unavailable, so the flat screen is shown.");
   }, []);
+  const onFrameUnavailableRef = React.useRef(onFrameUnavailable);
+  onFrameUnavailableRef.current = onFrameUnavailable;
+  const onFrameInputCancel = React.useCallback((cancel: (() => void) | null) => {
+    cancelFrameInputRef.current = cancel;
+  }, []);
+  const duoCommand = (command: DuoCommand) => {
+    cancelFrameInputRef.current?.();
+    clientRef.current?.controlDuo(command);
+  };
+  const restoreView = () => {
+    // A slab device rests upright; the Duo's own reset asks for the orientation its view needs.
+    if (!duo && screen && screen.orientation !== "portrait") clientRef.current?.setOrientation("portrait");
+    resetPose?.();
+  };
   const touch3d = React.useCallback((phase: "begin" | "move" | "end", point: { x: number; y: number }) => {
     clientRef.current?.sendTouch(phase, point.x, point.y);
   }, []);
@@ -333,12 +364,12 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     setToolsOpen(false);
     toolsTriggerRef.current?.focus();
   };
-  const toggleFrame = () => {
-    if (blocker !== null) return;
-    const next = framePreference === "3d" ? "flat" : "3d";
+  const chooseFrame = (next: DeviceFramePreference) => {
+    if (next === "3d" && blocker !== null) return;
     setFramePreference(next);
     writeFramePreference(next);
   };
+  const showing3d = framePreference === "3d" && blocker === null;
   const label = deviceStatusLabel(status, inputConnected);
   const railButton = (
     name: string,
@@ -397,19 +428,40 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             tabIndex={0}
             role="application"
             aria-roledescription="simulator"
-            aria-label={`${device.name} in a 3D frame. Drag the screen to touch, or drag around the device to turn it; type to send keys while focused.`}
+            aria-label={
+              duo
+                ? `${device.name} in 3D. Drag a display to touch, drag around the device or swipe with two fingers to turn it, and pinch over it to open or close the hinge; type to send keys while focused.`
+                : `${device.name} in 3D. Drag the screen to touch, drag around the device or swipe with two fingers to turn it, and pinch to zoom; type to send keys while focused.`
+            }
             onKeyDown={key("down")}
             onKeyUp={key("up")}
           >
-            <DevicePhoneViewport
-              source={canvasRef}
-              screen={screen}
-              profile={profile}
-              onFrameListener={onFrameListener}
-              onResetReady={onResetReady}
-              touch={touch3d}
-              onUnavailable={onFrameUnavailable}
-            />
+            {duo ? (
+              <DeviceDuoViewport
+                source={canvasRef}
+                client={clientRef}
+                screen={screen}
+                hingePreview={duoState.requested?.control === "angle" ? duoState.requested.value : null}
+                controlError={duoState.error}
+                onFrameListener={onFrameListener}
+                onResetReady={onResetReady}
+                onInputCancel={onFrameInputCancel}
+                onUnavailable={onFrameUnavailable}
+              />
+            ) : (
+              <DevicePhoneViewport
+                source={canvasRef}
+                screen={screen}
+                profile={profile}
+                model={model}
+                // Android foldables feed their hinge angle here once fold state reaches the viewer.
+                foldAngle={null}
+                onFrameListener={onFrameListener}
+                onResetReady={onResetReady}
+                touch={touch3d}
+                onUnavailable={onFrameUnavailable}
+              />
+            )}
             {errorOverlay}
           </div>
         ) : null}
@@ -438,7 +490,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             screen={screen}
             state={duoState}
             enabled={streaming && inputConnected}
-            onCommand={(command) => clientRef.current?.controlDuo(command)}
+            onCommand={duoCommand}
           />
         ) : null}
       </div>
@@ -484,17 +536,17 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         </DropdownMenu>
         {railButton("Screenshot to chat", <Camera aria-hidden />, screenshotToChat, busy !== null)}
         <Button
-          variant={framePreference === "3d" && blocker === null ? "muted" : "transparent"}
+          variant={showing3d ? "muted" : "transparent"}
           size="small"
           iconOnly
-          aria-label="3D frame"
+          aria-label="3D view"
           title={frameBlockerLabel(blocker)}
-          aria-pressed={framePreference === "3d" && blocker === null}
+          aria-pressed={showing3d}
           // aria-disabled keeps the button focusable and hoverable so the reason stays reachable.
           aria-disabled={blocker !== null || undefined}
           aria-describedby={blocker !== null ? frameBlockerId : undefined}
           className={blocker !== null ? "opacity-45" : undefined}
-          onClick={toggleFrame}
+          onClick={() => chooseFrame("3d")}
         >
           <Box aria-hidden />
         </Button>
@@ -503,7 +555,18 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             {frameBlockerLabel(blocker)}
           </span>
         ) : null}
-        {frame3d && resetPose ? railButton("Reset 3D view", <Rotate3d aria-hidden />, resetPose) : null}
+        <Button
+          variant={showing3d ? "transparent" : "muted"}
+          size="small"
+          iconOnly
+          aria-label="Flat view"
+          title="Flat view"
+          aria-pressed={!showing3d}
+          onClick={() => chooseFrame("flat")}
+        >
+          <Smartphone aria-hidden />
+        </Button>
+        {frame3d && resetPose ? railButton("Restore 3D view", <Rotate3d aria-hidden />, restoreView) : null}
         <Button
           variant={toolsOpen ? "muted" : "transparent"}
           size="small"
