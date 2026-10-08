@@ -97,8 +97,12 @@ export type DesignRunStatus =
   | "interrupted"
   | "failed";
 
-/** Why a run that published fewer designs than its cap ended (owner decision 2026-10-07). */
-export type DesignRunEndReason = "stopped" | "provider_failed" | "interrupted" | "short";
+/**
+ * Why a run that published fewer designs than its cap ended (owner decision 2026-10-07):
+ * a Stop, a provider failure, a failure in Aiden's own runtime or storage, an app quit
+ * or restart, or a model that stopped early on its own.
+ */
+export type DesignRunEndReason = "stopped" | "provider_failed" | "host_failed" | "interrupted" | "short";
 
 export interface DesignRunRecord {
   id: string;

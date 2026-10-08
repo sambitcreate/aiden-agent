@@ -30,7 +30,7 @@ import {
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const RUN_STATUSES = new Set(["running", "complete", "partial", "cancelled", "interrupted", "failed"]);
-const RUN_END_REASONS = new Set(["stopped", "provider_failed", "interrupted", "short"]);
+const RUN_END_REASONS = new Set(["stopped", "provider_failed", "host_failed", "interrupted", "short"]);
 const REVISION_STATES = new Set(["draft", "published", "missing"]);
 
 export function createDesignProjectManifest(input: {

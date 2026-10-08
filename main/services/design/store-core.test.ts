@@ -21,6 +21,7 @@ import {
   revisionIdForToolCall,
   reconcileDesignManifest,
   type DesignArtifactAcceptance,
+  type DesignRunOutcome,
   type DesignStorageTotals,
 } from "./store-core.js";
 import { check } from "./test-support.js";
@@ -56,7 +57,7 @@ function startRun(manifest: DesignProjectManifestV1, runId: string, request: Des
   };
 }
 
-function settle(manifest: DesignProjectManifestV1, runId: string, outcome: "completed" | "cancelled" | "failed", now: number) {
+function settle(manifest: DesignProjectManifestV1, runId: string, outcome: DesignRunOutcome, now: number) {
   const ended = finishDesignRun(manifest, runId, outcome, now);
   return ended && check(ended);
 }
@@ -123,12 +124,17 @@ test("Refine adds an immutable revision that becomes current only when the run p
   assert.equal(Object.keys(manifest.screens).length, 2, "Refine never creates a Screen");
 });
 
-test("Stop, provider failure and restart publish accepted designs as partial with their end reason", () => {
+test("Stop, app quit, provider and host failures and restart publish accepted designs as partial with their end reason", () => {
   const { manifest: started } = startRun(project(), "run-1", explore(3));
   const manifest = accept(started, "run-1", "One");
   const draft = manifest.runs["run-1"]!.revisionIds[0]!;
   assert.equal(manifest.revisions[draft]!.state, "draft", "a running run's design is a draft");
-  for (const [outcome, endReason] of [["cancelled", "stopped"], ["failed", "provider_failed"]] as const) {
+  for (const [outcome, endReason] of [
+    ["cancelled", "stopped"],
+    ["interrupted", "interrupted"],
+    ["failed", "provider_failed"],
+    ["host_failed", "host_failed"],
+  ] as const) {
     const ended = settle(manifest, "run-1", outcome, 4_000)!;
     assert.deepEqual([ended.runs["run-1"]!.status, ended.runs["run-1"]!.endReason], ["partial", endReason], outcome);
     assert.equal(ended.revisions[draft]!.state, "published", outcome);
@@ -149,7 +155,13 @@ test("a short run is partial, and a run that ends with nothing accepted keeps no
   const short = settle(accept(manifest, "run-1", "Only"), "run-1", "completed", 4_000)!;
   assert.deepEqual([short.runs["run-1"]!.status, short.runs["run-1"]!.endReason], ["partial", "short"]);
   const empty = startRun(project(), "run-2", explore(2)).manifest;
-  for (const [outcome, status] of [["cancelled", "cancelled"], ["failed", "failed"], ["completed", "failed"]] as const) {
+  for (const [outcome, status] of [
+    ["cancelled", "cancelled"],
+    ["interrupted", "interrupted"],
+    ["failed", "failed"],
+    ["host_failed", "failed"],
+    ["completed", "failed"],
+  ] as const) {
     const ended = settle(empty, "run-2", outcome, 4_000)!;
     assert.equal(ended.runs["run-2"]!.status, status, outcome);
     assert.equal(ended.runs["run-2"]!.endReason, undefined, outcome);

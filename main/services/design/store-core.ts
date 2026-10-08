@@ -52,7 +52,12 @@ export class DesignStoreError extends Error {
   }
 }
 
-export type DesignRunOutcome = "completed" | "cancelled" | "failed";
+/**
+ * How a started run ended: the model stopped on its own ("completed"), a Stop or
+ * another explicit cancellation ("cancelled"), an app quit ("interrupted"), the
+ * provider failed ("failed"), or Aiden's own runtime or storage failed ("host_failed").
+ */
+export type DesignRunOutcome = "completed" | "cancelled" | "interrupted" | "failed" | "host_failed";
 
 export interface DesignRunPlan {
   kind: "explore" | "refine";
@@ -525,13 +530,16 @@ export function publishRunDrafts(manifest: DesignProjectManifestV1, run: DesignR
 const OUTCOME_END_REASON: Record<DesignRunOutcome, DesignRunEndReason> = {
   completed: "short",
   cancelled: "stopped",
+  interrupted: "interrupted",
   failed: "provider_failed",
+  host_failed: "host_failed",
 };
 
 const NOTHING_ACCEPTED_STATUS: Record<DesignRunEndReason, DesignRunStatus> = {
   short: "failed",
   stopped: "cancelled",
   provider_failed: "failed",
+  host_failed: "failed",
   interrupted: "interrupted",
 };
 
