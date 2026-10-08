@@ -55,3 +55,32 @@ export function rotatedMediaStyle(rotation: DeviceDisplayRotation): React.CSSPro
 
 /** Makes the device screen box the size container its turned media is measured against. */
 export const DEVICE_SCREEN_CONTAINER_STYLE: React.CSSProperties = { containerType: "size" };
+
+/**
+ * Sizes a device screen box to the largest `aspect` (width / height) box that
+ * fits its parent, which must be a size container. Keeping the box at the
+ * displayed aspect means the media is never letterboxed inside it, so touches,
+ * multi-touch, and the accessibility overlay can all normalize against the
+ * box itself.
+ */
+export function fittedScreenStyle(aspect: number): React.CSSProperties {
+  return {
+    width: `min(100cqw, calc(100cqh * ${aspect}))`,
+    height: `min(100cqh, calc(100cqw / ${aspect}))`,
+  };
+}
+
+/**
+ * The screen the accessibility overlay maps its tree into: the displayed one.
+ * Once a raw portrait frame is drawn turned, the display is in interface space,
+ * so the overlay sees the turned size (and an upright orientation for an
+ * upside-down turn) instead of the raw framebuffer.
+ */
+export function displayedAxScreen(
+  screen: DeviceScreenSize | null,
+  rotation: DeviceDisplayRotation,
+): DeviceScreenSize | null {
+  if (!screen || rotation === 0) return screen;
+  if (rotation === 180) return { ...screen, orientation: "portrait" };
+  return { width: screen.height, height: screen.width, orientation: screen.orientation };
+}

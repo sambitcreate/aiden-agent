@@ -70,6 +70,8 @@ import {
   DEVICE_SCREEN_CONTAINER_STYLE,
   deviceDisplayRotation,
   displayedAspect,
+  displayedAxScreen,
+  fittedScreenStyle,
   rotatedMediaStyle,
 } from "../lib/device-display-rotation";
 import { LOCAL_DEVICE_HOST_ID, type DeviceSession, type DeviceStreamGrant, type DeviceSummary } from "../shared/devices";
@@ -500,6 +502,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
       <div
         ref={stageRef}
         className="device-viewer-stage"
+        // The flat screen sizes itself against the stage (see `fittedScreenStyle`).
+        style={DEVICE_SCREEN_CONTAINER_STYLE}
         data-frame={frame3d ? "3d" : "flat"}
         onFocus={() => {
           stageFocusedRef.current = true;
@@ -565,7 +569,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           className="device-viewer-screen"
           data-typing-surface="device"
           hidden={frame3d}
-          style={{ ...DEVICE_SCREEN_CONTAINER_STYLE, aspectRatio: String(aspect) }}
+          style={{ ...DEVICE_SCREEN_CONTAINER_STYLE, ...fittedScreenStyle(aspect), aspectRatio: String(aspect) }}
           tabIndex={0}
           role="application"
           aria-roledescription={`${noun} screen`}
@@ -586,7 +590,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
               deviceId={session.deviceId}
               platform={device.platform}
               grants={featureGrants}
-              screen={screen}
+              screen={displayedAxScreen(screen, displayRotation)}
               screenRef={screenRef}
               poll={localDevice}
               refreshKey={axRefresh}

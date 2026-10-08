@@ -3,7 +3,12 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, GripHorizontal, House, PanelRight, RotateCw, Square, X } from "lucide-react";
 import { Button, Text } from "./ui";
 import { useDeviceStream } from "../lib/use-device-stream";
-import { DEVICE_SCREEN_CONTAINER_STYLE, deviceDisplayRotation, rotatedMediaStyle } from "../lib/device-display-rotation";
+import {
+  DEVICE_SCREEN_CONTAINER_STYLE,
+  deviceDisplayRotation,
+  fittedScreenStyle,
+  rotatedMediaStyle,
+} from "../lib/device-display-rotation";
 import { useFloatingContainerBounds } from "../lib/use-floating-container-bounds";
 import { useDeviceServiceState } from "../lib/use-device-service-state";
 import {
@@ -236,11 +241,14 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
           <X aria-hidden />
         </Button>
       </div>
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-b-sheet bg-well">
+      <div
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-b-sheet bg-well"
+        style={DEVICE_SCREEN_CONTAINER_STYLE}
+      >
         <div
           className="device-viewer-screen device-mini-player-screen"
           data-typing-surface="device"
-          style={DEVICE_SCREEN_CONTAINER_STYLE}
+          style={{ ...DEVICE_SCREEN_CONTAINER_STYLE, ...fittedScreenStyle(source.width / source.height) }}
           tabIndex={0}
           role="application"
           aria-roledescription="simulator screen"
