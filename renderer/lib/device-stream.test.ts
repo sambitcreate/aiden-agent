@@ -233,7 +233,8 @@ function envelope(tag: number, payload: number[]): Uint8Array {
   return out;
 }
 
-function decodePacket(bytes: Uint8Array) {
+function decodePacket(raw: Uint8Array | string) {
+  const bytes = raw as Uint8Array;
   return { tag: bytes[0], body: JSON.parse(new TextDecoder().decode(bytes.subarray(1))) };
 }
 
@@ -838,7 +839,8 @@ test("an encoder restart keeps the stream, rebuilds the decoder, and reports the
   ws.onmessage?.({ data: JSON.stringify({ type: "video-session", width: 2208, height: 1840 }) });
   assert.equal(h.decoders[0]!.state, "closed");
   assert.deepEqual(h.log, ["status:connecting"]);
-  assert.deepEqual(sentJson(ws).at(-1), { type: "reset-video", ack: false });
+  const requests = sentJson(ws);
+  assert.deepEqual(requests[requests.length - 1], { type: "reset-video", ack: false });
   assert.equal(ws.closed, false, "the socket, and with it input, stays up");
 
   ws.onmessage?.({ data: semu(KEY_UNIT, { key: true, pts: 5 }) });
