@@ -344,3 +344,28 @@ test("each display feed opens with a freshly minted grant, and a refused feed re
   assert.equal(h.sockets[0]!.closed, false);
   h.client.stop();
 });
+
+test("detaching the display feeds resumes the primary video with a fresh grant", async () => {
+  let minted = 0;
+  const grants = createDeviceGrantSource(async () => ({
+    origin: "http://127.0.0.1:4100",
+    token: `fresh-${++minted}`,
+    expiresAt: Date.now(),
+  }));
+  const token = (url: string) => new URL(url).searchParams.get("t") ?? "";
+  // By the time the 3D view closes, the parent's original grant has expired.
+  const h = harness({ grants, refuse: (url) => minted > 0 && token(url) === "tok" });
+  h.client.start();
+  await settle();
+  h.config(3);
+  h.client.setDuoPanels(h.panels);
+  await settle();
+  h.client.setDuoPanels(null);
+  await settle();
+  const primary = last(h.feeds)!;
+  assert.ok(!primary.url.includes("/panel/"));
+  assert.equal(token(primary.url), "fresh-2");
+  assert.equal(h.unauthorized(), 0);
+  assert.equal(h.sockets.length, 1);
+  h.client.stop();
+});

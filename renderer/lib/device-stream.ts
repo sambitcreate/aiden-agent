@@ -506,8 +506,10 @@ export function createDeviceStreamClient(
   const android = platform === "android";
   const vendor = android ? "/vendor/serve-emu" : "/vendor/serve-sim";
   const device = encodeURIComponent(target.deviceId);
-  const httpUrl = (path: string) => deviceHubUrl(target, `${vendor}${path}`, "http");
-  const wsUrl = (path: string) => deviceHubUrl(target, `${vendor}${path}`, "ws");
+  // Connections opened later (a resumed video read) may carry a newer grant from `target.grants`.
+  let grant = target.grant;
+  const httpUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "http");
+  const wsUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "ws");
   const useWebCodecs =
     Boolean(runtime.VideoDecoder && runtime.EncodedVideoChunk) && !target.preferMjpeg;
   const videoPath = `/helper/${device}${target.panelId ? `/panel/${target.panelId}` : ""}/stream.avcc`;
@@ -1086,7 +1088,21 @@ export function createDeviceStreamClient(
       retryTimers.delete("video");
     },
     resumePrimaryVideo: () => {
-      if (useWebCodecs && !mjpeg) void readVideo();
+      if (!useWebCodecs || mjpeg) return;
+      if (!target.grants) return void readVideo();
+      // The 3D view may have held the display feeds for longer than the original grant lives.
+      const paused = videoGeneration;
+      const current = () => !stopped && videoGeneration === paused;
+      target.grants.get().then(
+        (fresh) => {
+          if (!current()) return;
+          grant = fresh;
+          void readVideo();
+        },
+        () => {
+          if (current()) void readVideo();
+        },
+      );
     },
     openFeed: (panelId, feedSink, feedEvents) => openPanelFeed(panelId, feedSink, feedEvents),
     onUnavailable: (detail) => events.onDuoUnavailable?.(detail),
@@ -1110,8 +1126,8 @@ export function createDeviceStreamClient(
     let client: DeviceStreamClient | null = null;
     let renewed = false;
     const open = () => {
-      const grant = grants ? grants.get() : Promise.resolve(target.grant);
-      grant.then(
+      const pending = grants ? grants.get() : Promise.resolve(grant);
+      pending.then(
         (fresh) => {
           if (closed) return;
           const feed = createDeviceStreamClient(
