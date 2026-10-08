@@ -12,6 +12,7 @@ import {
   parseDeviceActionInput,
   type DeviceConsentKind,
 } from "../../../renderer/shared/devices.js";
+import { parseSshDeviceHostConfig } from "../../../renderer/shared/device-ssh-hosts.js";
 
 const ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 const CHAT_ID_MAX_LENGTH = 256;
@@ -191,6 +192,54 @@ export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
   deps.handle(
     "devices:prune-tools",
     guarded(async (service) => service.pruneTools()),
+  );
+  // Each SSH and tool-version channel below runs only from a user action in the renderer.
+  deps.handle(
+    "devices:start-host",
+    guarded(async (service, owner, [hostId]) => {
+      subscribe(owner, service);
+      return service.startHost(requireHostId(hostId));
+    }),
+  );
+  deps.handle(
+    "devices:update-tool",
+    guarded(async (service, owner, [input]) => {
+      const request = requireRecord(input);
+      if (request.tool !== "hub" && request.tool !== "agent") throw new Error("Unknown simulator helper.");
+      subscribe(owner, service);
+      return service.updateTool({ hostId: requireHostId(request.hostId), tool: request.tool });
+    }),
+  );
+  deps.handle(
+    "devices:inspect-tools",
+    guarded(async (service, owner) => {
+      subscribe(owner, service);
+      return service.inspectTools();
+    }),
+  );
+  deps.handle(
+    "devices:ssh-save",
+    guarded(async (service, owner, [input]) => {
+      const config = parseSshDeviceHostConfig(input);
+      if (!config) throw new Error("Check the SSH host's details and try again.");
+      subscribe(owner, service);
+      return service.saveSshHost(config);
+    }),
+  );
+  deps.handle(
+    "devices:ssh-remove",
+    guarded(async (service, owner, [hostId]) => {
+      subscribe(owner, service);
+      return service.removeSshHost(requireHostId(hostId));
+    }),
+  );
+  deps.handle(
+    "devices:ssh-test",
+    guarded(async (service, _owner, [input]) => {
+      const config = parseSshDeviceHostConfig(input);
+      if (!config) throw new Error("Check the SSH host's details and try again.");
+      return service.testSshHost(config);
+    }),
   );
   deps.handle(
     "devices:remove-tools",

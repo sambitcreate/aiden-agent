@@ -408,6 +408,14 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       });
     },
     current: ready,
+    async installTool(tool) {
+      const spec = tool === "hub" ? DEVICE_HUB : AGENT_DEVICE;
+      await withStartLock(() => install(spec, undefined, true));
+    },
+    runningToolVersions: () => ({
+      hub: hub ? DEVICE_HUB.version : null,
+      agent: agentDevice ? AGENT_DEVICE.version : null,
+    }),
     onHealth(listener) {
       healthListeners.add(listener);
       return () => healthListeners.delete(listener);

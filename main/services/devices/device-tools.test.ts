@@ -332,3 +332,35 @@ test("the shim runs the pinned install and refuses commands without device_open'
     await rm(baseDir, { recursive: true, force: true });
   }
 });
+
+test("agents see connected SSH hosts' simulators but never paired Macs or disconnected SSH hosts", async () => {
+  const remote: DeviceSummary = { ...IPHONE, hostId: "ssh-mini01", id: "REMOTE-1", name: "Remote iPhone" };
+  const offline: DeviceSummary = { ...IPHONE, hostId: "ssh-studio", id: "REMOTE-2" };
+  const paired: DeviceSummary = { ...IPHONE, hostId: "peer-1", id: "PEER-1" };
+  const { port, calls } = fakePort({
+    hosts: [
+      { id: "local", kind: "local", name: "This Mac", status: "ready" },
+      { id: "peer-1", kind: "peer", name: "Studio Mac", status: "ready" },
+      { id: "ssh-mini01", kind: "ssh", name: "Mac mini", status: "ready" },
+      { id: "ssh-studio", kind: "ssh", name: "Studio", status: "stopped" },
+    ],
+    devices: [IPHONE, remote, offline, paired],
+  });
+  const call = tools(port);
+  const listed = json(await call("device_list"));
+  assert.deepEqual(
+    (listed.devices as Array<{ hostId: string; id: string }>).map((device) => `${device.hostId}/${device.id}`),
+    ["local/UDID-1", "ssh-mini01/REMOTE-1"],
+  );
+  assert.deepEqual(
+    (listed.hosts as Array<{ id: string }>).map((host) => host.id),
+    ["local", "ssh-mini01"],
+  );
+  const opened = json(await call("device_open", { hostId: "ssh-mini01", deviceId: "REMOTE-1" }));
+  assert.equal((opened.device as { hostId: string }).hostId, "ssh-mini01");
+  assert.ok(calls.includes("agentTarget:chat-1:REMOTE-1"));
+  await assert.rejects(call("device_open", { hostId: "peer-1", deviceId: "PEER-1" }), /No device PEER-1 on host peer-1/u);
+  await assert.rejects(call("device_open", { hostId: "ssh-studio", deviceId: "REMOTE-2" }), /No device REMOTE-2/u);
+  // Listing refreshes this Mac only; SSH hosts are connected by the user, never by the tools.
+  assert.deepEqual(calls.filter((entry) => entry === "refresh"), ["refresh"]);
+});

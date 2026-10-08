@@ -20,7 +20,18 @@ import { getPeerHostRegistry } from "../services/peer-host-service-main.js";
 import {
   createLocalDeviceHost,
   defaultLocalDeviceHostDeps,
+  reservePort,
 } from "../services/devices/local-device-host.js";
+import {
+  createSshDeviceHost,
+  defaultSshDeviceHostDeps,
+  runSshCommand,
+  sshDeviceHostOwner,
+} from "../services/devices/ssh-device-host.js";
+import { defaultLocalSshTargetDeps, isLocalSshTarget } from "../services/devices/local-ssh-target.js";
+
+/** The system ssh; Aiden never bundles one or stores keys. */
+const SSH_PATH = "/usr/bin/ssh";
 
 let deviceService: DeviceService | null = null;
 
@@ -58,6 +69,22 @@ function defaultDeviceService(): DeviceService {
       request: (id, input) => getPeerHostRegistry().request(id, input),
       relayTarget: (id) => getPeerHostRegistry().relayTarget(id),
     }),
+    // SSH hosts are created from the saved list without contacting them; each connects on a user action.
+    ssh: {
+      create: (config) =>
+        createSshDeviceHost(
+          config,
+          defaultSshDeviceHostDeps({ owner: sshDeviceHostOwner(baseDir, config.id), sshPath: SSH_PATH, reservePort }),
+        ),
+      isLocalTarget: (config) =>
+        isLocalSshTarget(
+          config,
+          defaultLocalSshTargetDeps(async (args) => {
+            const result = await runSshCommand(SSH_PATH, args, { timeoutMs: 5_000 });
+            return result.code === 0 ? result.stdout : null;
+          }),
+        ),
+    },
     startProxy: (resolveHub) =>
       startDeviceHubProxy({ resolveHub, allowedOrigins: proxyAllowedOrigins() }),
     fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),

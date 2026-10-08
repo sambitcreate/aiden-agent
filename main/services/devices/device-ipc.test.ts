@@ -19,6 +19,12 @@ const CHANNELS = [
   "devices:toolchain",
   "devices:prune-tools",
   "devices:remove-tools",
+  "devices:start-host",
+  "devices:update-tool",
+  "devices:inspect-tools",
+  "devices:ssh-save",
+  "devices:ssh-remove",
+  "devices:ssh-test",
 ];
 
 const STATE: DeviceServiceState = {
@@ -70,6 +76,12 @@ function harness(options: { enabled: boolean; ownerError?: boolean }) {
     toolchain: record("toolchain", { tools: [] }),
     pruneTools: record("pruneTools", { tools: [] }),
     removeTools: record("removeTools"),
+    startHost: record("startHost"),
+    updateTool: record("updateTool"),
+    inspectTools: record("inspectTools"),
+    saveSshHost: record("saveSshHost"),
+    removeSshHost: record("removeSshHost"),
+    testSshHost: record("testSshHost", { status: "local" }),
     onState: (listener: (state: DeviceServiceState) => void) => {
       stateListener = listener;
       return () => undefined;
@@ -186,5 +198,34 @@ test("actions are parsed fail-closed and screenshots return plain bytes", async 
     ["action", { hostId: "local", deviceId: "ABC", type: "setAppearance", value: "dark" }],
     ["settings", { hostId: "local", deviceId: "ABC" }],
     ["screenshot", { hostId: "local", deviceId: "ABC" }],
+  ]);
+});
+
+test("SSH host and tool-version channels refuse malformed input before the service runs", async () => {
+  const ipc = harness({ enabled: true });
+  const host = { id: "ssh-abc123", label: "Mac mini", target: "me@mini.local", port: 2222 };
+  await assert.rejects(ipc.invoke("devices:start-host", "../local"), /valid device host/u);
+  await assert.rejects(ipc.invoke("devices:update-tool", { hostId: "local", tool: "npm" }), /Unknown simulator helper/u);
+  await assert.rejects(ipc.invoke("devices:update-tool", null), /Invalid simulator request/u);
+  // A target that starts with a dash would become an ssh option, so it never reaches the service.
+  await assert.rejects(ipc.invoke("devices:ssh-save", { ...host, target: "-oProxyCommand=sh" }), /SSH host's details/u);
+  await assert.rejects(ipc.invoke("devices:ssh-save", { ...host, id: "local" }), /SSH host's details/u);
+  await assert.rejects(ipc.invoke("devices:ssh-test", { ...host, port: 70000 }), /SSH host's details/u);
+  await assert.rejects(ipc.invoke("devices:ssh-remove", "has space"), /valid device host/u);
+  assert.deepEqual(ipc.calls, []);
+
+  await ipc.invoke("devices:start-host", "local");
+  await ipc.invoke("devices:update-tool", { hostId: "ssh-abc123", tool: "agent", extra: true });
+  await ipc.invoke("devices:inspect-tools");
+  await ipc.invoke("devices:ssh-save", { ...host, extra: "dropped" });
+  assert.deepEqual(await ipc.invoke("devices:ssh-test", host), { status: "local" });
+  await ipc.invoke("devices:ssh-remove", "ssh-abc123");
+  assert.deepEqual(ipc.calls, [
+    ["startHost", "local"],
+    ["updateTool", { hostId: "ssh-abc123", tool: "agent" }],
+    ["inspectTools"],
+    ["saveSshHost", host],
+    ["testSshHost", host],
+    ["removeSshHost", "ssh-abc123"],
   ]);
 });

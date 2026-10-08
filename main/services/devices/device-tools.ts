@@ -163,17 +163,31 @@ const text = (value: unknown): AgentToolResult<null> => ({
 });
 const id = (description: string) =>
   Type.Optional(Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9-]+$", description }));
-const hostId = id("Device host. Defaults to this Mac (\"local\").");
+const hostId = id("Device host from device_list. Defaults to this Mac (\"local\").");
 const deviceId = id("Simulator UDID from device_list.");
 
-/** Agents see and drive this Mac's simulators only; paired Macs stay user-driven. */
+/**
+ * Agents see and drive this Mac's simulators, plus those on SSH hosts the user
+ * already connected. Paired Macs stay user-driven, and the tools never connect
+ * an SSH host themselves.
+ */
+function agentHostIds(state: DeviceServiceState): Set<string> {
+  return new Set([
+    LOCAL_DEVICE_HOST_ID,
+    ...state.hosts.filter((host) => host.kind === "ssh" && host.status === "ready").map((host) => host.id),
+  ]);
+}
+
 function requireState(state: DeviceServiceState): DeviceServiceState {
-  if (state.hostStatus === "needs-consent" || !state.consent.streaming) throw new Error(DEVICE_SUPPORT_OFF);
+  if (!state.consent.streaming) throw new Error(DEVICE_SUPPORT_OFF);
+  const sshReady = state.hosts.some((host) => host.kind === "ssh" && host.status === "ready");
+  if (state.hostStatus === "needs-consent" && !sshReady) throw new Error(DEVICE_SUPPORT_OFF);
   if (!state.consent.agentAccess) throw new Error(DEVICE_ACCESS_OFF);
+  const allowed = agentHostIds(state);
   return {
     ...state,
-    devices: state.devices.filter((device) => device.hostId === LOCAL_DEVICE_HOST_ID),
-    sessions: state.sessions.filter((session) => session.hostId === LOCAL_DEVICE_HOST_ID),
+    devices: state.devices.filter((device) => allowed.has(device.hostId)),
+    sessions: state.sessions.filter((session) => allowed.has(session.hostId)),
   };
 }
 
@@ -184,7 +198,7 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
     [
       "device_list",
       "List devices",
-      "List iOS Simulators on this Mac, whether each is booted, and which are already open in this chat's Simulator tab. Call this before device_open when you do not know a device id.",
+      "List iOS Simulators on this Mac and on SSH hosts the user connected, whether each is booted, and which are already open in this chat's Simulator tab. Call this before device_open when you do not know a device id.",
       Type.Object({ hostId }, { additionalProperties: false }),
     ],
     [
@@ -222,6 +236,9 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       return text({
         hostStatus: state.hostStatus,
         ...(state.unavailableReason ? { unavailableReason: state.unavailableReason } : {}),
+        hosts: state.hosts
+          .filter((host) => agentHostIds(state).has(host.id))
+          .map((host) => ({ id: host.id, name: host.name, status: host.status })),
         devices: state.devices
           .filter((device) => !requestedHost || device.hostId === requestedHost)
           .map(({ hostId: host, id: udid, name: deviceName, version, booted, kind }) => ({
