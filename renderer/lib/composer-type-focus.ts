@@ -117,7 +117,7 @@ export function isReservedTypingSurface(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      "[data-command-scope='terminal'], .ghostty-screen, [data-command-scope='fileEditor'], [data-shortcut-recorder='true']",
+      "[data-command-scope='terminal'], .ghostty-screen, [data-command-scope='fileEditor'], [data-shortcut-recorder='true'], [data-typing-surface='device']",
     ),
   );
 }

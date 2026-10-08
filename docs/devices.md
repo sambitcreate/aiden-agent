@@ -45,21 +45,76 @@ A Mac you paired as an Aiden desktop can share its simulators. On the Mac that h
 - turn on **Share with paired Macs**, and
 - grant the other Mac simulator control in **Aiden On The Go**.
 
-The paired Mac's simulators then appear under their own heading in your tab. Aiden checks paired Macs only when you open the tab or choose refresh. It never polls in the background. Agent tools use this Mac's simulators only.
+The paired Mac's simulators then appear under their own heading in your tab. Aiden checks paired Macs only when you open the tab or choose refresh. It never polls in the background. Agent tools never use a paired Mac's simulators.
+
+### Simulators on SSH hosts
+
+Any Mac you can already reach with `ssh` can lend its simulators. It needs Xcode, Node.js 22 or newer, and npm on the PATH of a non-interactive SSH shell (Aiden adds `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`).
+
+1. In Settings → **Simulator** → **SSH hosts**, choose **Add SSH host**. Enter a name, an SSH target (`user@host` or an alias from `~/.ssh/config`), and optionally an identity file and port.
+2. Choose **Test connection**. Aiden checks Node, npm, Xcode, and the helper versions on the host. It installs and starts nothing. A target that resolves to this Mac is reported as such and skipped.
+3. Save the host, then choose **Install…** on its row. After you confirm, Aiden runs `npm` on the host to install the pinned `expo-device-hub` (and `agent-device` when agent access is on) into `~/.aiden/devices` there.
+4. In the Simulator tab the host appears after This Mac and any paired Macs. Choose **Connect**, then open a simulator as usual.
+
+Aiden runs the system `/usr/bin/ssh` with `BatchMode=yes`. It never asks for or stores passwords or keys, so the key must be loaded in `ssh-agent` or named in your SSH config or the identity-file field. SSH hosts are contacted only when you choose **Connect**, **Retry**, **Refresh**, **Open**, **Test connection**, **Install**, **Update**, or **Check versions**. Startup and background refreshes never contact them. Turning simulator streaming off, removing a host, or quitting Aiden closes the tunnels and stops the helpers Aiden started on the host. Helpers installed on a host stay there.
+
+When agent access is on, `device_list` and `device_open` also cover SSH hosts that you have connected. The agent never connects a host or installs anything on it. If agent tools are missing on a host, the agent asks you to install them in Settings.
+
+### Helper versions and updates
+
+Each host shows its helpers' installed, running, and pinned versions: in Settings → Simulator, on each SSH host row, and under **Host diagnostics** in the Device tools drawer and the Simulator tab before the hub is ready.
+
+When a new Aiden release pins a newer helper, the update runs only as part of an explicit action, and only for a helper you already approved. Approval means simulator streaming for this Mac's hub, agent access for its `agent-device`, and **Install** for an SSH host. The explicit actions are **Start**, **Retry**, or **Update** on this Mac, and **Connect**, **Refresh**, or **Retry** on an SSH host. Progress such as "Updating the device hub from 0.11.0 to 0.12.0…" shows wherever the host is listed, and a failure offers **Retry** for that host. Nothing updates at startup or in the background.
+
+**Check versions** only reads: the disk on this Mac, and one SSH call per SSH host. It never queries the npm registry.
+
+After a successful update, Aiden reclaims old versions. It keeps the newest previous version as a fallback. **Prune old versions** removes every unpinned version. Both run under a maintenance lock and never delete a version that a running helper was started from.
+
+### Device power features
+
+These work on this Mac's simulators. A paired Mac's simulator gets only the screenshot options, the overlay, and the event log.
+
+- **Screenshots.** The rail's screenshot control has two halves. The camera sends a screenshot to the chat, as before. The menu beside it offers **Screenshot to chat** and **Save screenshot…**. Saving opens the system save dialog in Downloads with a name like `iPhone-17-Pro-2026-10-08-142530.png`, and the confirmation toast has **Reveal in Finder**.
+- **Screen recording.** **Record screen** in the rail starts `simctl io recordVideo` (H.264). While it runs, the button turns into a red indicator with the elapsed time. Selecting it stops the recording with SIGINT so the file is finalized. Recordings stop by themselves after 10 minutes. On stop, the save dialog opens in Downloads (`<device>-<time>.mp4`). Cancelling the dialog deletes the recording. Deleting the chat, quitting Aiden, or shutting the simulator down stops a recording and deletes it. Aiden's composer has no video attachments, so recordings are not attached to the chat.
+- **Accessibility overlay.** Turn on **Overlay element frames** in the device tools drawer to outline every accessibility element on the flat screen. Hover an element to see its label and role. The frames follow rotation. While they show, the flat screen is used instead of the 3D frame. On this Mac the tree is re-read every two seconds. On a paired Mac it is read once, and a refresh button reads it again.
+- **Event log.** Expand **Event log** in the drawer for serve-sim's live record of touches, keys, buttons, and launches. You can filter, pause (new events keep buffering), clear, and copy it. It keeps the newest 500 entries and is connected only while the section is expanded.
+- **Clipboard.** **Paste to device** in the drawer puts the Mac clipboard's text on the simulator's pasteboard (`simctl pbcopy`, text on stdin) and then presses Cmd+V on the device so the focused field receives it. Cmd+V on the focused screen does the same. **Copy from device** (`simctl pbpaste`) copies the simulator's text to the Mac. Only text up to 64 KB is accepted, and images and files are refused.
+- **Multi-touch.** On the flat screen, Option-drag places two touches mirrored around the screen centre. Moving toward or away from the centre pinches, and moving around it rotates. Option+Shift-drag moves both touches together for a two-finger pan. Touch dots show both fingers while Option is held. A trackpad pinch over the flat screen pinches the device. The 3D frame keeps its own gestures.
+- **Erase.** **Erase all content and settings…** in the drawer first shows a destructive confirmation that names the simulator. It then shuts the simulator down if it is running, runs `simctl erase`, and offers **Boot** to start it again, or **Close simulator**. Agents have no erase tool, and the always-on guidance still forbids erasing a watched simulator unless the user asks.
+
+The agent's `device_screenshot` takes an optional `saveTo` that also writes the PNG to a path. The path must be inside the chat's workspace (a relative path is relative to the workspace) or the Downloads folder. A folder path gets a dated file name. Paths are checked as written and again after resolving symlinks. A final symlink is never followed, and the path is checked before the screenshot is taken. Under ask permission, a screenshot with `saveTo` asks first.
+
+## Android Emulators
+
+The Simulator tab also shows Android Emulators, under the same feature flag and the same streaming consent. Nothing extra is installed: the pinned expo-device-hub already bundles serve-emu. The port follows T3 Code at commit `a6ec88f7`.
+
+- **Requirements.** The Android SDK with Platform-Tools, the Emulator, and Command-line Tools (latest), and at least one AVD from Android Studio's Device Manager. Aiden finds the SDK from `ANDROID_HOME` or `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, then the SDK that owns an `adb` on your PATH. It puts `platform-tools` and `emulator` first on PATH for the hub and for every host command. A Mac without Xcode can still run emulators: the hub starts when either platform can run.
+- **Listing.** Each host lists its devices in an **iOS Simulators** and an **Android Emulators** section. A platform that cannot run says why, for example "Android SDK not found." Running emulators come from the hub's `/api/devices`. AVDs the hub leaves out because they never booted come from `emulator -list-avds`. Physical Android phones are not listed. A stopped emulator's id is its AVD name; once it boots, its id becomes the adb serial (`emulator-5554`), and the session follows the serial.
+- **Booting and shutting down.** Both go through the hub (`/api/devices/boot` and `/api/devices/shutdown`). Boot failures are classified as in T3: not enough disk space, a timeout, or a launch failure.
+- **Stream.** One WebSocket, `/vendor/serve-emu/ws?device=<serial>&frame-meta=1`, carries H.264 Annex-B access units behind a 16-byte `SEMU` header (magic, version, key flag, pts) and takes JSON gestures upstream. The decoder configures from the keyframe's SPS and asks for keyframes with `reset-video`. When a fold or rotation changes the screen size, serve-emu restarts its encoder (`video-session`). The viewer keeps the last frame and input stays connected. After 2 seconds the viewer shows "Waiting for device video…". There is no MJPEG fallback on Android.
+- **Input.** Printable characters are sent as text. Arrows, Enter, Backspace, Tab, Delete, Home/End, and Page Up/Down are sent as Android keycodes, and Escape is Back. The rail has Back, Home, Recents, Power, and a Portrait/Landscape menu that tilts the emulator's accelerometer.
+- **Device tools.** Appearance, text size, Reduce Motion (the animation scales), the network switch (`svc wifi` and `svc data`), orientation, location, eight permission groups, open URL, launch, quit, and the focused app. Each one is a typed `adb -s <serial>` argv in `main/services/devices/android-device-actions.ts`. Arguments after `adb shell` are quoted for the device's shell, which parses them again. iOS-only controls such as Liquid Glass, color filters, and push notifications are hidden.
+- **Foldables.** When the emulator reports a hinge sensor, the flat view shows **Fold device** and **Unfold device**. The state is read from `/vendor/serve-emu/api/fold` and read again whenever the screen size changes. A failed read is retried every 3 seconds, and a command that does not finish in 12 seconds fails with "Fold command timed out." `useAndroidFold` (`renderer/lib/device-fold.ts`) exposes the posture and hinge angle, from 0 (closed) to 180 (open), for the 3D frame.
+- **Proxy.** The allowlist adds T3's serve-emu routes: `api/devices`, `screenshot`, `stream-mode`, `stream-settings`, `accessibility`, `fold`, `health`, and the `ws` socket. Device-scoped serve-emu routes need exactly one valid `?device=`. Each mutating route accepts only its own method: POST for screenshot and fold, PUT for stream-mode, and PATCH for stream-settings. `decideDeviceHubRoute` reports a scope. Reading fold state is `read`; folding, stream tuning, and input sockets are `operate`.
+- **Paired Macs.** The `/simulators` listing carries `platform`. The relay forwards the serve-emu stream, screenshots, and fold. It rebuilds the fold body from `posture` alone and never relays stream tuning.
+- **Agents.** `device_list` reports each device's platform and which platforms this Mac can run. `device_open` takes `platform`, which it needs when both platforms have devices and no `deviceId` is given. It pins agent-device with `--platform android --serial <serial>`. The Android quick start allows `adb -s` for builds, logs, and `adb reverse`, and forbids shutting down or wiping the watched emulator and stopping serve-emu.
 
 ## Settings → Simulator
 
 Settings → **Simulator** appears in the settings list and command palette only when the feature flag is on. It contains:
 
 - **Simulator streaming**, **Agent access** and **Share with paired Macs** switches. Turning on either of the first two asks before anything is downloaded from npm. Turning streaming off also turns the other two off.
-- **Helper tools**: the pinned version of each helper, whether it is installed, and any older versions still on disk. Reading this touches only the disk.
-- **Prune old versions**: deletes every helper version except the pinned ones. An install in progress is left alone.
+- **Helper tools**: the pinned version of each helper, whether it is installed or running, and any older versions still on disk. Reading this touches only the disk. An outdated helper shows **Update** when its permission is on.
+- **Check device tool versions**: re-reads the versions on this Mac and on each SSH host. It installs and changes nothing.
+- **Prune old versions**: deletes every helper version except the pinned ones and any version a running helper uses. It runs under the maintenance lock, and an install in progress is left alone.
+- **SSH hosts**: add, edit, test, connect, install on, and remove SSH device hosts (see [Simulators on SSH hosts](#simulators-on-ssh-hosts)).
 - **Remove installed tools**: asks first, then turns every permission off, stops both helpers, and deletes them together with saved screenshots and agent state. Your simulators and their apps are not touched.
 
 ## Network and privacy
 
 - The only new outbound traffic is `npm install <tool>@<exact version>` against your configured npm registry. It runs only after you confirm simulator setup or agent access. The install also lets `node-datachannel` download its prebuilt native binary. Aiden sends nothing about your chats.
 - Startup, background refreshes, onboarding and the agent tools never install anything. If the helpers are missing, they say so.
+- SSH hosts are contacted over your own `ssh` only from the actions listed in [Simulators on SSH hosts](#simulators-on-ssh-hosts). Their installs run `npm` on that host against its configured registry, and only after you confirm **Install**. Streams from a host travel through the SSH tunnel to this Mac's token proxy. The renderer never connects to the host directly.
 - Screenshots you send to a chat go to that chat's selected model, like any image attachment.
 
 ## Troubleshooting
@@ -67,10 +122,16 @@ Settings → **Simulator** appears in the settings list and command palette only
 | Symptom | What to do |
 | --- | --- |
 | "Xcode was not found." | Install Xcode from the App Store and open it once so it can finish setting up, then choose refresh. |
+| "Android SDK not found." | Install Android Studio and its SDK Platform-Tools, Emulator, and Command-line Tools (latest), or set `ANDROID_HOME`, then choose refresh. |
+| An Android emulator shows "Waiting for device video…" | The emulator is restarting its encoder after a fold or rotation. If it does not recover, close the device and open it again. |
 | Setup fails with an npm error | Make sure `npm` is on your PATH and can reach your registry, then turn streaming on again. |
 | The screen stays black | Close the device and open it again. If the stream can't renew its grant three times in a minute, **Reconnect** appears. |
 | The 3D frame never shows | The stream is using MJPEG, the device has a hinge, or WebGL is unavailable. The flat view is intended in these cases. |
 | A paired Mac shows no simulators | On that Mac, check **Share with paired Macs** and the simulator-control grant for this Mac. |
+| An SSH host says SSH was refused | Load the key with `ssh-add`, or set the host's identity file. Aiden runs ssh in batch mode and never prompts for passwords. |
+| An SSH host stops at host key verification | Run `ssh <target>` once in Terminal to accept the host key, then choose **Retry**. |
+| "Node.js was not found" or "npm was not found" on an SSH host | Install Node.js 22 or newer with npm on the host. Make sure a non-interactive shell can find it, for example in `/opt/homebrew/bin`, `/usr/local/bin` or `~/.local/bin`. |
+| An SSH host is listed as this Mac | The target resolves to this Mac, whose simulators already appear under This Mac. |
 
 ## Internals
 
@@ -114,9 +175,35 @@ serve-sim's own Tools panel sends shell commands over that exec channel. Aiden n
 
 There are deliberately only four `device_*` tools (`device-tools.ts`). Driving happens through the `agent-device` CLI. `run_command` gets a pinned shim directory on its PATH, read fresh for every command, so a revoke mid-generation drops it. How to drive a device comes back in the `device_open` result instead of an always-loaded prompt. The always-on prompt block is four lines that point at the tools and ask the agent to prefer them (and `agent-device`) for anything on the device the user is watching. Shell tools such as `xcrun simctl`, `xcodebuild` and `adb` stay allowed for builds, installs, logs, port forwarding and diagnostics the device tools do not cover, but the block also forbids shutting down or erasing a watched simulator or stopping `serve-sim` unless the user asks, since the prompt is loaded before any `device_open`. The `device_open` quick start repeats that preference, allows `xcrun simctl` for gaps on the same UDID, and repeats the no-teardown guardrail.
 
+### Device power features
+
+- Erase, clipboard, and recording are argv builders in `device-actions.ts` (`deviceEraseCommands`, `deviceClipboardWriteCommand`, `deviceClipboardReadCommand`, `deviceRecordVideoCommand`, `eraseDevice`). Each one takes the target's `platform`, and a platform without a variant is refused before anything runs, so adb variants can be added beside iOS. They reach a simulator only through `DeviceService.localTarget`, which accepts only this Mac's simulators that the last listing reported. Clipboard and recording also require the simulator to be booted.
+- `device-recording.ts` supervises `simctl io recordVideo` children. It runs one recorder per simulator. Stop sends SIGINT, then SIGKILL after 15 s, which fails the recording. The cap is 10 minutes. Temp files go in `userData/devices/recordings/`.
+- `device-features.ts` composes the features, discards recordings when their simulator stops being booted or listed, and remembers the files it saved so that only those can be revealed.
+- The IPC is `device-feature-ipc.ts`. Channels: `devices:erase`, `devices:clipboard-paste`, `devices:clipboard-copy`, `devices:recordings-list`, `devices:recording-start`, `devices:recording-stop`, `devices:recording-save`, `devices:recording-discard`, `devices:screenshot-save`, `devices:reveal-saved`, plus the `devices:recordings` notification. Inputs are parsed by `renderer/shared/device-features.ts`.
+- serve-sim's input socket takes two contacts as message `0x05` (`{ type, x1, y1, x2, y2 }`, normalized like `0x03`). The stream client's `sendMultiTouch` applies the same rotation remap as single touches. The gesture geometry is in `renderer/lib/device-multitouch.ts`, so the 3D view can reuse it.
+- The accessibility overlay reads `GET /vendor/serve-sim/helper/<udid>/ax`, and the event log reads `GET /vendor/serve-sim/api/event-log/events`. Both are already on the proxy's read-only allowlist. They draw short-lived grants from `renderer/lib/device-grant.ts`, because they can outlive the stream's one-minute grant.
+
 ### Paired Macs
 
 A paired desktop serves `/simulators*` through the Aiden Remote router (`aiden-remote-simulators.ts`). This needs both the desktop-only `simulators:control` capability and the owner's `peerSharing` consent. The client side (`peer-devices.ts`) relays streams over the pinned-TLS peer connection. The proxy resolves `?host=` to that relay, so the renderer's contract is the same for every host.
+
+### SSH hosts
+
+`ssh-device-host.ts` implements `DeviceHost` over the system ssh, adapted from T3's `SshDeviceHost`:
+
+- It pipes `ssh-device-script.ts` to `node` on the host. The script has modes `probe`, `start`, `agent-start`, `stop-agent`, and `stop`. State lives in `~/.aiden/devices/hosts/<owner>` and tools in `~/.aiden/devices/tools/<name>@<version>`. The owner is a hash of this Aiden's data directory and the host id, so two Aiden installs never stop each other's hub.
+- A start installs only when the service passes `allowInstall`, which happens only for an approved host. Otherwise a missing tool exits with code 3 and the service asks for Install.
+- The hub, and the agent-device daemon after agent access, are forwarded to this Mac's loopback with `ssh -N -L` (`ExitOnForwardFailure`, `ServerAliveInterval=10`). The proxy treats the forwarded origin like the local hub, so the renderer contract is unchanged.
+- There is no health polling. When the tunnel exits, the host reconnects up to five times with a 1 s doubling backoff and never installs while reconnecting. Before a user action reuses a forward, the host checks `/readyz` through it.
+
+`local-ssh-target.ts` parses `ssh -G` (and does a name lookup only for a non-IP hostname) to skip targets that are this Mac. Hosts and their per-host install approval are stored in `userData/devices/ssh-hosts.json`. Revoking streaming clears that approval.
+
+Agent access to an SSH host uses the local `agent-device` CLI through the PATH shim, with a per-host `--config` in `userData/devices/hosts/<hash>.json` that points at the forwarded daemon.
+
+### Tool maintenance
+
+`device-tool-maintenance.ts` holds one JavaScript program, shared with the SSH script. It takes a directory lock (rename of a populated directory, with stale-owner recovery). It never removes the pinned install or any version that appears in `ps` output as a running helper's path. The `reclaim` policy runs after an update and keeps the newest previous version. The `prune` policy backs **Prune old versions**.
 
 ### The viewer
 
@@ -127,5 +214,5 @@ The 3D frame (`renderer/lib/device-3d/`) is procedural. T3's Apple GLB models ha
 ### Tests
 
 - `npm run test:devices`: unit and SSR suites.
-- `tests/e2e/environment-devices-*.spec.ts`: Electron E2E against `tests/e2e/device-hub-fake.mjs` and `agent-device-fake.mjs`.
+- `tests/e2e/environment-devices-*.spec.ts`: Electron E2E against `tests/e2e/device-hub-fake.mjs` and `agent-device-fake.mjs`. The Android spec also fakes the SDK's `adb` and `emulator`; the iOS specs pin `ANDROID_HOME` to an empty folder.
 - `scripts/devices-acceptance.mjs --allow-npm-install`: real-Mac acceptance.

@@ -9,7 +9,7 @@
 import * as React from "react";
 import { devicesApi } from "./ipc";
 import { subscribeDeviceForeground, type DeviceForegroundApp } from "./device-foreground";
-import type { DeviceActionInput, DeviceSettings, DeviceStreamGrant } from "../shared/devices";
+import type { DeviceActionInput, DevicePlatform, DeviceSettings, DeviceStreamGrant } from "../shared/devices";
 
 type Distribute<T> = T extends unknown ? Omit<T, "hostId" | "deviceId"> : never;
 export type DeviceActionBody = Distribute<DeviceActionInput>;
@@ -94,7 +94,10 @@ export interface DeviceControls extends DeviceControlsState {
   act(body: DeviceActionBody): Promise<boolean>;
   /** True while an action runs or before settings are known. */
   disabled: boolean;
-  /** The frontmost app from serve-sim's feed, or `null` when there is none or the feed is unavailable. */
+  /**
+   * The frontmost app: serve-sim's feed on iOS, the focused package read with
+   * the settings on Android. `null` when there is none or it is unknown.
+   */
   foregroundApp: DeviceForegroundApp | null;
 }
 
@@ -102,10 +105,13 @@ export interface DeviceControls extends DeviceControlsState {
 export function useDeviceControls(options: {
   hostId: string;
   deviceId: string;
+  /** Defaults to iOS. */
+  platform?: DevicePlatform;
   grant: DeviceStreamGrant | null;
   visible: boolean;
 }): DeviceControls {
   const { hostId, deviceId, grant, visible } = options;
+  const android = options.platform === "android";
   const [state, setState] = React.useState<DeviceControlsState>({
     settings: null,
     pending: false,
@@ -130,18 +136,20 @@ export function useDeviceControls(options: {
   }, [controller, visible]);
 
   React.useEffect(() => {
-    if (!visible || !grant) return;
+    // serve-emu has no frontmost-app feed; Android reports it with the settings instead.
+    if (!visible || !grant || android) return;
     const unsubscribe = subscribeDeviceForeground({ hostId, deviceId, grant }, setForegroundApp);
     return () => {
       unsubscribe();
       setForegroundApp(null);
     };
-  }, [hostId, deviceId, grant, visible]);
+  }, [hostId, deviceId, grant, visible, android]);
 
+  const androidApp = state.settings?.foregroundApp;
   return {
     ...state,
     act: controller.act,
     disabled: state.pending || state.settings === null || !visible,
-    foregroundApp,
+    foregroundApp: android ? (androidApp ? { id: androidApp } : null) : foregroundApp,
   };
 }
