@@ -184,6 +184,27 @@ test.describe("Android emulator", () => {
       if (entry.origin) expect(entry.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u);
     }
 
+    // Floated over the chat, the emulator still streams through serve-emu and takes Android input.
+    const before = (await gestures()).length;
+    await panel.getByRole("button", { name: "Float over chat" }).click();
+    const player = page.locator("[data-device-mini-player]");
+    await expect(player.getByRole("status")).toHaveText("Live");
+    const header = player.getByRole("group", { name: /^Move / });
+    for (const name of ["Back", "Home", "Recents"]) await expect(header.getByRole("button", { name })).toBeEnabled();
+    await expect(header.getByRole("button", { name: "Rotate" })).toHaveCount(0);
+    await player.getByRole("application").click();
+    await page.keyboard.press("b");
+    await header.getByRole("button", { name: "Back" }).click();
+    await expect
+      .poll(async () =>
+        (await gestures()).slice(before).map((body) => (body?.type === "touch" ? `touch:${String(body.action)}` : JSON.stringify(body))),
+      )
+      .toEqual(["touch:down", "touch:up", JSON.stringify({ type: "text", text: "b" }), JSON.stringify({ type: "back" })]);
+    expect((await readHubLog()).some((entry) => entry.path?.includes("/serve-sim/"))).toBe(false);
+    await player.getByRole("button", { name: "Dock device in its tab" }).click();
+    await expect(player).toHaveCount(0);
+    await expect(status).toHaveText("Live");
+
     await panel.getByRole("button", { name: "Close emulator" }).click();
     await expect(android.getByRole("button", { name: `Open ${AVD}` })).toBeVisible();
   });
