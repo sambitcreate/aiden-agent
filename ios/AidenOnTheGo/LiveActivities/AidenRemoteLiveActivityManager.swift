@@ -22,12 +22,23 @@ final class AidenRemoteLiveActivityManager {
     private typealias ContentState = AgentRunActivityAttributes.ContentState
 
     private let defaults: UserDefaults
+    /// False keeps this manager off the device's ActivityKit entirely: it
+    /// requests, updates and ends nothing and sees no existing activities.
+    /// Chat view-model tests use it because their flows await `finish`
+    /// before reconciling the transcript, and a loaded simulator's Live
+    /// Activity daemon can hold that await for seconds.
+    private let drivesActivityKit: Bool
     private var currentActivity: Activity<AgentRunActivityAttributes>?
     private var stateByActivityID: [String: ContentState] = [:]
     private var throttleByActivityID: [String: AidenLatestValueThrottle<ContentState>] = [:]
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, drivesActivityKit: Bool = true) {
         self.defaults = defaults
+        self.drivesActivityKit = drivesActivityKit
+    }
+
+    private var systemActivities: [Activity<AgentRunActivityAttributes>] {
+        drivesActivityKit ? Activity<AgentRunActivityAttributes>.activities : []
     }
 
     var includesResponseExcerpts: Bool {
@@ -43,7 +54,7 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func start(instanceID: String, chatID: String, title: String, streamID: String) async {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard drivesActivityKit, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let startedAt = Date()
         let attributes = AgentRunActivityAttributes(
             instanceID: instanceID,
@@ -164,7 +175,7 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func markAllStale() async {
-        for activity in Activity<AgentRunActivityAttributes>.activities where isLive(activity) {
+        for activity in systemActivities where isLive(activity) {
             let state = AgentRunActivityStateReducer.stale(state: state(for: activity))
             stateByActivityID[activity.id] = state
             await throttle(for: activity).submitUrgent(state)
@@ -172,7 +183,7 @@ final class AidenRemoteLiveActivityManager {
     }
 
     func endAll(forInstanceID instanceID: String) async {
-        for activity in Activity<AgentRunActivityAttributes>.activities
+        for activity in systemActivities
         where activity.attributes.instanceID == instanceID && isLive(activity) {
             let state = AgentRunActivityStateReducer.final(
                 status: .failed,
@@ -218,7 +229,7 @@ final class AidenRemoteLiveActivityManager {
         client: AidenRemoteClient,
         isCurrent: @MainActor () -> Bool
     ) async {
-        for activity in Activity<AgentRunActivityAttributes>.activities
+        for activity in systemActivities
         where activity.attributes.instanceID == instanceID && isLive(activity) {
             guard isCurrent() else { return }
             guard let streamID = activity.attributes.streamID else {
@@ -304,7 +315,7 @@ final class AidenRemoteLiveActivityManager {
            isLive(currentActivity) {
             return currentActivity
         }
-        return Activity<AgentRunActivityAttributes>.activities.first {
+        return systemActivities.first {
             Self.matches($0.attributes, instanceID: instanceID, streamID: streamID) && isLive($0)
         }
     }

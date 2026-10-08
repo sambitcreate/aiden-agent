@@ -41,3 +41,11 @@ Status (2026-10-01): merged in PR #276 (on main after 0.51.0); plan moved to `do
 - Reading `activity.activityState` right after `await manager.endAll(...)` was flaky on loaded CI simulators (run 37530293739 attempt 2, line 480, `XCTAssertTrue failed`, 0.13 s).
 - Tests now `await assertDeliveredEnd(of:)`, which subscribes to `activityStateUpdates` before reading the current state and uses the same failure-only 30 s ceiling. `deliveredContent` and `assertDeliveredEnd` share the generic `AidenDeliveryRace`.
 - Branch `fix/ios-activitykit-end-state-race`.
+
+## Chat view-model tests are kept off ActivityKit (2026-10-08)
+
+- `AidenChatTests.testForeignRunResponseStaysVisibleUntilAFailedTranscriptReadRecovers` failed intermittently on PR #377 CI (runs 37721736343, 37805265233) with `Timed out waiting for failed transcript read`; every later assertion passed.
+- Cause: `makeProgressLifecycleModel` used `AidenRemoteLiveActivityManager.shared`, so the model drove the simulator's real ActivityKit. A foreign run's `.ended` effect awaits `liveActivities.finish` (`activity.end`) before `endForeignRunQuietly` reads the transcript; on a loaded CI simulator that await took longer than the test's ~5 s poll (the xcresult shows live `Updating content for activity` lines and an ActivityKit `XPC connection interrupted` inside the test). Owned streams also await `finish` before `finishStream`.
+- Reproduced locally by delaying `finish` by 6 s: the same single failure message. With the fix, that delay no longer reaches the test.
+- Fix: `AidenRemoteLiveActivityManager(drivesActivityKit: false)` requests, updates and ends nothing and sees no system activities; chat view-model test helpers inject it. Production keeps `.shared` (default `true`). `AidenNativeIntegrationTests` still exercises the real ActivityKit.
+- Found while verifying: `AidenRemoteClientTests.testBotDeleteSendsTheBotRevisionAndOnlyWhenTheHostAdvertisesIt` failed once locally with `Unexpected Bot delete request: GET /api/aiden/v1/bot-capabilities`. The previous test's `AidenBotChatToolsModel.refresh` leaves its cancelled `async let` catalog request to reach `startLoading` after the next test installs its handler. `AidenRemoteMockURLProtocol` now stamps each `makeSession()` with a per-test epoch header and fails requests from an earlier epoch with `URLError(.cancelled)`.

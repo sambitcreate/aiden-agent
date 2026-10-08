@@ -1009,6 +1009,9 @@ final class AidenChatTests: XCTestCase {
             cache: cache,
             draftStore: draftStore,
             modelPreferenceStore: modelPreferenceStore,
+            // The device's ActivityKit is shared, slow on loaded simulators,
+            // and awaited before terminal transcript reads.
+            liveActivities: AidenRemoteLiveActivityManager(drivesActivityKit: false),
             networkPath: networkPath ?? AidenNetworkAvailability(),
             onChatUpdated: onChatUpdated
         )
@@ -1091,6 +1094,7 @@ final class AidenChatTests: XCTestCase {
             cache: cache,
             draftStore: draftStore,
             modelPreferenceStore: .shared,
+            liveActivities: AidenRemoteLiveActivityManager(drivesActivityKit: false),
             onChatUpdated: { _ in }
         )
         await forkModel.load(observeProgress: false)
