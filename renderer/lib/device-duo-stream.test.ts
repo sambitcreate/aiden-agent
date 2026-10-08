@@ -8,6 +8,7 @@ import {
   type DeviceScreenSize,
   type DeviceStreamRuntime,
 } from "./device-stream";
+import { createDeviceGrantSource } from "./device-grant";
 
 /** The newest entry. Equivalent to `.at(-1)`, which the ES2021 lib lacks. */
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
@@ -44,7 +45,7 @@ class FakeSocket {
   }
 }
 
-function harness() {
+function harness(options: { grants?: ReturnType<typeof createDeviceGrantSource>; refuse?: (url: string) => boolean } = {}) {
   const feeds: Array<{ url: string; signal: AbortSignal; push(bytes: Uint8Array): void }> = [];
   const sockets: FakeSocket[] = [];
   const decoders: Array<{ output: (frame: VideoFrame) => void }> = [];
@@ -54,6 +55,7 @@ function harness() {
     fetch: async (url, init) => {
       if (!url.includes("stream.avcc")) return new Response(new Uint8Array([1]), { status: 200 });
       if (url.includes("/panel/") && panelStatus !== 200) return new Response("unsupported", { status: panelStatus });
+      if (options.refuse?.(url)) return new Response("expired", { status: 401 });
       let controller!: ReadableStreamDefaultController<Uint8Array>;
       const body = new ReadableStream<Uint8Array>({
         start(value) {
@@ -93,13 +95,21 @@ function harness() {
   const inners: unknown[] = [];
   const unavailable: Array<string | undefined> = [];
   const statuses: string[] = [];
+  let unauthorized = 0;
   const client = createDeviceStreamClient(
-    { hostId: "peer-1", deviceId: "duo", grant: { origin: "http://127.0.0.1:4100", token: "tok", expiresAt: Date.now() + 60_000 } },
+    {
+      hostId: "peer-1",
+      deviceId: "duo",
+      grant: { origin: "http://127.0.0.1:4100", token: "tok", expiresAt: Date.now() + 60_000 },
+      ...(options.grants ? { grants: options.grants } : {}),
+    },
     { present: (source) => (presented.push(source), true) },
     {
       onStatus: (status) => statuses.push(status),
       onScreen: () => undefined,
-      onUnauthorized: () => undefined,
+      onUnauthorized: () => {
+        unauthorized++;
+      },
       onMjpegFallback: () => undefined,
       onInputConnected: () => undefined,
       onDuoUnavailable: (detail) => unavailable.push(detail),
@@ -141,6 +151,7 @@ function harness() {
     panels,
     config,
     frame,
+    unauthorized: () => unauthorized,
     setSupported: (value: boolean) => (supported = value),
     setPanelStatus: (value: number) => (panelStatus = value),
   };
@@ -286,5 +297,50 @@ test("panels attach only to a hinged simulator, and raw touches skip the rotatio
   assert.deepEqual(touches[0], { type: "begin", x: 0.2, y: 0.7 });
   // The flat path remaps a rotated portrait framebuffer; the Duo's 3D path already mapped it.
   assert.notDeepEqual(touches[1], touches[0]);
+  h.client.stop();
+});
+
+test("each display feed opens with a freshly minted grant, and a refused feed renews only itself", async () => {
+  let minted = 0;
+  const grants = createDeviceGrantSource(async () => ({
+    origin: "http://127.0.0.1:4100",
+    token: `fresh-${++minted}`,
+    // Minted grants are already near expiry, so every open mints again.
+    expiresAt: Date.now(),
+  }));
+  const refused = new Set<string>();
+  const token = (url: string) => new URL(url).searchParams.get("t") ?? "";
+  const h = harness({ grants, refuse: (url) => refused.has(token(url)) });
+  const panelTokens = () => h.feeds.filter((feed) => feed.url.includes("/panel/")).map((feed) => token(feed.url));
+  h.client.start();
+  await settle();
+  h.config(3);
+  // Opening Duo 3D after the parent grant's minute must not present the parent's grant.
+  refused.add("tok");
+  h.client.setDuoPanels(h.panels);
+  await settle();
+  assert.deepEqual(panelTokens(), ["fresh-1", "fresh-1"]);
+
+  // The proxy refuses the feeds' grant: the feeds renew themselves and the parent session stays.
+  refused.add("fresh-2");
+  h.client.setDuoPanels(null);
+  h.client.setDuoPanels(h.panels);
+  await settle(20);
+  // fresh-2 was refused before any body was served; the renewed feeds stream on fresh-3.
+  assert.equal(minted, 3);
+  assert.deepEqual(panelTokens().slice(2), ["fresh-3", "fresh-3"]);
+  assert.equal(h.unauthorized(), 0);
+  assert.equal(h.sockets.length, 1);
+  assert.equal(h.sockets[0]!.closed, false);
+  assert.deepEqual(h.unavailable, []);
+
+  // Refused again right after renewing, the feed hands the 3D view back; the parent still runs.
+  for (let index = 4; index <= 12; index++) refused.add(`fresh-${index}`);
+  h.client.setDuoPanels(null);
+  h.client.setDuoPanels(h.panels);
+  await settle(20);
+  assert.match(last(h.unavailable) ?? "", /refused access/u);
+  assert.equal(h.unauthorized(), 0);
+  assert.equal(h.sockets[0]!.closed, false);
   h.client.stop();
 });

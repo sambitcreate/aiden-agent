@@ -29,7 +29,8 @@ import {
   type DuoControlState,
   type DuoPose,
 } from "./device-duo-control";
-import { createDuoPanelFeeds, type DuoPanelSinks } from "./device-duo-stream";
+import { createDuoPanelFeeds, type DuoFeed, type DuoFeedEvents, type DuoPanelSinks } from "./device-duo-stream";
+import type { DeviceGrantSource } from "./device-grant";
 
 export type { DuoPanelSinks } from "./device-duo-stream";
 
@@ -83,6 +84,11 @@ export interface DeviceStreamTarget {
   panelId?: 1 | 3;
   /** Internal feeds decode video only and share their parent's input socket. */
   videoOnly?: boolean;
+  /**
+   * Mints grants for connections opened after `start` (the iPhone Duo display
+   * feeds). Without it those reuse `grant`, which expires a minute after minting.
+   */
+  grants?: DeviceGrantSource;
 }
 
 /** A synchronous, borrowed frame. The producer releases its source after `present` returns. */
@@ -1082,22 +1088,76 @@ export function createDeviceStreamClient(
     resumePrimaryVideo: () => {
       if (useWebCodecs && !mjpeg) void readVideo();
     },
-    openFeed: (panelId, feedSink, feedEvents) =>
-      createDeviceStreamClient(
-        { ...target, ...(panelId === null ? {} : { panelId }), videoOnly: true },
-        feedSink,
-        {
-          onStatus: feedEvents.onStatus,
-          onScreen: () => undefined,
-          onUnauthorized: feedEvents.onUnauthorized,
-          onMjpegFallback: () => undefined,
-          onInputConnected: () => undefined,
-        },
-        runtime,
-      ),
+    openFeed: (panelId, feedSink, feedEvents) => openPanelFeed(panelId, feedSink, feedEvents),
     onUnavailable: (detail) => events.onDuoUnavailable?.(detail),
-    onUnauthorized: () => handleUnauthorized(),
+    // A refused display feed returns the viewer to the flat view; the parent's session stays.
+    onUnauthorized: () => events.onDuoUnavailable?.("The iPhone Duo display stream refused access."),
   });
+
+  /**
+   * A video-only display feed. Each open draws a grant from `target.grants`, so
+   * a feed opened long after the parent connected never presents an expired
+   * one. A refused feed renews its own grant once; a second refusal in a row is
+   * reported to the panel host, never to the parent session.
+   */
+  const openPanelFeed = (
+    panelId: 1 | 3 | null,
+    feedSink: DeviceFrameSink,
+    feedEvents: DuoFeedEvents,
+  ): DuoFeed => {
+    const grants = target.grants;
+    let closed = true;
+    let client: DeviceStreamClient | null = null;
+    let renewed = false;
+    const open = () => {
+      const grant = grants ? grants.get() : Promise.resolve(target.grant);
+      grant.then(
+        (fresh) => {
+          if (closed) return;
+          const feed = createDeviceStreamClient(
+            { ...target, grant: fresh, ...(panelId === null ? {} : { panelId }), videoOnly: true },
+            feedSink,
+            {
+              onStatus: (status, detail) => {
+                if (status === "streaming") renewed = false;
+                feedEvents.onStatus(status, detail);
+              },
+              onScreen: () => undefined,
+              onUnauthorized: () => {
+                if (client === feed) client = null;
+                if (closed) return;
+                if (!grants || renewed) return feedEvents.onUnauthorized();
+                renewed = true;
+                grants.invalidate();
+                open();
+              },
+              onMjpegFallback: () => undefined,
+              onInputConnected: () => undefined,
+            },
+            runtime,
+          );
+          client = feed;
+          feed.start();
+        },
+        (error: unknown) => {
+          if (!closed) feedEvents.onStatus("error", error instanceof Error ? error.message : undefined);
+        },
+      );
+    };
+    return {
+      start() {
+        if (!closed) return;
+        closed = false;
+        renewed = false;
+        open();
+      },
+      stop() {
+        closed = true;
+        client?.stop();
+        client = null;
+      },
+    };
+  };
 
   const rawPoint = (x: number, y: number) => {
     // serve-sim streams the raw portrait framebuffer; rotated devices need

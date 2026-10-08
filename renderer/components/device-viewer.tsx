@@ -229,7 +229,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     // Frames always land in the flat canvas; a mounted 3D frame samples it as a texture.
     const canvasSink = createCanvasFrameSink(canvas);
     const client = createDeviceStreamClient(
-      { hostId: session.hostId, deviceId: session.deviceId, platform: device.platform, grant },
+      { hostId: session.hostId, deviceId: session.deviceId, platform: device.platform, grant, grants: featureGrants },
       {
         present(source, width, height) {
           const presented = canvasSink.present(source, width, height);
@@ -275,7 +275,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
       setInputConnected(false);
       setMjpegUrl(null);
     };
-  }, [active, grant, session.hostId, session.deviceId, device.platform, noun, fail]);
+  }, [active, grant, session.hostId, session.deviceId, device.platform, noun, fail, featureGrants]);
 
   // The fallback `<img>` mounts only after the running client asked for it,
   // and unmounts when that client stops, so the current client owns it.
