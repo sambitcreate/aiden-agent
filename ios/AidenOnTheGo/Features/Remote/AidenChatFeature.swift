@@ -4653,6 +4653,9 @@ struct AidenChatDetailView: View {
     @Namespace private var attachmentMotionNamespace
     @State private var coordinator: AidenRemoteCoordinator?
     @State private var forkSummaryRequest: AidenForkSummaryRequest?
+    @State private var simulators = AidenChatSimulatorsModel()
+    @State private var simulatorViewer: AidenSimulatorViewerModel?
+    @State private var simulatorRefreshEpoch = 0
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -4785,6 +4788,17 @@ struct AidenChatDetailView: View {
             AidenForkSummarySheet { focus in
                 performFork(messageID: request.id, action: .forkWithSummary, focus: focus)
             }
+        }
+        .task(id: simulatorRefreshKey) {
+            // Once when the chat opens, again after each return to the
+            // foreground (chatLoadEpoch) and when the viewer closes. No polling.
+            guard scenePhase != .background else { return }
+            await simulators.refresh(coordinator: coordinator, chatId: model.chat.id)
+        }
+        .fullScreenCover(item: $simulatorViewer, onDismiss: {
+            simulatorRefreshEpoch &+= 1
+        }) { viewer in
+            AidenSimulatorViewer(model: viewer)
         }
         .task(id: model.chat.forkedFrom?.chatId) {
             await model.resolveForkSource()
@@ -5007,8 +5021,22 @@ struct AidenChatDetailView: View {
         }
     }
 
+    private var simulatorRefreshKey: String {
+        let available = coordinator.map(AidenChatSimulatorsModel.isAvailable(coordinator:)) ?? false
+        return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
+            if simulators.deviceCount > 0 {
+                HStack {
+                    AidenSimulatorDeviceButton(count: simulators.deviceCount) {
+                        simulatorViewer = simulators.makeViewer(coordinator: coordinator)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.bottom, 4)
+            }
             AidenChatProgressControls(
                 taskProgress: model.taskProgress,
                 agentRoster: model.agentRoster,
