@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AttemptSnapshot, ImageRunConsentRequest, RunSnapshot } from "../shared/images/run-types";
+import type { AttemptSnapshot, ImageRunConsentRequest, OutputRef, RunSnapshot } from "../shared/images/run-types";
 import {
   acceptSnapshot,
   attemptDetail,
@@ -70,6 +70,15 @@ test("an Output node shows this run's images, falling back to the latest saved o
   assert.deepEqual(outputsForNode(run, latest, "missing"), []);
 });
 
+test("a node named like an Object.prototype member has no saved output", () => {
+  // Latest outputs arrive as a plain object over IPC; a crafted node id must not read inherited members.
+  const latest = JSON.parse("{}") as Record<string, readonly OutputRef[]>;
+  for (const nodeId of ["constructor", "toString", "valueOf", "hasOwnProperty"]) {
+    assert.deepEqual(outputsForNode(null, latest, nodeId), []);
+  }
+  assert.deepEqual(outputsForNode(null, { constructor: [ref] }, "constructor"), [ref]);
+});
+
 test("every scope's consent says which nodes will run, and node-only says what happens downstream", () => {
   assert.equal(scopeNote({ kind: "all" }), null);
   assert.match(scopeNote({ kind: "from-node", nodeId: "g" }) ?? "", /everything after it will run.*reuse their images/u);
@@ -77,9 +86,11 @@ test("every scope's consent says which nodes will run, and node-only says what h
 });
 
 test("the delete confirmation names the image count and says it cannot be undone", () => {
-  assert.doesNotMatch(deleteWorkflowDescription(0), /generated image/u);
-  assert.match(deleteWorkflowDescription(1), /and 1 generated image\./u);
-  assert.match(deleteWorkflowDescription(12), /and 12 generated images\./u);
+  assert.doesNotMatch(deleteWorkflowDescription(0), /image\b/u);
+  assert.match(deleteWorkflowDescription(1), /and 1 image\./u);
+  // The count includes imported Image Input pictures, so the copy must not call them all generated.
+  assert.match(deleteWorkflowDescription(2), /and 2 images\./u);
+  for (const count of [0, 1, 2]) assert.doesNotMatch(deleteWorkflowDescription(count), /generated/u);
   for (const count of [0, 1, 12]) {
     assert.match(deleteWorkflowDescription(count), /permanently deletes the workflow and its run history.*cannot be undone/u);
   }

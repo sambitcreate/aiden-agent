@@ -3,6 +3,7 @@ import { Button, Text } from "../../components/ui";
 import { CanvasNodeChrome } from "../../canvas";
 import { useWorkflowEditor } from "../editor-context";
 import type { WorkflowFlowNode } from "../flow-adapter-core";
+import { ownValue } from "../run-view-core";
 import { NodePorts } from "./node-ports";
 
 export function ImageInputNodeBody({ url, label, onChoose }: { url?: string; label: string; onChoose(): void }) {
@@ -21,7 +22,7 @@ export function ImageInputNode({ id, data, selected }: NodeProps<WorkflowFlowNod
   const node = data.node;
   if (node.type !== "image-input") return null;
   const label = node.data.label ?? "Reference image";
-  const url = node.data.assetId ? editor.assetUrls[node.data.assetId] : undefined;
+  const url = node.data.assetId ? ownValue(editor.assetUrls, node.data.assetId) : undefined;
   return (
     <div className="image-node">
       <CanvasNodeChrome title={node.title ?? "Image Input"} selected={selected}>

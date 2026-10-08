@@ -4,7 +4,7 @@ import { CanvasNodeChrome } from "../../canvas";
 import type { OutputRef } from "../../shared/images/run-types";
 import { useWorkflowEditor } from "../editor-context";
 import type { WorkflowFlowNode } from "../flow-adapter-core";
-import { STALE_LABEL } from "../run-view-core";
+import { STALE_LABEL, ownValue } from "../run-view-core";
 import { NodePorts } from "./node-ports";
 
 const GALLERY_LIMIT = 4;
@@ -18,7 +18,7 @@ export function OutputNodeBody({ images, urls, stale = false }: { images: readon
       {stale ? <Badge color="warning">{STALE_LABEL}</Badge> : null}
       <div className="image-gallery" role="list" aria-label="Generated images">
         {images.slice(0, GALLERY_LIMIT).map((image, index) => {
-          const url = urls[image.assetId];
+          const url = ownValue(urls, image.assetId);
           const name = `Generated image ${index + 1}`;
           return (
             <div role="listitem" key={image.assetId}>

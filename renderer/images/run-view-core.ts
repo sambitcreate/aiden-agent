@@ -125,9 +125,18 @@ export function scopeNote(scope: RunScope): string | null {
   }
 }
 
+/** The count covers generated and imported images alike (ruling P2): deleting the workflow releases both. */
 export function deleteWorkflowDescription(imageCount: number): string {
-  const images = imageCount > 0 ? `, and ${imageCount} generated image${imageCount === 1 ? "" : "s"}` : "";
+  const images = imageCount > 0 ? `, and ${imageCount} image${imageCount === 1 ? "" : "s"}` : "";
   return `This permanently deletes the workflow and its run history${images}. This cannot be undone. A workflow with a run in progress cannot be deleted.`;
+}
+
+/**
+ * Reads a record keyed by ids that came from a document. A node may be named `constructor`, so only
+ * the record's own keys count; inherited `Object.prototype` members are never a value.
+ */
+export function ownValue<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
 export function outputsForNode(
@@ -136,7 +145,7 @@ export function outputsForNode(
   nodeId: string,
 ): readonly OutputRef[] {
   const current = snapshot?.attempts.find((attempt) => attempt.nodeId === nodeId && attempt.state === "succeeded" && attempt.output.length > 0);
-  return current?.output ?? latest[nodeId] ?? [];
+  return current?.output ?? ownValue(latest, nodeId) ?? [];
 }
 
 export const START_ERROR_MESSAGES: Record<"expired" | "stale" | "model-unavailable", string> = {

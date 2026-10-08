@@ -18,7 +18,7 @@ import { createImagesIpc } from "../lib/create-images-ipc";
 import type { MutateWorkflowRequest, MutateWorkflowResponse } from "../shared/images/ipc-types";
 import type { WorkflowSummary } from "../shared/images/schema";
 import type { ImageWorkflowTemplate } from "../shared/images/templates";
-import { deleteWorkflowDescription } from "./run-view-core";
+import { deleteWorkflowDescription, ownValue } from "./run-view-core";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : "Something went wrong.");
 
@@ -138,7 +138,7 @@ export function ImagesHome() {
           if (!next) setDeleting(null);
         }}
         title={`Delete “${deleting?.title ?? ""}”?`}
-        description={deleteWorkflowDescription(deleting ? (imageCounts[deleting.id] ?? 0) : 0)}
+        description={deleteWorkflowDescription(deleting ? (ownValue(imageCounts, deleting.id) ?? 0) : 0)}
         confirmLabel="Delete"
         confirmVariant="destructive"
         onConfirm={async () => {
