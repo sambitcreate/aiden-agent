@@ -18,6 +18,7 @@ import {
   androidUnavailableReason,
   createLocalDeviceHost,
   findAndroidSdk,
+  findAndroidStudioJava,
   findDeviceHostHelpers,
   nextHubRestartDelay,
   xcodeUnavailableReason,
@@ -508,6 +509,32 @@ test("the Android SDK is found from ANDROID_HOME, Android Studio's default, or t
     androidUnavailableReason({ ...studio, emulator: false }) ?? "",
     /Android Emulator is missing from \/Users\/me\/Library\/Android\/sdk/u,
   );
+});
+
+test("the hub gets Android Studio's Java when JAVA_HOME is unset, so avdmanager can list AVDs before a boot", async () => {
+  const jbr = "/Applications/Android Studio.app/Contents/jbr/Contents/Home";
+  await withHost(
+    async (harness) => {
+      const host = createLocalDeviceHost(harness.deps);
+      assert.equal((await host.platformAvailability("android")).available, true);
+      await host.ensureReady();
+      const [spawned] = harness.spawns;
+      assert.equal(spawned?.env.JAVA_HOME, jbr);
+      assert.ok(spawned?.env.PATH?.split(":").includes(`${jbr}/bin`), "java resolves from the bundled runtime");
+      await host.stop();
+    },
+    fakeFs([...COMPLETE_SDK, `${jbr}/bin/java`]),
+  );
+  // A Java the user chose is never replaced.
+  assert.equal(
+    await findAndroidStudioJava({ env: { JAVA_HOME: "/opt/jdk", HOME: "/Users/me" }, ...fakeFs([`${jbr}/bin/java`]) }),
+    null,
+  );
+  assert.equal(
+    await findAndroidStudioJava({ env: { HOME: "/Users/me" }, ...fakeFs(["/Users/me/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java"]) }),
+    "/Users/me/Applications/Android Studio.app/Contents/jbr/Contents/Home",
+  );
+  assert.equal(await findAndroidStudioJava({ env: { HOME: "/Users/me" }, ...fakeFs([]) }), null);
 });
 
 test("a Mac with the Android SDK but no Xcode starts the hub with the SDK on its PATH", async () => {

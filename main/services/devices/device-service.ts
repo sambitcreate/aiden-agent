@@ -833,6 +833,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   async function attach(ready: DeviceHostReady, device: DeviceSummary): Promise<DeviceSummary> {
     let attached = device;
     if (!device.booted) {
+      if (device.platform === "ios") await recycleStaleStreamHelper(ready);
       let result: HubResult;
       try {
         result = await postHubJson(
@@ -865,6 +866,27 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
       await postHubJson(ready, "/vendor/serve-sim/grid/api/start", { udid: attached.id }, HUB_REQUEST_TIMEOUT_MS);
     }
     return attached;
+  }
+
+  /**
+   * serve-sim keeps one stream helper per simulator and reuses it on
+   * `grid/api/start`. A helper that outlives its simulator (shut down, erased,
+   * or restarted outside Aiden) keeps its old capture, so the rebooted device
+   * streams one stale frame and then nothing. serve-sim closes helpers of
+   * simulators that are no longer booted whenever one of its status routes is
+   * read, so read `readyz` while the simulator is still off. Best effort: the
+   * boot goes ahead whatever this returns.
+   */
+  async function recycleStaleStreamHelper(ready: DeviceHostReady): Promise<void> {
+    try {
+      const response = await deps.fetch(`${ready.hub.origin}/vendor/serve-sim/readyz`, {
+        method: "GET",
+        signal: AbortSignal.timeout(HUB_REQUEST_TIMEOUT_MS),
+      });
+      await response.arrayBuffer().catch(() => undefined);
+    } catch {
+      // An older hub or a slow read only means a stale helper may survive.
+    }
   }
 
   async function shutdownLocal(ready: DeviceHostReady, deviceId: string): Promise<void> {
