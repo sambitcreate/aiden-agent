@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Box,
   House,
+  Keyboard,
   Lock,
   Moon,
   PictureInPicture2,
@@ -46,6 +47,7 @@ import {
   type DeviceFramePreference,
 } from "../lib/device-3d/frame-mode";
 import { isDuoDevice, resolveDeviceModelId } from "../lib/device-3d/model-registry";
+import { deviceHasKeyboardAccessory, resolveDeviceAssetModelId } from "../lib/device-3d/model-source";
 import { resolveDeviceShape } from "../lib/device-3d/shape-profile";
 import { DeviceDuoControls } from "./device-duo-controls";
 import { DeviceDuoViewport } from "./device-duo-viewport";
@@ -145,6 +147,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const stageFocusedRef = React.useRef(false);
   const [resetPose, setResetPose] = React.useState<(() => void) | null>(null);
   /** Draws the framed device while the 3D view is mounted. */
+  /** The iPad Pro's bundled Magic Keyboard, shown with its 3D body. */
+  const [keyboardAttached, setKeyboardAttached] = React.useState(false);
   const [captureFramed, setCaptureFramed] = React.useState<(() => Promise<Blob | null>) | null>(null);
   /** Cancels a captured 3D touch or pinch before a command moves the device under it. */
   const cancelFrameInputRef = React.useRef<(() => void) | null>(null);
@@ -355,6 +359,7 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const aspect = screen ? displayedAspect(screen, displayRotation) : defaultAspect(device);
   const mediaStyle = rotatedMediaStyle(displayRotation);
   const model = resolveDeviceModelId(device.platform, device.name);
+  const assetModel = resolveDeviceAssetModelId(device.platform, device.name);
   const duo = isDuoDevice(device.platform, device.name, screen);
   const blocker = frameBlocker({
     mjpeg: Boolean(mjpegUrl),
@@ -414,9 +419,15 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     clientRef.current?.controlDuo(command);
   };
   const restoreView = () => {
-    // A slab device rests upright; the Duo's own reset asks for the orientation its view needs.
-    if (!duo && screen && screen.orientation !== "portrait") clientRef.current?.setOrientation("portrait");
+    // A slab device rests upright (an iPad on its keyboard, landscape); the Duo's own reset asks for its orientation.
+    const rest = keyboardAttached ? "landscape_right" : "portrait";
+    if (!duo && screen && screen.orientation !== rest) clientRef.current?.setOrientation(rest);
     resetPose?.();
+  };
+  const toggleKeyboard = () => {
+    // The keyboard holds the iPad in landscape, with its camera edge up.
+    if (!keyboardAttached && screen?.orientation !== "landscape_right") clientRef.current?.setOrientation("landscape_right");
+    setKeyboardAttached(!keyboardAttached);
   };
   const touch3d = React.useCallback((phase: "begin" | "move" | "end", point: { x: number; y: number }) => {
     clientRef.current?.sendTouch(phase, point.x, point.y);
@@ -552,6 +563,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
                 screen={screen}
                 profile={profile}
                 model={model}
+                asset={assetModel}
+                keyboardAttached={keyboardAttached}
                 // An Android foldable's hinge, moving ahead of a pending Fold or Unfold.
                 foldAngle={android ? fold.angle : null}
                 onFrameListener={onFrameListener}
@@ -751,6 +764,20 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         >
           <Smartphone aria-hidden />
         </Button>
+        {frame3d && deviceHasKeyboardAccessory(assetModel) ? (
+          <Button
+            variant={keyboardAttached ? "muted" : "transparent"}
+            size="small"
+            iconOnly
+            aria-label={keyboardAttached ? "Detach Magic Keyboard" : "Attach Magic Keyboard"}
+            title={keyboardAttached ? "Detach Magic Keyboard" : "Attach Magic Keyboard"}
+            aria-pressed={keyboardAttached}
+            disabled={!streaming}
+            onClick={toggleKeyboard}
+          >
+            <Keyboard aria-hidden />
+          </Button>
+        ) : null}
         {frame3d && resetPose ? railButton("Restore 3D view", <Rotate3d aria-hidden />, restoreView) : null}
         <Button
           variant={toolsOpen ? "muted" : "transparent"}

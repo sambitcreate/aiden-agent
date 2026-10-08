@@ -3,7 +3,17 @@
  * behaviour runs in Node: a recording renderer, manual frames, a manual clock
  * and timers, and 2D canvases that record what is drawn.
  */
-import { Box3, Group, PerspectiveCamera, Texture, type Camera, type Object3D, type Quaternion, type Scene } from "three";
+import {
+  Box3,
+  Group,
+  PerspectiveCamera,
+  Texture,
+  type BufferGeometry,
+  type Camera,
+  type Object3D,
+  type Quaternion,
+  type Scene,
+} from "three";
 import type { ViewerCanvas, ViewerRenderer, ViewerRuntime } from "./viewer-runtime";
 
 export interface RecordedFrame {
@@ -153,6 +163,97 @@ export function createTestRuntime(options: { reduced?: boolean; blankProbe?: boo
       reduced = value;
     },
   };
+}
+
+/**
+ * A minimal binary glTF (GLB) built by hand: untextured meshes, optionally
+ * under named group nodes. Enough to exercise the real GLTFLoader in Node.
+ */
+export function minimalGlb(
+  meshes: ReadonlyArray<{ name: string; geometry: BufferGeometry; group?: string }>,
+): ArrayBuffer {
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  const bufferViews: object[] = [];
+  const accessors: object[] = [];
+  const push = (bytes: Uint8Array, target: number) => {
+    const padded = new Uint8Array(Math.ceil(bytes.byteLength / 4) * 4);
+    padded.set(bytes);
+    bufferViews.push({ buffer: 0, byteOffset: byteLength, byteLength: bytes.byteLength, target });
+    chunks.push(padded);
+    byteLength += padded.byteLength;
+    return bufferViews.length - 1;
+  };
+  const groups = [...new Set(meshes.flatMap((mesh) => (mesh.group ? [mesh.group] : [])))];
+  const nodes: Array<{ name: string; mesh?: number; children?: number[] }> = groups.map((name) => ({ name, children: [] }));
+  const roots: number[] = groups.map((_, index) => index);
+  const gltfMeshes = meshes.map((mesh, index) => {
+    const geometry = mesh.geometry;
+    const position = geometry.getAttribute("position");
+    const positions = new Float32Array(position.count * 3);
+    for (let i = 0; i < position.count; i++) positions.set([position.getX(i), position.getY(i), position.getZ(i)], i * 3);
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox!;
+    accessors.push({
+      bufferView: push(new Uint8Array(positions.buffer), 34962),
+      componentType: 5126,
+      count: position.count,
+      type: "VEC3",
+      min: box.min.toArray(),
+      max: box.max.toArray(),
+    });
+    const attributes: Record<string, number> = { POSITION: accessors.length - 1 };
+    const normal = geometry.getAttribute("normal");
+    if (normal) {
+      const normals = new Float32Array(normal.count * 3);
+      for (let i = 0; i < normal.count; i++) normals.set([normal.getX(i), normal.getY(i), normal.getZ(i)], i * 3);
+      accessors.push({ bufferView: push(new Uint8Array(normals.buffer), 34962), componentType: 5126, count: normal.count, type: "VEC3" });
+      attributes.NORMAL = accessors.length - 1;
+    }
+    const primitive: Record<string, unknown> = { attributes };
+    if (geometry.index) {
+      const indices = Uint32Array.from(geometry.index.array as ArrayLike<number>);
+      accessors.push({ bufferView: push(new Uint8Array(indices.buffer), 34963), componentType: 5125, count: indices.length, type: "SCALAR" });
+      primitive.indices = accessors.length - 1;
+    }
+    nodes.push({ name: mesh.name, mesh: index });
+    const node = nodes.length - 1;
+    if (mesh.group) nodes[groups.indexOf(mesh.group)]!.children!.push(node);
+    else roots.push(node);
+    return { name: mesh.name, primitives: [primitive] };
+  });
+  const json = new TextEncoder().encode(
+    JSON.stringify({
+      asset: { version: "2.0" },
+      scene: 0,
+      scenes: [{ nodes: roots }],
+      nodes,
+      meshes: gltfMeshes,
+      accessors,
+      bufferViews,
+      buffers: [{ byteLength }],
+    }),
+  );
+  const jsonLength = Math.ceil(json.byteLength / 4) * 4;
+  const total = 12 + 8 + jsonLength + 8 + byteLength;
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, total, true);
+  view.setUint32(12, jsonLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  out.fill(0x20, 20, 20 + jsonLength);
+  out.set(json, 20);
+  let offset = 20 + jsonLength;
+  view.setUint32(offset, byteLength, true);
+  view.setUint32(offset + 4, 0x004e4942, true);
+  offset += 8;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
 }
 
 /** A WebGL canvas stand-in: an event target with the size fields the viewers touch. */

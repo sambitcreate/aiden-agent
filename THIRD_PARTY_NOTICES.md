@@ -126,9 +126,21 @@ The 3D viewer code (device motion, view snapping, framing, interaction,
 trackpad, iPhone Duo scene, viewer, controls and display feeds, Android fold
 scene, and the trackpad-scroll-end window hook) is adapted from T3 Code at
 commit `a6ec88f7` under the same license.
-Copyright (c) 2026 T3 Tools Inc. T3's imported Apple device models, Apple
-assets and Simulator-derived glyph art are not included: Aiden's device bodies
-(`hardware-models.ts`, `duo-model.ts`) and Duo glyphs are original work.
+Copyright (c) 2026 T3 Tools Inc. T3's Simulator-derived glyph art is not
+included; Aiden's Duo glyphs and procedural fallback bodies
+(`hardware-models.ts`, `duo-model.ts`) are original work.
+
+### Bundled device models (Apple Inc.)
+
+`renderer/assets/devices/models/` ships T3 Code's device models unchanged:
+`iphone-18-pro.glb`, `iphone-18-pro-max.glb`, `ipad-pro-13-m5.glb`,
+`ipad-pro-13-m5-magic-keyboard.glb` and `iphone-duo.glb`. They were converted
+by T3 Code from Apple Inc.'s public AR Quick Look (USDZ) product files.
+`sources.json` beside them records each source URL, its SHA-256 hash, and the
+conversion steps. Author: Apple Inc. No open-source or redistribution licence
+has been established for these assets; the owner chose on 2026-10-08 to ship
+them as T3 Code does. The models are loaded only when a matching device is
+shown in 3D.
 
 The per-device workspace tabs (`renderer/lib/device-tabs.ts`), the floating
 device player and its layout (`renderer/components/device-mini-player.tsx`,

@@ -4,18 +4,18 @@ Status: done (2026-09-25); T3 parity update 2026-10-08. Parent plan: [simulator-
 
 ## Goal
 
-Show the live simulator screen inside a turnable 3D device in the Simulator tab, with the feel of T3 Code's device workspace, including the iPhone Duo and Android foldables, without bundling any vendor device model or art.
+Show the live simulator screen inside a turnable 3D device in the Simulator tab, with the feel of T3 Code's device workspace, including the iPhone Duo and Android foldables, bundling T3's device models where they match and original procedural bodies elsewhere.
 
-## Asset rule (unchanged)
+## Asset decision (2026-10-08)
 
-T3 swaps in Apple `.glb` bodies (iPhone 18 Pro, Pro Max, iPad Pro 13-inch M5, iPhone Duo, Magic Keyboard). They have no redistribution licence. Aiden never bundles, downloads, or derives geometry or textures from them, nor from Apple's USDZ assets. T3's GLB metadata (node names, hinge rig, display layout, overall proportions) was read only to learn the rig contract and proportions.
+The owner reversed the earlier ban: Aiden bundles T3's device GLBs, the same files T3 ships ("if t3 uses no license thing we should use the same"). They are Apple-derived AR assets (iPhone 18 Pro, iPhone 18 Pro Max, iPad Pro 13-inch M5, its Magic Keyboard, and the iPhone Duo with its centimetre hinge rig). **No redistribution licence is established for them**; the owner accepted that. Provenance, source URLs and SHA-256 hashes stay in `renderer/assets/devices/models/sources.json`, and `THIRD_PARTY_NOTICES.md` names them.
 
-Every Aiden body is an **original procedural model built in three.js code** from public spec-sheet dimensions (body size and depth, display pixels and density). T3's viewer code is ported (MIT, authorized) and fed these models through the same normalized contract it expects from its GLBs.
+T3's GLB path is ported 1:1: exact device-name matching, an abortable, replaceable model slot, `GLTFLoader.parseAsync`, `?url` imports so the files stay out of the JavaScript and load only on demand, and the Magic Keyboard accessory. Aiden's **original procedural models** (built in three.js from public spec-sheet dimensions) remain: they show at once, cover devices without a GLB, and stay in place if a GLB fails to load or validate. T3's viewer code is ported (MIT, authorized) and runs against both through the same normalized contract.
 
 ## Scope
 
 - **Full 3D feel**, ported from T3: a quaternion spring with flick coast and decay, release snapping to the nearest rest view with a yaw allowance, a critically damped camera refit, logarithmic pinch zoom, trackpad orbit that ends on Electron's native `gestureScrollEnd`, and a render-on-demand scheduler.
-- **Hardware models**, matched by exact simulator name: 6.3-inch iPhone Pro (iPhone 17 Pro, 18 Pro), 6.9-inch iPhone Pro Max (17/18 Pro Max), 13-inch iPad Pro (M4 and M5 share a chassis), and the iPhone Duo. Everything else, including Android, uses family profiles (`ios-phone`, `ios-tablet`, `android-phone`, `android-tablet`). The Magic Keyboard accessory is not built.
+- **Hardware models**, matched by exact simulator name: 6.3-inch iPhone Pro (iPhone 17 Pro, 18 Pro), 6.9-inch iPhone Pro Max (17/18 Pro Max), 13-inch iPad Pro (M4 and M5 share a chassis), and the iPhone Duo. Everything else, including Android, uses family profiles (`ios-phone`, `ios-tablet`, `android-phone`, `android-tablet`). Exact T3 names (iPhone 18 Pro, iPhone 18 Pro Max, iPad Pro 13-inch (M5), iPhone Duo) then swap in the bundled GLB; the iPad's **Attach Magic Keyboard** rail button adds T3's keyboard accessory.
 - **iPhone Duo in 3D**: an articulated body, pinch to fold with a hinge preview, animated folds that re-centre on the hinge, flip to the other display with a 5 s rollback, Duo snap views, per-display stream feeds, and orientation-following fold controls (Book ↔ Laptop label, rotating glyphs, stands send the hold orientation before the angle).
 - **Android fold body**: T3's procedural book-style fold scene, selected when an Android profile has a fold angle.
 - The flat screen stays the source of truth. Frames decode into the flat canvas; the 3D view samples it as a `CanvasTexture` (the Duo also draws its per-display feeds into two surface canvases).
