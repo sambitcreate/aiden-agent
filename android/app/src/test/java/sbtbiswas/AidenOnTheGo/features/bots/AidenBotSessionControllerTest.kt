@@ -415,6 +415,27 @@ class AidenBotSessionControllerTest {
         assertEquals(AidenBotSessionEventOutcome.Refetch, aidenApplyBotSessionEvent(null, fixtureEvents[1]))
     }
 
+    @Test
+    fun onlyANewAssistantAnswerClearsTheStreamingText() {
+        val streaming = interruptedSession.copy(partial = "Working on it")
+        fun apply(entry: AidenBotSessionEntry) = (aidenApplyBotSessionEvent(
+            streaming,
+            AidenBotSessionEvent(streaming.botId, streaming.epoch, streaming.seq + 1, AidenBotSessionEventPayload.Entry(entry))
+        ) as AidenBotSessionEventOutcome.Applied).session
+
+        val card = AidenBotSessionEntry.ConnectCard(
+            id = "card_mid_turn", pluginId = "gmail", name = "Gmail", iconId = "gmail",
+            reason = "Read your inbox", status = AidenBotConnectCardStatus.PENDING
+        )
+        assertEquals("Working on it", apply(card).partial)
+
+        val existing = streaming.entries.last { it is AidenBotSessionEntry.Message } as AidenBotSessionEntry.Message
+        assertEquals("Working on it", apply(existing.copy(text = "edited in place")).partial)
+
+        val answer = existing.copy(id = "answer_new", role = AidenBotMessageRole.ASSISTANT, text = "Done")
+        assertEquals(null, apply(answer).partial)
+    }
+
     private fun serverError(status: Int, code: AidenRemoteErrorCode = AidenRemoteErrorCode.NOT_FOUND) =
         AidenRemoteClientException.Server(status, AidenRemoteErrorEnvelope.Body(code, "Nope.", "req_1", false))
 

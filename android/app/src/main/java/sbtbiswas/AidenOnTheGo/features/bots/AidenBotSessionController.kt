@@ -88,10 +88,15 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
                 current.entries + payload.entry
             }
             val trimmed = entries.takeLast(AidenBotSessionWire.MAX_ENTRIES)
+            // Only a newly appended assistant answer replaces the streaming text; a connect
+            // card, notice or in-place update arriving mid-turn keeps it (matches iOS).
+            val answered = existing < 0 &&
+                payload.entry is AidenBotSessionEntry.Message &&
+                payload.entry.role == AidenBotMessageRole.ASSISTANT
             AidenBotSessionEventOutcome.Applied(
                 current.copy(
                     seq = event.seq,
-                    partial = null,
+                    partial = if (answered) null else current.partial,
                     entries = trimmed,
                     hasOlder = current.hasOlder || trimmed.size < entries.size
                 )
