@@ -228,6 +228,7 @@
         "scripts/worktree-file-io.test.mjs",
         "main/services/generation-delta-coalescer.test.ts",
         "main/services/bot-connection-dismissals.test.ts",
+        "main/services/bot-connection-setup-core.test.ts",
         "main/services/bot-runtime-tools/suggest-connection.test.ts"
       ],
       "preserved": [
