@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import { X509Certificate } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer as createHttpsServer } from "node:https";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { loadOrCreateAidenRemoteTlsIdentity } from "../aiden-remote-tls-identity.js";
 import type { PeerHostView } from "../../../renderer/shared/peer-host.js";
 import { PeerTransportError, type PeerRequest } from "../peer-transport.js";
 import { createPeerDevices, parsePeerSimulatorListing, type PeerRegistryPort } from "./peer-devices.js";
@@ -33,14 +39,20 @@ test("listings are parsed fail-closed and hide devices while not sharing", () =>
   assert.deepEqual(parsePeerSimulatorListing({ sharing: true, status: "ready", devices: [SIMULATOR] }), {
     sharing: true,
     status: "ready",
-    devices: [{ id: UDID, name: "iPhone 17", version: "iOS 27.0", booted: false, kind: "iphone" }],
+    devices: [{ id: UDID, name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: false, kind: "iphone" }],
   });
+  // A paired Mac's Android emulators carry their platform; stopped ones go by AVD name.
+  const avd = { ...SIMULATOR, id: "Pixel_9_API_35", name: "Pixel 9", platform: "android", version: "Android 15.0", kind: "other" };
+  assert.deepEqual(parsePeerSimulatorListing({ sharing: true, status: "ready", devices: [avd] }).devices, [
+    { id: "Pixel_9_API_35", name: "Pixel 9", platform: "android", version: "Android 15.0", booted: false, kind: "other" },
+  ]);
   assert.deepEqual(parsePeerSimulatorListing({ sharing: false, status: "ready", devices: [SIMULATOR] }).devices, []);
   for (const invalid of [
     null,
     { sharing: true, status: "exploded", devices: [] },
     { sharing: true, status: "ready", devices: [{ ...SIMULATOR, id: "../x" }] },
-    { sharing: true, status: "ready", devices: [{ ...SIMULATOR, platform: "android" }] },
+    { sharing: true, status: "ready", devices: [{ ...SIMULATOR, platform: "watchos" }] },
+    { sharing: true, status: "ready", devices: [{ ...SIMULATOR, id: "-s" }] },
     { sharing: true, status: "ready", devices: Array.from({ length: 257 }, () => SIMULATOR) },
   ]) {
     assert.throws(() => parsePeerSimulatorListing(invalid), PeerTransportError);
@@ -158,5 +170,62 @@ test("the relay upstream carries the paired credential and pinned trust", async 
   assert.equal(upstream.tls.rejectUnauthorized, true);
   assert.equal(typeof upstream.tls.checkServerIdentity, "function");
   assert.equal(await peers.upstream("b"), null);
-  await assert.rejects(peers.screenshot("b", UDID), /disabled or unavailable/u);
+  await assert.rejects(peers.screenshot("b", UDID, "ios"), /disabled or unavailable/u);
+});
+
+test("screenshots come from serve-sim for iOS and from serve-emu's GET for Android, over pinned TLS", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-peer-shot-"));
+  const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory });
+  const seen: { method: string; url: string; body: string; auth?: string }[] = [];
+  const relay = createHttpsServer({ key: identity.privateKey, cert: identity.certificateChain }, (request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      seen.push({ method: request.method!, url: request.url!, body, auth: request.headers.authorization });
+      response.writeHead(200, { "content-type": "image/png" });
+      response.end(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    });
+  });
+  await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  const address = relay.address();
+  assert.ok(address && typeof address !== "string");
+  const trust = {
+    endpoint: `https://127.0.0.1:${address.port}/aiden/v1/`,
+    serverSpkiSha256: identity.serverSpkiSha256,
+    caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64"),
+  };
+  const peers = createPeerDevices({
+    list: async () => [host("a")],
+    request: async () => ({}),
+    relayTarget: async () => ({ trust, credential: "secret" }),
+  });
+  try {
+    assert.deepEqual([...(await peers.screenshot("a", UDID, "ios"))], [0x89, 0x50, 0x4e, 0x47]);
+    assert.deepEqual([...(await peers.screenshot("a", "emulator-5554", "android"))], [0x89, 0x50, 0x4e, 0x47]);
+    assert.deepEqual(seen, [
+      { method: "POST", url: "/aiden/v1/simulators/hub/vendor/serve-sim/api/screenshot", body: JSON.stringify({ udid: UDID }), auth: "Bearer secret" },
+      { method: "GET", url: "/aiden/v1/simulators/hub/vendor/serve-emu/api/screenshot?device=emulator-5554", body: "", auth: "Bearer secret" },
+    ]);
+  } finally {
+    relay.closeAllConnections();
+    await new Promise((resolve) => relay.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("opening a paired Mac's AVD accepts the emulator serial it boots under", async () => {
+  const peers = createPeerDevices(
+    registry((_id, input) =>
+      input.path === "/simulators/open"
+        ? { device: { id: "emulator-5554", name: "Pixel 9", platform: "android", version: "Android 15.0", booted: true, kind: "other" } }
+        : { device: { ...SIMULATOR, id: "99999999-2222-3333-4444-555555555555" } },
+    ),
+  );
+  assert.equal((await peers.open("a", "Pixel_9_API_35")).id, "emulator-5554");
+  // An iOS simulator must come back under the UDID that was asked for.
+  const ios = createPeerDevices(registry(() => ({ device: { ...SIMULATOR, id: "99999999-2222-3333-4444-555555555555" } })));
+  await assert.rejects(ios.open("a", UDID), PeerTransportError);
 });
