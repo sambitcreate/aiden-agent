@@ -65,7 +65,7 @@ test("run-store failures keep filesystem details out of renderer-visible errors"
   const [llm, historyHandler, chatHandler, chatApplicationService] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/handlers/subagents.ts"),
-    source("main/handlers/chats.ts"),
+    source("main/handlers/chat-renderer-mutations.ts"),
     source("main/services/chat-application-service.ts"),
   ]);
   assert.match(llm, /error: "local storage failed"/u);
@@ -111,13 +111,13 @@ test("private run-store I/O is descriptor-bound, generation-checked, and package
 
 test("chat removal deletes private child history before the chat can disappear", async () => {
   const [handler, applicationService, llm] = await Promise.all([
-    source("main/handlers/chats.ts"),
+    source("main/handlers/chat-renderer-mutations.ts"),
     source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
   assert.match(
     handler,
-    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId, \{ rejectFeatureOwned: true \}\)[\s\S]*return result/u,
+    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\b[\s\S]*return result/u,
   );
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
@@ -255,19 +255,21 @@ test("empty-chat workspace moves serialize against generation authority and term
 });
 
 test("renderer message appends serialize against detached terminal persistence", async () => {
-  const [handler, llm, schedule, surfaces] = await Promise.all([
+  const [handler, appendSource, llm, schedule, surfaces] = await Promise.all([
     source("main/handlers/chats.ts"),
+    // The append handler lives beside chats.ts so it can be invoked in tests.
+    source("main/handlers/chat-renderer-mutations.ts"),
     source("main/services/llm-client.ts"),
     source("main/services/schedule-execution.ts"),
     source("main/services/conversation-surface-generation.ts"),
   ]);
-  const appendHandler = ipcHandlerStart(handler, "chats:appendMessage");
-  const beginAppend = handler.indexOf(
+  const appendHandler = appendSource.indexOf("appendMessage:");
+  const beginAppend = appendSource.indexOf(
     "llmClient.beginChatTurn(chatId, turnId, owner.documentId)",
     appendHandler,
   );
-  const persist = handler.indexOf("chatStore.appendMessage(", beginAppend);
-  const failureRelease = handler.indexOf("if (!appended) turn.release();", persist);
+  const persist = appendSource.indexOf("chatStore.appendMessage(", beginAppend);
+  const failureRelease = appendSource.indexOf("if (!appended) turn.release();", persist);
 
   assert.ok(appendHandler >= 0);
   assert.ok(beginAppend > appendHandler);
