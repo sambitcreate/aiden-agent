@@ -113,7 +113,13 @@ enum AidenBotRoutineSchedule: Codable, Equatable, Sendable {
             self = .weekdays(time: time)
         case "weekly":
             try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "days", "time"])
-            self = .weekly(days: try values.decode([Int].self, forKey: .days), time: time)
+            // Like the host parser: 1–7 entries in 0...6, normalized to a
+            // sorted set (duplicates and order are not errors).
+            let days = try values.decode([Int].self, forKey: .days)
+            guard (1...7).contains(days.count), days.allSatisfy({ (0...6).contains($0) }) else {
+                throw AidenBotContractError.invalidField("schedule.days")
+            }
+            self = .weekly(days: Array(Set(days)).sorted(), time: time)
         case "monthly":
             try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "day", "time"])
             self = .monthly(day: try values.decode(Int.self, forKey: .day), time: time)
