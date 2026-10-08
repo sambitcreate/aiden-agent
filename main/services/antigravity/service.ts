@@ -28,6 +28,8 @@ import { ANTIGRAVITY_RELEASE } from "./release.js";
 
 export interface AntigravityStatus {
   runtime: AcpRuntimeState;
+  publisher: string;
+  downloadHost: string | undefined;
   signedIn: boolean;
   busy: boolean;
 }
@@ -134,6 +136,8 @@ export class AntigravityService {
     await this.ready();
     return {
       runtime: this.installer.state(),
+      publisher: this.definition.publisher,
+      downloadHost: this.installer.downloadHost,
       signedIn: await hasAntigravitySignIn(this.stateDir),
       busy: this.runtime.busy,
     };

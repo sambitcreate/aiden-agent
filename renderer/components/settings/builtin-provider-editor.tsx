@@ -10,7 +10,7 @@ import {
   type ProviderAuthSession,
 } from "../../lib/provider-auth-session";
 import type { Provider, ProviderAuthEvent, ProviderAuthPrompt } from "../../lib/types";
-import { isAcpHarnessProvider } from "../../shared/acp-harness";
+import { harnessSignInHint, isAcpHarnessProvider } from "../../shared/acp-harness";
 import { HarnessRuntimeSection, useHarnessStatus } from "./harness-runtime-section";
 import { ProviderModelVisibility } from "./provider-model-visibility";
 
@@ -55,9 +55,11 @@ export function BuiltinProviderEditor({
   const [responding, setResponding] = React.useState(false);
   const [authLink, setAuthLink] = React.useState<string | null>(null);
   const harness = isAcpHarnessProvider(provider.id);
-  const harnessStatus = useHarnessStatus(harness ? provider.id : undefined);
+  const harnessState = useHarnessStatus(harness ? provider.id : undefined);
+  const harnessStatus = harnessState.status;
   // Agent-backed providers sign in through their runtime, so it must exist first.
   const harnessReady = !harness || harnessStatus?.runtime.status === "installed";
+  const signInHint = harness ? harnessSignInHint(harnessStatus?.runtime) : undefined;
   const interactiveMethods = (provider.authMethods ?? []).filter(
     (method): method is { type: PiAuthMethod; label: string; canLogin: true } => method.canLogin,
   );
@@ -210,7 +212,7 @@ export function BuiltinProviderEditor({
       title={`Set up ${provider.label}`}
       description={
         harness
-          ? `${provider.label} runs Google's agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
+          ? `${provider.label} runs ${harnessStatus?.publisher ? `${harnessStatus.publisher}'s` : "its own"} agent on this computer. It follows each folder's permission setting: in Ask, its changes and commands wait for your approval.`
           : "Pi owns this provider's endpoint, models, credentials, and request transport."
       }
       confirmLabel="Continue"
@@ -221,7 +223,13 @@ export function BuiltinProviderEditor({
     >
       <div className="grid gap-4">
         {harness ? (
-          <HarnessRuntimeSection providerId={provider.id} label={provider.label} status={harnessStatus} />
+          <HarnessRuntimeSection
+            providerId={provider.id}
+            label={provider.label}
+            status={harnessStatus}
+            loadError={harnessState.error}
+            onRetry={harnessState.retry}
+          />
         ) : null}
         {prompt?.type === "select" ? (
           <div className="grid gap-2" aria-label={prompt.message}>
@@ -278,9 +286,9 @@ export function BuiltinProviderEditor({
                 {method.label}
               </Button>
             ))}
-            {!harnessReady ? (
+            {signInHint ? (
               <Text variant="small" color="tertiary">
-                Install the runtime above before signing in.
+                {signInHint}
               </Text>
             ) : null}
           </div>

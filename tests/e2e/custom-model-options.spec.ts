@@ -306,6 +306,12 @@ test("custom GLM effort selector persists and sends every supported thinking mod
   ] as const) {
     await controls.hover();
     const selected = controls.getByRole("radio", { name: level === "off" ? "Thinking: off" : `Thinking: ${level} effort`, exact: true });
+    // Unselected levels are revealed by hover or focus within the group. The
+    // click's scroll-into-view can move the group out from under a stationary
+    // pointer and collapse it, so hold it open with focus (which alone never
+    // changes the level) and let the click select.
+    await selected.focus();
+    await expect(selected).toBeVisible();
     await selected.click();
     await expect(selected).toHaveAttribute("aria-checked", "true");
     const prompt = `Custom effort check ${level}`;
@@ -322,7 +328,10 @@ test("custom GLM effort selector persists and sends every supported thinking mod
   // Remember an enabled effort, then reset the connection. A hidden selector
   // must not leave the old effort active on subsequent requests.
   await controls.hover();
-  await controls.getByRole("radio", { name: "Thinking: max effort", exact: true }).click();
+  const max = controls.getByRole("radio", { name: "Thinking: max effort", exact: true });
+  await max.focus();
+  await expect(max).toBeVisible();
+  await max.click();
   page = await aiden.relaunch();
   await expect(page.getByRole("radio", { name: "Thinking: max effort", exact: true })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "Settings", exact: true }).click();

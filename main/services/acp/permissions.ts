@@ -113,6 +113,7 @@ export async function answerPermission(
         toolCallId: String(request.toolCall.toolCallId),
         ...(activityId ? { activityId } : {}),
         kind: approvalKind(kind),
+        ...(kind === "delete" || kind === "move" ? { fileChange: kind } : {}),
         title: cleanTitle(request.toolCall.title) || "The agent wants to make a change.",
         paths,
         ...(classification.warning ? { warning: classification.warning } : {}),

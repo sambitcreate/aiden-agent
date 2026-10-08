@@ -88,6 +88,8 @@ export interface AcpHarnessDefinition {
   /** Provider id used everywhere in Aiden (`antigravity`). */
   id: string;
   label: string;
+  /** Who builds and ships the agent runtime ("Google"), named in setup copy. */
+  publisher: string;
   /** Pi API id for this harness's models. */
   api: Api;
   /** Expected `agentInfo.name` reported by `initialize`. */

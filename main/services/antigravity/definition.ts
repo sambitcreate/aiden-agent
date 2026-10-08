@@ -110,6 +110,7 @@ export function createAntigravityDefinition(options: AntigravityDefinitionOption
   return {
     id: ANTIGRAVITY_PROVIDER_ID,
     label: ANTIGRAVITY_LABEL,
+    publisher: "Google",
     api: ANTIGRAVITY_API,
     agentName: ANTIGRAVITY_AGENT_NAME,
     release: ANTIGRAVITY_RELEASE,

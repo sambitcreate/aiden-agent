@@ -590,6 +590,13 @@ enum AidenAgentActivityPresentation {
         "device_close": ("Closing simulator", "Closed simulator"),
         "vcc_recall": ("Recalling chat history", "Recalled chat history"),
         "compact_context": ("Compacting context", "Compacted context"),
+        // Activity an ACP agent (for example, Google Antigravity) ran itself.
+        "delete_file": ("Deleting", "Deleted"),
+        "move_file": ("Moving", "Moved"),
+        "web_fetch": ("Fetching web page", "Fetched web page"),
+        "agent_subagents": ("Running subagents", "Ran subagents"),
+        "agent_tool": ("Using an agent tool", "Used an agent tool"),
+        "agent_context_rebuilt": ("Starting a fresh agent session", "Started a fresh agent session"),
     ]
 
     /// Exactly one compaction: its line carries every metric. Repeated compactions
