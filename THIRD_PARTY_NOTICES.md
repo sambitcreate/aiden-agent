@@ -145,6 +145,11 @@ adapted from T3 Code's right-panel device surfaces and commits `8bbe2bf660`
 (floating device streams) and `429c625a85` (workspace card beside chat), under
 the same MIT license. Copyright (c) 2026 T3 Tools Inc.
 
+The accessibility-tree overlay (`renderer/lib/device-ax.ts`,
+`renderer/components/device-ax-overlay.tsx`) and the iOS event log
+(`renderer/lib/device-event-log.ts`, `renderer/components/device-event-log-panel.tsx`)
+are adapted from T3 Code at commit `a6ec88f7`, under the same MIT license.
+
 ## three.js
 
 Renders the Simulator tab's 3D device frame. Loaded only when a 3D frame is

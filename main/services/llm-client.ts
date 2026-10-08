@@ -45,10 +45,10 @@ import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
 import {
-  DEVICE_APPROVAL_TOOL_NAMES,
   canUseDeviceTools,
   createDeviceAgentTools,
   deviceToolApprovalSummary,
+  deviceToolRequiresApproval,
   isDeviceToolName,
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
@@ -1436,6 +1436,11 @@ async function prepareGeneration(
             }
           },
           screenshotDir: () => deviceService.screenshotDir(params.chatId!),
+          // `saveTo` may write only into this chat's workspace or Downloads.
+          saveRoots: async () => ({
+            ...(folderPath && workspace?.permission !== "none" ? { workspace: folderPath } : {}),
+            downloads: (await import("../handlers/devices.js")).deviceDownloadsDir(),
+          }),
         }).filter(({ name }) => !options.excludeToolNames?.has(name))
       : [];
   // PATH gets the pinned agent-device only when the gate held at generation start, and
@@ -3130,7 +3135,7 @@ export const llmClient = {
               permission === "ask" &&
               (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
                 BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
-                DEVICE_APPROVAL_TOOL_NAMES.has(context.toolCall.name));
+                deviceToolRequiresApproval(context.toolCall.name, context.args));
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const memoryApproval =
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||

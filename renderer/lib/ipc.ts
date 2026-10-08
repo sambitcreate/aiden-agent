@@ -199,6 +199,14 @@ import {
   type DeviceStreamGrant,
   type DeviceToolchainState,
 } from "../shared/devices";
+import {
+  parseDeviceRecordingInfo,
+  parseDeviceRecordingList,
+  parseDeviceSaveResult,
+  type DeviceFeatureTarget,
+  type DeviceRecordingInfo,
+  type DeviceSaveResult,
+} from "../shared/device-features";
 import type {
   PeerDiscoveryState,
   PeerHostFeedMessage,
@@ -882,7 +890,45 @@ export const devicesApi = {
           : undefined;
       handler(value.chatId, target);
     }),
+  /** Shuts the simulator down if it is booted, then erases all of its content and settings. */
+  erase: (target: DeviceFeatureTarget) => invoke<{ wasBooted: boolean }>("devices:erase", target),
+  /** Host clipboard text onto the simulator's pasteboard. Send Cmd+V afterwards to paste it. */
+  pasteClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-paste", target),
+  /** The simulator's pasteboard text onto the host clipboard. */
+  copyClipboard: (target: DeviceFeatureTarget) => invoke<{ bytes: number }>("devices:clipboard-copy", target),
+  recordings: async (): Promise<DeviceRecordingInfo[]> => {
+    const list = parseDeviceRecordingList(await invoke<unknown>("devices:recordings-list"));
+    if (!list) throw new Error("The simulator recordings response was invalid.");
+    return list;
+  },
+  startRecording: async (input: DeviceFeatureTarget & { chatId: string }): Promise<DeviceRecordingInfo> => {
+    const info = parseDeviceRecordingInfo(await invoke<unknown>("devices:recording-start", input));
+    if (!info) throw new Error("The simulator recording response was invalid.");
+    return info;
+  },
+  stopRecording: async (id: string): Promise<DeviceRecordingInfo> => {
+    const info = parseDeviceRecordingInfo(await invoke<unknown>("devices:recording-stop", { id }));
+    if (!info) throw new Error("The simulator recording response was invalid.");
+    return info;
+  },
+  /** Shows the save dialog; a cancelled dialog deletes the recording. */
+  saveRecording: (id: string) => invokeDeviceSave("devices:recording-save", { id }),
+  discardRecording: (id: string) => invoke<void>("devices:recording-discard", { id }),
+  saveScreenshot: (input: { hostId: string; deviceId: string }) => invokeDeviceSave("devices:screenshot-save", input),
+  /** Reveals a file this launch saved from the Simulator tab. */
+  revealSaved: (path: string) => invoke<void>("devices:reveal-saved", { path }),
+  onRecordings: (handler: (recordings: DeviceRecordingInfo[]) => void) =>
+    onNotification<unknown>("devices:recordings", (payload) => {
+      const list = parseDeviceRecordingList(payload);
+      if (list) handler(list);
+    }),
 };
+
+async function invokeDeviceSave(channel: string, input: unknown): Promise<DeviceSaveResult> {
+  const result = parseDeviceSaveResult(await invoke<unknown>(channel, input));
+  if (!result) throw new Error("The save response was invalid.");
+  return result;
+}
 
 export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),

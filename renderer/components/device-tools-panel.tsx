@@ -63,7 +63,11 @@ export const DEVICE_LOCATION_PRESETS = [
   { label: "Tokyo", latitude: 35.6762, longitude: 139.6503 },
 ] as const;
 
-export function DeviceToolsPanel({ controls, onClose }: { controls: DeviceControls; onClose(): void }) {
+export function DeviceToolsPanel({
+  controls,
+  onClose,
+  children,
+}: React.PropsWithChildren<{ controls: DeviceControls; onClose(): void }>) {
   const { settings, pending, error, foregroundApp, disabled, act } = controls;
   return (
     <section className="device-tools" aria-labelledby="device-tools-title" aria-busy={pending}>
@@ -213,12 +217,13 @@ export function DeviceToolsPanel({ controls, onClose }: { controls: DeviceContro
             </Text>
           ) : null}
         </ToolsSection>
+        {children}
       </div>
     </section>
   );
 }
 
-function ToolsSection({ title, children }: React.PropsWithChildren<{ title: string }>) {
+export function ToolsSection({ title, children }: React.PropsWithChildren<{ title: string }>) {
   const id = React.useId();
   return (
     <section className="device-tools-section" aria-labelledby={id}>
@@ -230,7 +235,7 @@ function ToolsSection({ title, children }: React.PropsWithChildren<{ title: stri
   );
 }
 
-function Row({ label, children }: React.PropsWithChildren<{ label: string }>) {
+export function Row({ label, children }: React.PropsWithChildren<{ label: string }>) {
   return (
     <div className="device-tools-row">
       <Text variant="small" color="secondary" className="shrink-0">

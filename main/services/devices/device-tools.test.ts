@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -21,6 +21,7 @@ import {
   canUseDeviceTools,
   createDeviceAgentTools,
   deviceToolApprovalSummary,
+  deviceToolRequiresApproval,
   isDeviceToolName,
   pickDevice,
   pngDimensions,
@@ -331,4 +332,56 @@ test("the shim runs the pinned install and refuses commands without device_open'
   } finally {
     await rm(baseDir, { recursive: true, force: true });
   }
+});
+
+test("device_screenshot saveTo writes only inside the workspace or Downloads, and asks first under ask", async () => {
+  const base = await realpath(await mkdtemp(path.join(tmpdir(), "aiden-device-save-")));
+  const workspace = path.join(base, "workspace");
+  const downloads = path.join(base, "Downloads");
+  try {
+    await mkdir(workspace, { recursive: true });
+    await mkdir(downloads, { recursive: true });
+    const { port, calls } = fakePort({ sessions: [{ chatId: "chat-1", hostId: "local", deviceId: "UDID-2", openedBy: "agent" }] });
+    const list = createDeviceAgentTools({
+      chatId: "chat-1",
+      signal: new AbortController().signal,
+      supportsImages: true,
+      port,
+      saveRoots: () => ({ workspace, downloads }),
+    });
+    const shoot = (args: Record<string, unknown>) =>
+      list.find((tool) => tool.name === "device_screenshot")!.execute("call", args as never);
+
+    const saved = json(await shoot({ saveTo: "shots/home.png" }));
+    assert.equal(saved.savedTo, path.join(workspace, "shots", "home.png"));
+    assert.deepEqual(await readFile(path.join(workspace, "shots", "home.png")), PNG);
+
+    // A folder in Downloads gets a dated default name.
+    const dated = json(await shoot({ saveTo: `${downloads}/` }));
+    assert.match(path.basename(String(dated.savedTo)), /^iPhone-Air-\d{4}-\d{2}-\d{2}-\d{6}\.png$/u);
+    assert.equal(path.dirname(String(dated.savedTo)), downloads);
+
+    const before = calls.length;
+    await assert.rejects(shoot({ saveTo: "../escape.png" }), /outside the allowed folders/u);
+    await assert.rejects(shoot({ saveTo: "/etc/x.png" }), /outside the allowed folders/u);
+    assert.equal(calls.length, before, "a refused path never takes a screenshot");
+
+    // Without saveTo nothing is written and no approval is needed.
+    assert.equal(json(await shoot({})).savedTo, undefined);
+    assert.equal(deviceToolRequiresApproval("device_screenshot", {}), false);
+    assert.equal(deviceToolRequiresApproval("device_screenshot", { saveTo: "a.png" }), true);
+    assert.equal(deviceToolRequiresApproval("device_open", {}), true);
+    assert.equal(deviceToolRequiresApproval("device_list", { saveTo: "a.png" }), false);
+    assert.match(
+      deviceToolApprovalSummary("device_screenshot", { saveTo: "shots/a.png" }),
+      /Save a screenshot .* to shots\/a\.png/u,
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("device_screenshot saveTo is refused when the chat has no save folders", async () => {
+  const { port } = fakePort({ sessions: [{ chatId: "chat-1", hostId: "local", deviceId: "UDID-2", openedBy: "agent" }] });
+  await assert.rejects(tools(port)("device_screenshot", { saveTo: "/tmp/x.png" }), /cannot be saved to a file/u);
 });

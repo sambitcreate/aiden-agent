@@ -232,9 +232,14 @@ test("only allowlisted routes reach the hub, and never exec, tools, or traversal
       `/vendor/serve-sim/helper/${UDID}/stream.avcc`,
       `/vendor/serve-sim/helper/${UDID}/config`,
       `/vendor/serve-sim/helper/${UDID}/panel/3/stream.avcc`,
+      `/vendor/serve-sim/helper/${UDID}/ax`,
       "/vendor/serve-sim/appstate",
     ]) {
       assert.equal((await send(proxy, `${path}?t=${token}`)).status, 200, path);
+    }
+    // The accessibility tree and the event log are read-only.
+    for (const path of [`/vendor/serve-sim/helper/${UDID}/ax`, "/vendor/serve-sim/api/event-log/events"]) {
+      assert.equal((await send(proxy, `${path}?t=${token}`, { method: "POST" })).status, 405, path);
     }
   });
 });
