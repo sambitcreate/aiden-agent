@@ -1,4 +1,5 @@
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { botStore } from "./bot-store.js";
 import { chatStore } from "./chat-store.js";
@@ -64,7 +65,10 @@ export const contextLifecycleService = new ContextLifecycleService({
             ? settings.codexThinkingByModel?.[chat.model!]
             : chat.providerId === ANTHROPIC_PROVIDER_ID
               ? settings.anthropicThinkingByModel?.[chat.model!]
-              : settings.providerThinkingByModel?.[chat.providerId!]?.[chat.model!];
+              : runtime.provider.isBuiltin || (runtime.provider.kind === "openai" &&
+                  customModelThinkingLevels(runtime.provider.modelMetadata?.[chat.model!]?.overrides))
+                ? settings.providerThinkingByModel?.[chat.providerId!]?.[chat.model!]
+                : undefined;
     return resolveGenerationThinkingLevel(chat.providerId!, runtime.model, requested);
   },
 });
