@@ -27,10 +27,28 @@ shell card on first use. The in-memory grants bind the run, authority digest,
 and workspace revision. Each operation still uses its exact-call ledger and
 rechecks live authority, workspace state, file preimage or shell root, and stop.
 
-P1 follow-up: support a per-task child model override resolved through the
-parent's model resolver, with the selected provider/model disclosed on the child
-run. This implementation keeps inheritance from the current parent runtime.
-Concurrent implementer worktree warnings and same-run continuation remain P1.
+Per-task child model and reasoning effort (PR #379): each task may name an
+approved `model` and `effort`. The Mac host resolves each child's runtime in
+this order:
+
+1. Explicit arguments.
+2. `settings.subagentModels` role or default entries.
+3. The parent. A locked role applies last.
+
+A different model starts at its own default effort. Explicit picks are strict
+and list the allowed values; nothing falls back silently. The allowlist, the
+effort ceiling, and a no-costlier-than-parent guard bound the choice. Bot and
+Assistant children stay on the parent model.
+
+Model choice binds only the child's runtime fingerprints, effort, and context
+budget. Capabilities, approvals, permission, and workspace are unchanged. Run
+snapshots record `providerId`, `thinkingLevel`, and `modelSelection`, and the
+desktop chips, roster, and detail display them.
+
+P1:
+- A Settings UI for these defaults.
+- Capability-gated Remote, iOS, and Android display.
+- Concurrent implementer worktree warnings and same-run continuation.
 
 ## Goal
 

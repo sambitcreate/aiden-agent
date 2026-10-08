@@ -280,6 +280,17 @@ import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
 import {
+  parseSubagentModelSettings,
+  subagentModelToolOptions,
+  type SubagentModelPolicy,
+} from "./subagents/subagent-model-selection.js";
+import {
+  createSubagentChildModelResolver,
+  savedThinkingLevelFor,
+  subagentModelCandidatesFromSettings,
+} from "./subagents/subagent-model-runtime.js";
+import { listConfiguredProviders } from "./provider-list-main.js";
+import {
   subagentsAllowedForGeneration,
   subagentWorkspaceWriteAllowedForGeneration,
 } from "./subagents/eligibility.js";
@@ -1195,6 +1206,35 @@ async function prepareGeneration(
       },
     });
   }
+  // Bot and Assistant runtimes are bound by their grant, so their children
+  // always run on the parent model. Model choice never reaches capabilities.
+  const subagentModelOverridesAllowed = !botBound && !assistantMode;
+  const subagentModelSettings = subagentModelOverridesAllowed
+    ? parseSubagentModelSettings(settings.subagentModels)
+    : undefined;
+  const subagentModelPolicy: SubagentModelPolicy | undefined =
+    allowSubagents && folderPath && workspace?.id
+      ? {
+          parent: {
+            providerId: runtime.provider.id,
+            providerLabel: runtime.provider.label,
+            modelId: model.id,
+            modelLabel: model.name?.trim() || model.id,
+            effort: thinkingLevel,
+          },
+          candidates: subagentModelOverridesAllowed
+            ? subagentModelCandidatesFromSettings(
+                await listConfiguredProviders().catch(() => []),
+                subagentModelSettings,
+              )
+            : [],
+          overridesAllowed: subagentModelOverridesAllowed,
+          settings: subagentModelSettings,
+        }
+      : undefined;
+  const subagentModelOptions = subagentModelPolicy
+    ? subagentModelToolOptions(subagentModelPolicy)
+    : undefined;
   const subagentSupervisor =
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
@@ -1229,6 +1269,17 @@ async function prepareGeneration(
             return persisted;
           },
           prepareRun: subagentPersistence?.prepareRun,
+          selectChildModel: subagentModelPolicy
+            ? createSubagentChildModelResolver({
+                policy: subagentModelPolicy,
+                parentRuntime: runtime,
+                savedEffort: (providerId, modelId) =>
+                  savedThinkingLevelFor(settings, providerId, modelId),
+                resolveRuntime: (providerId, modelId, modelSignal) =>
+                  resolveModelRuntime(providerId, modelId, modelSignal, chat.id),
+              })
+            : undefined,
+          modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
           projector: subagentProjector,
         })
@@ -1441,6 +1492,7 @@ async function prepareGeneration(
                 : [],
               subagentShellEnabled,
               subagentDelegationEnabled,
+              subagentModelOptions,
             )
         : undefined,
       shareImage: folderPath ? shareImage : undefined,

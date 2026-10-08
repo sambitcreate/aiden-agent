@@ -319,3 +319,47 @@ test("llm-client resolves write rollout before schema and authority exposure", a
     /projectRequestableSubagentMcpInventoryV2\(subagentMcpInventory\),\s+subagentWriteEnabled,\s+childMcpMutationsRollout/u,
   );
 });
+
+const modelChoices = {
+  models: [
+    { providerId: "anthropic", providerLabel: "Anthropic", modelId: "claude-sonnet", modelLabel: "Claude Sonnet" },
+    { providerId: "openrouter", providerLabel: "OpenRouter", modelId: "qwen/qwen3", modelLabel: "Qwen 3" },
+  ],
+  efforts: ["off", "low", "medium"] as const,
+};
+
+function modelTool(withChoices: boolean) {
+  return createSubagentTool(
+    { execute: async () => "done" } as unknown as SubagentSupervisor,
+    [],
+    false,
+    [],
+    false,
+    false,
+    withChoices ? modelChoices : undefined,
+  );
+}
+
+const scoutTask = (extra: Record<string, unknown> = {}) => ({
+  tasks: [{ role: "scout", label: "Inspect", task: "Inspect one source", ...extra }],
+});
+
+test("per-task model and effort accept only offered values and stay optional", () => {
+  const validate = new Ajv().compile(modelTool(true).parameters as object);
+  assert.equal(validate(scoutTask()), true);
+  assert.equal(validate(scoutTask({ model: "openrouter/qwen/qwen3", effort: "low" })), true);
+  assert.equal(validate(scoutTask({ model: "openai/gpt-unlisted" })), false);
+  assert.equal(validate(scoutTask({ effort: "high" })), false);
+  const description = modelTool(true).description;
+  assert.match(description, /Omit model and effort unless the user asks/u);
+  assert.match(description, /openrouter\/qwen\/qwen3 \(Qwen 3, OpenRouter\)/u);
+});
+
+test("model and effort are hidden when only the parent model is allowed", () => {
+  const delegated = modelTool(false);
+  const validate = new Ajv().compile(delegated.parameters as object);
+  assert.equal(validate(scoutTask()), true);
+  assert.equal(validate(scoutTask({ model: "anthropic/claude-sonnet" })), false);
+  assert.equal(validate(scoutTask({ effort: "low" })), false);
+  assert.doesNotMatch(delegated.description, /optional model/u);
+});

@@ -124,7 +124,8 @@ test.describe("Simulator agent tools", () => {
 
       const tools = page.getByRole("complementary", { name: "Environment work surface" });
       if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
-      await tools.getByRole("tab", { name: "Simulator", exact: true }).click();
+      await tools.getByRole("button", { name: "More tools…", exact: true }).click();
+      await tools.getByRole("button", { name: "Simulator", exact: true }).click();
       const panel = page.locator("#environment-devices-panel");
       await panel.getByRole("button", { name: "Start", exact: true }).click();
       const agentAccess = panel.getByRole("switch", { name: "Let Aiden use simulators" });

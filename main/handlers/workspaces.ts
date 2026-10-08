@@ -22,7 +22,7 @@ import {
   type GitDiffInput,
   type GitPushInput,
 } from "../services/git.js";
-import { githubCurrentPullRequest } from "../services/github-pull-request.js";
+import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
 import { GitRepoWatcher } from "../services/git-repo-watcher.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import {
@@ -202,7 +202,7 @@ export function registerWorkspaceHandlers(): void {
     }),
   );
 
-  ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown) =>
+  ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown, interactive?: unknown) =>
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
       if (!resolved) return { availability: "not-repo" as const, message: "This workspace has no accessible folder." };
       const info = await gitInfo(resolved.folderPath, signal);
@@ -212,7 +212,11 @@ export function registerWorkspaceHandlers(): void {
       if (!info.hasRemote) {
         return { availability: "no-pull-request" as const, message: "This repository has no remote to inspect for pull requests." };
       }
-      return githubCurrentPullRequest(resolved.folderPath, signal);
+      return githubCurrentPullRequest(
+        resolved.folderPath,
+        signal,
+        interactive === true ? { interactive: true } : undefined,
+      );
     }),
   );
 

@@ -907,8 +907,12 @@ export const gitApi = {
   checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
   createBranch: (workspaceId: string, name: string) =>
     invoke<void>("git:createBranch", workspaceId, name),
-  pullRequestStatus: (workspaceId: string) =>
-    invoke<GitHubPullRequestStatus>("git:pullRequestStatus", workspaceId),
+  pullRequestStatus: (workspaceId: string, options?: { interactive?: boolean }) =>
+    invoke<GitHubPullRequestStatus>(
+      "git:pullRequestStatus",
+      workspaceId,
+      options?.interactive === true,
+    ),
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
@@ -924,7 +928,7 @@ export const gitApi = {
 export const pullRequestsApi = {
   list: (chatId: string) => invoke<ChatPullRequestListResult>("pullRequests:list", chatId),
   current: (chatId: string) =>
-    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string }>(
+    invoke<{ pullRequest: ChatPullRequestView | undefined; reason: string; message?: string; rateLimitedUntil?: number }>(
       "pullRequests:current",
       chatId,
     ),
