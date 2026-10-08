@@ -462,7 +462,9 @@ body {
   cursor: pointer !important;
 }
 
-:root[data-reduce-motion="true"] *,
+/* Activity marks are excluded: they freeze on their own still pose (see .aiden-mark),
+   and collapsing their tracks to 0.001ms would end them on a last frame instead. */
+:root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *),
 :root[data-reduce-motion="true"] *::before,
 :root[data-reduce-motion="true"] *::after {
   animation-duration: 0.001ms !important;

@@ -36,3 +36,7 @@ recomposition with O(n²) work on Android. The owner wanted animations that are 
 - Swell's second wave adds to the braid and is not scaled by depth (desktop wraps each circle in a `<g>`).
 - Search tools match whole name segments (`find|glob|grep|list|read|search` split on `_ : -`) on every client.
 - Finished tool/subagent marks freeze rather than keep animating.
+- Desktop inline delays are wrapped into (−D, 0] so tracks start mid-cycle like native `(t − d) mod D`.
+  A positive CSS delay means a startup wait, which gives the wrong frozen pose.
+- The app-wide `:root[data-reduce-motion="true"] *` rule (0.001ms, one iteration) excludes `.aiden-mark`.
+  Marks freeze via `animation-play-state: paused` instead, which keeps their t = 0 pose.

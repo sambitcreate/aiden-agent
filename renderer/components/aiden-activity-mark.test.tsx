@@ -53,9 +53,22 @@ test("only an explicit voice level picks a swell step, clamped to its range", ()
 test("phase offsets are plain inline delays, so marks mount without custom properties", () => {
   const helix = renderToStaticMarkup(<AidenActivityMark mark="helix-twist" />);
   assert.doesNotMatch(helix, /style="[^"]*--/u);
-  // Column 0 of strand a starts at phase 0; its depth track trails by a quarter of 1.5s.
-  assert.match(helix, /animation-delay:0s, 0\.375s/u);
+  // Column 0 of strand a starts at phase 0; its depth track trails by a quarter of
+  // 1.5s, which as a repeating phase is 0.375s − 1.5s = −1.125s.
+  assert.match(helix, /animation-delay:0s, -1\.125s/u);
   // Swell's second wave sits on a wrapper per circle, so it adds to the braid rather than scaling with depth.
   const swell = renderToStaticMarkup(<AidenActivityMark mark="helix-swell" />);
   assert.equal((swell.match(/<g class="aiden-mark-wave" style="animation-delay:[^"]*"><circle/gu) ?? []).length, 10);
+});
+
+test("every phase offset starts mid-cycle like the native (t − d) mod D, never as a startup wait", () => {
+  for (const mark of ACTIVITY_MARKS) {
+    const markup = renderToStaticMarkup(<AidenActivityMark mark={mark} />);
+    const delays = [...markup.matchAll(/animation-delay:([^;"]+)/gu)].flatMap((match) =>
+      match[1].split(",").map((value) => Number.parseFloat(value)),
+    );
+    for (const seconds of delays) assert.ok(seconds <= 0, `${mark} has a positive delay ${seconds}s`);
+  }
+  // Bounce dot 2 trails dot 1 by 0.13s of a 1.2s cycle: −1.07s, as on iOS and Android.
+  assert.match(renderToStaticMarkup(<AidenActivityMark mark="bounce" />), /animation-delay:-1\.07s/u);
 });

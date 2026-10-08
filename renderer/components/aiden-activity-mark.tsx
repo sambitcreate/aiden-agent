@@ -4,9 +4,15 @@ import { cn } from "../lib/ui-utils";
 
 // Per-shape phase offsets (seconds) come from docs/activity-marks.md. They are
 // plain inline animation delays, so no custom properties are written per frame
-// or per shape; the keyframes themselves live in styles.css.
-const delay = (...seconds: number[]): React.CSSProperties => ({
-  animationDelay: seconds.map((value) => `${Number(value.toFixed(3))}s`).join(", "),
+// or per shape; the keyframes themselves live in styles.css. Each offset is
+// wrapped into (-period, 0] so a track starts mid-cycle at once, exactly like
+// the native evaluators' `(t - d) mod D`, instead of waiting on a positive delay.
+const phase = (seconds: number, period: number) => {
+  const wrapped = -(((-seconds % period) + period) % period);
+  return `${Number(wrapped.toFixed(3)) || 0}s`;
+};
+const delay = (...tracks: Array<[seconds: number, period: number]>): React.CSSProperties => ({
+  animationDelay: tracks.map(([seconds, period]) => phase(seconds, period)).join(", "),
 });
 
 // Tri-step's triangle: radius 6.5 around the 24-unit view box centre.
@@ -51,12 +57,12 @@ function Helix({ mark }: { mark: HelixMark }) {
           const position = -(i * step) - (strand === "a" ? 0 : 0.5) * duration;
           const depth = position + duration / 4;
           const circle = (
-            <circle key={`${strand}${x}`} className={`aiden-mark-strand-${strand}`} cx={x} cy={12} r={1.8} style={delay(position, depth)} />
+            <circle key={`${strand}${x}`} className={`aiden-mark-strand-${strand}`} cx={x} cy={12} r={1.8} style={delay([position, duration], [depth, duration])} />
           );
           // Swell's second wave rides on a wrapper so it adds to the braid's
           // motion instead of being scaled by the circle's depth.
           return mark === "helix-swell" ? (
-            <g key={`${strand}${x}`} className="aiden-mark-wave" style={delay(i * -0.45)}>{circle}</g>
+            <g key={`${strand}${x}`} className="aiden-mark-wave" style={delay([i * -0.45, 2.3])}>{circle}</g>
           ) : circle;
         }),
       )}
@@ -78,7 +84,7 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
       return (
         <>
           {COMPOSE_LINES.map(({ y, width }, i) => (
-            <rect key={y} x={4} y={y} width={width} height={2.6} rx={1.3} style={delay(i * 0.16 - 1.1)} />
+            <rect key={y} x={4} y={y} width={width} height={2.6} rx={1.3} style={delay([i * 0.16 - 1.1, 2.2])} />
           ))}
         </>
       );
@@ -86,7 +92,7 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
       return (
         <>
           {GRID.flatMap((cy) =>
-            GRID.map((cx, col) => <circle key={`${cx}${cy}`} cx={cx} cy={cy} r={1.9} opacity={0.2} style={delay(col * 0.18 - 0.45)} />),
+            GRID.map((cx, col) => <circle key={`${cx}${cy}`} cx={cx} cy={cy} r={1.9} opacity={0.2} style={delay([col * 0.18 - 0.45, 1.5])} />),
           )}
         </>
       );
@@ -98,7 +104,7 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
         </g>
       );
     case "bounce":
-      return <>{[5.5, 12, 18.5].map((cx, i) => <circle key={cx} cx={cx} cy={13} r={2.4} style={delay(i * 0.13)} />)}</>;
+      return <>{[5.5, 12, 18.5].map((cx, i) => <circle key={cx} cx={cx} cy={13} r={2.4} style={delay([i * 0.13, 1.2])} />)}</>;
     case "helix-calm":
     case "helix-twist":
     case "helix-swell":
