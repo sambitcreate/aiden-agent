@@ -8,6 +8,8 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,13 +119,80 @@ class AidenSimulatorViewerTest {
         assertNull(AidenFittedRect.aspectFit(0f, 100f, 10f, 10f).normalized(0f, 0f))
     }
 
+    // --- Frame decoding ---
+
+    @Test
+    fun framesSubsampleOnlyWhileTheyStayAtLeastAsLargeAsTheyAreDrawn() {
+        // An unknown or empty viewer decodes at full size.
+        assertEquals(1, AidenSimulatorFrameSampling.inSampleSize(1206, 2622, 0, 0))
+        // A full-screen viewer on a phone shows the frame near its own size.
+        assertEquals(1, AidenSimulatorFrameSampling.inSampleSize(1206, 2622, 1080, 2340))
+        // A small viewer: 1206x2622 fit into 300x600 shrinks by 4.37, so a quarter still covers it.
+        assertEquals(4, AidenSimulatorFrameSampling.inSampleSize(1206, 2622, 300, 600))
+        for ((view, frame) in listOf((300 to 600) to (1206 to 2622), (540 to 540) to (2048 to 2732), (100 to 1000) to (1179 to 2556))) {
+            val sample = AidenSimulatorFrameSampling.inSampleSize(frame.first, frame.second, view.first, view.second)
+            assertEquals("power of two", 0, sample and (sample - 1))
+            val fit = minOf(view.first.toDouble() / frame.first, view.second.toDouble() / frame.second)
+            // Never smaller than drawn, and the next power of two would be.
+            assertTrue(frame.first / sample >= frame.first * fit - 1)
+            assertTrue(frame.first / (sample * 2.0) < frame.first * fit)
+        }
+    }
+
+    @Test
+    fun aBitmapIsReusedOnlyOnceTheScreenHasMovedTwoFramesPastIt() {
+        val policy = AidenFrameReusePolicy<String>()
+        listOf("a", "b", "c").forEach(policy::published)
+        // Nothing is free until the UI reports what it shows.
+        assertNull(policy.acquire { true })
+        policy.shown("b")
+        // "b" is on screen and "a" may still be drawing: neither is reused.
+        assertNull(policy.acquire { true })
+        policy.shown("c")
+        assertEquals("a", policy.acquire { true })
+        assertNull(policy.acquire { true })
+
+        // Frames the UI skipped ("d") are released with everything older than the shown one's
+        // predecessor. Only the newest four stay tracked, so "b" was already forgotten, never freed.
+        listOf("d", "e", "f").forEach(policy::published)
+        policy.shown("f")
+        val freed = generateSequence { policy.acquire { true } }.toList()
+        assertEquals(listOf("c", "d"), freed)
+        // A reused frame is never handed out twice, and a frame that does not fit stays free.
+        listOf("g", "h").forEach(policy::published)
+        policy.shown("h")
+        assertNull(policy.acquire { it == "zzz" })
+        assertEquals("e", policy.acquire { it == "e" })
+        assertNull(policy.acquire { it == "e" })
+        assertEquals("f", policy.acquire { true })
+    }
+
+    @Test
+    fun framesTheUiNeverReportsAreForgottenNotReused() {
+        val policy = AidenFrameReusePolicy<String>(trackedLimit = 4)
+        (1..10).map { "frame-$it" }.forEach(policy::published)
+        // Old untracked frames are left to the garbage collector.
+        policy.shown("frame-1")
+        assertNull(policy.acquire { true })
+        policy.shown("frame-10")
+        assertEquals(listOf("frame-7", "frame-8"), generateSequence { policy.acquire { true } }.toList())
+        policy.clear()
+        assertNull(policy.acquire { true })
+    }
+
     // --- Viewer model ---
 
-    private class FakeRemote(var listing: AidenSimulatorListing, var access: Boolean = true) : AidenSimulatorRemote {
+    private class FakeRemote(
+        var listing: AidenSimulatorListing,
+        var access: Boolean = true,
+        /** Hand out real sessions aimed at a closed local port instead of none. */
+        private val liveSessions: Boolean = false
+    ) : AidenSimulatorRemote {
         val listingRequests = mutableListOf<String?>()
         val opened = mutableListOf<String>()
         val shutdowns = mutableListOf<String>()
         val sessions = mutableListOf<String>()
+        val created = mutableListOf<AidenSimulatorStreamSession<ImageBitmap>>()
 
         override val hasAccess: Boolean get() = access
         override suspend fun simulators(chatId: String?): AidenSimulatorListing {
@@ -138,9 +207,22 @@ class AidenSimulatorViewerTest {
             shutdowns += deviceId
         }
         // No network in unit tests: the model reports the stream as unreachable.
-        override fun session(deviceId: String, scope: CoroutineScope): AidenSimulatorStreamSession<ImageBitmap>? {
+        override fun session(
+            deviceId: String,
+            scope: CoroutineScope,
+            decodeFrame: (ByteArray) -> ImageBitmap?
+        ): AidenSimulatorStreamSession<ImageBitmap>? {
             sessions += deviceId
-            return null
+            if (!liveSessions) return null
+            val unreachable = Request.Builder().url("http://127.0.0.1:9/").build()
+            return AidenSimulatorStreamSession<ImageBitmap>(
+                httpClient = OkHttpClient(),
+                mjpegRequest = unreachable,
+                inputRequest = unreachable,
+                scope = scope,
+                decodeFrame = decodeFrame,
+                retryDelayMillis = 60_000
+            ).also { created += it }
         }
     }
 
@@ -232,6 +314,30 @@ class AidenSimulatorViewerTest {
         assertEquals(listOf(iphone), remote.shutdowns)
         assertFalse(model.viewer.value.open)
         assertEquals(2, remote.listingRequests.size)
+    }
+
+    @Test
+    fun leavingTheViewerReleasesTheStreamAndReturningReconnects() {
+        val remote = FakeRemote(fixtureListing, liveSessions = true)
+        val model = AidenSimulatorsViewModel("chat_1", remote)
+        model.refreshChatDevices()
+        model.openViewer()
+        assertEquals(1, remote.created.size)
+        assertTrue(model.session.value === remote.created.single())
+
+        // The viewer left the screen (or the app went to the background) while still open.
+        model.pauseStreaming()
+        assertNull(model.session.value)
+        assertTrue(model.viewer.value.open)
+        // A stopped session cannot send, so it holds no socket on the Mac.
+        assertFalse(remote.created.single().send(byteArrayOf(0)))
+
+        // Coming back (ON_START replays when the observer is re-added) opens a new stream.
+        model.resumeStreaming()
+        assertEquals(2, remote.created.size)
+        assertTrue(model.session.value === remote.created.last())
+        model.closeViewer()
+        assertNull(model.session.value)
     }
 
     @Test

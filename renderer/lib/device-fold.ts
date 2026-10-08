@@ -105,6 +105,25 @@ export interface AndroidFoldSnapshot {
 
 type Timer = ReturnType<typeof setTimeout>;
 
+/** Settles with `task`, or rejects as soon as `signal` aborts, even if `task` never settles. */
+function untilAborted<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    task.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export interface AndroidFoldController {
   /** Reads now and keeps retrying until a read lands. Call again when the screen size changes. */
   watch(): void;
@@ -126,6 +145,7 @@ export function createAndroidFoldController(options: {
   const cancel = options.clearTimeout ?? ((timer) => clearTimeout(timer));
   let state: AndroidFoldSnapshot = { fold: null, angle: null, pending: false, error: null };
   let reading: AbortController | null = null;
+  let writing: AbortController | null = null;
   let retry: Timer | null = null;
   let watching = false;
   let disposed = false;
@@ -176,9 +196,11 @@ export function createAndroidFoldController(options: {
       const before = state.fold;
       set({ pending: true, error: null, angle: posture === "closed" ? 0 : 180 });
       const controller = new AbortController();
+      writing = controller;
       const timeout = schedule(() => controller.abort(), ANDROID_FOLD_TIMEOUT_MS);
       try {
-        const fold = await options.write(posture, controller.signal);
+        // The timeout covers the whole command, minting its grant included.
+        const fold = await untilAborted(options.write(posture, controller.signal), controller.signal);
         set({ fold, angle: androidFoldAngle(fold) });
       } catch (cause) {
         set({
@@ -191,6 +213,7 @@ export function createAndroidFoldController(options: {
         });
       } finally {
         cancel(timeout);
+        if (writing === controller) writing = null;
         set({ pending: false });
         read();
       }
@@ -200,6 +223,8 @@ export function createAndroidFoldController(options: {
       disposed = true;
       watching = false;
       stopReading();
+      writing?.abort();
+      writing = null;
     },
   };
 }

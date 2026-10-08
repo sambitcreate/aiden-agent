@@ -180,6 +180,35 @@ struct AidenLatestFrameMailbox {
     }
 }
 
+/// Hands decoded frames to the main thread one at a time. Only one main-queue
+/// hop is outstanding; a frame decoded while it waits replaces the older one,
+/// so a stalled main thread holds at most one full-size image, not a backlog.
+final class AidenLatestFrameSlot<Frame>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latest: Frame?
+    private var hopPending = false
+
+    /// Stores `frame` as the newest. Returns true when the caller must schedule
+    /// the hop that will `take()` it; false when one is already on its way.
+    func offer(_ frame: Frame) -> Bool {
+        lock.withLock {
+            latest = frame
+            guard !hopPending else { return false }
+            hopPending = true
+            return true
+        }
+    }
+
+    /// Called by the hop: the newest frame, after which the next offer schedules a new hop.
+    func take() -> Frame? {
+        lock.withLock {
+            hopPending = false
+            defer { latest = nil }
+            return latest
+        }
+    }
+}
+
 /// Decodes JPEGs on a background queue, newest first, dropping stale frames.
 final class AidenSimulatorFrameDecoder: @unchecked Sendable {
     private let queue = DispatchQueue(label: "AidenSimulatorFrameDecoder", qos: .userInitiated)

@@ -104,11 +104,18 @@ struct AidenSimulatorDevice: Decodable, Equatable, Identifiable, Sendable {
         kind = AidenSimulatorKind(wireValue: kindValue)
     }
 
-    /// `^[A-Za-z0-9-]{1,128}$`, the only device identifiers the relay admits.
+    /// `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, the desktop's `DEVICE_ID_PATTERN`:
+    /// a simulator UDID, an adb serial (`emulator-5554`) or a stopped AVD's
+    /// name (`Pixel_9_API_35`). The first byte is alphanumeric, so an id is
+    /// never a dot segment or a flag.
     static func isValidIdentifier(_ value: String) -> Bool {
-        (1...128).contains(value.utf8.count) && value.utf8.allSatisfy { byte in
-            (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte) || byte == 45
-        }
+        let bytes = Array(value.utf8)
+        guard (1...128).contains(bytes.count), isAlphanumeric(bytes[0]) else { return false }
+        return bytes.allSatisfy { isAlphanumeric($0) || $0 == 45 || $0 == 46 || $0 == 95 }
+    }
+
+    private static func isAlphanumeric(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
     }
 
     private enum CodingKeys: String, CodingKey { case id, name, platform, version, booted, kind }
@@ -167,16 +174,18 @@ struct AidenSimulatorListing: Decodable, Equatable, Sendable {
         let sharing = try values.decode(Bool.self, forKey: .sharing)
         let status = try values.decode(String.self, forKey: .status)
         let detail = try values.decodeIfPresent(String.self, forKey: .detail)
-        let devices = try values.decode([AidenSimulatorDevice].self, forKey: .devices)
+        // A device this version cannot use (an id it does not admit, a missing
+        // field, a repeat) is skipped, so one odd entry never hides the rest.
+        let entries = try values.decode([AidenSimulatorLossyDevice].self, forKey: .devices)
+        var listed = Set<String>()
+        let devices = entries.compactMap(\.device).filter { listed.insert($0.id).inserted }
         let chatDeviceIds = try values.decodeIfPresent([String].self, forKey: .chatDeviceIds) ?? []
         let toolVersions = try values.decodeIfPresent(AidenSimulatorToolVersions.self, forKey: .toolVersions)
         guard status.count <= 32,
               (detail?.count ?? 0) <= 2_000,
-              devices.count <= 256,
-              Set(devices.map(\.id)).count == devices.count,
-              sharing || devices.isEmpty,
-              chatDeviceIds.count <= 256,
-              chatDeviceIds.allSatisfy(AidenSimulatorDevice.isValidIdentifier) else {
+              entries.count <= 256,
+              sharing || entries.isEmpty,
+              chatDeviceIds.count <= 256 else {
             throw AidenRemoteContractError.unsafePayloadField("simulator listing")
         }
         var seen = Set<String>()
@@ -223,6 +232,15 @@ struct AidenSimulatorListing: Decodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sharing, status, detail, devices, chatDeviceIds, toolVersions
+    }
+}
+
+/// One `devices` entry, or nil when it does not decode as a usable device.
+private struct AidenSimulatorLossyDevice: Decodable {
+    let device: AidenSimulatorDevice?
+
+    init(from decoder: Decoder) throws {
+        device = try? AidenSimulatorDevice(from: decoder)
     }
 }
 
@@ -367,6 +385,31 @@ enum AidenSimulatorHelperMessage {
 /// Mac or the network drops the socket, retry once after about a second.
 /// (A browser reports a refused upgrade as 1006; URLSession reports the HTTP
 /// status instead, so 1006 is not a refusal here.)
+/// The reconnect budget of one stream or socket. It refills once a connection
+/// has stayed healthy for `stableInterval`, so a long session survives more than
+/// one drop, while a connection that fails straight after connecting still
+/// gives up after its single retry instead of flapping.
+struct AidenSimulatorRetryBudget: Equatable {
+    static let stableInterval: TimeInterval = 5
+
+    private(set) var used = 0
+    private var healthySince: TimeInterval?
+
+    /// The connection works: input connected, or a frame arrived.
+    mutating func succeeded(at now: TimeInterval) {
+        if healthySince == nil { healthySince = now }
+    }
+
+    /// The connection ended. Returns the retries used, after any refill.
+    mutating func ended(at now: TimeInterval) -> Int {
+        if let since = healthySince, now - since >= Self.stableInterval { used = 0 }
+        healthySince = nil
+        return used
+    }
+
+    mutating func spend() { used += 1 }
+}
+
 enum AidenSimulatorInputRetryPolicy {
     enum Decision: Equatable {
         case retry(after: TimeInterval)

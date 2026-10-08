@@ -1,8 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.simulators
 
-import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -34,7 +33,11 @@ interface AidenSimulatorRemote {
     suspend fun simulators(chatId: String?): AidenSimulatorListing
     suspend fun open(deviceId: String): AidenSimulatorDevice
     suspend fun shutdown(deviceId: String)
-    fun session(deviceId: String, scope: CoroutineScope): AidenSimulatorStreamSession<ImageBitmap>?
+    fun session(
+        deviceId: String,
+        scope: CoroutineScope,
+        decodeFrame: (ByteArray) -> ImageBitmap?
+    ): AidenSimulatorStreamSession<ImageBitmap>?
 }
 
 class AidenCoordinatorSimulatorRemote(private val coordinator: AidenRemoteCoordinator) : AidenSimulatorRemote {
@@ -49,14 +52,18 @@ class AidenCoordinatorSimulatorRemote(private val coordinator: AidenRemoteCoordi
     override suspend fun open(deviceId: String) = client().openSimulator(deviceId)
     override suspend fun shutdown(deviceId: String) = client().shutdownSimulator(deviceId)
 
-    override fun session(deviceId: String, scope: CoroutineScope): AidenSimulatorStreamSession<ImageBitmap>? {
+    override fun session(
+        deviceId: String,
+        scope: CoroutineScope,
+        decodeFrame: (ByteArray) -> ImageBitmap?
+    ): AidenSimulatorStreamSession<ImageBitmap>? {
         val client = coordinator.client.value ?: return null
         return AidenSimulatorStreamSession(
             httpClient = client.simulatorStreamingClient,
             mjpegRequest = client.simulatorMjpegRequest(deviceId),
             inputRequest = client.simulatorInputRequest(deviceId),
             scope = scope,
-            decodeFrame = { jpeg -> BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.asImageBitmap() }
+            decodeFrame = decodeFrame
         )
     }
 }
@@ -117,6 +124,10 @@ class AidenSimulatorsViewModel(
     private var openJob: Job? = null
     private var openingDeviceId: String? = null
     private var foreground = true
+    /** The viewer's size in pixels, read on the decode thread to subsample frames. */
+    @Volatile private var viewSize: Pair<Int, Int>? = null
+    /** The current session's decoder; it reuses bitmaps the UI no longer shows. */
+    @Volatile private var decoder: AidenSimulatorFrameDecoder? = null
 
     fun refreshChatDevices() {
         if (!remote.hasAccess) {
@@ -195,7 +206,7 @@ class AidenSimulatorsViewModel(
         }
     }
 
-    /** ON_STOP: close the stream and socket; the last frame stays on screen. */
+    /** ON_STOP, or the viewer leaving the screen: close the stream and socket; the last frame stays. */
     fun pauseStreaming() {
         foreground = false
         stopSession()
@@ -236,6 +247,15 @@ class AidenSimulatorsViewModel(
         val (next, exits) = _controls.value.back()
         _controls.value = next
         return exits
+    }
+
+    fun viewSizeChanged(width: Int, height: Int) {
+        viewSize = if (width > 0 && height > 0) width to height else null
+    }
+
+    /** The viewer is showing [frame]; older frames of this session may be decoded into again. */
+    fun frameShown(frame: ImageBitmap) {
+        decoder?.shown(frame.asAndroidBitmap())
     }
 
     fun touch(phase: AidenSimulatorTouchPhase, x: Double, y: Double) {
@@ -289,11 +309,13 @@ class AidenSimulatorsViewModel(
             boot(device)
             return
         }
-        val session = remote.session(device.id, viewModelScope)
+        val frameDecoder = AidenSimulatorFrameDecoder { viewSize }
+        val session = remote.session(device.id, viewModelScope, frameDecoder::decode)
         if (session == null) {
             _viewer.update { it.copy(error = AidenSimulatorViewerError.UNREACHABLE) }
             return
         }
+        decoder = frameDecoder
         _session.value = session
         _controls.update { it.withInputConnected(false) }
         sessionWatch = viewModelScope.launch {
@@ -337,6 +359,8 @@ class AidenSimulatorsViewModel(
         sessionWatch = null
         _session.value?.stop()
         _session.value = null
+        // A frame still on screen came from this decoder, which is never used again.
+        decoder = null
         _controls.update { it.withInputConnected(false) }
     }
 

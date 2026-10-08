@@ -58,7 +58,7 @@ const tick = async () => {
   for (let index = 0; index < 5; index++) await new Promise((resolve) => setImmediate(resolve));
 };
 
-function harness() {
+function harness(options: { writeIgnoresAbort?: boolean } = {}) {
   const clock = fakeClock();
   const reads: Array<{ signal: AbortSignal; result: ReturnType<typeof deferred<AndroidFoldState>> }> = [];
   const writes: Array<{
@@ -76,7 +76,8 @@ function harness() {
     write: (posture, signal) => {
       const result = deferred<AndroidFoldState>();
       writes.push({ posture, signal, result });
-      signal.addEventListener("abort", () => result.reject(new Error("aborted")));
+      // A write stuck minting its grant never sees the signal.
+      if (!options.writeIgnoresAbort) signal.addEventListener("abort", () => result.reject(new Error("aborted")));
       return result.promise;
     },
     onChange: (snapshot) => snapshots.push(snapshot),
@@ -199,6 +200,26 @@ test("a fold command times out after 12 seconds and restores the last known angl
   h.clock.advance(1);
   await changing;
   assert.deepEqual(h.controller.snapshot(), { fold: OPEN, angle: 180, pending: false, error: "Fold command timed out." });
+});
+
+test("the timeout also covers a command whose grant never arrives, and dispose aborts a command in flight", async () => {
+  const h = harness({ writeIgnoresAbort: true });
+  h.controller.watch();
+  h.reads[0]!.result.resolve(OPEN);
+  await tick();
+  const changing = h.controller.change("closed");
+  h.clock.advance(ANDROID_FOLD_TIMEOUT_MS);
+  await changing;
+  assert.deepEqual(h.controller.snapshot(), { fold: OPEN, angle: 180, pending: false, error: "Fold command timed out." });
+  // The device can be folded again.
+  h.reads[1]!.result.resolve(OPEN);
+  await tick();
+  const again = h.controller.change("closed");
+  assert.equal(h.writes.length, 2);
+  h.controller.dispose();
+  assert.equal(h.writes[1]!.signal.aborted, true);
+  await again;
+  assert.equal(h.reads.length, 2, "a disposed controller never reads again");
 });
 
 test("a refused command keeps serve-emu's message, and an emulator without a hinge never writes", async () => {

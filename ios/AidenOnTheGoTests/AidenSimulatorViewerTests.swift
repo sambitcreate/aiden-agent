@@ -147,6 +147,30 @@ final class AidenSimulatorViewerTests: XCTestCase {
         XCTAssertTrue(mailbox.offer(Data([4])), "the pass ended, so the next frame starts another")
     }
 
+    func testDecodedFramesWaitForTheMainThreadOneAtATime() {
+        let slot = AidenLatestFrameSlot<Int>()
+        // The first frame schedules the only hop; frames decoded while it waits replace it.
+        XCTAssertTrue(slot.offer(1))
+        XCTAssertFalse(slot.offer(2))
+        XCTAssertFalse(slot.offer(3))
+        XCTAssertEqual(slot.take(), 3)
+        // Nothing is left behind, and the next frame schedules a new hop.
+        XCTAssertNil(slot.take())
+        XCTAssertTrue(slot.offer(4))
+        XCTAssertEqual(slot.take(), 4)
+
+        // A stalled main thread: thousands of frames from the decoder schedule one hop.
+        let stalled = AidenLatestFrameSlot<Int>()
+        let hops = NSLock()
+        var scheduled = 0
+        DispatchQueue.concurrentPerform(iterations: 2_000) { index in
+            if stalled.offer(index) { hops.withLock { scheduled += 1 } }
+        }
+        XCTAssertEqual(scheduled, 1)
+        XCTAssertNotNil(stalled.take())
+        XCTAssertNil(stalled.take())
+    }
+
     func testFrameDecoderDecodesARealJPEG() throws {
         let data = NSMutableData()
         let context = try XCTUnwrap(CGContext(
@@ -211,6 +235,64 @@ final class AidenSimulatorViewerTests: XCTestCase {
         }
     }
 
+    func testRetryBudgetRefillsOnlyAfterAStableConnection() {
+        typealias Policy = AidenSimulatorInputRetryPolicy
+        var budget = AidenSimulatorRetryBudget()
+        // Connected, then dropped well after the stable interval: one retry, again and again.
+        for round in 0..<3 {
+            let start = Double(round) * 100
+            budget.succeeded(at: start)
+            let used = budget.ended(at: start + AidenSimulatorRetryBudget.stableInterval + 1)
+            XCTAssertEqual(Policy.decision(closeCode: 1001, httpStatus: 101, retriesUsed: used), .retry(after: 1), "drop \(round)")
+            budget.spend()
+        }
+
+        // A connection that drops right after connecting keeps its spent budget and gives up.
+        var flapping = AidenSimulatorRetryBudget()
+        flapping.succeeded(at: 0)
+        XCTAssertEqual(flapping.ended(at: 1), 0)
+        flapping.spend()
+        flapping.succeeded(at: 2)
+        XCTAssertEqual(Policy.decision(closeCode: 1001, httpStatus: 101, retriesUsed: flapping.ended(at: 3)), .giveUp)
+
+        // A connection that never succeeded never refills.
+        var never = AidenSimulatorRetryBudget()
+        never.spend()
+        XCTAssertEqual(never.ended(at: 1_000), 1)
+    }
+
+    func testTouchTrackerPairsEveryBeginWithOneEndEvenWhenTheGestureIsCancelled() {
+        typealias Touch = AidenSimulatorTouchTracker.Touch
+        var tracker = AidenSimulatorTouchTracker()
+        // A touch that starts in the letterbox never begins.
+        XCTAssertNil(tracker.changed(inside: nil, clamped: CGPoint(x: 0, y: 0.5)))
+        XCTAssertNil(tracker.ended(clamped: CGPoint(x: 0, y: 0.5)))
+
+        XCTAssertEqual(tracker.changed(inside: CGPoint(x: 0.2, y: 0.3), clamped: CGPoint(x: 0.2, y: 0.3)),
+                       Touch(phase: .begin, point: CGPoint(x: 0.2, y: 0.3)))
+        // Once down, the finger follows the clamped point off the frame's edge.
+        XCTAssertEqual(tracker.changed(inside: nil, clamped: CGPoint(x: 1, y: 0.4)),
+                       Touch(phase: .move, point: CGPoint(x: 1, y: 0.4)))
+
+        // The system cancels the gesture (edge swipe, Notification Center): no onEnded.
+        // The finger is lifted where it last was, exactly once.
+        XCTAssertEqual(tracker.cancel(), Touch(phase: .end, point: CGPoint(x: 1, y: 0.4)))
+        XCTAssertNil(tracker.cancel())
+        XCTAssertNil(tracker.ended(clamped: CGPoint(x: 1, y: 0.4)))
+
+        // The next touch begins again rather than moving a finger the helper already lifted.
+        XCTAssertEqual(tracker.changed(inside: CGPoint(x: 0.5, y: 0.5), clamped: CGPoint(x: 0.5, y: 0.5))?.phase, .begin)
+        // A normal end followed by the gesture state reset sends one end, not two.
+        XCTAssertEqual(tracker.ended(clamped: CGPoint(x: 0.6, y: 0.5)), Touch(phase: .end, point: CGPoint(x: 0.6, y: 0.5)))
+        XCTAssertNil(tracker.cancel())
+
+        // A dropped socket forgets the contact without sending anything.
+        _ = tracker.changed(inside: CGPoint(x: 0.1, y: 0.1), clamped: CGPoint(x: 0.1, y: 0.1))
+        tracker.reset()
+        XCTAssertFalse(tracker.isTracking)
+        XCTAssertEqual(tracker.changed(inside: CGPoint(x: 0.1, y: 0.2), clamped: CGPoint(x: 0.1, y: 0.2))?.phase, .begin)
+    }
+
     func testTouchesAreClampedToTheFrame() throws {
         let encoded = AidenSimulatorHelperMessage.touch(.move, x: -0.2, y: 1.7, screen: nil)
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded.dropFirst()) as? [String: Any])
@@ -254,9 +336,11 @@ final class AidenSimulatorViewerTests: XCTestCase {
         let listing = try AidenRemoteJSONDecoder.decode(AidenSimulatorListing.self, from: fixtureData("listing"))
         XCTAssertTrue(listing.sharing)
         XCTAssertEqual(listing.status, .ready)
-        XCTAssertEqual(listing.devices.map(\.platform), [.ios, .ios, .android])
-        XCTAssertEqual(listing.devices.map(\.kind), [.iphone, .ipad, .other])
-        XCTAssertEqual(listing.devices.map(\.booted), [true, false, true])
+        XCTAssertEqual(listing.devices.map(\.platform), [.ios, .ios, .android, .android])
+        XCTAssertEqual(listing.devices.map(\.kind), [.iphone, .ipad, .other, .other])
+        XCTAssertEqual(listing.devices.map(\.booted), [true, false, true, false])
+        // A stopped emulator is listed by its AVD name, as the desktop lists it.
+        XCTAssertEqual(listing.devices.last?.id, "Pixel_9_API_35")
         XCTAssertEqual(listing.devices.filter(\.platform.isViewableOnPhone).count, 2)
         XCTAssertEqual(listing.chatDevices.map(\.name), ["iPhone 17 Pro", "Pixel 9"])
         XCTAssertEqual(listing.toolVersions, AidenSimulatorToolVersions(hub: "0.12.0", agent: "0.21.12"))
@@ -309,24 +393,61 @@ final class AidenSimulatorViewerTests: XCTestCase {
         XCTAssertEqual(listing.devices[0].platform, .other("visionos"))
         XCTAssertFalse(listing.devices[0].platform.isViewableOnPhone)
         XCTAssertEqual(listing.devices[0].kind, .other)
-        XCTAssertEqual(listing.devices.count, 3)
+        XCTAssertEqual(listing.devices.count, 4)
     }
 
-    func testListingRejectsUnsafeIdentitiesAndMissingFields() throws {
-        let rejected: [(String, Data)] = [
+    func testIdentifiersFollowTheDesktopDevicePattern() {
+        for id in ["5A0C1F3E-0000-4000-8000-000000000001", "emulator-5554", "Pixel_9_API_35", "Pixel.9", "a"] {
+            XCTAssertTrue(AidenSimulatorDevice.isValidIdentifier(id), id)
+        }
+        for id in ["", ".hidden", "_x", "-flag", "../etc/passwd", "bad id", "a/b", String(repeating: "a", count: 129)] {
+            XCTAssertFalse(AidenSimulatorDevice.isValidIdentifier(id), id)
+        }
+    }
+
+    func testListingSkipsDevicesItCannotUseAndKeepsTheRest() throws {
+        let skipped: [(String, Data)] = [
             ("bad id", try mutatedListing { listing in mutateFirstDevice(&listing) { $0["id"] = "../etc/passwd" } }),
             ("long id", try mutatedListing { listing in
                 mutateFirstDevice(&listing) { $0["id"] = String(repeating: "a", count: 129) }
             }),
             ("missing platform", try mutatedListing { listing in mutateFirstDevice(&listing) { $0["platform"] = nil } }),
             ("missing booted", try mutatedListing { listing in mutateFirstDevice(&listing) { $0["booted"] = nil } }),
+        ]
+        for (label, data) in skipped {
+            let listing = try AidenRemoteJSONDecoder.decode(AidenSimulatorListing.self, from: data)
+            XCTAssertEqual(
+                listing.devices.map(\.id),
+                ["5A0C1F3E-0000-4000-8000-000000000002", "emulator-5554", "Pixel_9_API_35"],
+                label
+            )
+            // The skipped device leaves the chat; the emulator keeps the button.
+            XCTAssertEqual(listing.chatDeviceIds, ["emulator-5554"], label)
+            XCTAssertTrue(listing.showsChatDeviceButton, label)
+        }
+        let duplicate = try AidenRemoteJSONDecoder.decode(
+            AidenSimulatorListing.self,
+            from: mutatedListing { listing in
+                var devices = listing["devices"] as? [[String: Any]] ?? []
+                devices.append(devices[0])
+                listing["devices"] = devices
+            }
+        )
+        XCTAssertEqual(duplicate.devices.count, 4)
+
+        let rejected: [(String, Data)] = [
             ("missing sharing", try mutatedListing { $0["sharing"] = nil }),
             ("devices while sharing off", try mutatedListing { $0["sharing"] = false }),
-            ("bad chat id", try mutatedListing { $0["chatDeviceIds"] = ["bad id"] }),
         ]
         for (label, data) in rejected {
             XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenSimulatorListing.self, from: data), label)
         }
+        // A chat id that is not a listed device is dropped, not trusted.
+        let badChatId = try AidenRemoteJSONDecoder.decode(
+            AidenSimulatorListing.self,
+            from: mutatedListing { $0["chatDeviceIds"] = ["bad id", "emulator-5554"] }
+        )
+        XCTAssertEqual(badChatId.chatDeviceIds, ["emulator-5554"])
         // A chat id the listing does not contain is dropped, not trusted.
         let stray = try AidenRemoteJSONDecoder.decode(
             AidenSimulatorListing.self,

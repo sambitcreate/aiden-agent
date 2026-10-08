@@ -73,6 +73,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
@@ -165,7 +166,12 @@ private fun AidenSimulatorViewerContent(viewModel: AidenSimulatorsViewModel, sta
     val liveFrame by frameFlow.collectAsStateWithLifecycle()
     // The last frame stays on screen through a reload or a trip to the background.
     var shownFrame by remember(state.selectedDeviceId) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(liveFrame) { liveFrame?.let { shownFrame = it } }
+    LaunchedEffect(liveFrame) {
+        liveFrame?.let {
+            shownFrame = it
+            viewModel.frameShown(it)
+        }
+    }
 
     ImmersiveWindow(reduceMotion)
     StreamLifecycle(viewModel)
@@ -180,6 +186,7 @@ private fun AidenSimulatorViewerContent(viewModel: AidenSimulatorsViewModel, sta
         modifier = Modifier
             .fillMaxSize()
             .background(AidenTheme.palette.canvas)
+            .onSizeChanged { viewModel.viewSizeChanged(it.width, it.height) }
     ) {
         val frame = shownFrame
         if (frame != null && device != null && device.isViewableOnPhone && state.error == null) {
@@ -551,7 +558,11 @@ private fun ImmersiveWindow(reduceMotion: Boolean) {
     }
 }
 
-/** Streams run only while the app is started; they reconnect on return. */
+/**
+ * Streams run only while the app is started and the viewer is on screen; they
+ * reconnect on return. The view model outlives this screen (it is scoped to the
+ * activity), so leaving the chat must release the Mac's relay slot here.
+ */
 @Composable
 private fun StreamLifecycle(viewModel: AidenSimulatorsViewModel) {
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -564,7 +575,11 @@ private fun StreamLifecycle(viewModel: AidenSimulatorsViewModel) {
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            // Re-adding the observer replays ON_START, which reconnects.
+            viewModel.pauseStreaming()
+        }
     }
 }
 

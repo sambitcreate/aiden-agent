@@ -106,6 +106,44 @@ enum AidenSimulatorTouchMapping {
     }
 }
 
+/// One finger on the simulator screen. Every begin gets exactly one end, even
+/// when the system cancels the gesture (an edge swipe, Notification Center,
+/// the app leaving the foreground) and SwiftUI never calls `onEnded`.
+struct AidenSimulatorTouchTracker: Equatable {
+    struct Touch: Equatable {
+        let phase: AidenSimulatorTouchPhase
+        let point: CGPoint
+    }
+
+    private(set) var lastPoint: CGPoint?
+
+    var isTracking: Bool { lastPoint != nil }
+
+    /// `inside` is nil outside the frame; `clamped` keeps a started touch at the edge.
+    mutating func changed(inside: CGPoint?, clamped: CGPoint?) -> Touch? {
+        if lastPoint != nil {
+            guard let clamped else { return nil }
+            lastPoint = clamped
+            return Touch(phase: .move, point: clamped)
+        }
+        guard let inside else { return nil }
+        lastPoint = inside
+        return Touch(phase: .begin, point: inside)
+    }
+
+    mutating func ended(clamped: CGPoint?) -> Touch? {
+        guard let last = lastPoint else { return nil }
+        lastPoint = nil
+        return Touch(phase: .end, point: clamped ?? last)
+    }
+
+    /// The gesture was cancelled or the viewer is going away: lift the finger where it last was.
+    mutating func cancel() -> Touch? { ended(clamped: nil) }
+
+    /// The input socket ended; the next touch starts a new contact.
+    mutating func reset() { lastPoint = nil }
+}
+
 enum AidenSimulatorViewerCopy {
     static let sharingOff = String(localized:
         "Turn on Share with Aiden On The Go in Aiden on your Mac (Settings → Simulator)."
@@ -177,9 +215,10 @@ final class AidenSimulatorViewerModel: Identifiable {
     @ObservationIgnored private var stream: AidenSimulatorFrameStream?
     @ObservationIgnored private var socket: AidenSimulatorInputSocket?
     @ObservationIgnored private var generation = 0
-    @ObservationIgnored private var inputRetries = 0
-    @ObservationIgnored private var streamRetries = 0
+    @ObservationIgnored private var inputRetries = AidenSimulatorRetryBudget()
+    @ObservationIgnored private var streamRetries = AidenSimulatorRetryBudget()
     @ObservationIgnored private var isActive = false
+    @ObservationIgnored private var touches = AidenSimulatorTouchTracker()
     @ObservationIgnored private var work: Task<Void, Never>?
 
     init(client: AidenRemoteClient, listing: AidenSimulatorListing) {
@@ -216,6 +255,8 @@ final class AidenSimulatorViewerModel: Identifiable {
     /// stream, the socket and their session. The last frame stays on screen.
     func deactivate() {
         guard isActive else { return }
+        // A finger still down when the app leaves is lifted before the socket closes.
+        touchCancelled()
         isActive = false
         stopStreaming()
         if case .streaming = phase { phase = .idle }
@@ -253,9 +294,26 @@ final class AidenSimulatorViewerModel: Identifiable {
 
     // MARK: Input
 
-    func touch(_ phase: AidenSimulatorTouchPhase, x: Double, y: Double) {
-        guard inputConnected else { return }
-        socket?.send(AidenSimulatorHelperMessage.touch(phase, x: x, y: y, screen: screen))
+    /// `inside` is the normalized point when it lies on the frame; `clamped` is pinned to it.
+    func touchChanged(inside: CGPoint?, clamped: CGPoint?) {
+        guard inputConnected || touches.isTracking else { return }
+        send(touches.changed(inside: inside, clamped: clamped))
+    }
+
+    func touchEnded(clamped: CGPoint?) {
+        send(touches.ended(clamped: clamped))
+    }
+
+    /// The system cancelled the gesture without `onEnded`.
+    func touchCancelled() {
+        send(touches.cancel())
+    }
+
+    private func send(_ touch: AidenSimulatorTouchTracker.Touch?) {
+        guard let touch, inputConnected else { return }
+        socket?.send(AidenSimulatorHelperMessage.touch(
+            touch.phase, x: touch.point.x, y: touch.point.y, screen: screen
+        ))
     }
 
     func home() { press(.home) }
@@ -294,8 +352,8 @@ final class AidenSimulatorViewerModel: Identifiable {
         stopStreaming()
         generation &+= 1
         let current = generation
-        inputRetries = 0
-        streamRetries = 0
+        inputRetries = AidenSimulatorRetryBudget()
+        streamRetries = AidenSimulatorRetryBudget()
         inputMessage = nil
         screen = nil
         controls.apply(.connecting)
@@ -339,6 +397,7 @@ final class AidenSimulatorViewerModel: Identifiable {
         stream = nil
         socket?.close()
         socket = nil
+        touches.reset()
         transport?.close()
         transport = nil
         if controls.inputConnected { controls.apply(.inputDisconnected) }
@@ -355,7 +414,19 @@ final class AidenSimulatorViewerModel: Identifiable {
         do {
             let request = try client.simulatorStreamRequest(deviceId: deviceId)
             let sink = AidenSimulatorEventSink(self)
+            let frames = AidenLatestFrameSlot<CGImage>()
             let stream = try currentTransport().makeFrameStream(request: request) { event in
+                if case .frame(let image) = event {
+                    // At most one frame waits for the main thread; newer ones replace it.
+                    guard frames.offer(image) else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let image = frames.take() else { return }
+                            sink.model?.handle(.frame(image), deviceId: deviceId, generation: current)
+                        }
+                    }
+                    return
+                }
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated { sink.model?.handle(event, deviceId: deviceId, generation: current) }
                 }
@@ -390,7 +461,7 @@ final class AidenSimulatorViewerModel: Identifiable {
             if socket == nil, inputMessage == nil { connectInput(deviceId: deviceId, generation: current) }
         case .frame(let image):
             frame = image
-            streamRetries = 0
+            streamRetries.succeeded(at: Self.now())
             if phase != .streaming { phase = .streaming }
         case .failed(let failure):
             stream?.cancel()
@@ -398,8 +469,8 @@ final class AidenSimulatorViewerModel: Identifiable {
             socket?.close()
             socket = nil
             if controls.inputConnected { controls.apply(.inputDisconnected) }
-            if failure == .disconnected, streamRetries < 1 {
-                streamRetries += 1
+            if failure == .disconnected, streamRetries.ended(at: Self.now()) < 1 {
+                streamRetries.spend()
                 scheduleAfterDelay(generation: current) { [weak self] in
                     self?.openStream(deviceId: deviceId, generation: current)
                 }
@@ -414,23 +485,25 @@ final class AidenSimulatorViewerModel: Identifiable {
         switch event {
         case .connected:
             inputMessage = nil
+            inputRetries.succeeded(at: Self.now())
             controls.apply(.inputConnected)
         case .screen(let config):
             screen = config
         case .closed(let closeCode, let httpStatus):
             socket = nil
+            touches.reset()
             if controls.inputConnected { controls.apply(.inputDisconnected) }
             switch AidenSimulatorInputRetryPolicy.decision(
                 closeCode: closeCode,
                 httpStatus: httpStatus,
-                retriesUsed: inputRetries
+                retriesUsed: inputRetries.ended(at: Self.now())
             ) {
             case .refused:
                 inputMessage = AidenSimulatorViewerCopy.refused
             case .giveUp:
                 inputMessage = AidenSimulatorViewerCopy.generic
             case .retry(let delay):
-                inputRetries += 1
+                inputRetries.spend()
                 scheduleAfterDelay(delay, generation: current) { [weak self] in
                     guard let self, stream != nil else { return }
                     connectInput(deviceId: deviceId, generation: current)
@@ -438,6 +511,8 @@ final class AidenSimulatorViewerModel: Identifiable {
             }
         }
     }
+
+    private static func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     private func scheduleAfterDelay(
         _ delay: TimeInterval = AidenSimulatorInputRetryPolicy.retryDelay,

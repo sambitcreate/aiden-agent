@@ -165,6 +165,9 @@ struct AidenSimulatorViewer: View {
             shakeMonitor.start {
                 toggleControlsFromShake()
             }
+        case .inactive:
+            // Notification Center, Control Center or the app switcher took the touch.
+            model.touchCancelled()
         case .background:
             shakeMonitor.stop()
             model.deactivate()
@@ -198,8 +201,9 @@ struct AidenSimulatorViewer: View {
             AidenSimulatorFrameView(
                 frame: frame,
                 deviceName: deviceName,
-                acceptsInput: model.inputConnected,
-                onTouch: { phase, point in model.touch(phase, x: point.x, y: point.y) }
+                onTouchChanged: { inside, clamped in model.touchChanged(inside: inside, clamped: clamped) },
+                onTouchEnded: { clamped in model.touchEnded(clamped: clamped) },
+                onTouchCancelled: { model.touchCancelled() }
             )
         } else {
             placeholder
@@ -447,14 +451,18 @@ final class AidenShakeMonitor {
 }
 
 /// The newest decoded frame, aspect-fit, forwarding touches as normalized
-/// points inside the frame. Touches that begin outside the frame are ignored.
+/// points. The model decides where a touch begins and moves; this view also
+/// reports a gesture the system cancelled, which never reaches `onEnded`.
 private struct AidenSimulatorFrameView: View {
     let frame: CGImage
     let deviceName: String
-    let acceptsInput: Bool
-    let onTouch: (AidenSimulatorTouchPhase, CGPoint) -> Void
+    /// The point on the frame (nil outside it) and the same point pinned to the frame.
+    let onTouchChanged: (CGPoint?, CGPoint?) -> Void
+    let onTouchEnded: (CGPoint?) -> Void
+    let onTouchCancelled: () -> Void
 
-    @State private var isTracking = false
+    /// Resets without `onEnded` when the system cancels the drag.
+    @GestureState private var isPressing = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -467,27 +475,27 @@ private struct AidenSimulatorFrameView: View {
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                        .updating($isPressing) { _, pressing, _ in pressing = true }
                         .onChanged { value in
-                            guard acceptsInput else { return }
-                            if isTracking {
-                                if let point = AidenSimulatorTouchMapping.normalizedPoint(
+                            onTouchChanged(
+                                AidenSimulatorTouchMapping.normalizedPoint(
+                                    value.location, imageSize: imageSize, container: proxy.size
+                                ),
+                                AidenSimulatorTouchMapping.normalizedPoint(
                                     value.location, imageSize: imageSize, container: proxy.size, clamped: true
-                                ) { onTouch(.move, point) }
-                            } else if let point = AidenSimulatorTouchMapping.normalizedPoint(
-                                value.location, imageSize: imageSize, container: proxy.size
-                            ) {
-                                isTracking = true
-                                onTouch(.begin, point)
-                            }
+                                )
+                            )
                         }
                         .onEnded { value in
-                            guard isTracking else { return }
-                            isTracking = false
-                            if let point = AidenSimulatorTouchMapping.normalizedPoint(
+                            onTouchEnded(AidenSimulatorTouchMapping.normalizedPoint(
                                 value.location, imageSize: imageSize, container: proxy.size, clamped: true
-                            ) { onTouch(.end, point) }
+                            ))
                         }
                 )
+                // A completed drag already ended its touch, so this only lifts a cancelled one.
+                .onChange(of: isPressing) { _, pressing in
+                    if !pressing { onTouchCancelled() }
+                }
         }
         .accessibilityElement()
         .accessibilityLabel(Text("\(deviceName) simulator screen"))

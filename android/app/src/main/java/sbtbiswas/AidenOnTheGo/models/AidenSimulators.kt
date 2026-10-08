@@ -2,6 +2,9 @@ package sbtbiswas.AidenOnTheGo.models
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -18,7 +21,12 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
  * query segments of hub relay URLs.
  */
 object AidenSimulators {
-    val DEVICE_ID_PATTERN = Regex("^[A-Za-z0-9-]{1,128}$")
+    /**
+     * The desktop's `DEVICE_ID_PATTERN`: a simulator UDID, an adb serial
+     * (`emulator-5554`) or a stopped AVD's name (`Pixel_9_API_35`). The first
+     * character is alphanumeric, so an id is never a dot segment or a flag.
+     */
+    val DEVICE_ID_PATTERN = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
     fun isValidDeviceId(id: String): Boolean = DEVICE_ID_PATTERN.matches(id)
 }
@@ -112,16 +120,16 @@ data class AidenSimulatorListing(
     val sharing: Boolean,
     val status: AidenSimulatorHostStatus,
     val detail: String? = null,
+    /** Devices this version cannot use (bad id, missing field, a repeat) are skipped. */
+    @Serializable(with = AidenSimulatorDeviceListSerializer::class)
     val devices: List<AidenSimulatorDevice>,
-    /** Present only on `GET /simulators?chatId=`: devices the desktop attached to that chat. */
+    /**
+     * Present only on `GET /simulators?chatId=`: devices the desktop attached to
+     * that chat. Read through [chatDevices], which drops ids that are not listed.
+     */
     val chatDeviceIds: List<String>? = null,
     val toolVersions: AidenSimulatorToolVersions? = null
 ) {
-    init {
-        if (chatDeviceIds != null && chatDeviceIds.any { !AidenSimulators.isValidDeviceId(it) }) {
-            throw AidenRemoteContractException.InvalidJson("Invalid simulator chat device id")
-        }
-    }
 
     /**
      * The chat's devices in the order the desktop attached them. Sharing off
@@ -133,6 +141,25 @@ data class AidenSimulatorListing(
             val byId = devices.associateBy { it.id }
             return chatDeviceIds.orEmpty().distinct().mapNotNull { byId[it] }
         }
+}
+
+/**
+ * Decodes `devices` one entry at a time and skips any entry that is not a
+ * usable device, so one odd device never fails the whole listing.
+ */
+object AidenSimulatorDeviceListSerializer : KSerializer<List<AidenSimulatorDevice>> {
+    private val delegate = ListSerializer(AidenSimulatorDevice.serializer())
+    override val descriptor: SerialDescriptor = delegate.descriptor
+    override fun serialize(encoder: Encoder, value: List<AidenSimulatorDevice>) = delegate.serialize(encoder, value)
+    override fun deserialize(decoder: Decoder): List<AidenSimulatorDevice> {
+        val json = decoder as? JsonDecoder ?: return delegate.deserialize(decoder)
+        val seen = HashSet<String>()
+        return json.decodeJsonElement().jsonArray.mapNotNull { entry ->
+            runCatching { json.json.decodeFromJsonElement(AidenSimulatorDevice.serializer(), entry) }
+                .getOrNull()
+                ?.takeIf { seen.add(it.id) }
+        }
+    }
 }
 
 @Serializable

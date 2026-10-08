@@ -37,6 +37,30 @@ test("the floating player is a labelled, keyboard-reachable surface with Home, R
   assert.doesNotMatch(html, /border-(red|green|blue|accent)/u);
 });
 
+test("a floating Android emulator offers Back, Home and Recents instead of the iOS Rotate", () => {
+  const pixel: DeviceSummary = {
+    hostId: "local",
+    id: "emulator-5554",
+    name: "Pixel 9",
+    platform: "android",
+    version: "Android 16",
+    booted: true,
+    kind: "other",
+  };
+  const html = renderToStaticMarkup(
+    <DeviceMiniPlayer device={pixel} title="Pixel 9" active={false} onDock={noop} onClose={noop} />,
+  );
+  const labels = [...html.matchAll(/<button[^>]*aria-label="([^"]+)"/gu)].map((match) => match[1]);
+  assert.deepEqual(labels, ["Back", "Home", "Recents", "Dock device in its tab", "Close floating device"]);
+  const ios = renderToStaticMarkup(
+    <DeviceMiniPlayer device={IPHONE} title="iPhone" active={false} onDock={noop} onClose={noop} />,
+  );
+  assert.deepEqual(
+    [...ios.matchAll(/<button[^>]*aria-label="([^"]+)"/gu)].map((match) => match[1]),
+    ["Home", "Rotate", "Dock device in its tab", "Close floating device"],
+  );
+});
+
 test("Settings offers the auto-show floating device switch", () => {
   const on = renderToStaticMarkup(<DeviceWorkspaceSettingsView autoFloat onAutoFloatChange={noop} />);
   assert.match(on, new RegExp(`role="switch"[^>]*aria-checked="true"[^>]*aria-label="${AUTO_FLOAT_DEVICE_LABEL}"`, "u"));

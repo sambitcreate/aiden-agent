@@ -13,7 +13,7 @@ import {
   type DeviceStreamClient,
   type DeviceStreamStatus,
 } from "./device-stream";
-import type { DeviceStreamGrant } from "../shared/devices";
+import type { DevicePlatform, DeviceStreamGrant } from "../shared/devices";
 
 /** A burst of rejected grants means the proxy is refusing us, not that one grant expired. */
 const MAX_GRANT_RENEWALS_PER_MINUTE = 3;
@@ -46,8 +46,14 @@ function framePoint(element: HTMLElement, event: React.PointerEvent): { x: numbe
   };
 }
 
-export function useDeviceStream(input: { hostId: string; deviceId: string; active: boolean }): DeviceStreamView {
-  const { hostId, deviceId, active } = input;
+export function useDeviceStream(input: {
+  hostId: string;
+  deviceId: string;
+  /** Picks serve-sim (iOS) or serve-emu (Android) routes and input encoding. */
+  platform: DevicePlatform;
+  active: boolean;
+}): DeviceStreamView {
+  const { hostId, deviceId, platform, active } = input;
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const clientRef = React.useRef<DeviceStreamClient | null>(null);
   const renewalsRef = React.useRef<number[]>([]);
@@ -92,7 +98,7 @@ export function useDeviceStream(input: { hostId: string; deviceId: string; activ
     const canvas = canvasRef.current;
     if (!canvas) return;
     const client = createDeviceStreamClient(
-      { hostId, deviceId, grant },
+      { hostId, deviceId, platform, grant },
       createCanvasFrameSink(canvas),
       {
         onStatus: (next, message) => {
@@ -125,7 +131,7 @@ export function useDeviceStream(input: { hostId: string; deviceId: string; activ
       setInputConnected(false);
       setMjpegUrl(null);
     };
-  }, [active, grant, hostId, deviceId, fail]);
+  }, [active, grant, hostId, deviceId, platform, fail]);
 
   // The fallback image mounts only after the running client asked for it.
   const attachImage = React.useCallback((image: HTMLImageElement | null) => {
@@ -164,7 +170,8 @@ export function useDeviceStream(input: { hostId: string; deviceId: string; activ
       if (phase === "down" && event.repeat) return;
       if (phase === "down") pressedKeysRef.current.add(event.code);
       else pressedKeysRef.current.delete(event.code);
-      clientRef.current?.sendKey(event.code, phase);
+      // Android takes characters and key names, not HID usages.
+      clientRef.current?.sendKey(event.code, phase, { key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
     },
     [],
   );

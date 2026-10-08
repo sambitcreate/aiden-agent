@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { GripHorizontal, House, PanelRight, RotateCw, X } from "lucide-react";
+import { ArrowLeft, GripHorizontal, House, PanelRight, RotateCw, Square, X } from "lucide-react";
 import { Button, Text } from "./ui";
 import { useDeviceStream } from "../lib/use-device-stream";
 import { useFloatingContainerBounds } from "../lib/use-floating-container-bounds";
@@ -71,7 +71,8 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
   // The chat area in viewport coordinates; the player never leaves it.
   const container = useFloatingContainerBounds();
   const geometry = useDeviceMiniPlayerGeometry();
-  const stream = useDeviceStream({ hostId: device.hostId, deviceId: device.id, active });
+  const stream = useDeviceStream({ hostId: device.hostId, deviceId: device.id, platform: device.platform, active });
+  const android = device.platform === "android";
   const source = deviceMiniPlayerSource(device.kind, stream.screen);
   const stored = deviceMiniPlayerFrame({ source, container, geometry });
   const [live, setLive] = React.useState<DeviceMiniPlayerFrame | null>(null);
@@ -170,6 +171,19 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
         <Text id={titleId} variant="small-strong" className="min-w-0 flex-1 truncate">
           {title}
         </Text>
+        {android ? (
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Back"
+            title="Back"
+            disabled={!streaming}
+            onClick={() => stream.client()?.pressButton("back")}
+          >
+            <ArrowLeft aria-hidden />
+          </Button>
+        ) : null}
         <Button
           variant="transparent"
           size="small"
@@ -181,17 +195,32 @@ export function DeviceMiniPlayer({ device, title, active, onDock, onClose }: Dev
         >
           <House aria-hidden />
         </Button>
-        <Button
-          variant="transparent"
-          size="small"
-          iconOnly
-          aria-label="Rotate"
-          title="Rotate"
-          disabled={!streaming}
-          onClick={() => stream.client()?.rotate()}
-        >
-          <RotateCw aria-hidden />
-        </Button>
+        {android ? (
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Recents"
+            title="Recents"
+            disabled={!streaming}
+            onClick={() => stream.client()?.pressButton("recents")}
+          >
+            <Square aria-hidden />
+          </Button>
+        ) : (
+          // Android rotates through the emulator's sensor action, which the full viewer offers.
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Rotate"
+            title="Rotate"
+            disabled={!streaming}
+            onClick={() => stream.client()?.rotate()}
+          >
+            <RotateCw aria-hidden />
+          </Button>
+        )}
         <Button variant="transparent" size="small" iconOnly aria-label="Dock device in its tab" title="Dock in tab" onClick={onDock}>
           <PanelRight aria-hidden />
         </Button>

@@ -377,6 +377,8 @@ class AidenSimulatorStreamSession<Frame : Any>(
     private var socket: WebSocket? = null
     private var socketOpenedAt = 0L
     private var socketRetryAvailable = true
+    /** When the current MJPEG read delivered its first frame, or 0. */
+    @Volatile private var firstFrameAt = 0L
 
     fun start() {
         val runGeneration = synchronized(lock) {
@@ -432,6 +434,7 @@ class AidenSimulatorStreamSession<Frame : Any>(
     private suspend fun runStream(runGeneration: Long) {
         var streamRetryAvailable = true
         while (isCurrent(runGeneration)) {
+            firstFrameAt = 0L
             val failure = try {
                 readStream(runGeneration)
                 AidenSimulatorStreamFailure.NETWORK
@@ -443,6 +446,10 @@ class AidenSimulatorStreamSession<Frame : Any>(
                 AidenSimulatorStreamFailure.NETWORK
             }
             if (!isCurrent(runGeneration)) return
+            // A stream that delivered frames for a while earns a fresh retry; one that
+            // drops straight after connecting keeps its spent budget and gives up.
+            val streamingSince = firstFrameAt
+            if (streamingSince > 0 && clock() - streamingSince >= STABLE_SOCKET_MILLIS) streamRetryAvailable = true
             if (failure == AidenSimulatorStreamFailure.NETWORK && streamRetryAvailable) {
                 streamRetryAvailable = false
                 _state.update { it.copy(phase = AidenSimulatorStreamPhase.CONNECTING) }
@@ -473,6 +480,7 @@ class AidenSimulatorStreamSession<Frame : Any>(
                 if (read < 0) break
                 val frames = parser.feed(chunk, 0, read)
                 if (frames.isNotEmpty()) {
+                    if (firstFrameAt == 0L) firstFrameAt = clock()
                     pendingJpeg.value = frames.last()
                     if (_state.value.phase != AidenSimulatorStreamPhase.STREAMING) {
                         _state.update { it.copy(phase = AidenSimulatorStreamPhase.STREAMING, failure = null) }

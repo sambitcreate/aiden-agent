@@ -29,7 +29,8 @@ import {
   type DuoControlState,
   type DuoPose,
 } from "./device-duo-control";
-import { createDuoPanelFeeds, type DuoPanelSinks } from "./device-duo-stream";
+import { createDuoPanelFeeds, type DuoFeed, type DuoFeedEvents, type DuoPanelSinks } from "./device-duo-stream";
+import type { DeviceGrantSource } from "./device-grant";
 
 export type { DuoPanelSinks } from "./device-duo-stream";
 
@@ -83,6 +84,11 @@ export interface DeviceStreamTarget {
   panelId?: 1 | 3;
   /** Internal feeds decode video only and share their parent's input socket. */
   videoOnly?: boolean;
+  /**
+   * Mints grants for connections opened after `start` (the iPhone Duo display
+   * feeds). Without it those reuse `grant`, which expires a minute after minting.
+   */
+  grants?: DeviceGrantSource;
 }
 
 /** A synchronous, borrowed frame. The producer releases its source after `present` returns. */
@@ -128,6 +134,8 @@ export interface DeviceStreamRuntime {
   createImageBitmap?: (blob: Blob) => Promise<ImageBitmap>;
   setTimeout(callback: () => void, ms: number): Timer;
   clearTimeout(timer: Timer): void;
+  /** Wall-clock milliseconds, compared with `grant.expiresAt`. Defaults to `Date.now`. */
+  now?(): number;
 }
 
 const SOCKET_OPEN = 1;
@@ -153,6 +161,8 @@ export function browserDeviceStreamRuntime(): DeviceStreamRuntime {
 }
 
 export const DEVICE_STREAM_RETRY_DELAY_MS = 1_000;
+/** A grant this close to `expiresAt` may already be refused by the proxy. */
+export const DEVICE_STREAM_GRANT_EXPIRY_MARGIN_MS = 5_000;
 export const DEVICE_STREAM_FIRST_FRAME_TIMEOUT_MS = 15_000;
 export const DEVICE_STREAM_MJPEG_CHECK_MS = 250;
 export const DEVICE_STREAM_PRIME_TIMEOUT_MS = 2_000;
@@ -521,8 +531,18 @@ export function createDeviceStreamClient(
   const android = platform === "android";
   const vendor = android ? "/vendor/serve-emu" : "/vendor/serve-sim";
   const device = encodeURIComponent(target.deviceId);
-  const httpUrl = (path: string) => deviceHubUrl(target, `${vendor}${path}`, "http");
-  const wsUrl = (path: string) => deviceHubUrl(target, `${vendor}${path}`, "ws");
+  // Connections opened later (a resumed video read) may carry a newer grant from `target.grants`.
+  let grant = target.grant;
+  const grantExpiring = () => grant.expiresAt - (runtime.now?.() ?? Date.now()) <= DEVICE_STREAM_GRANT_EXPIRY_MARGIN_MS;
+  /**
+   * The proxy refuses an expired grant during the HTTP upgrade, which the browser
+   * reports only as 1006. A 1006 with a live grant is a dropped or refused
+   * device connection and takes the normal retry path.
+   */
+  const refusedGrant = (code: number) =>
+    code === 1008 || code === 4401 || (code === 1006 && grantExpiring());
+  const httpUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "http");
+  const wsUrl = (path: string) => deviceHubUrl({ hostId: target.hostId, grant }, `${vendor}${path}`, "ws");
   const useWebCodecs =
     Boolean(runtime.VideoDecoder && runtime.EncodedVideoChunk) && !target.preferMjpeg;
   const videoPath = `/helper/${device}${target.panelId ? `/panel/${target.panelId}` : ""}/stream.avcc`;
@@ -961,11 +981,7 @@ export function createDeviceStreamClient(
         false,
         event.reason || (event.code === 1006 ? "input socket refused" : `closed ${event.code}`),
       );
-      // The proxy refuses an expired grant during the HTTP upgrade, which the
-      // browser reports as 1006, so any abnormal close renews the grant once.
-      if (event.code === 1008 || event.code === 4401 || event.code === 1006) {
-        return handleUnauthorized();
-      }
+      if (refusedGrant(event.code)) return handleUnauthorized();
       scheduleRetry("input", () => void connectInput());
     };
     ws.onerror = () => ws.close();
@@ -1024,8 +1040,7 @@ export function createDeviceStreamClient(
       closeDecoder();
       if (stopped) return;
       events.onInputConnected(false, event.reason || `closed ${event.code}`);
-      // An expired grant is refused during the upgrade, which the browser reports as 1006.
-      if (event.code === 1008 || event.code === 4401 || event.code === 1006) return handleUnauthorized();
+      if (refusedGrant(event.code)) return handleUnauthorized();
       configuring = false;
       connecting(event.reason || undefined);
       scheduleRetry("input", connectAndroid);
@@ -1101,24 +1116,92 @@ export function createDeviceStreamClient(
       retryTimers.delete("video");
     },
     resumePrimaryVideo: () => {
-      if (useWebCodecs && !mjpeg) void readVideo();
-    },
-    openFeed: (panelId, feedSink, feedEvents) =>
-      createDeviceStreamClient(
-        { ...target, ...(panelId === null ? {} : { panelId }), videoOnly: true },
-        feedSink,
-        {
-          onStatus: feedEvents.onStatus,
-          onScreen: () => undefined,
-          onUnauthorized: feedEvents.onUnauthorized,
-          onMjpegFallback: () => undefined,
-          onInputConnected: () => undefined,
+      if (!useWebCodecs || mjpeg) return;
+      if (!target.grants) return void readVideo();
+      // The 3D view may have held the display feeds for longer than the original grant lives.
+      const paused = videoGeneration;
+      const current = () => !stopped && videoGeneration === paused;
+      target.grants.get().then(
+        (fresh) => {
+          if (!current()) return;
+          grant = fresh;
+          void readVideo();
         },
-        runtime,
-      ),
+        () => {
+          if (current()) void readVideo();
+        },
+      );
+    },
+    openFeed: (panelId, feedSink, feedEvents) => openPanelFeed(panelId, feedSink, feedEvents),
     onUnavailable: (detail) => events.onDuoUnavailable?.(detail),
-    onUnauthorized: () => handleUnauthorized(),
+    // A refused display feed returns the viewer to the flat view; the parent's session stays.
+    onUnauthorized: () => events.onDuoUnavailable?.("The iPhone Duo display stream refused access."),
   });
+
+  /**
+   * A video-only display feed. Each open draws a grant from `target.grants`, so
+   * a feed opened long after the parent connected never presents an expired
+   * one. A refused feed renews its own grant once; a second refusal in a row is
+   * reported to the panel host, never to the parent session.
+   */
+  const openPanelFeed = (
+    panelId: 1 | 3 | null,
+    feedSink: DeviceFrameSink,
+    feedEvents: DuoFeedEvents,
+  ): DuoFeed => {
+    const grants = target.grants;
+    let closed = true;
+    let client: DeviceStreamClient | null = null;
+    let renewed = false;
+    const open = () => {
+      const pending = grants ? grants.get() : Promise.resolve(grant);
+      pending.then(
+        (fresh) => {
+          if (closed) return;
+          const feed = createDeviceStreamClient(
+            { ...target, grant: fresh, ...(panelId === null ? {} : { panelId }), videoOnly: true },
+            feedSink,
+            {
+              onStatus: (status, detail) => {
+                if (status === "streaming") renewed = false;
+                feedEvents.onStatus(status, detail);
+              },
+              onScreen: () => undefined,
+              onUnauthorized: () => {
+                if (client === feed) client = null;
+                if (closed) return;
+                if (!grants || renewed) return feedEvents.onUnauthorized();
+                renewed = true;
+                grants.invalidate();
+                open();
+              },
+              onMjpegFallback: () => undefined,
+              onInputConnected: () => undefined,
+            },
+            runtime,
+          );
+          client = feed;
+          feed.start();
+        },
+        (error: unknown) => {
+          if (!closed) feedEvents.onStatus("error", error instanceof Error ? error.message : undefined);
+        },
+      );
+    };
+    return {
+      start() {
+        if (!closed) return;
+        closed = false;
+        renewed = false;
+        open();
+      },
+      stop() {
+        closed = true;
+        client?.stop();
+        client = null;
+      },
+    };
+  };
 
   const rawPoint = (x: number, y: number) => {
     // serve-sim streams the raw portrait framebuffer; rotated devices need

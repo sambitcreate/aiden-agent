@@ -66,6 +66,7 @@ function fakeClock() {
       now = end;
     },
     pending: () => timers.size,
+    now: () => now,
   };
 }
 
@@ -113,7 +114,9 @@ function streamBody() {
 
 type FetchHandler = (url: string, signal: AbortSignal) => Promise<Response>;
 
-function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean; android?: boolean } = {}) {
+function harness(
+  options: { webCodecs?: boolean; preferMjpeg?: boolean; android?: boolean; expiresAt?: number } = {},
+) {
   const clock = fakeClock();
   const sockets: FakeSocket[] = [];
   const fetches: string[] = [];
@@ -179,6 +182,7 @@ function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean; android?
       : {}),
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
+    now: clock.now,
   };
   const sink: DeviceFrameSink = {
     present(_source, width, height) {
@@ -197,6 +201,8 @@ function harness(options: { webCodecs?: boolean; preferMjpeg?: boolean; android?
   const client = createDeviceStreamClient(
     {
       ...target,
+      // A fresh one-minute grant on the fake clock.
+      grant: { ...target.grant, expiresAt: options.expiresAt ?? 60_000 },
       preferMjpeg: options.preferMjpeg,
       ...(options.android ? { platform: "android" as const, deviceId: "emulator-5554" } : {}),
     },
@@ -421,6 +427,30 @@ test("a policy close reports unauthorized once and stops", async () => {
   h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS * 3);
   await settle();
   assert.equal(h.sockets.length, 1);
+});
+
+test("an iOS input socket closed with 1006 retries while the grant is live and renews it once expired", async () => {
+  const h = harness();
+  h.client.start();
+  await settle();
+  // The device is down: every reconnect is dropped abnormally, but the grant is still good.
+  for (let index = 0; index < 5; index++) {
+    h.sockets[index]!.drop(1006);
+    h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS);
+    await settle();
+  }
+  assert.equal(h.sockets.length, 6);
+  assert.ok(!h.log.includes("unauthorized"));
+  h.client.stop();
+  // Near expiry the same close means the proxy refused the grant.
+  const expiring = harness({ expiresAt: 3_000 });
+  expiring.client.start();
+  await settle();
+  expiring.sockets[0]!.drop(1006);
+  assert.equal(expiring.log.filter((entry) => entry === "unauthorized").length, 1);
+  expiring.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS * 3);
+  await settle();
+  assert.equal(expiring.sockets.length, 1);
 });
 
 test("a hung prime request is aborted after its timeout and the socket still connects", async () => {
@@ -938,9 +968,18 @@ test("an Android socket retries after a drop, renews an expired grant, and fails
   assert.ok(h.log.includes("status:connecting:device restarting"));
   h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS);
   assert.equal(h.sockets.length, 2);
+  // A 1006 while the grant is live is a dropped emulator, not a refused grant.
   h.sockets[1]!.drop(1006);
-  assert.ok(h.log.includes("unauthorized"));
-  assert.equal(h.clock.pending(), 0);
+  assert.ok(!h.log.includes("unauthorized"));
+  h.clock.advance(DEVICE_STREAM_RETRY_DELAY_MS);
+  assert.equal(h.sockets.length, 3);
+  h.client.stop();
+  // Once the grant is about to expire, the proxy's refusal (also 1006) renews it.
+  const expiring = harness({ webCodecs: true, android: true, expiresAt: 3_000 });
+  expiring.client.start();
+  expiring.sockets[0]!.drop(1006);
+  assert.ok(expiring.log.includes("unauthorized"));
+  assert.equal(expiring.clock.pending(), 0);
 
   const without = harness({ android: true });
   without.client.start();

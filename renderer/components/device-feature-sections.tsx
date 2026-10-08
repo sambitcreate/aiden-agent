@@ -29,6 +29,8 @@ export function DeviceFeatureSections(props: {
   target: DeviceFeatureTarget;
   deviceName: string;
   grants: DeviceGrantSource;
+  /** The viewer is shown and streaming; live feeds (the event log) close while it is not. */
+  active?: boolean;
   axOverlay: boolean;
   axStatus: DeviceAxStatus | null;
   /** Element frames draw over the flat screen only; the 3D frame is off while they show. */
@@ -86,6 +88,7 @@ export function DeviceFeatureSections(props: {
           deviceId={props.target.deviceId}
           platform={props.target.platform}
           grants={props.grants}
+          active={props.active}
           {...(props.foregroundApp ? { foregroundApp: props.foregroundApp } : {})}
         />
       ) : null}
