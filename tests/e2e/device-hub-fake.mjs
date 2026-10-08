@@ -14,7 +14,9 @@
 //   `/vendor/serve-emu/ws` socket sends a real one-frame H.264 keyframe behind a
 //   SEMU header every 200ms and logs every JSON gesture. `/api/fold` folds it:
 //   the socket announces a `video-session` restart and switches to a landscape
-//   frame, as a real foldable's outer display would.
+//   frame, as a real foldable's outer display would. Its accessibility snapshot,
+//   logcat SSE, text gesture, and the hub's shutdown answer the Android power
+//   features.
 //
 // Every request is appended as a JSON line to AIDEN_E2E_FAKE_HUB_LOG.
 import { Buffer } from "node:buffer";
@@ -112,6 +114,50 @@ const server = createServer((request, response) => {
     return json(response, { ok: true });
   }
   if (entry.path === "/api/devices") return json(response, { simulators: [], emulators: [EMULATOR], errors: [] });
+  if (request.method === "POST" && entry.path === "/api/devices/shutdown") {
+    void readBody(request).then((text) => {
+      log({ kind: "shutdown", body: JSON.parse(text || "null") });
+      json(response, { ok: true, errors: [] });
+    });
+    return;
+  }
+  // serve-emu's accessibility snapshot: a flattened uiautomator dump in pixels, root first.
+  if (request.method === "GET" && entry.path === "/vendor/serve-emu/api/accessibility") {
+    return json(response, {
+      ok: true,
+      capturedAt: "2026-10-08T09:41:00.000Z",
+      screen: { width: 1080, height: 2160 },
+      nodes: [
+        { id: "0", text: "", contentDescription: "", resourceId: "", className: "android.widget.FrameLayout", bounds: { left: 0, top: 0, right: 1080, bottom: 2160 } },
+        { id: "1", text: "Add to cart", contentDescription: "", resourceId: "com.example.shop:id/add", className: "android.widget.Button", bounds: { left: 90, top: 1500, right: 990, bottom: 1650 } },
+        { id: "2", text: "", contentDescription: "Cart", resourceId: "", className: "android.widget.ImageButton", bounds: { left: 900, top: 100, right: 1020, bottom: 220 } },
+      ],
+    });
+  }
+  // serve-emu's logcat: a ready event, one batch of threadtime lines, then the stream stays open.
+  if (request.method === "GET" && entry.path === "/vendor/serve-emu/api/logcat") {
+    response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+    const lines = [
+      { line: "10-08 09:41:02.100   612   640 I ActivityTaskManager: START u0 {cmp=com.example.shop/.MainActivity}", at: "2026-10-08T09:41:02.100Z" },
+      { line: "10-08 09:41:02.300  4321  4321 E Shop    : Cart failed to load", at: "2026-10-08T09:41:02.300Z" },
+    ];
+    response.write(`event: ready\ndata: ${JSON.stringify({ serial: EMULATOR.id })}\n\n`);
+    response.write(`event: logs\ndata: ${JSON.stringify({ lines, dropped: 0, totalDropped: 0, sourceDropped: 0 })}\n\n`);
+    const timer = setInterval(() => response.write(": keep-alive\n\n"), 1_000);
+    response.once("close", () => {
+      clearInterval(timer);
+      log({ kind: "logcat-closed", query: entry.query });
+    });
+    return;
+  }
+  // serve-emu types text into the focused field; main sends a paste here in pieces.
+  if (request.method === "POST" && entry.path === "/vendor/serve-emu/api/text") {
+    void readBody(request).then((text) => {
+      log({ kind: "text", query: entry.query, body: JSON.parse(text || "null") });
+      json(response, { ok: true });
+    });
+    return;
+  }
   if (entry.path === "/vendor/serve-emu/api/screenshot") {
     response.writeHead(200, { "content-type": "image/png" });
     return response.end(PNG);
