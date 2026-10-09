@@ -30,7 +30,10 @@ test("Gemini setup offers accessible borderless radio cards and a concrete priva
   assert.doesNotMatch(dialogSource, /className="sr-only"[\s\S]*?type="radio"/u);
 });
 
-// Voice-page Gemini deferral is covered behaviorally in voice-settings.test.tsx.
+// Voice-page Gemini deferral (disclosure before any settings write, the keyless
+// path through the voice-only key editor, and Privacy & access) is covered
+// behaviorally in voice-settings.test.tsx: "choosing Gemini waits for the privacy
+// disclosure…" and "Gemini without a key collects one…".
 
 test("Providers routes Google through the same purpose dialog and voice-only auth readiness", () => {
   assert.match(providerSource, /provider\.id !== GOOGLE_PROVIDER_ID/u);

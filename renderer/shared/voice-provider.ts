@@ -62,12 +62,24 @@ export function voiceSetupMessage(reason: VoiceSetupReason): string {
   }
 }
 
+/** Setup guidance phrased for Settings → Voice itself, where the fix is on the same page. */
+function settingsSetupMessage(reason: VoiceSetupReason): string {
+  switch (reason) {
+    case "no-local-model":
+      return "Download an on-device model below.";
+    case "no-provider":
+      return "No voice provider yet. Download an on-device model below or add an OpenAI or Gemini key.";
+    case "local-engine-unavailable":
+      return "On-device voice couldn't start. Restart Aiden, or choose a cloud provider.";
+  }
+}
+
 /** Settings caption for the Automatic choice: what dictation will use right now. */
 export function automaticVoiceCaption(
   resolution: VoiceProviderResolution,
   localModelName: (modelId: string) => string | undefined,
 ): string {
-  if (resolution.kind === "needs-setup") return voiceSetupMessage(resolution.reason);
+  if (resolution.kind === "needs-setup") return settingsSetupMessage(resolution.reason);
   const label =
     resolution.provider === "local"
       ? `On-device (${localModelName(resolution.modelId) ?? resolution.modelId})`

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { installBotTestIpc } from "../../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import { VoiceInputSettings } from "./voice-settings";
 import { localModelsTestCatalog } from "./local-models-test-catalog";
@@ -12,15 +12,11 @@ import type { VoiceProviderResolution } from "../../shared/voice-provider";
 
 afterEach(cleanup);
 
-function mount(settings: Partial<AppSettings>, resolution: VoiceProviderResolution, installed: string[]) {
-  return mountWithCalls(settings, resolution, installed);
-}
-
-function mountWithCalls(
+function mount(
   settings: Partial<AppSettings>,
   resolution: VoiceProviderResolution,
   installed: string[],
-  providers: unknown[] = [],
+  providers: unknown[] | (() => unknown[]) = [],
 ) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
@@ -29,7 +25,8 @@ function mountWithCalls(
       current = { ...current, ...(patch as Partial<AppSettings>) };
       return current;
     },
-    "providers:list": () => providers,
+    "providers:list": () => (typeof providers === "function" ? providers() : providers),
+    "providers:auth:start": () => ({ started: true }),
     "settings:setGeminiVoiceSetup": () => ({ ...current, voiceProvider: "gemini" }),
     "localModels:list": () => localModelsTestCatalog(installed),
     "voice:resolveProvider": () => resolution,
@@ -95,9 +92,11 @@ test("cloud transcription offers the common cloud languages", async () => {
   mount({ voiceProvider: "openai" }, { kind: "ready", provider: "openai", automatic: false }, []);
   const options = await optionsOf("Language");
   assert.equal(options[0], "Automatic");
-  assert.ok(options.includes("Japanese"));
-  assert.ok(options.includes("Ukrainian"));
-  assert.equal(options.length, 18);
+  for (const language of ["English", "German", "Japanese", "Chinese", "Ukrainian"]) {
+    assert.ok(options.includes(language), language);
+  }
+  // On-device-only languages are not offered for cloud transcription.
+  assert.ok(!options.includes("Cantonese"));
 });
 
 test("Translate to English appears only for a model that can translate", async () => {
@@ -126,7 +125,7 @@ async function choose(comboboxName: string, optionName: string) {
 }
 
 test("choosing Gemini waits for the privacy disclosure before switching voice", async () => {
-  const { calls, patches } = mountWithCalls(
+  const { calls, patches } = mount(
     {},
     localReady("parakeet-v3", true),
     ["parakeet-v3"],
@@ -141,13 +140,13 @@ test("choosing Gemini waits for the privacy disclosure before switching voice", 
 });
 
 test("choosing the language saves the spoken-language preference", async () => {
-  const { patches } = mountWithCalls({}, localReady("canary-180m-flash", true), ["canary-180m-flash"]);
+  const { patches } = mount({}, localReady("canary-180m-flash", true), ["canary-180m-flash"]);
   await choose("Language", "German");
   await waitFor(() => assert.deepEqual(patches(), [{ voiceLanguage: "de" }]));
 });
 
 test("Gemini voice keeps its privacy and access choice reachable", async () => {
-  mountWithCalls(
+  mount(
     { voiceProvider: "gemini", geminiUsageScope: "transcription_only" },
     { kind: "ready", provider: "gemini", automatic: false },
     [],
@@ -155,4 +154,46 @@ test("Gemini voice keeps its privacy and access choice reachable", async () => {
   );
   fireEvent.click(await screen.findByRole("button", { name: "Privacy & access" }));
   await screen.findByRole("dialog", { name: "Use Google Gemini for voice?" });
+});
+
+test("with nothing set up, Automatic points at fixes on this page", async () => {
+  mount({}, { kind: "needs-setup", reason: "no-provider" }, []);
+  await screen.findByText(
+    "No voice provider yet. Download an on-device model below or add an OpenAI or Gemini key.",
+  );
+  assert.equal(screen.queryByText(/in Settings → Voice/), null);
+});
+
+test("Gemini without a key collects one, then saves voice without needing a chat model", async () => {
+  let providers: unknown[] = [
+    {
+      id: "google",
+      kind: "builtin",
+      label: "Google",
+      baseUrl: "",
+      models: [],
+      needsKey: true,
+      isBuiltin: true,
+      hasKey: false,
+      authMethods: [{ type: "api_key", label: "Enter API key", canLogin: true }],
+    },
+  ];
+  const { calls, patches } = mount({}, { kind: "needs-setup", reason: "no-provider" }, [], () => providers);
+  await choose("Voice provider", "Online · Google Gemini");
+  const disclosure = await screen.findByRole("dialog", { name: "Use Google Gemini for voice?" });
+  fireEvent.click(within(disclosure).getByRole("button", { name: "Continue to API key" }));
+
+  const editor = await screen.findByRole("dialog", { name: "Set up Google" });
+  fireEvent.click(within(editor).getByRole("button", { name: "Enter API key" }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "providers:auth:start")));
+  const start = calls.find((call) => call.channel === "providers:auth:start")!.args[0] as { flowId: string };
+
+  // Pi stores the key; Google still has no chat models, which voice-only setup accepts.
+  providers = [{ ...(providers[0] as object), hasKey: true, models: [] }];
+  assert.ok(!calls.some((call) => call.channel === "settings:setGeminiVoiceSetup"));
+  emitBotTestNotification("providers:auth:done", { flowId: start.flowId, providerId: "google", cancelled: false });
+
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setGeminiVoiceSetup")));
+  assert.equal(screen.queryByText(/no usable chat model/), null);
+  assert.deepEqual(patches(), []);
 });

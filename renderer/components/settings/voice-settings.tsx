@@ -154,6 +154,15 @@ export function VoiceInputSettings() {
     await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
   };
 
+  /** Saves one voice preference, telling the user when it didn't stick. */
+  const savePreference = async (next: Parameters<typeof patch>[0], failure: string) => {
+    try {
+      await patch(next);
+    } catch {
+      toast.error(failure);
+    }
+  };
+
   const openGeminiSetup = () => {
     setGeminiScope(
       defaultGeminiUsageScope(settings.data?.geminiUsageScope, googleProvider?.hasKey === true),
@@ -276,7 +285,9 @@ export function VoiceInputSettings() {
           <div className="flex w-full flex-col">
             <Select
               value={language}
-              onValueChange={(value) => void patch({ voiceLanguage: value })}
+              onValueChange={(value) =>
+                void savePreference({ voiceLanguage: value }, "Aiden couldn’t change the voice language.")
+              }
             >
               <SelectTrigger size="small" aria-label="Language">
                 <SelectValue />
@@ -305,13 +316,20 @@ export function VoiceInputSettings() {
             <Switch
               aria-label="Translate to English"
               checked={settings.data?.voiceTranslateToEnglish === true}
-              onCheckedChange={(value) => void patch({ voiceTranslateToEnglish: value })}
+              onCheckedChange={(value) =>
+                void savePreference(
+                  { voiceTranslateToEnglish: value },
+                  "Aiden couldn’t change translation to English.",
+                )
+              }
             />
           </Field>
         ) : null}
         {isCloud ? (
           <Field label="Model" description="Used for microphone input and the dictation shortcut.">
-            <Select value={model} onValueChange={(v) => void patch({ voiceModel: v })}>
+            <Select value={model} onValueChange={(v) =>
+                void savePreference({ voiceModel: v }, "Aiden couldn’t change the transcription model.")
+              }>
               <SelectTrigger size="small">
                 <SelectValue />
               </SelectTrigger>

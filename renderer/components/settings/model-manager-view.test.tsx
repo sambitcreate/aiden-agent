@@ -73,3 +73,19 @@ test("a download in its verification phase says it is verifying", async () => {
   await within(canary).findByText(/Verifying…/);
   assert.equal(within(canary).queryByText(/Downloading…/), null);
 });
+
+test("after verification, the download reports that it is installing", async () => {
+  mount({ "localModels:download": () => new Promise(() => undefined) });
+  const canary = await card("Canary 180M Flash");
+  fireEvent.click(within(canary).getByRole("button", { name: /Download/ }));
+  await within(canary).findByText(/Downloading…/);
+  emitBotTestNotification("localModels:progress", {
+    id: "canary-180m-flash",
+    downloaded: 1,
+    total: 1,
+    percentage: 100,
+    phase: "extract",
+  });
+  await within(canary).findByText("Installing…");
+  assert.equal(within(canary).queryByText(/Downloading…|Verifying…/), null);
+});
