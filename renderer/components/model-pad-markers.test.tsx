@@ -1,10 +1,15 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { installBotTestIpc } from "../main/bots/test-dom";
+import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { positionSavedModels, type ModelEntry } from "../lib/model-picker-data";
+import type { AppSettings, Provider } from "../lib/types";
 import { ModelPickerPad } from "./model-picker-pad";
 import { ModelPadLegend } from "./settings/model-pad-legend";
+import { ModelPadSettings } from "./settings/model-pad-settings";
 
 afterEach(cleanup);
 
@@ -81,4 +86,72 @@ test("the settings legend shows one marker per placement source, with matching w
   );
   for (const marker of markers) assert.equal(marker.getAttribute("aria-hidden"), "true");
   assert.match(container.textContent ?? "", /Hover, focus, or select a marker to see its model/u);
+});
+
+/** Grid dots are aria-hidden spans; return the positions of those sharing a marker's spot. */
+function gridDotsUnder(container: HTMLElement, marker: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLElement>("[data-grid-cell]")]
+    .filter((dot) => dot.style.left === marker.style.left && dot.style.top === marker.style.top)
+    .map((dot) => `${dot.style.left} ${dot.style.top}`);
+}
+
+test("the picker draws no grid dot inside an occupied marker", () => {
+  renderPad();
+  const pad = screen.getByRole("listbox");
+  const options = screen.getAllByRole("option");
+  for (const option of options) assert.deepEqual(gridDotsUnder(pad, option), []);
+  // Every other cell keeps its dot.
+  assert.equal(pad.querySelectorAll("[data-grid-cell]").length, 7 * 7 - options.length);
+});
+
+test("the settings editor draws no grid node inside an occupied marker", async () => {
+  const provider: Provider = {
+    id: "test",
+    label: "Test",
+    kind: "openai",
+    baseUrl: "https://example.test/v1",
+    models: ["mine", "assisted"],
+    needsKey: false,
+    hasKey: true,
+  };
+  const settings = {
+    modelPadPlacements: {
+      "test::mine": { x: 0, y: 1, xSource: "user", ySource: "user" },
+      "test::assisted": { x: 0.5, y: 0.5, xSource: "neutral", ySource: "benchmark" },
+    },
+    pinnedModels: [],
+  } as unknown as AppSettings;
+  installBotTestIpc({
+    "providers:list": () => [provider],
+    "models:info": () => ({}),
+    "modelInsights:status": () => ({ connected: false }),
+    "settings:get": () => structuredClone(settings),
+  });
+  const { container } = render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <ModelPadSettings />
+    </QueryClientProvider>,
+  );
+  const pad = await waitFor(() => {
+    const group = screen.getByRole("group", { name: "Personal Model Pad arrangement" });
+    assert.equal(group.querySelectorAll("[data-placement-source]").length, 2);
+    return group;
+  });
+  const markers = [...pad.querySelectorAll<HTMLElement>("[data-placement-source]")];
+  assert.deepEqual(
+    markers.map((marker) => [
+      marker.dataset.placementSource,
+      /Placed by you|Benchmark-assisted/u.exec(marker.getAttribute("aria-label") ?? "")?.[0],
+    ]),
+    [
+      ["personal", "Placed by you"],
+      ["benchmark", "Benchmark-assisted"],
+    ],
+  );
+  for (const marker of markers) assert.deepEqual(gridDotsUnder(container, marker), []);
+  const gridSize = Number(pad.dataset.gridSize);
+  assert.equal(
+    pad.querySelectorAll("[data-grid-cell]").length,
+    gridSize * gridSize - markers.length,
+  );
 });

@@ -29,12 +29,9 @@ test("dense Model Pad markers reveal identity contextually without permanent nam
   assert.match(styles, /\.model-pad-axis-label\s*\{[\s\S]*font-weight: 600/u);
   assert.match(source, /model-pad-chip model-pad-marker/u);
   assert.match(source, /aria-pressed=\{selected\}/u);
-  assert.match(source, /data-placement-source=\{personalPlacement/u);
   assert.match(source, /data-selected=\{selected \? "true" : "false"\}/u);
   assert.match(source, /model-pad-marker group absolute z-10 grid size-6/u);
   assert.match(source, /model-pad-marker-visual block size-3 rounded-full/u);
-  assert.match(source, /placementSourceDescription/u);
-  assert.match(source, /\? "Placed by you"\s*: "Benchmark-assisted"/u);
   assert.match(source, /className="model-pad-marker-label"/u);
   assert.match(
     source,

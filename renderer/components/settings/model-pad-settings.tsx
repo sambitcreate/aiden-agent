@@ -44,7 +44,9 @@ import {
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
   measureModelPadAvailableSize,
+  modelPadPlacementKind,
   MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
   type ModelPadDirection,
   type ModelPadLayout,
@@ -711,9 +713,14 @@ export function ModelPadSettings() {
     }
   };
 
-  const activePoint = activeValue ? pointForValue(activeValue) : undefined;
-  const activeColumn = activePoint ? Math.round(activePoint.x * (gridSize - 1)) : -1;
-  const activeRow = activePoint ? Math.round((1 - activePoint.y) * (gridSize - 1)) : -1;
+  const occupiedCells = new Set(
+    placed.flatMap((entry) => {
+      const point = pointForValue(entry.value);
+      return point
+        ? [`${Math.round(point.x * (gridSize - 1))}:${Math.round((1 - point.y) * (gridSize - 1))}`]
+        : [];
+    }),
+  );
 
   return (
     <FieldSet className="model-pad-fieldset">
@@ -818,24 +825,15 @@ export function ModelPadSettings() {
               {Array.from({ length: gridSize * gridSize }, (_, index) => {
                 const column = index % gridSize;
                 const row = Math.floor(index / gridSize);
-                const targeted = column === activeColumn && row === activeRow;
-                const occupied = placed.some((entry) => {
-                  const placement = pointForValue(entry.value);
-                  return (
-                    placement &&
-                    Math.round(placement.x * (gridSize - 1)) === column &&
-                    Math.round((1 - placement.y) * (gridSize - 1)) === row
-                  );
-                });
+                // A node under a marker (including a dragged one) would read as a dot inside
+                // a hollow ring, so occupied cells skip it; the marker itself is the affordance.
+                if (occupiedCells.has(`${column}:${row}`)) return null;
                 return (
                   <span
                     key={index}
                     aria-hidden="true"
-                    className={cn(
-                      "model-pad-node absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/16",
-                      occupied && "bg-primary/32",
-                      targeted && "z-[5] size-1.5 bg-accent",
-                    )}
+                    data-grid-cell=""
+                    className="model-pad-node absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/16"
                     style={{
                       left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
                       top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
@@ -858,11 +856,7 @@ export function ModelPadSettings() {
                 if (!placement || !sourcePlacement) return null;
                 const selected = activeValue === entry.value;
                 const dragging = dragState?.value === entry.value;
-                const personalPlacement =
-                  sourcePlacement.xSource === "user" && sourcePlacement.ySource === "user";
-                const placementSourceDescription = personalPlacement
-                  ? "Placed by you"
-                  : "Benchmark-assisted";
+                const placementKind = modelPadPlacementKind(sourcePlacement);
                 const labelAlign =
                   placement.x < 0.16 ? "start" : placement.x > 0.84 ? "end" : "center";
                 const labelSide = placement.y > 0.82 ? "bottom" : "top";
@@ -874,9 +868,9 @@ export function ModelPadSettings() {
                   <button
                     key={entry.value}
                     type="button"
-                    aria-label={`${placementLabel(entry)}, ${placementSourceDescription}, ${paceDescription}. Drag to another dot; use arrow keys to move one dot.`}
+                    aria-label={`${placementLabel(entry)}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[placementKind]}, ${paceDescription}. Drag to another dot; use arrow keys to move one dot.`}
                     aria-pressed={selected}
-                    data-placement-source={personalPlacement ? "personal" : "benchmark"}
+                    data-placement-source={placementKind}
                     data-selected={selected ? "true" : "false"}
                     data-label-align={labelAlign}
                     data-label-side={labelSide}

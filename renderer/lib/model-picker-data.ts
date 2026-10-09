@@ -4,8 +4,10 @@ import {
   modelPadGridPoints,
   modelPadGridSize,
   modelPadGridSizeForPlacements,
+  modelPadPlacementKind,
   reflowVisibleModelPadPlacements,
   type ModelPadPlacement,
+  type ModelPadPlacementKind,
 } from "./model-pad-layout";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import { isModelHidden, type HiddenModelsByProvider } from "../shared/model-visibility";
@@ -80,6 +82,8 @@ export interface PositionedModel extends ModelEntry {
   /** Bottom (everyday) to top (more capable), normalized to 0...1. */
   y: number;
   confidence: PositionConfidence;
+  /** Marker kind shared by every Pad surface. */
+  placementKind: ModelPadPlacementKind;
   positionSource: string;
   capabilityLabel: "Everyday" | "Capable" | "Advanced";
   paceLabel: "Faster" | "Balanced" | "Deliberate";
@@ -257,7 +261,7 @@ function labelsFor(x: number, y: number): Pick<PositionedModel, "capabilityLabel
 
 function estimatePosition(
   entry: ModelEntry,
-): Omit<PositionedModel, keyof ModelEntry | "capabilityLabel" | "paceLabel"> {
+): Omit<PositionedModel, keyof ModelEntry | "capabilityLabel" | "paceLabel" | "placementKind"> {
   const ranking = entry.ranking;
   if (
     ranking &&
@@ -337,7 +341,11 @@ function estimatePosition(
 }
 
 export function positionModels(entries: ModelEntry[]): PositionedModel[] {
-  const models = entries.map((entry) => ({ ...entry, ...estimatePosition(entry) }));
+  const models = entries.map((entry) => ({
+    ...entry,
+    ...estimatePosition(entry),
+    placementKind: "benchmark" as const,
+  }));
   const gridSize = modelPadGridSize(models.length);
   const availableCells = modelPadGridPoints(gridSize);
   const confidenceOrder: Record<PositionConfidence, number> = {
@@ -390,17 +398,16 @@ export function positionSavedModels(
     if (!placement) return [];
     const x = Math.min(1, Math.max(0, placement.x));
     const y = Math.min(1, Math.max(0, placement.y));
+    const placementKind = modelPadPlacementKind(placement);
     return [
       {
         ...entry,
         x,
         y,
-        confidence:
-          placement.xSource === "user" && placement.ySource === "user"
-            ? ("personal" as const)
-            : ("suggested" as const),
+        confidence: placementKind === "personal" ? ("personal" as const) : ("suggested" as const),
+        placementKind,
         positionSource:
-          placement.xSource === "user" && placement.ySource === "user"
+          placementKind === "personal"
             ? "Personal placement"
             : placement.xSource === "neutral" && placement.ySource === "benchmark"
               ? "Benchmark capability · pace unmeasured"

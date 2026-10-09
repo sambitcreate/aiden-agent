@@ -9,6 +9,7 @@ import {
 } from "../lib/model-picker-data";
 import {
   MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
   modelPadLeftPercent,
   modelPadTopPercent,
@@ -72,6 +73,13 @@ export function ModelPickerPad({
   const crosshairPoint = active;
   const activeColumn = crosshairPoint ? Math.round(crosshairPoint.x * (gridSize - 1)) : -1;
   const activeRow = crosshairPoint ? Math.round((1 - crosshairPoint.y) * (gridSize - 1)) : -1;
+  // A grid dot under a marker would read as a dot inside a hollow ring, so occupied cells skip it.
+  const occupiedCells = new Set(
+    models.map(
+      (model) =>
+        `${Math.round(model.x * (gridSize - 1))}:${Math.round((1 - model.y) * (gridSize - 1))}`,
+    ),
+  );
 
   const applyPoint = React.useCallback(
     (point: ModelPoint) => {
@@ -237,11 +245,13 @@ export function ModelPickerPad({
         {Array.from({ length: gridSize * gridSize }, (_, index) => {
           const column = index % gridSize;
           const row = Math.floor(index / gridSize);
+          if (occupiedCells.has(`${column}:${row}`)) return null;
           const highlighted = column === activeColumn || row === activeRow;
           return (
             <span
               key={index}
               aria-hidden="true"
+              data-grid-cell=""
               className={cn(
                 "absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-[background-color,opacity] duration-100",
                 highlighted ? "bg-primary/50" : "bg-primary/16",
@@ -257,15 +267,14 @@ export function ModelPickerPad({
         {models.map((model) => {
           const isSelected = model.value === selectedValue;
           const isPreview = model.value === active?.value;
-          const personal = model.confidence === "personal";
           return (
             <span
               key={model.value}
               id={modelOptionId(model.value)}
               role="option"
               aria-selected={isSelected}
-              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${personal ? "Placed by you" : "Benchmark-assisted"}`}
-              data-placement-source={personal ? "personal" : "benchmark"}
+              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[model.placementKind]}`}
+              data-placement-source={model.placementKind}
               data-state={isSelected ? "selected" : isPreview ? "preview" : "resting"}
               className="model-pad-model absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
               style={{

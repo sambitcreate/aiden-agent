@@ -9,6 +9,21 @@ export type {
   ModelPadPlacementSource,
 } from "../shared/model-pad-preferences";
 
+/** How a marker reads on every Pad surface: placed by the user, or positioned with data. */
+export type ModelPadPlacementKind = "personal" | "benchmark";
+
+export const MODEL_PAD_PLACEMENT_KIND_LABELS: Record<ModelPadPlacementKind, string> = {
+  personal: "Placed by you",
+  benchmark: "Benchmark-assisted",
+};
+
+/** A placement is personal only when the user owns both axes; any data-derived axis makes it data-assisted. */
+export function modelPadPlacementKind(
+  placement: Pick<ModelPadPlacement, "xSource" | "ySource">,
+): ModelPadPlacementKind {
+  return placement.xSource === "user" && placement.ySource === "user" ? "personal" : "benchmark";
+}
+
 export const BASE_MODEL_PAD_GRID_SIZE = 7;
 export const MODEL_PAD_GRID_DENSITY = 6;
 export const MODEL_PAD_INSET_PERCENT = 8;
