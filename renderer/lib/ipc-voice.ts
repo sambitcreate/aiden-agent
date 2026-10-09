@@ -45,9 +45,9 @@ export const voiceApi = {
   transcribe: (audioBase64: string, mimeType: string, model?: string, operationId?: string) =>
     invoke<string>("voice:transcribe", audioBase64, mimeType, model, operationId),
   cancelTranscription: (operationId: string) => invoke<void>("voice:transcribeCancel", operationId),
-  /** On-device transcription: base64 raw 16 kHz mono Float32 PCM + downloaded model id. */
-  transcribeLocal: (pcmBase64: string, modelId: string, operationId: string) =>
-    invoke<string>("voice:transcribeLocal", pcmBase64, modelId, operationId),
+  /** On-device transcription: raw 16 kHz mono PCM16 samples + downloaded model id. */
+  transcribeLocal: (pcm: ArrayBuffer, modelId: string, operationId: string) =>
+    invoke<string>("voice:transcribeLocal", pcm, modelId, operationId),
   cancelLocalTranscription: (operationId: string) =>
     invoke<void>("voice:transcribeLocalCancel", operationId),
   streamStart: () => invoke<{ sessionId: string }>("voice:streamStart"),

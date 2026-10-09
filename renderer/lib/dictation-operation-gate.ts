@@ -29,7 +29,7 @@ export class DictationOperationGate {
 export const CLOUD_TRANSCRIPTION_BUDGET_MS = 45_000;
 export const LOCAL_TRANSCRIPTION_BUDGET_MS = 125_000;
 
-/** Parakeet owns a 120-second process timeout; leave IPC settlement headroom. */
+/** The speech worker's shortest transcribe deadline is 120 s; leave IPC settlement headroom. */
 export function transcriptionBudgetMs(provider: string): number {
   return provider === "local" ? LOCAL_TRANSCRIPTION_BUDGET_MS : CLOUD_TRANSCRIPTION_BUDGET_MS;
 }
@@ -118,7 +118,10 @@ export function voiceErrorMessage(error: unknown): string {
   }
   if (/cancel/iu.test(message)) return "Transcription was cancelled.";
   if (/no speech/iu.test(message)) return "No speech detected.";
-  if (/on-device|parakeet|download and select/iu.test(message)) {
+  if (/couldn.t finish \(decode-failed\)/iu.test(message)) {
+    return "On-device transcription couldn’t finish. Try again.";
+  }
+  if (/on-device|isn.t downloaded|download and select/iu.test(message)) {
     return "On-device transcription isn’t ready. Download and select a model in Settings → Voice.";
   }
   if (/429|rate limit|quota/iu.test(message)) {

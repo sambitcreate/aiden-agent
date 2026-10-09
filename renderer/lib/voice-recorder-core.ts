@@ -66,17 +66,17 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-function float32ToBase64(samples: Float32Array): string {
-  const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+/** Float samples in [-1, 1] → signed 16-bit PCM (out-of-range samples clamp). */
+export function float32ToPcm16(samples: Float32Array): Int16Array<ArrayBuffer> {
+  const pcm = new Int16Array(samples.length);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]!));
+    pcm[index] = Math.round(sample * 32_767);
   }
-  return btoa(binary);
+  return pcm;
 }
 
-/** Decode recorded audio and resample to 16 kHz mono Float32 PCM (base64) for the on-device engine. */
+/** Decode recorded audio and resample to 16 kHz mono Float32 PCM. */
 async function blobToMono16k(blob: Blob): Promise<Float32Array> {
   const arrayBuf = await blob.arrayBuffer();
   const decodeCtx = new AudioContext();
@@ -94,7 +94,7 @@ async function blobToMono16k(blob: Blob): Promise<Float32Array> {
   source.connect(offline.destination);
   source.start();
   const rendered = await offline.startRendering();
-  // Copy into a standalone Float32Array so the base64 covers exactly the samples.
+  // Copy into a standalone Float32Array detached from the rendering context.
   return Float32Array.from(rendered.getChannelData(0));
 }
 
@@ -155,9 +155,9 @@ async function convertAndTranscribeBlob(
     if (!options.localModel) {
       throw new Error("Download and select an on-device model in Settings → Voice.");
     }
-    const pcm = float32ToBase64(await blobToMono16k(blob));
+    const pcm = float32ToPcm16(await blobToMono16k(blob));
     beforeDispatch();
-    return (await voiceApi.transcribeLocal(pcm, options.localModel, operationId)).trim();
+    return (await voiceApi.transcribeLocal(pcm.buffer, options.localModel, operationId)).trim();
   }
   if (options.provider === "gemini") {
     const samples = await blobToMono16k(blob);

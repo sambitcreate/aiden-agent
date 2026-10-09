@@ -54,7 +54,7 @@ import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
 import { disposeDictation, toggleDictation } from "./services/dictation.js";
-import { disposeParakeet } from "./services/parakeet.js";
+import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
 import { appUpdateService } from "./services/app-updater.js";
@@ -317,7 +317,7 @@ function cleanupApplication(): void {
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
-  disposeParakeet();
+  disposeLocalSpeech();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
   scheduleService.stop();

@@ -55,8 +55,8 @@ export function errorHideDelayMs(message: string): number {
 export const WARNING_HIDE_DELAY_MS = 4_000;
 const MAX_TRANSCRIPT_LENGTH = 100_000;
 export const HOLD_RELEASE_GRACE_MS = 50;
-// Cloud renderers fail within 45 seconds. Parakeet owns a 120-second process
-// timeout, so the coordinator's last-resort fence must not preempt local work.
+// Cloud renderers fail within 45 seconds. The local speech worker allows at least
+// 120 seconds per request, so the coordinator's last-resort fence must not preempt local work.
 export const TRANSCRIPTION_WATCHDOG_MS = 135_000;
 
 /**

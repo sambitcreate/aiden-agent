@@ -6,7 +6,7 @@ import {
   AIDEN_REMOTE_MAX_SPEECH_SECONDS,
   AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES,
   AIDEN_REMOTE_SPEECH_SAMPLE_RATE,
-  decodeAidenRemotePcm16,
+  decodeAidenRemotePcm16ToInt16,
 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
 import { completeAidenRemoteSpeechTranscription } from "./aiden-remote-speech-transcription.js";
@@ -44,13 +44,11 @@ test("remote speech PCM codec validates base64 and converts signed little-endian
   bytes.writeInt16LE(-32_768, 0);
   bytes.writeInt16LE(0, 2);
   bytes.writeInt16LE(32_767, 4);
-  const samples = decodeAidenRemotePcm16(bytes.toString("base64"));
-  assert.equal(samples.length, 3);
-  assert.equal(samples[0], -1);
-  assert.equal(samples[1], 0);
-  assert.ok(samples[2]! > 0.999);
-  assert.throws(() => decodeAidenRemotePcm16("not base64"), /valid base64/u);
-  assert.throws(() => decodeAidenRemotePcm16(Buffer.from([1]).toString("base64")), /16-bit mono/u);
+  const samples = decodeAidenRemotePcm16ToInt16(bytes.toString("base64"));
+  assert.ok(samples instanceof Int16Array);
+  assert.deepEqual(Array.from(samples), [-32_768, 0, 32_767]);
+  assert.throws(() => decodeAidenRemotePcm16ToInt16("not base64"), /valid base64/u);
+  assert.throws(() => decodeAidenRemotePcm16ToInt16(Buffer.from([1]).toString("base64")), /16-bit mono/u);
 });
 
 test("remote speech accepts the advertised 60-second PCM limit and rejects the next sample", () => {
@@ -61,9 +59,9 @@ test("remote speech accepts the advertised 60-second PCM limit and rejects the n
     AIDEN_REMOTE_SPEECH_SAMPLE_RATE * 2 * AIDEN_REMOTE_MAX_SPEECH_SECONDS,
   );
   assert.equal(maximumBase64.length, AIDEN_REMOTE_MAX_PCM16_BASE64_LENGTH);
-  assert.equal(decodeAidenRemotePcm16(maximumBase64).length, AIDEN_REMOTE_MAX_PCM16_BYTES / 2);
+  assert.equal(decodeAidenRemotePcm16ToInt16(maximumBase64).length, AIDEN_REMOTE_MAX_PCM16_BYTES / 2);
   assert.throws(
-    () => decodeAidenRemotePcm16(Buffer.alloc(AIDEN_REMOTE_MAX_PCM16_BYTES + 2).toString("base64")),
+    () => decodeAidenRemotePcm16ToInt16(Buffer.alloc(AIDEN_REMOTE_MAX_PCM16_BYTES + 2).toString("base64")),
     (error: unknown) =>
       typeof error === "object"
       && error !== null

@@ -578,8 +578,8 @@ export function registerProviderHandlers(): void {
       : await configStore.setSettings(next);
     if (next.cacheWarmingEnabled === false) stopAllPiCacheWarmers();
     if (next.localVoiceIdleUnloadMinutes !== undefined) {
-      const { reconfigureParakeetIdleUnload } = await import("../services/parakeet.js");
-      void reconfigureParakeetIdleUnload();
+      const { reconfigureLocalSpeechIdleUnload } = await import("../services/local-speech.js");
+      void reconfigureLocalSpeechIdleUnload();
     }
     if (next.skillsEnabled !== undefined) {
       skillRegistry.invalidate();

@@ -84,7 +84,7 @@ const coordinator = new DictationCoordinator({
   warmUp: async () => {
     const settings = await configStore.getSettings();
     if (settings.voiceProvider !== "local" || !settings.localVoiceModel) return;
-    const { warmLocalVoice } = await import("./parakeet.js");
+    const { warmLocalVoice } = await import("./local-speech.js");
     await warmLocalVoice(settings.localVoiceModel);
   },
   applyDictionary: async (text) =>

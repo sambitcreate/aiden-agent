@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ParakeetTranscriptionLane } from "./parakeet-transcription-lane.js";
+import { LocalSpeechLane } from "./local-speech-lane.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -12,8 +12,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-test("cancelling queued Parakeet work leaves the active request running", async () => {
-  const lane = new ParakeetTranscriptionLane();
+test("cancelling queued local speech work leaves the active request running", async () => {
+  const lane = new LocalSpeechLane();
   const firstResult = deferred<string>();
   const started: string[] = [];
   let activeCancellationCount = 0;
@@ -53,8 +53,8 @@ test("cancelling queued Parakeet work leaves the active request running", async 
   assert.deepEqual(started, ["first", "after-queued"]);
 });
 
-test("cancelling active Parakeet work restarts the lane for queued requests", async () => {
-  const lane = new ParakeetTranscriptionLane();
+test("cancelling active local speech work restarts the lane for queued requests", async () => {
+  const lane = new LocalSpeechLane();
   const activeResult = deferred<string>();
   const activeController = new AbortController();
   const started: string[] = [];

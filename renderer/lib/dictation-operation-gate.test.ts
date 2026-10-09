@@ -43,7 +43,7 @@ test("one deadline budget is shared across sequential operations", async () => {
   await assert.rejects(deadline.run(Promise.resolve("late")), /took too long/u);
 });
 
-test("on-device transcription keeps headroom around Parakeet's process deadline", () => {
+test("on-device transcription keeps headroom around the worker's minimum deadline", () => {
   assert.equal(transcriptionBudgetMs("gemini"), 45_000);
   assert.equal(transcriptionBudgetMs("openai"), 45_000);
   assert.equal(transcriptionBudgetMs("local"), 125_000);
@@ -87,6 +87,20 @@ test("voice errors hide Electron wrappers and provide actionable setup copy", ()
   assert.equal(
     voiceErrorMessage(new Error("Gemini Live transcription timed out while finalizing.")),
     "Transcription took too long. Try again with a shorter recording.",
+  );
+});
+
+test("an on-device worker that crashed twice asks for a retry, not a model download", () => {
+  const message = voiceErrorMessage(
+    new Error(
+      "Error invoking remote method 'voice:transcribeLocal': Error: On-device transcription couldn't finish (decode-failed). Try again.",
+    ),
+  );
+  assert.doesNotMatch(message, /Download/u);
+  assert.match(message, /couldn.t finish/u);
+  assert.match(
+    voiceErrorMessage(new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.")),
+    /Download/u,
   );
 });
 
