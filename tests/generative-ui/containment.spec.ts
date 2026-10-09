@@ -537,16 +537,69 @@ test("a guest can steal focus without a gesture, but only a real click activates
   }
 });
 
-test("guest code cannot replace window.aiden", async ({ page }) => {
-  const guest = await loadWrappedGuest(
-    page,
-    "<script>try { window.aiden.sendPrompt = () => {}; } catch (e) {} try { window.aiden = {}; } catch (e) {} window.aiden.sendPrompt('still works');</script>",
+test("with two visuals, the page can tell which one the user's click went to", async ({ page }) => {
+  // Gesture attribution relies on: pointerenter/leave reaching the iframe
+  // elements in the page, and a click in B moving focus to B even while A
+  // keeps stealing focus.
+  const quiet = wrapGenerativeUiHtml('<button id="b">B</button>', "B", undefined, { inline: true });
+  const thief = wrapGenerativeUiHtml(
+    '<input id="field"><script>setInterval(() => document.getElementById("field").focus(), 50)</script>',
+    "A",
+    undefined,
+    { inline: true },
   );
+  const site = await listen((request, response) => {
+    if (request.url === "/a" || request.url === "/b") {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": GENERATIVE_UI_GUEST_CSP });
+      response.end(request.url === "/a" ? thief : quiet);
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!DOCTYPE html><html><body style="margin:0">
+      <script>
+        window.__log = [];
+        addEventListener("DOMContentLoaded", () => {
+          for (const id of ["a", "b"]) {
+            const frame = document.getElementById(id);
+            frame.addEventListener("pointerenter", () => __log.push("enter:" + id));
+            frame.addEventListener("pointerleave", () => __log.push("leave:" + id));
+          }
+        });
+        addEventListener("blur", () => setTimeout(() => {
+          __log.push("focus:" + (document.activeElement && document.activeElement.id));
+          console.log("focus-moved");
+        }, 0));
+      </script>
+      <iframe id="a" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="/a" style="display:block;width:400px;height:150px;border:0"></iframe>
+      <iframe id="b" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="/b" style="display:block;width:400px;height:150px;border:0"></iframe>
+    </body></html>`);
+  });
   try {
-    await expect
-      .poll(async () => ofType(await guest.messages(), "aiden:generative-ui:prompt").map((m) => m.text))
-      .toEqual(["still works"]);
+    await page.goto(site.origin);
+    // A steals focus on its own; the pointer has never been over it.
+    await page.waitForEvent("console", (message) => message.text() === "focus-moved");
+    await page.frameLocator("#b").locator("#b").click();
+    const log = await page.evaluate(() => (window as unknown as { __log: string[] }).__log);
+    expect(log[0]).toBe("focus:a");
+    expect(log).toContain("enter:b");
+    expect(log).not.toContain("enter:a");
   } finally {
-    await guest.close();
+    await site.close();
   }
 });
+
+for (const declaration of ["const aiden = 1;", "let aiden = 1;", "function aiden() {}"]) {
+  test(`a guest that declares its own top-level aiden (${declaration}) still runs`, async ({ page }) => {
+    // Design Studio pages and older artifacts never saw the bridge; their own
+    // names must not break the whole script.
+    const guest = await loadWrappedGuest(
+      page,
+      `<p id="out">pending</p><script>${declaration} document.getElementById("out").textContent = "ran";</script>`,
+    );
+    try {
+      await expect(page.frameLocator("#artifact").locator("#out")).toHaveText("ran");
+    } finally {
+      await guest.close();
+    }
+  });
+}

@@ -189,44 +189,61 @@ function setParentActivation(isActive: boolean): void {
   Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive, hasBeenActive: isActive } });
 }
 
-test("guest prompts count as gestured only with activation the parent page did not cause", async (t) => {
+test("a visual's prompts count as the user's only when the gesture reached that visual", async (t) => {
   t.after(() => setParentActivation(false));
-  setParentActivation(false);
-  const prompts: Array<{ text: string; focused: boolean; activated: boolean; entry: number }> = [];
+  const prompts: Array<[string, boolean, boolean]> = [];
   const { iframe, guest } = await mountedFrame((text, focus) =>
-    prompts.push({ text, focused: focus.frameFocused, activated: focus.userActivated, entry: focus.focusEntry }));
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Unfocused" });
-  postFrom(window, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "spoofed" });
-
-  // The guest focuses itself from a timer: focus moves in, but no gesture.
-  const enterFrame = () => act(() => {
+    prompts.push([text, focus.frameFocused, focus.userActivated]));
+  const prompt = (text: string) => postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text });
+  const enter = () => act(() => {
     iframe.focus();
     window.dispatchEvent(new Event("blur"));
   });
-  enterFrame();
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Scripted" });
-  // The user clicks inside the frame: the parent gains transient activation.
+  const leave = () => act(() => window.dispatchEvent(new Event("focus")));
+  const hover = (over: boolean) =>
+    act(() => iframe.dispatchEvent(new Event(over ? "pointerenter" : "pointerleave")));
+
+  setParentActivation(false);
+  prompt("Unfocused");
+  postFrom(window, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "spoofed" });
+
+  // The guest focuses itself from a timer: focus moves in, but no gesture.
+  enter();
+  prompt("Scripted");
+  // Then the user clicks inside it while it holds focus: activation starts here.
   setParentActivation(true);
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Clicked" });
-  // Typing in the composer also activates the parent; that must not count.
+  prompt("ClickedWhileFocused");
+  leave();
+
+  // The user clicks another visual (page activates, pointer elsewhere) and this
+  // one steals focus: the activation is not its own.
+  enter();
+  prompt("StoleAfterOtherClick");
+  leave();
+
+  // A click straight into this visual: pointer over it, focus and activation together.
+  hover(true);
+  enter();
+  prompt("ClickedInto");
+  leave();
+
+  // Typing in the composer, then this visual steals focus under the resting pointer.
   act(() => {
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
   });
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "AfterTyping" });
+  enter();
+  prompt("StoleWhileTyping");
 
-  assert.deepEqual(prompts.map(({ text, focused, activated }) => [text, focused, activated]), [
+  assert.deepEqual(prompts, [
     ["Unfocused", false, false],
     ["Scripted", true, false],
-    ["Clicked", true, true],
-    ["AfterTyping", true, false],
+    ["ClickedWhileFocused", true, true],
+    ["StoleAfterOtherClick", true, false],
+    ["ClickedInto", true, true],
+    ["StoleWhileTyping", true, false],
   ]);
-  const firstEntry = prompts[1]!.entry;
-  assert.equal(prompts[2]!.entry, firstEntry);
-  act(() => window.dispatchEvent(new Event("focus")));
-  enterFrame();
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Reentered" });
-  assert.notEqual(prompts[prompts.length - 1]!.entry, firstEntry);
 });
+
 
 /** happy-dom lacks the Popover API; Chromium top-layer behavior is covered in tests/generative-ui. */
 function stubPopoverApi(): () => void {
@@ -281,6 +298,31 @@ test("a presented visual replaces its draft at the draft's height with a ready p
   assert.equal(view.container.querySelector("iframe")?.getAttribute("src"), src);
   assert.equal(view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height, "333px");
   assert.equal(calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length, fetchesBefore);
+});
+
+test("a draft's height seeds only the one frame that replaces it", () => {
+  rememberDraftHeight("call-9", 377);
+  const first = render(<HtmlArtifactFrame chatId="chat-1" artifact={artifact()} placementCallId="call-9" />);
+  assert.equal(first.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height, "377px");
+  first.unmount();
+  // call-N ids repeat across turns; a later, unrelated visual must not inherit it.
+  const later = render(<HtmlArtifactFrame chatId="chat-2" artifact={artifact()} placementCallId="call-9" />);
+  assert.equal(later.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height, "160px");
+});
+
+test("a same-title replace navigates the mounted frame to the replacement's preview", () => {
+  const first = artifact();
+  const v1 = `aiden-genui://preview/${"1".repeat(64)}`;
+  const v2 = `aiden-genui://preview/${"2".repeat(64)}`;
+  primeInlineVisualPreview("chat-1", first, v1);
+  const view = render(<HtmlArtifactFrame chatId="chat-1" artifact={first} />);
+  assert.equal(view.container.querySelector("iframe")?.getAttribute("src"), v1);
+  // Same mediaId, new content hash: main presents the replacement with a ready preview.
+  const replaced = { ...first, id: `${first.id}-v2` };
+  primeInlineVisualPreview("chat-1", replaced, v2);
+  view.rerender(<HtmlArtifactFrame chatId="chat-1" artifact={replaced} />);
+  assert.equal(view.container.querySelector("iframe")?.getAttribute("src"), v2);
+  assert.equal(view.container.querySelectorAll("iframe").length, 1);
 });
 
 test("a remount at stream handoff reuses the cached preview and height", async () => {

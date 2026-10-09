@@ -49,13 +49,10 @@ export interface GuestPromptInput {
   text: string;
   /** `document.activeElement` is this frame. Necessary, not sufficient: a guest can focus itself. */
   frameFocused: boolean;
-  /**
-   * The user just interacted inside a frame: the parent holds transient user
-   * activation that no parent-page input produced (see `guestUserActivation`).
-   */
+  /** The user's own input reached this frame (`createFrameGestureTracker`). */
   userActivated: boolean;
-  /** An ungestured prompt from this frame was already staged since focus entered it. */
-  stagedThisFocus: boolean;
+  /** This visual already staged an ungestured suggestion since the user last sent. */
+  alreadyStaged: boolean;
   chatBusy: boolean;
   /** Monotonic milliseconds (performance.now), so wall-clock jumps can't lock prompts out. */
   now: number;
@@ -75,25 +72,11 @@ export function decideGuestPrompt(input: GuestPromptInput): GuestPromptDecision 
     return { action: "reject", reason: "cooldown" };
   }
   if (input.userActivated) return { action: input.chatBusy ? "stage" : "send", text };
-  // Without a gesture the guest may suggest a follow-up once per focus entry,
-  // into the composer for the user to review; it can never send or flood.
-  return input.stagedThisFocus ? { action: "reject", reason: "repeat" } : { action: "stage", text };
+  // Without a gesture the guest may suggest one follow-up, into the composer
+  // for the user to review, until the user next sends; it can never send or
+  // flood (focus cycling cannot reset this).
+  return input.alreadyStaged ? { action: "reject", reason: "repeat" } : { action: "stage", text };
 }
 
 /** Chromium's transient user activation lifetime. */
 export const USER_ACTIVATION_WINDOW_MS = 5000;
-
-/**
- * Whether the parent's current transient activation came from the user
- * interacting inside a child frame. A click or key press inside the guest
- * activates the parent too, but a guest's scripted `focus()` does not; parent
- * input (typing in the composer) also activates it, so that is excluded.
- */
-export function guestUserActivation(input: {
-  parentActivationActive: boolean;
-  now: number;
-  lastParentInputAt?: number;
-}): boolean {
-  if (!input.parentActivationActive) return false;
-  return input.lastParentInputAt === undefined || input.now - input.lastParentInputAt > USER_ACTIVATION_WINDOW_MS;
-}

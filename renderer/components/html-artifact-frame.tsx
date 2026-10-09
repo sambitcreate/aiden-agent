@@ -5,7 +5,7 @@ import { GENERATIVE_UI_IFRAME_SANDBOX } from "../shared/generative-ui";
 import {
   GENERATIVE_UI_THEME_MESSAGE,
   clampInlineVisualHeight,
-  guestUserActivation,
+  USER_ACTIVATION_WINDOW_MS,
   parseGuestBridgeMessage,
 } from "../shared/generative-ui-bridge";
 import { chatsApi } from "../lib/ipc";
@@ -16,6 +16,7 @@ import {
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { Button, Callout, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
+import { createFrameGestureTracker } from "../shared/generative-ui-gesture";
 
 /** Height before the guest first reports its content size. */
 const INITIAL_VISUAL_HEIGHT = 160;
@@ -43,6 +44,13 @@ function cacheKey(chatId: string, mediaId: string): string {
 
 /** Last height each streaming draft reported, by its public toolCallId. */
 const draftHeights = new Map<string, number>();
+
+/** One use only: call-N ids repeat across turns and chats. */
+function takeDraftHeight(toolCallId: string): number | undefined {
+  const height = draftHeights.get(toolCallId);
+  draftHeights.delete(toolCallId);
+  return height;
+}
 
 export function rememberDraftHeight(toolCallId: string, height: number): void {
   draftHeights.set(toolCallId, height);
@@ -87,31 +95,43 @@ export type GuestPromptHandler = (
 
 export interface GuestPromptFocus {
   frameFocused: boolean;
-  /** The user interacted inside a frame just now; see guestUserActivation. */
+  /** The user's own input reached this frame (see createFrameGestureTracker). */
   userActivated: boolean;
-  /** Identifies one entry of focus into this frame; changes on every entry. */
-  focusEntry: number;
 }
 
 /** Last pointer or key input on the app page itself (not inside a frame). */
 let lastParentInputAt: number | undefined;
 let parentInputTrackerInstalled = false;
-let focusEntrySequence = 0;
 
-function nextFocusEntry(): number {
-  focusEntrySequence += 1;
-  return focusEntrySequence;
-}
+/** True only inside the app page's own Tab keydown and its default focus move. */
+let inParentTabDefault = false;
 
 function installParentInputTracker(): void {
   if (parentInputTrackerInstalled) return;
   parentInputTrackerInstalled = true;
-  const note = () => {
+  const note = (event: Event) => {
     lastParentInputAt = performance.now();
+    if (event instanceof KeyboardEvent && event.key === "Tab") {
+      // The default action (moving focus, which blurs the window when focus
+      // enters a frame) runs before this timeout; a guest's own later
+      // focus() arrives as a separate task.
+      inParentTabDefault = true;
+      setTimeout(() => {
+        inParentTabDefault = false;
+      }, 0);
+    }
   };
   for (const type of ["pointerdown", "keydown"] as const) {
     document.addEventListener(type, note, { capture: true, passive: true });
   }
+}
+
+function pageActivation(): boolean {
+  return navigator.userActivation?.isActive === true;
+}
+
+function parentInputRecent(now: number): boolean {
+  return lastParentInputAt !== undefined && now - lastParentInputAt <= USER_ACTIVATION_WINDOW_MS;
 }
 
 interface HtmlArtifactFrameError {
@@ -165,6 +185,7 @@ function HtmlArtifactIframe({
   onHeight,
   onPrompt,
   onGuestFocus,
+  expanded,
 }: {
   src: string;
   title: string;
@@ -174,36 +195,64 @@ function HtmlArtifactIframe({
   onPrompt?: (text: string, focus: GuestPromptFocus) => void;
   /** Focus moved into (true) or out of (false) the guest document. */
   onGuestFocus?: (focused: boolean) => void;
+  /** The frame is the expanded top-layer view (every other visual is inert). */
+  expanded?: boolean;
 }) {
   const frameRef = React.useRef<HTMLIFrameElement | null>(null);
-  const handlers = React.useRef({ onEscape, onHeight, onPrompt, onGuestFocus });
+  const handlers = React.useRef({ onEscape, onHeight, onPrompt, onGuestFocus, expanded });
   React.useLayoutEffect(() => {
-    handlers.current = { onEscape, onHeight, onPrompt, onGuestFocus };
-  }, [onEscape, onHeight, onPrompt, onGuestFocus]);
+    handlers.current = { onEscape, onHeight, onPrompt, onGuestFocus, expanded };
+  }, [onEscape, onHeight, onPrompt, onGuestFocus, expanded]);
 
   React.useEffect(() => {
-    // Focus entering a cross-origin frame blurs this window. That happens for
-    // a click or Tab into it, but also when the guest calls focus() itself,
-    // so focus never authorizes sending: transient user activation does (see
-    // guestUserActivation). The iframe never matches :focus-visible, so focus
-    // is reported for the host to draw a ring.
+    // Focus entering a cross-origin frame blurs this window, for a click or
+    // Tab into it but also when the guest calls focus() itself. Page
+    // activation is page-wide, so a gesture is attributed to this frame by
+    // createFrameGestureTracker; nothing else lets a visual send as the user.
+    // The iframe never matches :focus-visible, so focus is also reported for
+    // the host to draw a ring.
     installParentInputTracker();
-    let focusEntry = 0;
+    const frameElement = frameRef.current;
+    const gesture = createFrameGestureTracker();
+    let hovered = false;
     let guestFocused = false;
+    let sampler = 0;
+    const sample = () => ({ active: pageActivation(), focused: document.activeElement === frameRef.current });
+    const runSampler = () => {
+      gesture.tick(sample());
+      sampler = guestFocused ? requestAnimationFrame(runSampler) : 0;
+    };
     const setGuestFocused = (next: boolean) => {
       if (guestFocused === next) return;
       guestFocused = next;
+      if (next && !sampler) sampler = requestAnimationFrame(runSampler);
+      if (!next) gesture.focusLeft();
       handlers.current.onGuestFocus?.(next);
     };
     const noteFocusEntry = () => {
       if (document.activeElement !== frameRef.current) return;
-      focusEntry = nextFocusEntry();
+      const now = performance.now();
+      gesture.focusEntered({
+        active: pageActivation(),
+        hovered,
+        expanded: handlers.current.expanded === true,
+        duringTabDefault: inParentTabDefault,
+        parentInputRecent: parentInputRecent(now),
+      });
       setGuestFocused(true);
     };
     const noteFocusReturn = () => setGuestFocused(false);
     const noteParentFocus = (event: FocusEvent) => {
       if (event.target !== frameRef.current) setGuestFocused(false);
     };
+    const noteHover = () => {
+      hovered = true;
+    };
+    const noteUnhover = () => {
+      hovered = false;
+    };
+    frameElement?.addEventListener("pointerenter", noteHover);
+    frameElement?.addEventListener("pointerleave", noteUnhover);
     const receiveMessage = (event: MessageEvent) => {
       const frame = frameRef.current;
       const guest = frame?.contentWindow;
@@ -217,15 +266,12 @@ function HtmlArtifactIframe({
       else if (message.type === "ready") postThemeTo(guest);
       else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
       else {
-        const frameFocused = document.activeElement === frame;
-        const userActivated =
-          frameFocused &&
-          guestUserActivation({
-            parentActivationActive: navigator.userActivation?.isActive === true,
-            now: performance.now(),
-            lastParentInputAt,
-          });
-        handlers.current.onPrompt?.(message.text, { frameFocused, userActivated, focusEntry });
+        const now = sample();
+        gesture.tick(now);
+        handlers.current.onPrompt?.(message.text, {
+          frameFocused: now.focused,
+          userActivated: gesture.gestured(now),
+        });
       }
     };
     window.addEventListener("blur", noteFocusEntry);
@@ -237,6 +283,9 @@ function HtmlArtifactIframe({
       window.removeEventListener("focus", noteFocusReturn);
       document.removeEventListener("focusin", noteParentFocus);
       window.removeEventListener("message", receiveMessage);
+      frameElement?.removeEventListener("pointerenter", noteHover);
+      frameElement?.removeEventListener("pointerleave", noteUnhover);
+      if (sampler) cancelAnimationFrame(sampler);
     };
   }, []);
 
@@ -285,7 +334,7 @@ function HtmlArtifactFrameImpl({
   const [height, setHeight] = React.useState<number>(
     () =>
       cachedPreview(chatId, artifact)?.height ??
-      (placementCallId ? draftHeights.get(placementCallId) : undefined) ??
+      (placementCallId ? takeDraftHeight(placementCallId) : undefined) ??
       INITIAL_VISUAL_HEIGHT,
   );
   const [error, setError] = React.useState<HtmlArtifactFrameError | null>(null);
@@ -323,7 +372,14 @@ function HtmlArtifactFrameImpl({
   // preview stays mounted and interactive until the replacement arrives —
   // clearing src here would flash the placeholder on every replace.
   React.useEffect(() => {
-    if (cachedPreview(chatId, artifact)) return;
+    const cached = cachedPreview(chatId, artifact);
+    if (cached) {
+      // A same-title replace primes the new version's preview before this
+      // rerender; navigate the mounted iframe to it in place.
+      setError(null);
+      setSrc(cached.src);
+      return;
+    }
     let cancelled = false;
     void chatsApi
       .htmlArtifactSrcdoc(chatId, artifact.mediaId, readGenerativeUiTheme())
@@ -480,6 +536,7 @@ function HtmlArtifactFrameImpl({
             onHeight={recordHeight}
             onPrompt={relayPrompt}
             onGuestFocus={setGuestFocused}
+            expanded={expanded}
           />
         ) : error ? (
           <div className="flex h-full items-center justify-center px-4 text-center">
@@ -546,6 +603,14 @@ function HtmlArtifactDraftFrameImpl({
     },
     [toolCallId],
   );
+  // A retracted draft must not leave its height for an unrelated later call.
+  // The replacing frame reads it while rendering, before this runs.
+  React.useEffect(() => {
+    if (!toolCallId) return;
+    return () => {
+      setTimeout(() => draftHeights.delete(toolCallId), 0);
+    };
+  }, [toolCallId]);
   const label = title ? `Visualizing ${title}` : "Visualizing";
   return (
     <section

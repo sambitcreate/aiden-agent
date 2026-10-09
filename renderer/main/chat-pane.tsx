@@ -1570,6 +1570,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  /** Visuals whose one ungestured suggestion was staged since the user last sent. */
+  const stagedVisualsRef = React.useRef(new Set<string>());
   const handleSend = React.useCallback(
     async (
       text: string,
@@ -1608,6 +1610,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         return;
       }
+      // A new turn lets each visual suggest one ungestured follow-up again.
+      stagedVisualsRef.current.clear();
       if (chatMessageQueue(chatId).getSnapshot().messages.length === 0)
         chatMessageQueue(chatId).resume();
       // A new turn revokes any active read-aloud job for this chat.
@@ -1721,8 +1725,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const lastVisualPromptAtRef = React.useRef(new Map<string, number>());
-  /** mediaId → focus entry whose one ungestured suggestion was already staged. */
-  const stagedVisualFocusRef = React.useRef(new Map<string, number>());
   /** Anything that makes an immediate send unsafe; refreshed below once the queue is known. */
   const visualPromptBusyRef = React.useRef(false);
   const handleVisualPrompt = React.useCallback<GuestPromptHandler>(
@@ -1732,7 +1734,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         text,
         frameFocused: focus.frameFocused,
         userActivated: focus.userActivated,
-        stagedThisFocus: stagedVisualFocusRef.current.get(mediaId) === focus.focusEntry,
+        alreadyStaged: stagedVisualsRef.current.has(mediaId),
         chatBusy: visualPromptBusyRef.current,
         now,
         lastAcceptedAt: lastVisualPromptAtRef.current.get(mediaId),
@@ -1740,7 +1742,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (decision.action === "reject") return;
       lastVisualPromptAtRef.current.set(mediaId, now);
       if (decision.action === "stage") {
-        if (!focus.userActivated) stagedVisualFocusRef.current.set(mediaId, focus.focusEntry);
+        if (!focus.userActivated) stagedVisualsRef.current.add(mediaId);
         stageComposerText(chatId, decision.text);
         return;
       }

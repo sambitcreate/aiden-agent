@@ -138,7 +138,10 @@ function guestBridgeScript(nonce?: string): string {
       return [1, 2, 3, 4, 5, 6, 7, 8].map((i) => cssVar("--chart-" + i)).filter(Boolean);
     },
   });
-  Object.defineProperty(window, "aiden", { value: api, writable: false, configurable: false, enumerable: true });
+  // Configurable so a guest's own top-level aiden (Design Studio pages, older
+  // artifacts) shadows it instead of failing the whole script. Locking it adds
+  // no security: a guest can always post to the parent directly.
+  Object.defineProperty(window, "aiden", { value: api, writable: false, configurable: true, enumerable: true });
   document.addEventListener("DOMContentLoaded", applyChartDefaults);
   post({ type: ${JSON.stringify(GENERATIVE_UI_READY_MESSAGE)} });
 })();
