@@ -564,12 +564,21 @@ test("inline visuals preference is chosen in Appearance and survives relaunch", 
   await control.click();
   await page.getByRole("option", { name: "Off" }).click();
   await expect(control).toHaveText("Off");
-  await expect.poll(async () => {
-    const appearance = JSON.parse(
-      await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-    ).settings?.appearance;
-    return appearance?.inlineVisuals;
-  }).toBe("off");
+  // The live preview leads the debounced durable write, and a fresh profile
+  // has no settings.json until the first write lands. Treat that missing file
+  // as "not written yet" so the poll retries; other read failures still throw.
+  const storedInlineVisuals = async () => {
+    try {
+      const appearance = JSON.parse(
+        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+      ).settings?.appearance;
+      return appearance?.inlineVisuals;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
+  await expect.poll(storedInlineVisuals).toBe("off");
   page = await aiden.relaunch();
   await openAppearance();
   await expect(page.getByRole("combobox", { name: "Inline visuals" })).toHaveText("Off");
