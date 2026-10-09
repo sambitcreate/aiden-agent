@@ -8,7 +8,7 @@ import {
   GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_PARENT_FRAME_SRC,
 } from "../../renderer/shared/generative-ui";
-import { generativeUiExportDocument } from "../../main/services/generative-ui-html";
+import { generativeUiExportDocument, wrapGenerativeUiHtml } from "../../main/services/generative-ui-html";
 
 // Playwright's config loader resolves this ESM repo through the CommonJS
 // condition. Named exports are unavailable; the default object carries them.
@@ -299,4 +299,112 @@ test("a top-layer artifact escapes transcript stacking and preserves its browsin
   await expect(counter).toHaveText("2");
   await expect(page.locator("#host")).toHaveCSS("position", "static");
   await expect(page.locator("#opener")).toBeFocused();
+});
+
+type BridgeMessage = { type?: string; height?: number; text?: string } | string | null;
+
+/**
+ * Serve a parent page embedding the main-wrapped guest exactly as the app does
+ * (unique-origin sandbox, guest CSP) and record every message it posts.
+ */
+async function loadWrappedGuest(
+  page: PlaywrightTestModule.Page,
+  html: string,
+): Promise<{ messages: () => Promise<BridgeMessage[]>; close: () => Promise<void> }> {
+  const guest = wrapGenerativeUiHtml(html, "Bridge probe", undefined, { inline: true });
+  const site = await listen((request, response) => {
+    if (request.url === "/guest") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": GENERATIVE_UI_GUEST_CSP,
+      });
+      response.end(guest);
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!DOCTYPE html><html><body>
+      <script>window.__msgs = []; window.addEventListener("message", (e) => window.__msgs.push(e.data));</script>
+      <iframe id="artifact" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="/guest" style="width:600px;height:300px"></iframe>
+    </body></html>`);
+  });
+  await page.goto(site.origin);
+  return {
+    messages: () => page.evaluate(() => (window as unknown as { __msgs: BridgeMessage[] }).__msgs),
+    close: site.close,
+  };
+}
+
+const ofType = (messages: BridgeMessage[], type: string) =>
+  messages.filter((m): m is { type: string; height?: number; text?: string } =>
+    typeof m === "object" && m !== null && m.type === type);
+
+test("bridge reports content height to the parent", async ({ page }) => {
+  const guest = await loadWrappedGuest(page, '<div style="height:640px">tall</div>');
+  try {
+    await expect
+      .poll(async () => {
+        const resizes = ofType(await guest.messages(), "aiden:generative-ui:resize");
+        return resizes[resizes.length - 1]?.height ?? 0;
+      })
+      .toBeGreaterThanOrEqual(640);
+  } finally {
+    await guest.close();
+  }
+});
+
+test("sendPrompt posts a typed prompt message and nothing else", async ({ page }) => {
+  const guest = await loadWrappedGuest(
+    page,
+    '<button id="b" onclick="aiden.sendPrompt(\'Drill in\')">go</button>',
+  );
+  try {
+    await page.frameLocator("#artifact").locator("#b").click();
+    await expect
+      .poll(async () => ofType(await guest.messages(), "aiden:generative-ui:prompt"))
+      .toEqual([{ type: "aiden:generative-ui:prompt", text: "Drill in" }]);
+  } finally {
+    await guest.close();
+  }
+});
+
+test("theme messages from the parent update guest variables without reloading", async ({ page }) => {
+  const guest = await loadWrappedGuest(
+    page,
+    "<p id=p>x</p><script>window.__loaded = (window.__loaded || 0) + 1</script>",
+  );
+  try {
+    const paragraph = page.frameLocator("#artifact").locator("#p");
+    await expect(paragraph).toHaveText("x");
+    await page.evaluate(() => {
+      const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+      iframe.contentWindow!.postMessage(
+        { type: "aiden:generative-ui:theme", colorScheme: "dark", vars: { "--accent": "#ff0000", "--bad": "x;}" } },
+        "*",
+      );
+    });
+    await expect
+      .poll(() => paragraph.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()))
+      .toBe("#ff0000");
+    expect(await paragraph.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--bad").trim())).toBe("");
+    expect(await paragraph.evaluate(() => document.documentElement.dataset.colorScheme)).toBe("dark");
+    expect(await paragraph.evaluate(() => (window as unknown as { __loaded: number }).__loaded)).toBe(1);
+  } finally {
+    await guest.close();
+  }
+});
+
+test("guest code cannot replace window.aiden", async ({ page }) => {
+  const guest = await loadWrappedGuest(
+    page,
+    "<script>try { window.aiden.sendPrompt = () => {}; } catch (e) {} try { window.aiden = {}; } catch (e) {} window.aiden.sendPrompt('still works');</script>",
+  );
+  try {
+    await expect
+      .poll(async () => ofType(await guest.messages(), "aiden:generative-ui:prompt").map((m) => m.text))
+      .toEqual(["still works"]);
+  } finally {
+    await guest.close();
+  }
 });

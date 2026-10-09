@@ -11,7 +11,16 @@ import {
   MAX_HTML_ARTIFACT_BYTES,
   isHtmlArtifactTitle,
 } from "../../renderer/shared/generative-ui.js";
-import { sanitizeGenerativeUiThemeVars } from "../../renderer/shared/generative-ui-theme.js";
+import {
+  GENERATIVE_UI_THEME_VARIABLES,
+  sanitizeGenerativeUiThemeVars,
+} from "../../renderer/shared/generative-ui-theme.js";
+import {
+  GENERATIVE_UI_PROMPT_MESSAGE,
+  GENERATIVE_UI_RESIZE_MESSAGE,
+  GENERATIVE_UI_THEME_MESSAGE,
+  MAX_GUEST_PROMPT_CHARS,
+} from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
 
 const FORBIDDEN_OPEN_TAG =
@@ -36,6 +45,82 @@ export interface GenerativeUiThemeTokens {
 export interface GenerativeUiWrapOptions {
   /** Chat-inline preview: transparent canvas so the transcript shows through. */
   inline?: boolean;
+  /** Draft previews block model scripts; only the nonce'd bridge may run. */
+  bridgeNonce?: string;
+}
+
+const NONCE = /^[A-Za-z0-9+/=]{16,64}$/u;
+
+/**
+ * Host-owned guest runtime, placed before host libraries and model code.
+ * Reports content height, relays Escape, exposes a frozen `window.aiden`
+ * (sendPrompt, theme), and applies parent theme updates in place.
+ */
+function guestBridgeScript(nonce?: string): string {
+  if (nonce !== undefined && !NONCE.test(nonce)) throw new Error("Invalid bridge nonce.");
+  const attr = nonce ? ` nonce="${nonce}"` : "";
+  return `<script${attr}>
+(() => {
+  const parentWindow = window.parent;
+  const post = (data) => parentWindow.postMessage(data, "*");
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") post(${JSON.stringify(GENERATIVE_UI_ESCAPE_MESSAGE)});
+  }, true);
+  let lastHeight = 0;
+  let frame = 0;
+  const report = () => {
+    frame = 0;
+    const height = Math.ceil(document.documentElement.scrollHeight);
+    if (Math.abs(height - lastHeight) < 2) return;
+    lastHeight = height;
+    post({ type: ${JSON.stringify(GENERATIVE_UI_RESIZE_MESSAGE)}, height });
+  };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(report); };
+  new ResizeObserver(schedule).observe(document.documentElement);
+  window.addEventListener("load", schedule);
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const applyChartDefaults = () => {
+    const Chart = window.Chart;
+    if (!Chart || !Chart.defaults) return;
+    Chart.defaults.color = cssVar("--text-secondary") || Chart.defaults.color;
+    Chart.defaults.borderColor = cssVar("--border-separator") || Chart.defaults.borderColor;
+    const family = cssVar("--font-ui-family");
+    if (family && Chart.defaults.font) Chart.defaults.font.family = family;
+    for (const chart of Object.values(Chart.instances || {})) chart.update("none");
+  };
+  window.addEventListener("message", (event) => {
+    if (event.source !== parentWindow) return;
+    const data = event.data;
+    if (!data || data.type !== ${JSON.stringify(GENERATIVE_UI_THEME_MESSAGE)} || !data.vars || typeof data.vars !== "object") return;
+    const root = document.documentElement;
+    const scheme = data.colorScheme === "dark" ? "dark" : "light";
+    root.dataset.colorScheme = scheme;
+    root.style.colorScheme = scheme;
+    for (const [name, value] of Object.entries(data.vars)) {
+      if (/^--[a-z0-9-]+$/.test(name) && typeof value === "string" && !/[;{}<>]|url\\(/i.test(value)) {
+        root.style.setProperty(name, value);
+      }
+    }
+    applyChartDefaults();
+    window.dispatchEvent(new CustomEvent("aiden:themechange"));
+  });
+  const names = ${JSON.stringify(GENERATIVE_UI_THEME_VARIABLES)};
+  const api = Object.freeze({
+    sendPrompt(text) {
+      if (typeof text !== "string") return;
+      post({ type: ${JSON.stringify(GENERATIVE_UI_PROMPT_MESSAGE)}, text: text.slice(0, ${MAX_GUEST_PROMPT_CHARS + 1}) });
+    },
+    theme() {
+      return Object.fromEntries(names.map((name) => [name, cssVar(name)]));
+    },
+    series() {
+      return [1, 2, 3, 4, 5, 6, 7, 8].map((i) => cssVar("--chart-" + i)).filter(Boolean);
+    },
+  });
+  Object.defineProperty(window, "aiden", { value: api, writable: false, configurable: false, enumerable: true });
+  document.addEventListener("DOMContentLoaded", applyChartDefaults);
+})();
+</script>`;
 }
 
 const DEFAULT_THEME: GenerativeUiThemeTokens = {
@@ -179,6 +264,7 @@ export function wrapGenerativeUiHtml(
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${GENERATIVE_UI_GUEST_CSP}">
 <title>${safeTitle}</title>
+${guestBridgeScript(options.bridgeNonce)}
 ${hostLibraryTags()}
 <style>
 :root {
@@ -206,11 +292,6 @@ button, input, select, textarea {
 </style>
 </head>
 <body>
-<script>
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") window.parent.postMessage(${JSON.stringify(GENERATIVE_UI_ESCAPE_MESSAGE)}, "*");
-}, true);
-</script>
 ${fragment}
 </body>
 </html>
