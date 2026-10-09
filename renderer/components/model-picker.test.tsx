@@ -46,9 +46,13 @@ const placedSettings: AppSettings = {
 
 async function mountPicker(
   server: ReturnType<typeof settingsServer>,
-  options: { hidden?: string[]; onChange?: (providerId: string, model: string) => void } = {},
+  options: {
+    hidden?: string[];
+    onChange?: (providerId: string, model: string) => void;
+    settingsBlockedReason?: string;
+  } = {},
 ) {
-  await mountWithBotRouter(
+  const { router } = await mountWithBotRouter(
     <>
       <ModelPicker
         providers={[provider]}
@@ -56,18 +60,18 @@ async function mountPicker(
         model="current-model"
         onChange={options.onChange ?? (() => {})}
         hiddenModelsByProvider={options.hidden ? { acme: options.hidden } : undefined}
+        settingsBlockedReason={options.settingsBlockedReason}
       />
       <Toaster />
     </>,
   );
   // The picker opens on the Pad once the saved placements have loaded.
   await act(async () => {
-    await waitFor(() =>
-      assert.ok(server.calls.some((call) => call.channel === "settings:get")),
-    );
+    await waitFor(() => assert.ok(server.calls.some((call) => call.channel === "settings:get")));
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   fireEvent.click(screen.getByRole("button", { name: /Choose a model/u }));
+  return router;
 }
 
 async function openPicker(
@@ -112,7 +116,9 @@ test("a current model that is not on the Pad is not shown as selected and can be
   // Focus stays on the Pad when the Add button goes away.
   await waitFor(() => assert.equal(document.activeElement, pad));
   assert.equal(
-    within(pad).getByRole("option", { name: /^Current Model,/u }).getAttribute("aria-selected"),
+    within(pad)
+      .getByRole("option", { name: /^Current Model,/u })
+      .getAttribute("aria-selected"),
     "true",
   );
 });
@@ -149,7 +155,9 @@ test("an empty Pad offers the current model and shows it on the Pad once added",
     "acme::current-model",
   ]);
   assert.equal(screen.queryByRole("button", { name: "Add to Pad" }), null);
-  assert.equal(screen.queryByRole("button", { name: "Customize Model Pad" }), null);
+  // The empty-state call to action is replaced by the Pad's own Customize button.
+  assert.equal(screen.getAllByRole("button", { name: "Customize Model Pad" }).length, 1);
+  assert.ok(!screen.queryByText("Your Model Pad is empty"));
 });
 
 test("a failed Add to Pad says why and keeps offering the model", async () => {
@@ -182,4 +190,119 @@ test("choosing a model on the Pad closes the picker after the confirm pulse", as
   await waitFor(() =>
     assert.ok(!screen.queryByRole("listbox", { name: /Model pad/u }), "the picker closed"),
   );
+});
+
+function savedPlacements(server: ReturnType<typeof settingsServer>) {
+  const writes = server.calls.filter((call) => call.channel === "settings:set");
+  return writes.map((call) => (call.args[0] as AppSettings).modelPadPlacements);
+}
+
+async function openList(server: ReturnType<typeof settingsServer>, options = {}) {
+  await openPicker(server, options);
+  fireEvent.click(screen.getByRole("tab", { name: "List" }));
+  return screen.findByLabelText("Filter chat models");
+}
+
+test("list rows say whether each model is on the Pad", async () => {
+  const server = settingsServer(placedSettings);
+  await openList(server);
+
+  const remove = screen.getByRole("button", {
+    name: "Remove Placed One from Pad",
+  });
+  assert.equal(remove.getAttribute("aria-pressed"), "true");
+  assert.ok(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
+  const add = screen.getByRole("button", { name: "Add Current Model to Pad" });
+  assert.equal(add.getAttribute("aria-pressed"), "false");
+});
+
+test("adding a model from its list row places it on the Pad without choosing it", async () => {
+  const server = settingsServer(placedSettings);
+  const changes: string[] = [];
+  const list = await openList(server, {
+    onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
+  });
+
+  fireEvent.mouseDown(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+
+  await waitFor(() =>
+    assert.ok(screen.getByRole("button", { name: "Remove Current Model from Pad" })),
+  );
+  const writes = savedPlacements(server);
+  assert.equal(writes.length, 1);
+  const saved = writes[0] ?? {};
+  assert.deepEqual(Object.keys(saved).sort(), [
+    "acme::current-model",
+    "acme::placed-one",
+    "acme::placed-two",
+  ]);
+  assert.equal(saved["acme::current-model"].xSource, "user");
+  assert.equal(saved["acme::current-model"].ySource, "user");
+  // Three placed models never share a cell.
+  const cells = new Set(Object.values(saved).map((point) => `${point.x},${point.y}`));
+  assert.equal(cells.size, 3);
+  // The toggle edits the Pad only: the row is not chosen and the picker stays open.
+  assert.deepEqual(changes, []);
+  assert.ok(list.isConnected);
+});
+
+test("removing a model from its list row takes it off the Pad and keeps the others", async () => {
+  const server = settingsServer(placedSettings);
+  await openList(server);
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
+
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Placed Two to Pad" })));
+  const writes = savedPlacements(server);
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0], {
+    "acme::placed-one": placedSettings.modelPadPlacements?.["acme::placed-one"],
+  });
+});
+
+test("a failed Pad toggle says why and leaves the row unchanged", async () => {
+  const server = settingsServer(placedSettings, { failWrites: true });
+  await openList(server);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+
+  await screen.findByText(/disk full/u);
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Current Model to Pad" })));
+});
+
+test("a Pad with models offers Customize Model Pad, which opens Model Pad settings", async () => {
+  const server = settingsServer(placedSettings);
+  const router = await mountPicker(server);
+  await screen.findByRole("listbox", { name: /Model pad/u });
+
+  const customize = screen.getAllByRole("button", {
+    name: "Customize Model Pad",
+  });
+  assert.equal(customize.length, 1);
+  fireEvent.click(customize[0]);
+
+  await waitFor(() => assert.equal(router.state.location.pathname, "/settings"));
+  assert.deepEqual({ ...router.state.location.search }, { section: "modelData" });
+  assert.ok(!screen.queryByRole("listbox", { name: /Model pad/u }), "the picker closed");
+});
+
+test("Customize Model Pad explains why settings are unavailable and stays put", async () => {
+  const server = settingsServer(placedSettings);
+  const router = await mountPicker(server, {
+    settingsBlockedReason: "Finish the current task first",
+  });
+  await screen.findByRole("listbox", { name: /Model pad/u });
+
+  const customize = screen.getByRole("button", { name: "Customize Model Pad" });
+  assert.equal(customize.getAttribute("aria-disabled"), "true");
+  const descriptionId = customize.getAttribute("aria-describedby") ?? "";
+  assert.match(
+    document.getElementById(descriptionId)?.textContent ?? "",
+    /Finish the current task first/u,
+  );
+
+  fireEvent.click(customize);
+  assert.notEqual(router.state.location.pathname, "/settings");
+  assert.ok(screen.getByRole("listbox", { name: /Model pad/u }));
 });

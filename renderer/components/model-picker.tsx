@@ -39,7 +39,7 @@ import {
 } from "../lib/model-pad-layout";
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, Pin, SlidersHorizontal } from "lucide-react";
+import { Check, Grid2x2Check, Grid2x2Plus, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import { providerDeploymentLabel } from "../shared/provider-deployment";
@@ -476,6 +476,22 @@ export function ModelPicker({
     [saveModelPadPreferences],
   );
 
+  const toggleOnPad = React.useCallback(
+    (value: string) => {
+      const visibleValues = entries.map((entry) => entry.value);
+      void saveModelPadPreferences(({ placements }) => {
+        if (!placements[value]) {
+          return { modelPadPlacements: addModelPadPlacement(placements, visibleValues, value) };
+        }
+        const { [value]: _removed, ...rest } = placements;
+        return { modelPadPlacements: rest };
+      }).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "Couldn’t update your Pad.");
+      });
+    },
+    [entries, saveModelPadPreferences],
+  );
+
   const focusPad = React.useCallback(() => {
     contentRef.current
       ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
@@ -563,6 +579,7 @@ export function ModelPicker({
     });
   };
 
+  const customizeBlockedReasonId = `${pickerId}-customize-blocked`;
   const openModelDataSettings = () => {
     if (settingsBlockedReason) return;
     setOpen(false);
@@ -698,17 +715,44 @@ export function ModelPicker({
             aria-labelledby={padTabId}
             className="min-w-0 p-2"
           >
-            {selectedOffPad ? (
-              <div className="mb-2 flex min-w-0 items-center gap-2 rounded-control bg-control/60 py-1 pr-1 pl-2.5">
-                <Text variant="small" color="secondary" as="p" className="flex min-w-0 flex-1">
-                  <span className="min-w-0 truncate" title={selectedOffPad.label}>
-                    {selectedOffPad.label}
-                  </span>
-                  <span className="shrink-0">{"\u00a0"}isn’t on your Pad</span>
-                </Text>
-                <Button size="small" className="shrink-0" onClick={addSelectedToPad}>
-                  Add to Pad
-                </Button>
+            {selectedOffPad || hasPadModels ? (
+              <div className="mb-2 flex min-w-0 items-center justify-end gap-1">
+                {selectedOffPad ? (
+                  <div className="flex min-w-0 flex-1 items-center gap-2 rounded-control bg-control/60 py-1 pr-1 pl-2.5">
+                    <Text variant="small" color="secondary" as="p" className="flex min-w-0 flex-1">
+                      <span className="min-w-0 truncate" title={selectedOffPad.label}>
+                        {selectedOffPad.label}
+                      </span>
+                      <span className="shrink-0">{"\u00a0"}isn’t on your Pad</span>
+                    </Text>
+                    <Button size="small" className="shrink-0" onClick={addSelectedToPad}>
+                      Add to Pad
+                    </Button>
+                  </div>
+                ) : null}
+                {hasPadModels ? (
+                  // The empty Pad has its own Customize call to action.
+                  <>
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      iconOnly
+                      className={cn("shrink-0", settingsBlockedReason && "opacity-45")}
+                      aria-label="Customize Model Pad"
+                      aria-disabled={Boolean(settingsBlockedReason)}
+                      aria-describedby={settingsBlockedReason ? customizeBlockedReasonId : undefined}
+                      title={settingsBlockedReason ?? "Customize Model Pad"}
+                      onClick={openModelDataSettings}
+                    >
+                      <SlidersHorizontal />
+                    </Button>
+                    {settingsBlockedReason ? (
+                      <span id={customizeBlockedReasonId} className="sr-only">
+                        {settingsBlockedReason}.
+                      </span>
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             ) : null}
             {hasPadModels ? (
@@ -753,6 +797,7 @@ export function ModelPicker({
                 {orderedEntries.map((entry) => {
                   const isActive = entry.value === selectedValue;
                   const isPinned = pinned.includes(entry.value);
+                  const isOnPad = Boolean(modelPadPlacements[entry.value]);
                   const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
                   return (
                     <CommandItem
@@ -805,6 +850,33 @@ export function ModelPicker({
                         )}
                       >
                         <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={
+                          isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`
+                        }
+                        aria-pressed={isOnPad}
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleOnPad(entry.value);
+                        }}
+                        className={cn(
+                          "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+                          isOnPad
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                        )}
+                      >
+                        {isOnPad ? (
+                          <Grid2x2Check className="size-3.5 text-accent" />
+                        ) : (
+                          <Grid2x2Plus className="size-3.5" />
+                        )}
                       </button>
                     </CommandItem>
                   );
