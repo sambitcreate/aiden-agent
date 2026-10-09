@@ -112,6 +112,7 @@ function HtmlArtifactIframe({
   onEscape,
   onHeight,
   onPrompt,
+  onGuestFocus,
 }: {
   src: string;
   title: string;
@@ -119,20 +120,35 @@ function HtmlArtifactIframe({
   onEscape?: () => void;
   onHeight?: (height: number) => void;
   onPrompt?: (text: string, focus: { frameFocused: boolean; freshActivation: boolean }) => void;
+  /** Focus moved into (true) or out of (false) the guest document. */
+  onGuestFocus?: (focused: boolean) => void;
 }) {
   const frameRef = React.useRef<HTMLIFrameElement | null>(null);
-  const handlers = React.useRef({ onEscape, onHeight, onPrompt });
+  const handlers = React.useRef({ onEscape, onHeight, onPrompt, onGuestFocus });
   React.useLayoutEffect(() => {
-    handlers.current = { onEscape, onHeight, onPrompt };
-  }, [onEscape, onHeight, onPrompt]);
+    handlers.current = { onEscape, onHeight, onPrompt, onGuestFocus };
+  }, [onEscape, onHeight, onPrompt, onGuestFocus]);
 
   React.useEffect(() => {
     // Focus entering a cross-origin frame (a click or Tab into it) blurs this
     // window. Each entry licenses one auto-sent prompt; the guest cannot move
-    // focus into itself without a user gesture.
+    // focus into itself without a user gesture. The iframe element itself
+    // never matches :focus-visible, so focus is reported for the host to draw.
     let freshActivation = false;
+    let guestFocused = false;
+    const setGuestFocused = (next: boolean) => {
+      if (guestFocused === next) return;
+      guestFocused = next;
+      handlers.current.onGuestFocus?.(next);
+    };
     const noteFocusEntry = () => {
-      if (document.activeElement === frameRef.current) freshActivation = true;
+      if (document.activeElement !== frameRef.current) return;
+      freshActivation = true;
+      setGuestFocused(true);
+    };
+    const noteFocusReturn = () => setGuestFocused(false);
+    const noteParentFocus = (event: FocusEvent) => {
+      if (event.target !== frameRef.current) setGuestFocused(false);
     };
     const receiveMessage = (event: MessageEvent) => {
       const frame = frameRef.current;
@@ -154,9 +170,13 @@ function HtmlArtifactIframe({
       }
     };
     window.addEventListener("blur", noteFocusEntry);
+    window.addEventListener("focus", noteFocusReturn);
+    document.addEventListener("focusin", noteParentFocus);
     window.addEventListener("message", receiveMessage);
     return () => {
       window.removeEventListener("blur", noteFocusEntry);
+      window.removeEventListener("focus", noteFocusReturn);
+      document.removeEventListener("focusin", noteParentFocus);
       window.removeEventListener("message", receiveMessage);
     };
   }, []);
@@ -211,6 +231,8 @@ function HtmlArtifactFrameImpl({
   const expandedCloseRef = React.useRef<HTMLButtonElement | null>(null);
   const returnFocusRequestedRef = React.useRef(false);
   const expandedTitleId = React.useId();
+  const captionTitleId = React.useId();
+  const [guestFocused, setGuestFocused] = React.useState(false);
   const closeExpanded = React.useCallback(() => {
     returnFocusRequestedRef.current = true;
     setExpanded(false);
@@ -325,7 +347,7 @@ function HtmlArtifactFrameImpl({
     <Button
       iconOnly
       size="small"
-      variant={expanded ? "transparent" : "glass"}
+      variant="transparent"
       aria-label={`Export ${artifact.title}`}
       disabled={exporting}
       onClick={() => void exportArtifact()}
@@ -338,10 +360,9 @@ function HtmlArtifactFrameImpl({
     <section
       ref={sectionRef}
       popover="auto"
-      role={expanded ? "dialog" : "region"}
+      role={expanded ? "dialog" : "figure"}
       aria-modal={expanded || undefined}
-      aria-label={expanded ? undefined : artifact.title}
-      aria-labelledby={expanded ? expandedTitleId : undefined}
+      aria-labelledby={expanded ? expandedTitleId : captionTitleId}
       className={cn(
         "aiden-html-artifact-popover aiden-inline-visual group/visual relative min-w-0 p-0 text-primary",
         expanded && "flex max-w-none flex-col overflow-hidden rounded-dialog bg-popover shadow-modal",
@@ -370,24 +391,7 @@ function HtmlArtifactFrameImpl({
             <X aria-hidden="true" />
           </Button>
         </div>
-      ) : (
-        <div className="aiden-inline-visual-toolbar" data-inline-visual-toolbar="">
-          <Text variant="small" color="secondary" className="min-w-0 max-w-[16rem] truncate px-1">
-            {artifact.title}
-          </Text>
-          <Button
-            ref={expandTriggerRef}
-            iconOnly
-            size="small"
-            variant="glass"
-            aria-label={`Expand ${artifact.title}`}
-            onClick={() => setExpanded(true)}
-          >
-            <Maximize2 aria-hidden="true" />
-          </Button>
-          {exportButton}
-        </div>
-      )}
+      ) : null}
       {error && src ? (
         <Callout color="red" role="alert" className="mb-2" data-html-artifact-error={error.kind}>
           <Text variant="small" color="red">
@@ -400,6 +404,7 @@ function HtmlArtifactFrameImpl({
       <div
         className={cn(expanded ? "min-h-0 flex-1" : "aiden-inline-visual-frame")}
         data-inline-visual-frame=""
+        data-guest-focused={guestFocused || undefined}
         style={expanded ? undefined : { height }}
       >
         {src ? (
@@ -409,6 +414,7 @@ function HtmlArtifactFrameImpl({
             onEscape={expanded ? closeExpanded : undefined}
             onHeight={recordHeight}
             onPrompt={relayPrompt}
+            onGuestFocus={setGuestFocused}
           />
         ) : error ? (
           <div className="flex h-full items-center justify-center px-4 text-center">
@@ -422,6 +428,30 @@ function HtmlArtifactFrameImpl({
           </div>
         )}
       </div>
+      {expanded ? null : (
+        // A caption below the content, so no control ever covers the guest.
+        <div className="aiden-inline-visual-caption" data-inline-visual-caption="">
+          <Text
+            id={captionTitleId}
+            variant="small"
+            color="tertiary"
+            className="min-w-0 flex-1 truncate"
+          >
+            {artifact.title}
+          </Text>
+          <Button
+            ref={expandTriggerRef}
+            iconOnly
+            size="small"
+            variant="transparent"
+            aria-label={`Expand ${artifact.title}`}
+            onClick={() => setExpanded(true)}
+          >
+            <Maximize2 aria-hidden="true" />
+          </Button>
+          {exportButton}
+        </div>
+      )}
     </section>
   );
 }
@@ -438,7 +468,7 @@ function HtmlArtifactDraftFrameImpl({ src, title }: { src: string; title?: strin
   const label = title ? `Visualizing ${title}` : "Visualizing";
   return (
     <section
-      role="region"
+      role="figure"
       aria-label={label}
       aria-busy="true"
       className="aiden-inline-visual relative min-w-0 p-0 text-primary"

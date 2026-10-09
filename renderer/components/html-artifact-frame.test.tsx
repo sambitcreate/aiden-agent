@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
@@ -89,10 +89,37 @@ test("a draft visual shows its streaming preview without expand or export action
 test("inline visual renders without card chrome and keeps an accessible title", () => {
   const html = renderToStaticMarkup(<HtmlArtifactFrame chatId="c1" artifact={artifact("Revenue")} />);
   assert.match(html, /data-inline-visual="media-\d+"/u);
-  assert.match(html, /aria-label="Revenue"/u);
   assert.match(html, /aria-label="Expand Revenue"/u);
   assert.match(html, /aria-label="Export Revenue"/u);
   assert.doesNotMatch(html, /<header/u);
+});
+
+test("the inline visual is a named figure whose actions sit below the content, never over it", () => {
+  const view = render(<HtmlArtifactFrame chatId="c1" artifact={artifact("Revenue")} />);
+  const figure = screen.getByRole("figure", { name: "Revenue" });
+  const frame = figure.querySelector("[data-inline-visual-frame]");
+  const caption = figure.querySelector("[data-inline-visual-caption]");
+  assert.ok(frame && caption);
+  // The caption follows the content box in flow instead of overlaying it.
+  assert.equal(frame.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING, Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(frame.contains(caption), false);
+  assert.ok(within(caption as HTMLElement).getByRole("button", { name: "Expand Revenue" }));
+  view.unmount();
+});
+
+test("keyboard focus inside the guest is reflected on the visual so a ring can show", async () => {
+  const { view, iframe } = await mountedFrame();
+  const box = () => view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!;
+  assert.equal(box().hasAttribute("data-guest-focused"), false);
+  act(() => {
+    iframe.focus();
+    window.dispatchEvent(new Event("blur"));
+  });
+  assert.equal(box().hasAttribute("data-guest-focused"), true);
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  assert.equal(box().hasAttribute("data-guest-focused"), false);
 });
 
 test("the preview loads in a unique-origin frame and asks main for the full token kit", async () => {
@@ -211,7 +238,7 @@ test("Expand promotes the same frame to a modal dialog and Close returns to the 
     screen.getByRole("button", { name: /^Close / }).click();
   });
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
-  assert.ok(screen.getByRole("region"));
+  assert.ok(screen.getByRole("figure", { name: "Revenue" }));
   assert.equal(view.container.querySelector("iframe"), iframe);
 });
 
@@ -233,5 +260,5 @@ test("a remount at stream handoff reuses the cached preview and height", async (
     calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length,
     fetchesBefore,
   );
-  assert.ok(screen.getByRole("region", { name: visual.title }));
+  assert.ok(screen.getByRole("figure", { name: visual.title }));
 });

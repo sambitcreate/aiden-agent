@@ -17,6 +17,47 @@ export const GENERATIVE_UI_THEME_VARIABLES = [
 
 export type GenerativeUiThemeVariable = (typeof GENERATIVE_UI_THEME_VARIABLES)[number];
 
+/**
+ * Aiden's light defaults (renderer/styles.css :root), used when no renderer
+ * theme is available — standalone export and older callers — so the kit's
+ * status colors and the chart series never come out empty.
+ */
+export const GENERATIVE_UI_DEFAULT_THEME_VARS: Readonly<Record<string, string>> = {
+  "--text-primary": "#3d3f41",
+  "--text-secondary": "#545963",
+  "--text-tertiary": "#595e69",
+  "--text-quaternary": "#5d6370",
+  "--surface-popover": "#ffffff",
+  "--surface-control": "rgb(61 63 65 / 0.084)",
+  "--surface-control-hover": "rgb(61 63 65 / 0.129)",
+  "--surface-well": "rgb(61 63 65 / 0.029)",
+  "--surface-input": "rgb(61 63 65 / 0.051)",
+  "--surface-list-hover": "rgb(61 63 65 / 0.053)",
+  "--surface-list-selection": "rgb(0 106 214 / 0.12)",
+  "--border-separator": "rgb(61 63 65 / 0.087)",
+  "--border-field": "rgb(61 63 65 / 0.144)",
+  "--accent": "#006ad6",
+  "--accent-foreground": "#ffffff",
+  "--accent-hover": "#0063c7",
+  "--focus-ring": "#3d3f41",
+  "--status-accent": "#155ba2",
+  "--status-red": "#8c3631",
+  "--status-green": "#266036",
+  "--status-warning": "#704f1a",
+  "--status-accent-surface": "rgb(0 106 214 / 0.080)",
+  "--status-red-surface": "rgb(182 49 41 / 0.080)",
+  "--status-green-surface": "rgb(26 113 48 / 0.080)",
+  "--status-warning-surface": "rgb(139 87 5 / 0.080)",
+  "--chart-1": "#1e88c7",
+  "--chart-2": "#1f9d63",
+  "--chart-3": "#b98200",
+  "--chart-4": "#e0544e",
+  "--chart-5": "#8a5cf0",
+  "--chart-6": "#138f88",
+  "--chart-7": "#d64d86",
+  "--chart-8": "#6f9a17",
+};
+
 const ALLOWED = new Set<string>(GENERATIVE_UI_THEME_VARIABLES);
 const COLOR =
   /^(#[0-9a-f]{3,8}|(rgb|rgba|hsl|hsla|oklch|oklab|color-mix)\([#0-9a-z.,%/\s-]+\)|transparent)$/iu;

@@ -840,26 +840,28 @@ textarea {
   transition: height var(--motion-duration) var(--motion-easing);
 }
 
-/* Title and actions float over the visual's top-right corner and appear on
-   hover or keyboard focus; touch devices keep them visible. */
-.aiden-inline-visual-toolbar {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 1;
+/* The iframe never matches :focus-visible itself; the host marks the box
+   while keyboard focus is inside the guest. Drawn inside the clipped box. */
+.aiden-inline-visual-frame[data-guest-focused] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Title and actions sit below the visual like a figure caption, so no
+   control ever covers guest content. Quiet at rest, clearer on hover. */
+.aiden-inline-visual-caption {
   display: flex;
   align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 12px);
-  opacity: 0;
-  pointer-events: none;
+  gap: 2px;
+  min-height: 28px;
+  margin-top: 2px;
+  opacity: 0.7;
   transition: opacity 150ms var(--motion-easing);
 }
 
-.aiden-inline-visual:hover > .aiden-inline-visual-toolbar,
-.aiden-inline-visual:focus-within > .aiden-inline-visual-toolbar {
+.aiden-inline-visual:hover > .aiden-inline-visual-caption,
+.aiden-inline-visual:focus-within > .aiden-inline-visual-caption {
   opacity: 1;
-  pointer-events: auto;
 }
 
 /* A drafting visual names itself above the frame; it never overlays content. */
@@ -870,16 +872,9 @@ textarea {
   margin-bottom: 6px;
 }
 
-@media (pointer: coarse) {
-  .aiden-inline-visual-toolbar {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .aiden-inline-visual-frame,
-  .aiden-inline-visual-toolbar {
+  .aiden-inline-visual-caption {
     transition: none;
   }
 }

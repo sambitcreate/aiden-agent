@@ -391,6 +391,42 @@ test("bridge reports content height to the parent", async ({ page }) => {
   }
 });
 
+test("bridge height follows content down as well as up, independent of the frame viewport", async ({ page }) => {
+  const guest = await loadWrappedGuest(
+    page,
+    '<h1>Title</h1><div id="box" style="height:600px"></div><script>setTimeout(() => { document.getElementById("box").style.height = "40px"; }, 300)</script>',
+  );
+  const lastHeight = async () => {
+    const resizes = ofType(await guest.messages(), "aiden:generative-ui:resize");
+    return resizes[resizes.length - 1]?.height ?? 0;
+  };
+  try {
+    await expect.poll(lastHeight).toBeGreaterThanOrEqual(600);
+    // The frame in this harness is 300px tall; the content is now ~40px + heading.
+    await expect.poll(lastHeight).toBeLessThan(160);
+    await expect.poll(lastHeight).toBeGreaterThan(40);
+  } finally {
+    await guest.close();
+  }
+});
+
+test("wrapped documents keep the browser's 16px rem in inline and standalone modes", async ({ page }) => {
+  for (const inline of [true, false]) {
+    const doc = wrapGenerativeUiHtml('<p id="p" style="width:10rem">x</p>', "Rem", undefined, { inline });
+    const site = await listen((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(doc);
+    });
+    try {
+      await page.goto(site.origin);
+      expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe("16px");
+      expect(await page.locator("#p").evaluate((el) => el.getBoundingClientRect().width)).toBe(160);
+    } finally {
+      await site.close();
+    }
+  }
+});
+
 test("sendPrompt posts a typed prompt message and nothing else", async ({ page }) => {
   const guest = await loadWrappedGuest(
     page,

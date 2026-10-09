@@ -13,6 +13,7 @@ import {
   isHtmlArtifactTitle,
 } from "../../renderer/shared/generative-ui.js";
 import {
+  GENERATIVE_UI_DEFAULT_THEME_VARS,
   GENERATIVE_UI_THEME_VARIABLES,
   sanitizeGenerativeUiThemeVars,
 } from "../../renderer/shared/generative-ui-theme.js";
@@ -72,7 +73,9 @@ function guestBridgeScript(nonce?: string): string {
   let frame = 0;
   const report = () => {
     frame = 0;
-    const height = Math.ceil(document.documentElement.scrollHeight);
+    // The root's own box tracks content both ways; scrollHeight never drops
+    // below the frame's viewport, so a shrinking visual would never report.
+    const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
     if (Math.abs(height - lastHeight) < 2) return;
     lastHeight = height;
     post({ type: ${JSON.stringify(GENERATIVE_UI_RESIZE_MESSAGE)}, height });
@@ -132,6 +135,7 @@ const DEFAULT_THEME: GenerativeUiThemeTokens = {
   foreground: "#181817",
   secondary: "#6b6b68",
   accent: "#0b7de5",
+  vars: GENERATIVE_UI_DEFAULT_THEME_VARS,
 };
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/iu;
@@ -150,7 +154,7 @@ export function parseGenerativeUiTheme(
     foreground: color(record.foreground, DEFAULT_THEME.foreground),
     secondary: color(record.secondary, DEFAULT_THEME.secondary),
     accent: color(record.accent, DEFAULT_THEME.accent),
-    vars: sanitizeGenerativeUiThemeVars(record.vars),
+    vars: { ...GENERATIVE_UI_DEFAULT_THEME_VARS, ...sanitizeGenerativeUiThemeVars(record.vars) },
   };
 }
 
@@ -329,11 +333,15 @@ ${themeVariableLines(tokens.vars)}
 }
 html, body {
   margin: 0;
-  min-height: 100%;
+  ${options.inline ? "" : "min-height: 100%;"}
   background: ${options.inline ? "transparent" : "var(--artifact-canvas)"};
   color: var(--text-primary, var(--artifact-text));
   font-family: var(--font-ui-family, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
-  font-size: var(--ui-font-size, 14px);
+}
+/* Body only, so rem stays the browser's 16px for authored layouts. Inline
+   bodies contain their children's margins so the root box is the content. */
+body {
+  ${options.inline ? "font-size: var(--ui-font-size, 14px);\n  display: flow-root;" : ""}
 }
 button, input, select, textarea {
   color: inherit;

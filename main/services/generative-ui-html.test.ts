@@ -217,6 +217,26 @@ test("the draft document head is open-ended and only its nonce'd bridge may run"
   assert.throws(() => generativeUiDraftDocumentHead("Draft", undefined, "\" onload=\"x"), /nonce/u);
 });
 
+test("documents without a renderer theme still carry Aiden's default token kit", () => {
+  for (const doc of [
+    wrapGenerativeUiHtml("<p>x</p>", "T"),
+    generativeUiExportDocument("<p>x</p>", "T", {
+      "chart.js": "window.Chart = 1;", "plotly.js": "1", "katex.js": "1", "katex.css": "b{}",
+    }),
+  ]) {
+    for (const name of ["--chart-1", "--chart-8", "--status-green-surface", "--surface-well", "--text-primary"]) {
+      assert.match(doc, new RegExp(`${name}: [^;]+;`, "u"), name);
+    }
+  }
+  // Renderer-supplied values win over the defaults.
+  const themed = wrapGenerativeUiHtml("<p>x</p>", "T", {
+    colorScheme: "dark", canvas: "#111111", foreground: "#eeeeee", secondary: "#999999", accent: "#3388ff",
+    vars: { "--chart-1": "#83d8ff" },
+  });
+  assert.equal(themed.match(/--chart-1: /gu)?.length, 1);
+  assert.match(themed, /--chart-1: #83d8ff;/u);
+});
+
 test("legacy four-color theme callers still render", () => {
   const doc = wrapGenerativeUiHtml("<p>x</p>", "T", {
     colorScheme: "light", canvas: "#ffffff", foreground: "#000000", secondary: "#666666", accent: "#0b7de5",
