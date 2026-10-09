@@ -47,6 +47,8 @@ export interface LocalSpeechWorkerHostOptions {
   onUnloaded: () => void;
   /** How long a retired worker may take to exit before it is killed again. */
   exitWaitMs?: number;
+  /** Sends a signal to a worker process by pid. Defaults to `process.kill`; tests inject one. */
+  signalPid?: (pid: number, signal: "SIGKILL") => void;
 }
 
 interface LiveWorker {
@@ -133,8 +135,8 @@ export class LocalSpeechWorkerHost {
 
   /**
    * Disposes the worker and waits for its process to exit, so the native model
-   * is freed before anything else loads. A worker that ignores its kill gets a
-   * second kill; the wait is bounded so a stuck process cannot wedge the lane.
+   * is freed before anything else loads. A worker that ignores the ordinary kill
+   * is escalated to SIGKILL; the wait is bounded so a stuck process cannot wedge the lane.
    */
   async retire(): Promise<void> {
     const exiting = this.live;
@@ -143,8 +145,26 @@ export class LocalSpeechWorkerHost {
     if (!exiting) return;
     const waitMs = this.options.exitWaitMs ?? DEFAULT_EXIT_WAIT_MS;
     if (await settlesWithin(exiting.exited, waitMs)) return;
-    exiting.process.kill();
+    this.forceKill(exiting.process);
     await settlesWithin(exiting.exited, waitMs);
+  }
+
+  /**
+   * A worker that ignored the ordinary kill gets SIGKILL by pid. Without a pid
+   * the handle is killed again. A pid that already exited (ESRCH) is not an error:
+   * the exit wait settles either way.
+   */
+  private forceKill(worker: UtilityProcess): void {
+    const pid = worker.pid;
+    if (typeof pid !== "number") {
+      worker.kill();
+      return;
+    }
+    try {
+      (this.options.signalPid ?? ((target, signal) => process.kill(target, signal)))(pid, "SIGKILL");
+    } catch {
+      // Already exited; retire() does not fail on a worker that is gone.
+    }
   }
 
   /** Disposes the worker only when it is still the current one (a hang, crash or cancel). */

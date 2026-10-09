@@ -72,6 +72,7 @@ test("a fresh worker is needed only when a different model is loaded, or a Sense
 
 interface FakeWorker {
   id: string;
+  pid: number | undefined;
   process: UtilityProcess;
   kills: () => number;
   sent: () => LocalSpeechParentMessage[];
@@ -83,7 +84,7 @@ interface FakeWorker {
  * A stand-in for an Electron utility process. It answers every request, and
  * exits a few milliseconds after a kill. A stubborn worker ignores its first kill.
  */
-function fakeWorker(id: string, log: string[], stubborn: boolean, failing = false): FakeWorker {
+function fakeWorker(id: string, log: string[], stubborn: boolean, failing: boolean, pid: number | undefined): FakeWorker {
   const listeners = {
     message: new Set<(value: unknown) => void>(),
     exit: new Set<(code: number) => void>(),
@@ -126,14 +127,17 @@ function fakeWorker(id: string, log: string[], stubborn: boolean, failing = fals
     kill() {
       kills += 1;
       log.push(`${id} kill`);
+      // A stubborn worker ignores the first (SIGTERM-style) kill; only a second kill or SIGKILL ends it.
       if (!stubborn || kills > 1) setTimeout(exit, 5);
       return true;
     },
+    pid,
     stderr: null,
     stdout: null,
   };
   return {
     id,
+    pid,
     process: handle as unknown as UtilityProcess,
     kills: () => kills,
     sent: () => [...sent],
@@ -141,9 +145,12 @@ function fakeWorker(id: string, log: string[], stubborn: boolean, failing = fals
   };
 }
 
-function harness(options: { stubbornWorkers?: number[]; failingWorkers?: number[]; exitWaitMs?: number } = {}) {
+function harness(
+  options: { stubbornWorkers?: number[]; failingWorkers?: number[]; pidless?: number[]; exitWaitMs?: number } = {},
+) {
   const log: string[] = [];
   const spawned: FakeWorker[] = [];
+  const signals: Array<{ pid: number; signal: string }> = [];
   let unloads = 0;
   const host = new LocalSpeechWorkerHost({
     fork: async () => {
@@ -152,6 +159,7 @@ function harness(options: { stubbornWorkers?: number[]; failingWorkers?: number[
         log,
         options.stubbornWorkers?.includes(spawned.length + 1) ?? false,
         options.failingWorkers?.includes(spawned.length + 1) ?? false,
+        options.pidless?.includes(spawned.length + 1) ? undefined : 50_000 + spawned.length + 1,
       );
       spawned.push(worker);
       log.push(`${worker.id} spawn`);
@@ -162,8 +170,15 @@ function harness(options: { stubbornWorkers?: number[]; failingWorkers?: number[
       log.push("unloaded");
     },
     exitWaitMs: options.exitWaitMs ?? 500,
+    signalPid: (pid, signal) => {
+      signals.push({ pid, signal });
+      const worker = spawned.find((candidate) => candidate.pid === pid);
+      if (!worker) throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      log.push(`${worker.id} ${signal}`);
+      worker.crash();
+    },
   });
-  return { host, log, spawned, unloads: () => unloads };
+  return { host, log, spawned, signals, unloads: () => unloads };
 }
 
 test("switching models kills the old worker and waits for its exit before the new one loads", async () => {
@@ -216,13 +231,31 @@ test("a SenseVoice language change replaces the worker, and the same language ke
   assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"), "the old worker exits before the replacement forks");
 });
 
-test("a worker that ignores its first kill is killed again and the replacement still starts", async () => {
-  const { host, log, spawned } = harness({ stubbornWorkers: [1], exitWaitMs: 20 });
+test("a worker that ignores its first kill is escalated to SIGKILL by pid before the replacement starts", async () => {
+  const { host, log, spawned, signals } = harness({ stubbornWorkers: [1], exitWaitMs: 20 });
+  await host.prepare(target(parakeet));
+  await host.prepare(target(canary));
+
+  assert.equal(spawned[0]!.kills(), 1, "the first attempt is the ordinary kill");
+  assert.deepEqual(signals, [{ pid: 50_001, signal: "SIGKILL" }]);
+  assert.ok(log.indexOf("w1 SIGKILL") < log.indexOf("w1 exit"));
+  assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"));
+});
+
+test("a worker without a pid is killed again through its handle when SIGKILL cannot be sent", async () => {
+  const { host, spawned, signals } = harness({ stubbornWorkers: [1], pidless: [1], exitWaitMs: 20 });
   await host.prepare(target(parakeet));
   await host.prepare(target(canary));
 
   assert.equal(spawned[0]!.kills(), 2);
-  assert.ok(log.indexOf("w2 spawn") > log.indexOf("w1 exit"));
+  assert.deepEqual(signals, []);
+});
+
+test("a worker that exits on the ordinary kill is never sent SIGKILL", async () => {
+  const { host, signals } = harness();
+  await host.prepare(target(parakeet));
+  await host.prepare(target(canary));
+  assert.deepEqual(signals, []);
 });
 
 test("a load that fails still leaves the worker holding its model, so the next model retires it", async () => {
