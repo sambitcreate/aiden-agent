@@ -690,7 +690,7 @@ extension Color {
         )
     }
 
-    fileprivate static func mixHex(_ from: String, _ to: String, fraction: Double) -> String {
+    static func mixHex(_ from: String, _ to: String, fraction: Double) -> String {
         let start = rgb(from)
         let end = rgb(to)
         let amount = min(max(fraction, 0), 1)
