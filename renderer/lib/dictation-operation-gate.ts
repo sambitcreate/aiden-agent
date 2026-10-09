@@ -28,6 +28,8 @@ export class DictationOperationGate {
 
 export const CLOUD_TRANSCRIPTION_BUDGET_MS = 45_000;
 export const LOCAL_TRANSCRIPTION_BUDGET_MS = 125_000;
+/** setTimeout fires immediately for delays above a signed 32-bit millisecond count. */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /**
  * The speech worker allows max(120 s, 20× real time) per transcription; the
@@ -69,7 +71,7 @@ export class DictationDeadline {
     timeoutMs: number,
     private readonly now: () => number = Date.now,
   ) {
-    this.expiresAt = now() + Math.max(1, timeoutMs);
+    this.expiresAt = now() + Math.min(MAX_TIMER_DELAY_MS, Math.max(1, timeoutMs));
   }
 
   remaining(): number {

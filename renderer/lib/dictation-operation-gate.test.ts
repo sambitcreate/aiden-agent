@@ -49,6 +49,14 @@ test("on-device transcription keeps headroom around the worker's minimum deadlin
   assert.equal(transcriptionBudgetMs("local"), 125_000);
 });
 
+test("a budget beyond the timer range still waits instead of expiring at once", async () => {
+  const deadline = new DictationDeadline(transcriptionBudgetMs("local", 10_000_000));
+  const settled = await deadline.run(
+    new Promise<string>((resolve) => setTimeout(() => resolve("done"), 20)),
+  );
+  assert.equal(settled, "done");
+});
+
 test("on-device budgets scale with the recording length; cloud budgets do not", () => {
   assert.equal(transcriptionBudgetMs("local", 5), 125_000);
   assert.equal(transcriptionBudgetMs("local", 600), 12_015_000);

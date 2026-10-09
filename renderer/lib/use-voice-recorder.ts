@@ -23,8 +23,8 @@ import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "./live-pcm-captu
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
 import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "./gemini-recorded-retry";
 import { localVoiceApi, voiceApi } from "./ipc";
-import type { LocalSpeechState } from "./ipc-voice";
-import { SlowModelLoadNotice } from "./slow-model-load";
+import type { SlowModelLoadNotice } from "./slow-model-load";
+import { useSlowModelLoad } from "./use-slow-model-load";
 import { voiceSetupMessage } from "../shared/voice-provider";
 
 type RecorderOptions = TranscribeOptions;
@@ -43,7 +43,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   const [recording, setRecording] = React.useState(false);
   const [transcribing, setTranscribing] = React.useState(false);
   /** An on-device model load outlasted the grace period while transcribing. */
-  const [loadingModel, setLoadingModel] = React.useState(false);
+  const { loadingModel, begin: beginSlowLoad, end: endSlowLoad } = useSlowModelLoad();
   const [awaitingRecordedRetryConsent, setAwaitingRecordedRetryConsent] = React.useState(false);
   const [liveTranscript, setLiveTranscript] = React.useState<LiveTranscriptSnapshot>({
     committed: "",
@@ -60,9 +60,6 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   const transcriptionControllerRef = React.useRef<AbortController | null>(null);
   const operationGateRef = React.useRef<DictationOperationGate | null>(null);
   const recordedRetryConsentRef = React.useRef<GeminiRecordedRetryConsent | null>(null);
-  /** Latest lifecycle state per on-device model; the warm-up may start before capture. */
-  const modelStatesRef = React.useRef(new Map<string, LocalSpeechState["state"]>());
-  const slowLoadRef = React.useRef<{ modelId: string; notice: SlowModelLoadNotice } | null>(null);
   if (operationGateRef.current === null) {
     operationGateRef.current = new DictationOperationGate();
   }
@@ -74,24 +71,6 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
   // Keep the latest options available to the recorder's stop callback.
   const optionsRef = React.useRef(options);
   optionsRef.current = options;
-
-  React.useEffect(
-    () =>
-      voiceApi.onState((event) => {
-        modelStatesRef.current.set(event.modelId, event.state);
-        const watch = slowLoadRef.current;
-        if (watch && watch.modelId === event.modelId) watch.notice.observe(event.state);
-      }),
-    [],
-  );
-
-  const endSlowLoad = React.useCallback((notice?: SlowModelLoadNotice) => {
-    const watch = slowLoadRef.current;
-    if (!watch || (notice && watch.notice !== notice)) return;
-    slowLoadRef.current = null;
-    watch.notice.dispose();
-    setLoadingModel(false);
-  }, []);
 
   const stopTracks = React.useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -197,20 +176,10 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         }
         setTranscribing(true);
         const audioSeconds = Math.max(0, (performance.now() - startedAt) / 1_000);
-        let slowLoad: SlowModelLoadNotice | undefined;
-        if (selected.provider === "local" && selected.localModel) {
-          const notice = new SlowModelLoadNotice({
-            setTimer: (callback, ms) => setTimeout(callback, ms),
-            clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-            onShow: () => {
-              if (slowLoadRef.current?.notice === notice) setLoadingModel(true);
-            },
-          });
-          slowLoad = notice;
-          endSlowLoad();
-          slowLoadRef.current = { modelId: selected.localModel, notice };
-          if (modelStatesRef.current.get(selected.localModel) === "loading") notice.observe("loading");
-        }
+        const slowLoad: SlowModelLoadNotice | undefined =
+          selected.provider === "local" && selected.localModel
+            ? beginSlowLoad(selected.localModel)
+            : undefined;
         const deadline = new DictationDeadline(transcriptionBudgetMs(selected.provider, audioSeconds));
         try {
           let text = "";
@@ -321,7 +290,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       stopTracks();
       reportError(microphoneCaptureErrorMessage(error));
     }
-  }, [endSlowLoad, onTranscript, operationGate, recordedRetryConsent, stopTracks, reportError]);
+  }, [beginSlowLoad, endSlowLoad, onTranscript, operationGate, recordedRetryConsent, stopTracks, reportError]);
 
   const stop = React.useCallback(() => {
     pendingStopRef.current = true;
@@ -354,8 +323,6 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       transcriptionControllerRef.current?.abort();
       transcriptionControllerRef.current = null;
       if (operationId && batchProvider) void cancelTranscription(batchProvider, operationId);
-      slowLoadRef.current?.notice.dispose();
-      slowLoadRef.current = null;
       setLiveTranscript({ committed: "", tentative: "" });
       stopTracks();
     },

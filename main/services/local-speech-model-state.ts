@@ -3,11 +3,7 @@
 // drops the model (idle unload, release, crash, cancel or hang kill) goes
 // through markUnloaded so a "ready" view never goes stale.
 
-export interface LocalSpeechState {
-  modelId: string;
-  state: "loading" | "ready" | "failed" | "unloaded";
-  error?: string;
-}
+import type { LocalSpeechState } from "../../renderer/shared/local-speech-state.js";
 
 export interface LocalSpeechLoadRequest {
   /** Call before each attempt: reports `loading` when this attempt must (re)load the model. */

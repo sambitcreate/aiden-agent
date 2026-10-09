@@ -8,8 +8,9 @@ import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import { PillCopiedNotice, type PillCopiedNoticeProps } from "./pill-copied-notice";
 import { onNotification } from "../lib/ipc-bridge";
-import { dictationApi, settingsApi, voiceApi, type LocalSpeechState } from "../lib/ipc-voice";
-import { SlowModelLoadNotice } from "../lib/slow-model-load";
+import { dictationApi, settingsApi, voiceApi } from "../lib/ipc-voice";
+import type { SlowModelLoadNotice } from "../lib/slow-model-load";
+import { useSlowModelLoad } from "../lib/use-slow-model-load";
 import { voiceSetupMessage, type VoiceProviderResolution } from "../shared/voice-provider";
 import type { DictationStatePayload } from "../shared/dictation";
 import {
@@ -80,7 +81,7 @@ export function PillApp() {
   const [recordingHint, setRecordingHint] = React.useState("");
   const [copiedNotice, setCopiedNotice] = React.useState<PillCopiedNoticeProps>({});
   const [elapsed, setElapsed] = React.useState(0);
-  const [loadingModel, setLoadingModel] = React.useState(false);
+  const { loadingModel, begin: beginSlowLoad, end: endSlowLoadWait } = useSlowModelLoad();
   const [liveTranscript, setLiveTranscript] = React.useState<LiveTranscriptSnapshot>({
     committed: "",
     tentative: "",
@@ -100,34 +101,20 @@ export function PillApp() {
   const soundsEnabledRef = React.useRef(false);
   const silenceDetectorRef = React.useRef<SilenceStopDetector | null>(null);
   const recordedRetryConsentRef = React.useRef<GeminiRecordedRetryConsent | null>(null);
-  /** Latest lifecycle state per on-device model; a warm-up may start before capture. */
-  const modelStatesRef = React.useRef(new Map<string, LocalSpeechState["state"]>());
-  const slowLoadRef = React.useRef<{ modelId: string; notice: SlowModelLoadNotice } | null>(null);
   if (recordedRetryConsentRef.current === null) {
     recordedRetryConsentRef.current = new GeminiRecordedRetryConsent();
   }
   const recordedRetryConsent = recordedRetryConsentRef.current;
 
-  React.useEffect(
-    () =>
-      voiceApi.onState((event) => {
-        modelStatesRef.current.set(event.modelId, event.state);
-        const watch = slowLoadRef.current;
-        if (watch && watch.modelId === event.modelId) watch.notice.observe(event.state);
-      }),
-    [],
+  const endSlowLoad = React.useCallback(
+    (active: ActiveRecording) => {
+      const notice = active.slowLoad;
+      if (!notice) return;
+      active.slowLoad = undefined;
+      endSlowLoadWait(notice);
+    },
+    [endSlowLoadWait],
   );
-
-  const endSlowLoad = React.useCallback((active: ActiveRecording) => {
-    const notice = active.slowLoad;
-    if (!notice) return;
-    active.slowLoad = undefined;
-    notice.dispose();
-    if (slowLoadRef.current?.notice === notice) {
-      slowLoadRef.current = null;
-      setLoadingModel(false);
-    }
-  }, []);
 
   React.useEffect(() => {
     const sync = startPillAppearanceSync();
@@ -269,18 +256,7 @@ export function PillApp() {
           transcriptionRef.current = active;
           setPhase("finalizing");
           const audioSeconds = Math.max(0, (performance.now() - active.startedAt) / 1_000);
-          if (voice.provider === "local") {
-            const notice = new SlowModelLoadNotice({
-              setTimer: (callback, ms) => setTimeout(callback, ms),
-              clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-              onShow: () => {
-                if (active.slowLoad === notice) setLoadingModel(true);
-              },
-            });
-            active.slowLoad = notice;
-            slowLoadRef.current = { modelId: voice.modelId, notice };
-            if (modelStatesRef.current.get(voice.modelId) === "loading") notice.observe("loading");
-          }
+          if (voice.provider === "local") active.slowLoad = beginSlowLoad(voice.modelId);
           void (async () => {
             const deadline = new DictationDeadline(
               transcriptionBudgetMs(voice.provider, audioSeconds),
@@ -409,7 +385,7 @@ export function PillApp() {
           .catch(() => {});
       }
     },
-    [endSlowLoad, recordedRetryConsent, releaseRecording, startWaveform],
+    [beginSlowLoad, endSlowLoad, recordedRetryConsent, releaseRecording, startWaveform],
   );
 
   const stopRecording = React.useCallback(() => {
@@ -529,8 +505,6 @@ export function PillApp() {
         releaseRecording(active);
       }
       const transcribing = transcriptionRef.current;
-      slowLoadRef.current?.notice.dispose();
-      slowLoadRef.current = null;
       if (transcribing) {
         transcribing.cancelled = true;
         transcribing.transcriptionController.abort();

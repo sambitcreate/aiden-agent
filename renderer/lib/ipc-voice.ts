@@ -8,14 +8,8 @@ import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
+import type { LocalSpeechState } from "../shared/local-speech-state";
 import { invoke, onNotification } from "./ipc-bridge";
-
-/** Mirrors main's LocalSpeechState broadcast on `localVoice:state`. */
-export interface LocalSpeechState {
-  modelId: string;
-  state: "loading" | "ready" | "failed" | "unloaded";
-  error?: string;
-}
 
 export type SettingsPatch = Partial<Omit<AppSettings, "voiceProvider">> & {
   voiceProvider?: VoiceProvider | null;

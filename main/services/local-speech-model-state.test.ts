@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runWithCrashRetry, WorkerCrashError } from "./local-speech-process-core.js";
-import { LocalSpeechModelState, type LocalSpeechState } from "./local-speech-model-state.js";
+import type { LocalSpeechState } from "../../renderer/shared/local-speech-state.js";
+import { LocalSpeechModelState } from "./local-speech-model-state.js";
 
 function recorder() {
   const events: LocalSpeechState[] = [];

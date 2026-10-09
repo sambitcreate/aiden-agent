@@ -3,7 +3,7 @@ import {
   HYBRID_TAP_THRESHOLD_MS,
   type DictationActivationMode,
 } from "../../renderer/shared/dictation-preferences.js";
-import { transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
+import { MAX_TIMER_DELAY_MS, transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
 import type { PasteDeliveryResult, PasteOutcome } from "./dictation-paste.js";
 
 export type DictationStage = "idle" | "starting" | "recording" | "transcribing" | "delivering";
@@ -24,7 +24,7 @@ export interface DictationCoordinatorDeps {
   getActivationMode?: () => DictationActivationMode | Promise<DictationActivationMode>;
   /**
    * Local-first provider check before the microphone opens. A failure shows its
-   * setup message and never starts recording; `provider` sizes the watchdog.
+   * setup message and never starts recording or warms a model.
    */
   resolveVoice?: () => Promise<VoiceResolutionCheck>;
   /** Best-effort preload of the transcription model when a recording starts. */
@@ -44,7 +44,10 @@ export interface DictationCoordinatorDeps {
   ) => (() => void) | null | undefined;
 }
 
-export type VoiceResolutionCheck = { ok: true; provider?: string } | { ok: false; message: string };
+export type VoiceResolutionCheck = { ok: true } | { ok: false; message: string };
+
+export const VOICE_CHECK_FAILED_MESSAGE =
+  "Aiden couldn't check your voice setup. Open Settings → Voice and try again.";
 
 const RESULT_HIDE_DELAY_MS = 1_200;
 // The pill window cannot take focus, so an error is readable only while it is
@@ -68,9 +71,16 @@ export const HOLD_RELEASE_GRACE_MS = 50;
 export const TRANSCRIPTION_WATCHDOG_MS = 135_000;
 const WATCHDOG_HEADROOM_MS = 10_000;
 
-/** The last-resort fence must outlast the renderer's own audio-scaled budget. */
-export function transcriptionWatchdogMs(provider: string, audioSeconds?: number): number {
-  return Math.max(TRANSCRIPTION_WATCHDOG_MS, transcriptionBudgetMs(provider, audioSeconds) + WATCHDOG_HEADROOM_MS);
+/**
+ * The last-resort fence must outlast the renderer's own audio-scaled budget.
+ * It is sized with the on-device budget for every provider: that budget is
+ * never shorter than the cloud's, so the fence never preempts either.
+ */
+export function transcriptionWatchdogMs(audioSeconds?: number): number {
+  return Math.min(
+    MAX_TIMER_DELAY_MS,
+    Math.max(TRANSCRIPTION_WATCHDOG_MS, transcriptionBudgetMs("local", audioSeconds) + WATCHDOG_HEADROOM_MS),
+  );
 }
 
 /**
@@ -96,8 +106,6 @@ export class DictationCoordinator {
   private operationSequence = 0;
   private operationId: string | null = null;
   private stopHoldWatch: (() => void) | null = null;
-  /** Provider resolved at press; unknown means the most lenient (on-device) fence. */
-  private provider = "local";
   /** A setup error a freshly created pill missed because it was not subscribed yet. */
   private replayOnReady: DictationStatePayload | null = null;
 
@@ -317,19 +325,20 @@ export class DictationCoordinator {
         this.pressedAt = pressedAt;
         this.operationSequence += 1;
         this.operationId = `${this.now()}-${this.operationSequence}`;
+        // Hybrid must observe the key-up from the start to tell a tap from a
+        // hold; plain hold keeps watching only once capture is live. Start it
+        // before the provider check so a slow check cannot delay the key-up.
+        if (this.watchesFromPress()) this.beginHoldWatch();
         // No usable provider: explain the setup step instead of opening the
         // microphone or warming a model.
         const check = await this.checkVoice();
         if (!check.ok) {
+          this.endHoldWatch();
           await this.showSetupError(check.message);
           return;
         }
-        this.provider = check.provider ?? "local";
         this.stage = "starting";
         this.startWarmUp();
-        // Hybrid must observe the key-up from the start to tell a tap from a
-        // hold; plain hold keeps watching only once capture is live.
-        if (this.watchesFromPress()) this.beginHoldWatch();
         try {
           const created = await this.deps.showPill();
           if (created) this.pillReady = false;
@@ -389,9 +398,8 @@ export class DictationCoordinator {
     try {
       return await this.deps.resolveVoice();
     } catch (error) {
-      // The pill resolves again before capture and reports its own error.
       this.deps.logError("Could not resolve the voice provider.", error);
-      return { ok: true };
+      return { ok: false, message: VOICE_CHECK_FAILED_MESSAGE };
     }
   }
 
@@ -494,7 +502,7 @@ export class DictationCoordinator {
         return;
       }
       if (typeof audioSeconds === "number" && Number.isFinite(audioSeconds) && audioSeconds >= 0) {
-        this.armWatchdog(transcriptionWatchdogMs(this.provider, audioSeconds));
+        this.armWatchdog(transcriptionWatchdogMs(audioSeconds));
       }
       this.deps.broadcast({ state: value as DictationProgress, operationId });
     });

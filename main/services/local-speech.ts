@@ -24,7 +24,8 @@ import {
 } from "./local-speech-process-core.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechAudio } from "./local-speech-protocol.js";
 import { handleLocalSpeechMessage } from "./local-speech-worker-core.js";
-import { LocalSpeechModelState, type LocalSpeechState } from "./local-speech-model-state.js";
+import type { LocalSpeechState } from "../../renderer/shared/local-speech-state.js";
+import { LocalSpeechModelState } from "./local-speech-model-state.js";
 
 const MODEL_MISSING_MESSAGE = "The selected voice model isn't downloaded. Download it in Settings → Voice.";
 
