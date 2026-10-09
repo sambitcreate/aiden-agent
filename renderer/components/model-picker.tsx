@@ -8,6 +8,7 @@ import {
   Button,
   Command,
   CommandEmpty,
+  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -26,6 +27,7 @@ import {
   orderModelEntries,
   positionSavedModels,
   positionModels,
+  recentModelsForList,
   visibleModelEntries,
   type ModelEntry,
 } from "../lib/model-picker-data";
@@ -38,6 +40,7 @@ import {
   modelPadGridSizeForPlacements,
 } from "../lib/model-pad-layout";
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
+import { recordRecentModel } from "../shared/model-pad-preferences";
 import type { ModelInfo, Provider } from "../lib/types";
 import { Check, Grid2x2Check, Grid2x2Plus, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
@@ -253,6 +256,79 @@ function ModelRowAction({
   );
 }
 
+/** One model row in the List, with its Pin and Pad toggles. */
+function ModelListRow({
+  entry,
+  isActive,
+  isPinned,
+  isOnPad,
+  onChoose,
+  onPreview,
+  onTogglePin,
+  onTogglePad,
+}: {
+  entry: ModelEntry;
+  isActive: boolean;
+  isPinned: boolean;
+  isOnPad: boolean;
+  onChoose: (entry: ModelEntry) => void;
+  onPreview: (value: string) => void;
+  onTogglePin: (value: string) => void;
+  onTogglePad: (value: string) => void;
+}) {
+  const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
+  return (
+    <CommandItem
+      value={entry.value}
+      keywords={[entry.label, entry.providerLabel, entry.model, entry.format ?? ""]}
+      aria-describedby={descriptionId}
+      onSelect={() => onChoose(entry)}
+      onMouseEnter={() => onPreview(entry.value)}
+      className="group gap-2"
+    >
+      <ProviderIcon
+        providerId={entry.providerId}
+        providerLabel={entry.providerLabel}
+        modelId={entry.model}
+        artwork={entry.providerArtwork}
+        className="size-4 text-tertiary"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-small-strong">{entry.label}</span>
+        <span className="block truncate text-small text-tertiary">
+          {entry.providerLabel}
+          {deploymentSuffix(entry)}
+        </span>
+      </span>
+      {entry.format ? (
+        <span className="shrink-0 text-small text-tertiary">{entry.format}</span>
+      ) : null}
+      <span id={descriptionId} className="sr-only">
+        {describeModel(entry)}
+      </span>
+      {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
+      <ModelRowAction
+        label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
+        pressed={isPinned}
+        onToggle={() => onTogglePin(entry.value)}
+      >
+        <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
+      </ModelRowAction>
+      <ModelRowAction
+        label={isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`}
+        pressed={isOnPad}
+        onToggle={() => onTogglePad(entry.value)}
+      >
+        {isOnPad ? (
+          <Grid2x2Check className="size-3.5 text-accent" />
+        ) : (
+          <Grid2x2Plus className="size-3.5" />
+        )}
+      </ModelRowAction>
+    </CommandItem>
+  );
+}
+
 function ModelHoverDetails({
   model,
   metadataLoading,
@@ -416,6 +492,7 @@ export function ModelPicker({
   const {
     placements: modelPadPlacements,
     pinnedModels: pinned,
+    recentModels,
     save: saveModelPadPreferences,
   } = useModelPadPreferences();
   const pickerId = React.useId();
@@ -445,6 +522,25 @@ export function ModelPicker({
     () => (open ? orderModelEntries(entries, pinned) : []),
     [open, entries, pinned],
   );
+  const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
+  // With an empty filter the List groups pinned models, then recent ones, then the
+  // rest; a filter shows one flat, ranked list. Each model is listed once.
+  const listSections = React.useMemo(() => {
+    const recent =
+      open && search === ""
+        ? recentModelsForList(entries, recentModels, { selectedValue, pinned })
+        : [];
+    if (!recent.length) return { leading: orderedEntries, recent, rest: [] };
+    const pinnedSet = new Set(pinned);
+    const recentSet = new Set(recent.map((entry) => entry.value));
+    return {
+      leading: orderedEntries.filter((entry) => pinnedSet.has(entry.value)),
+      recent,
+      rest: orderedEntries.filter(
+        (entry) => !pinnedSet.has(entry.value) && !recentSet.has(entry.value),
+      ),
+    };
+  }, [open, search, entries, recentModels, selectedValue, pinned, orderedEntries]);
   const detailPositions = React.useMemo(
     () => (open ? positionModels(entries) : []),
     [open, entries],
@@ -462,7 +558,6 @@ export function ModelPicker({
         : BASE_MODEL_PAD_GRID_SIZE,
     [hasPadModels, modelPadPlacements, entries],
   );
-  const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
   // The current model is available but not placed (the Pad may be empty): the Pad
@@ -569,8 +664,15 @@ export function ModelPicker({
       if (entry.value !== selectedValue) onChange(entry.providerId, entry.model);
       setPreviewValue(entry.value);
       if (close) setOpen(false);
+      // Recents are history: the choice already happened, so a failed write is
+      // not worth interrupting anyone for.
+      void saveModelPadPreferences(({ recentModels: recent }) => ({
+        recentModels: recordRecentModel(recent, entry.value),
+      })).catch((error: unknown) => {
+        console.warn("Couldn’t record the recent model.", error);
+      });
     },
-    [onChange, selectedValue],
+    [onChange, selectedValue, saveModelPadPreferences],
   );
 
   // Choosing on the Pad closes the picker once the knob's confirm pulse has shown,
@@ -594,6 +696,20 @@ export function ModelPicker({
       prefersReducedMotion() ? 0 : PAD_COMMIT_CLOSE_DELAY_MS,
     );
   };
+
+  const renderListRow = (entry: ModelEntry) => (
+    <ModelListRow
+      key={entry.value}
+      entry={entry}
+      isActive={entry.value === selectedValue}
+      isPinned={pinned.includes(entry.value)}
+      isOnPad={Boolean(modelPadPlacements[entry.value])}
+      onChoose={(choice) => commit(choice, true)}
+      onPreview={setPreviewValue}
+      onTogglePin={togglePin}
+      onTogglePad={toggleOnPad}
+    />
+  );
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -845,65 +961,13 @@ export function ModelPicker({
               />
               <CommandList>
                 <CommandEmpty>No models found.</CommandEmpty>
-                {orderedEntries.map((entry) => {
-                  const isActive = entry.value === selectedValue;
-                  const isPinned = pinned.includes(entry.value);
-                  const isOnPad = Boolean(modelPadPlacements[entry.value]);
-                  const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
-                  return (
-                    <CommandItem
-                      key={entry.value}
-                      value={entry.value}
-                      keywords={[entry.label, entry.providerLabel, entry.model, entry.format ?? ""]}
-                      aria-describedby={descriptionId}
-                      onSelect={() => commit(entry, true)}
-                      onMouseEnter={() => setPreviewValue(entry.value)}
-                      className="group gap-2"
-                    >
-                      <ProviderIcon
-                        providerId={entry.providerId}
-                        providerLabel={entry.providerLabel}
-                        modelId={entry.model}
-                        artwork={entry.providerArtwork}
-                        className="size-4 text-tertiary"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-small-strong">{entry.label}</span>
-                        <span className="block truncate text-small text-tertiary">
-                          {entry.providerLabel}
-                          {deploymentSuffix(entry)}
-                        </span>
-                      </span>
-                      {entry.format ? (
-                        <span className="shrink-0 text-small text-tertiary">{entry.format}</span>
-                      ) : null}
-                      <span id={descriptionId} className="sr-only">
-                        {describeModel(entry)}
-                      </span>
-                      {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
-                      <ModelRowAction
-                        label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
-                        pressed={isPinned}
-                        onToggle={() => togglePin(entry.value)}
-                      >
-                        <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
-                      </ModelRowAction>
-                      <ModelRowAction
-                        label={
-                          isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`
-                        }
-                        pressed={isOnPad}
-                        onToggle={() => toggleOnPad(entry.value)}
-                      >
-                        {isOnPad ? (
-                          <Grid2x2Check className="size-3.5 text-accent" />
-                        ) : (
-                          <Grid2x2Plus className="size-3.5" />
-                        )}
-                      </ModelRowAction>
-                    </CommandItem>
-                  );
-                })}
+                {listSections.leading.map(renderListRow)}
+                {listSections.recent.length ? (
+                  <CommandGroup heading="Recent">
+                    {listSections.recent.map(renderListRow)}
+                  </CommandGroup>
+                ) : null}
+                {listSections.rest.map(renderListRow)}
               </CommandList>
             </Command>
           </section>

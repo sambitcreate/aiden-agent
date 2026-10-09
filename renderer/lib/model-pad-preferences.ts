@@ -1,5 +1,5 @@
-// The single renderer read/save path for Model Pad preferences (layout and
-// picker pins). They live in main-process AppSettings; reads come from the
+// The single renderer read/save path for Model Pad preferences (layout, picker
+// pins and recent models). They live in main-process AppSettings; reads come from the
 // shared settings query, so every surface (and window) stays in step with it.
 
 import * as React from "react";
@@ -9,6 +9,7 @@ import { queryKeys, useSettings } from "./queries";
 import { parseModelPadLayout, type ModelPadLayout } from "./model-pad-layout";
 import {
   normalizePinnedModels,
+  normalizeRecentModels,
   type ModelPadPlacements,
   type ModelPadPreferencesPatch,
 } from "../shared/model-pad-preferences";
@@ -20,6 +21,8 @@ export type { ModelPadPreferencesPatch } from "../shared/model-pad-preferences";
 export interface ModelPadPreferences {
   placements: ModelPadPlacements;
   pinnedModels: string[];
+  /** Newest first. */
+  recentModels: string[];
 }
 
 export type ModelPadPreferencesUpdate =
@@ -30,6 +33,7 @@ export function modelPadPreferencesFrom(settings: AppSettings | undefined): Mode
   return {
     placements: parseModelPadLayout({ placements: settings?.modelPadPlacements }).placements,
     pinnedModels: normalizePinnedModels(settings?.pinnedModels) ?? [],
+    recentModels: normalizeRecentModels(settings?.recentModels) ?? [],
   };
 }
 
@@ -100,9 +104,15 @@ export function useModelPadPreferences(): ModelPadPreferences & {
   const settings = useSettings();
   const placements = settings.data?.modelPadPlacements;
   const pins = settings.data?.pinnedModels;
+  const recents = settings.data?.recentModels;
   const preferences = React.useMemo(
-    () => modelPadPreferencesFrom({ modelPadPlacements: placements, pinnedModels: pins }),
-    [placements, pins],
+    () =>
+      modelPadPreferencesFrom({
+        modelPadPlacements: placements,
+        pinnedModels: pins,
+        recentModels: recents,
+      }),
+    [placements, pins, recents],
   );
   const save = React.useCallback(
     (update: ModelPadPreferencesUpdate) => saveModelPadPreferences(queryClient, update),

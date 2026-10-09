@@ -15,6 +15,7 @@ import {
   parseModel,
   positionSavedModels,
   positionModels,
+  recentModelsForList,
   visibleModelEntries,
   resolveExplicitModelSelection,
   type ModelEntry,
@@ -224,6 +225,28 @@ test("entry creation includes every usable model, keeps hosted providers first, 
   assert.deepEqual(
     coordinates(entries),
     coordinates(orderModelEntries(entries, ["local::local-b"])),
+  );
+});
+
+test("recent rows are up to three visible models in recency order, skipping the current and pinned models", () => {
+  const entries = ["a", "b", "c", "d", "e", "f"].map((value) => entry(`p::${value}`));
+  const values = (rows: ModelEntry[]) => rows.map((row) => row.value);
+
+  assert.deepEqual(
+    values(
+      recentModelsForList(entries, ["p::e", "p::a", "p::gone", "p::b", "p::c", "p::d"], {
+        selectedValue: "p::a",
+        pinned: ["p::b"],
+      }),
+    ),
+    // The current model, a pinned model and a model no longer visible are skipped,
+    // and the slots they leave are filled by older visible history.
+    ["p::e", "p::c", "p::d"],
+  );
+  assert.deepEqual(values(recentModelsForList(entries, [], { selectedValue: "", pinned: [] })), []);
+  assert.deepEqual(
+    values(recentModelsForList(entries, ["p::a"], { selectedValue: "p::a", pinned: [] })),
+    [],
   );
 });
 

@@ -413,7 +413,7 @@ test("removing a provider clears its model visibility preferences", async (t) =>
   });
 });
 
-test("removing a provider drops its Model Pad placements and pins", async (t) => {
+test("removing a provider drops its Model Pad placements, pins and recent models", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
   const placement = { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } as const;
@@ -423,6 +423,7 @@ test("removing a provider drops its Model Pad placements and pins", async (t) =>
       "openai::gpt": placement,
     },
     pinnedModels: [`${provider.id}::qwen3-8b`, "openai::gpt"],
+    recentModels: ["openai::gpt", `${provider.id}::qwen3-8b`, "google::gemini"],
   });
 
   await h.store.removeProvider(provider.id);
@@ -430,6 +431,19 @@ test("removing a provider drops its Model Pad placements and pins", async (t) =>
   const settings = await createConfigStore(h.stores, h.secrets.port).getSettings();
   assert.deepEqual(settings.modelPadPlacements, { "openai::gpt": placement });
   assert.deepEqual(settings.pinnedModels, ["openai::gpt"]);
+  assert.deepEqual(settings.recentModels, ["openai::gpt", "google::gemini"]);
+});
+
+test("recent models are machine-local history and never reach the portable config", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setSettings({ recentModels: [`${provider.id}::qwen3-8b`, "openai::gpt"] });
+
+  const portableRaw = await fs.readFile(h.portableFile, "utf-8");
+  assert.equal(portableRaw.includes("recentModels"), false);
+  assert.equal(portableRaw.includes("openai::gpt"), false);
+  const local = await readJson<{ settings: { recentModels?: string[] } }>(h.settingsFile);
+  assert.deepEqual(local.settings.recentModels, [`${provider.id}::qwen3-8b`, "openai::gpt"]);
 });
 
 test("admitted provider removal finishes cache and visibility cleanup after renderer navigation", async (t) => {
@@ -709,7 +723,7 @@ test("released onboarding local identity migration re-homes cache and remembered
   });
 });
 
-test("provider identity migration re-homes Model Pad placements and pins with canonical precedence", async (t) => {
+test("provider identity migration re-homes Model Pad placements, pins and recent models with canonical precedence", async (t) => {
   const releasedId = "custom:onboarding-lmstudio";
   const canonicalId = "custom:lmstudio";
   const legacyPlacement = { x: 0.1, y: 0.2, xSource: "user", ySource: "user" } as const;
@@ -724,6 +738,7 @@ test("provider identity migration re-homes Model Pad placements and pins with ca
         "openai::gpt": legacyPlacement,
       },
       pinnedModels: [`${releasedId}::other`, "openai::gpt", `${canonicalId}::other`, `${releasedId}::qwen3-8b`],
+      recentModels: [`${releasedId}::qwen3-8b`, `${canonicalId}::other`, `${releasedId}::other`],
     },
     seeded: true,
   });
@@ -744,6 +759,8 @@ test("provider identity migration re-homes Model Pad placements and pins with ca
   const persisted = await readJson<{ settings: typeof settings }>(h.settingsFile);
   assert.deepEqual(persisted.settings.modelPadPlacements, settings.modelPadPlacements);
   assert.deepEqual(persisted.settings.pinnedModels, settings.pinnedModels);
+  assert.deepEqual(settings.recentModels, [`${canonicalId}::qwen3-8b`, `${canonicalId}::other`]);
+  assert.deepEqual(persisted.settings.recentModels, settings.recentModels);
 });
 
 test("an edited legacy preset is retained under a reserved ID with its cache re-homed", async (t) => {

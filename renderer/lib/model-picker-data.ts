@@ -244,6 +244,32 @@ export function orderModelEntries(entries: ModelEntry[], pinned: string[]): Mode
   return [...pinnedEntries, ...entries.filter((entry) => !pinnedSet.has(entry.value))];
 }
 
+/** Recent rows the picker list shows at most. */
+export const MAX_RECENT_MODEL_ROWS = 3;
+
+/**
+ * The recent models the list shows: still-visible entries in recency order,
+ * excluding the current model and pinned models (they are already prominent),
+ * at most {@link MAX_RECENT_MODEL_ROWS}.
+ */
+export function recentModelsForList(
+  entries: readonly ModelEntry[],
+  recent: readonly string[],
+  { selectedValue, pinned }: { selectedValue: string; pinned: readonly string[] },
+): ModelEntry[] {
+  const byValue = new Map(entries.map((entry) => [entry.value, entry]));
+  const skipped = new Set([selectedValue, ...pinned]);
+  const rows: ModelEntry[] = [];
+  for (const value of recent) {
+    if (rows.length >= MAX_RECENT_MODEL_ROWS) break;
+    const entry = byValue.get(value);
+    if (!entry || skipped.has(value)) continue;
+    rows.push(entry);
+    skipped.add(value);
+  }
+  return rows;
+}
+
 function clamp(value: number, min = 0.08, max = 0.92): number {
   return Math.min(max, Math.max(min, value));
 }

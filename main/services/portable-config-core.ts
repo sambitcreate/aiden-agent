@@ -51,6 +51,7 @@ import {
 import {
   normalizeModelPadPlacements,
   normalizePinnedModels,
+  normalizeRecentModels,
 } from "../../renderer/shared/model-pad-preferences.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
@@ -565,10 +566,20 @@ function normalizedSettingsVisibility(settings: {
   );
 }
 
-/** Model Pad placements and pins: invalid entries are dropped, wrong shapes removed. */
+type ModelPadPreferenceFields = {
+  modelPadPlacements?: unknown;
+  pinnedModels?: unknown;
+  recentModels?: unknown;
+};
+
+/**
+ * Model Pad placements, pins and recent models: invalid entries are dropped,
+ * wrong shapes removed. All three live in machine-local settings.json, never in
+ * the portable config.json.
+ */
 function applyModelPadPreferences(
-  source: { modelPadPlacements?: unknown; pinnedModels?: unknown },
-  target: { modelPadPlacements?: unknown; pinnedModels?: unknown },
+  source: ModelPadPreferenceFields,
+  target: ModelPadPreferenceFields,
 ): void {
   const placements = normalizeModelPadPlacements(source.modelPadPlacements);
   if (placements) target.modelPadPlacements = placements;
@@ -576,6 +587,9 @@ function applyModelPadPreferences(
   const pins = normalizePinnedModels(source.pinnedModels);
   if (pins) target.pinnedModels = pins;
   else delete target.pinnedModels;
+  const recents = normalizeRecentModels(source.recentModels);
+  if (recents) target.recentModels = recents;
+  else delete target.recentModels;
 }
 
 function normalizeSettingsShape(value: unknown): SettingsShape {

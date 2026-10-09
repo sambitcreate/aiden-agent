@@ -899,6 +899,11 @@ export interface AppSettings {
   modelPadPlacements?: ModelPadPlacements;
   /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
   pinnedModels?: string[];
+  /**
+   * Presentation-only model history: distinct `provider::model` values, newest
+   * first (at most 5). Machine-local; never part of the portable config.
+   */
+  recentModels?: string[];
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

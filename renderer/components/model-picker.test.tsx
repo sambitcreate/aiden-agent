@@ -466,3 +466,104 @@ test("re-selecting the List tab keeps the typed filter", async () => {
 
   assert.equal((screen.getByLabelText("Filter chat models") as HTMLInputElement).value, "pla");
 });
+
+const MODEL_LABELS = ["Current Model", "Placed One", "Placed Two"];
+
+/** The model each listed row names, in list order. */
+function optionNames(container: HTMLElement) {
+  return within(container)
+    .getAllByRole("option")
+    .map((option) => MODEL_LABELS.find((label) => option.textContent?.includes(label)) ?? "");
+}
+
+function savedRecents(server: ReturnType<typeof settingsServer>) {
+  return server.calls
+    .filter((call) => call.channel === "settings:set")
+    .map((call) => (call.args[0] as AppSettings).recentModels)
+    .filter((recent) => recent !== undefined);
+}
+
+test("the List shows recent models after pinned ones, without the current model or duplicates", async () => {
+  const server = settingsServer({
+    ...placedSettings,
+    pinnedModels: ["acme::current-model"],
+    recentModels: ["acme::current-model", "acme::gone", "acme::placed-two", "acme::placed-one"],
+  });
+  await openList(server);
+
+  const list = screen.getByRole("listbox");
+  const recent = within(list).getByRole("group", { name: "Recent" });
+  // Pinned first, then Recent (in recency order), then the rest. Every model is
+  // listed once, and the pinned current model is not repeated under Recent.
+  assert.deepEqual(optionNames(recent), ["Placed Two", "Placed One"]);
+  assert.deepEqual(optionNames(list), ["Current Model", "Placed Two", "Placed One"]);
+});
+
+test("filtering the List shows a flat list without the Recent group", async () => {
+  const server = settingsServer({
+    ...placedSettings,
+    recentModels: ["acme::placed-two"],
+  });
+  const filter = (await openList(server)) as HTMLInputElement;
+  assert.ok(screen.getByRole("group", { name: "Recent" }));
+
+  fireEvent.change(filter, { target: { value: "placed" } });
+
+  await waitFor(() => assert.ok(!screen.queryByRole("group", { name: "Recent" })));
+  assert.deepEqual(optionNames(screen.getByRole("listbox")).sort(), ["Placed One", "Placed Two"]);
+});
+
+test("choosing a model in the List records it as the most recent", async () => {
+  const server = settingsServer({ ...placedSettings, recentModels: ["acme::placed-one"] });
+  const changes: string[] = [];
+  await openList(server, {
+    onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
+  });
+
+  fireEvent.click(screen.getByRole("option", { name: /Placed Two/u }));
+
+  assert.deepEqual(changes, ["acme::placed-two"]);
+  await waitFor(() =>
+    assert.deepEqual(savedRecents(server), [["acme::placed-two", "acme::placed-one"]]),
+  );
+});
+
+test("re-choosing the current model on the Pad moves it to the front of the recents", async () => {
+  const server = settingsServer({
+    modelPadPlacements: {
+      ...placedSettings.modelPadPlacements,
+      "acme::current-model": { x: 0.5, y: 0.5, ...user },
+    },
+    recentModels: ["acme::placed-one", "acme::current-model"],
+  });
+  const changes: string[] = [];
+  const pad = await openPicker(server, {
+    onChange: (providerId, model) => changes.push(`${providerId}::${model}`),
+  });
+
+  fireEvent.keyDown(pad, { key: "Enter" });
+
+  // The current model needs no change, but it still becomes the newest recent.
+  assert.deepEqual(changes, []);
+  await waitFor(() =>
+    assert.deepEqual(savedRecents(server), [["acme::current-model", "acme::placed-one"]]),
+  );
+});
+
+test("a failed recents write neither blocks the choice nor shows an error", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  const server = settingsServer(placedSettings, { failWrites: true });
+  const changes: string[] = [];
+  await openList(server, {
+    onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
+  });
+
+  fireEvent.click(screen.getByRole("option", { name: /Placed Two/u }));
+
+  assert.deepEqual(changes, ["acme::placed-two"]);
+  await waitFor(() => assert.equal(warn.mock.callCount(), 1));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.ok(!screen.queryByText(/disk full/u), "no error toast for history");
+});
