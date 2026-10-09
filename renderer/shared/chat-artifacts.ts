@@ -34,6 +34,16 @@ export interface ChatHtmlArtifactV1 {
   mediaId: string;
 }
 
+/**
+ * Which tool call produced an HTML artifact. Kept on the message beside, not
+ * inside, `htmlArtifacts`: older builds parse artifacts with exact keys and drop
+ * a message's whole list on an unknown key, but ignore unknown message fields.
+ */
+export interface HtmlArtifactPlacementV1 {
+  mediaId: string;
+  toolCallId: string;
+}
+
 /** Versioned union so future Pi extensions can add GUI artifact kinds safely. */
 export type ChatArtifactV1 = ChatImageArtifactV1 | ChatHtmlArtifactV1;
 
@@ -42,6 +52,8 @@ export type ChatArtifactEventV1 =
       version: typeof CHAT_ARTIFACT_EVENT_VERSION;
       operation: "present";
       artifact: ChatArtifactV1;
+      /** The render_artifact call that produced it, for in-row placement. */
+      toolCallId?: string;
     }
   | {
       version: typeof CHAT_ARTIFACT_EVENT_VERSION;
@@ -53,6 +65,9 @@ const HTML_ARTIFACT_KEYS = new Set(["version", "kind", "id", "title", "mimeType"
 const IMAGE_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
 const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
+const PRESENT_EVENT_WITH_CALL_KEYS = new Set(["version", "operation", "artifact", "toolCallId"]);
+const PLACEMENT_KEYS = new Set(["mediaId", "toolCallId"]);
+const MAX_PLACEMENTS = 40;
 const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 512;
 const MAX_BASE64_CHARS = Math.ceil(MAX_INLINE_IMAGE_BYTES / 3) * 4;
@@ -207,11 +222,34 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
   if (event.operation === "reset" && hasExactKeys(event, RESET_EVENT_KEYS)) {
     return { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "reset" };
   }
-  if (event.operation !== "present" || !hasExactKeys(event, PRESENT_EVENT_KEYS)) {
-    return undefined;
-  }
+  if (event.operation !== "present") return undefined;
+  const withCall = hasExactKeys(event, PRESENT_EVENT_WITH_CALL_KEYS);
+  if (!withCall && !hasExactKeys(event, PRESENT_EVENT_KEYS)) return undefined;
+  if (withCall && !isToolCallId(event.toolCallId)) return undefined;
   const artifact = parseChatArtifactV1(event.artifact);
-  return artifact
-    ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "present", artifact }
-    : undefined;
+  if (!artifact) return undefined;
+  return withCall
+    ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "present", artifact, toolCallId: event.toolCallId as string }
+    : { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "present", artifact };
+}
+
+function isToolCallId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_CHARS;
+}
+
+/** Lenient on purpose: one bad placement must never hide the artifacts it points at. */
+export function parseHtmlArtifactPlacements(value: unknown): HtmlArtifactPlacementV1[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const placements: HtmlArtifactPlacementV1[] = [];
+  for (const entry of value.slice(0, MAX_PLACEMENTS)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (!hasExactKeys(record, PLACEMENT_KEYS)) continue;
+    if (!isHtmlArtifactMediaId(record.mediaId) || !isToolCallId(record.toolCallId)) continue;
+    if (seen.has(record.mediaId)) continue;
+    seen.add(record.mediaId);
+    placements.push({ mediaId: record.mediaId, toolCallId: record.toolCallId });
+  }
+  return placements.length ? placements : undefined;
 }

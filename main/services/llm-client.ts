@@ -804,6 +804,8 @@ async function prepareGeneration(
   const displayedImageIds = new Set<string>();
   const displayedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
   const displayedHtmlIds = new Set<string>();
+  /** mediaId → the render_artifact call it renders after. */
+  const htmlArtifactPlacements = new Map<string, string>();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
@@ -862,6 +864,7 @@ async function prepareGeneration(
       mcpServerInstructions: createMcpInstructionCollector().snapshot(),
       displayedImages,
       displayedHtmlArtifacts,
+      htmlArtifactPlacements,
       supportsImages: runtimeSupportsImages(designModel),
       thinkingLevel: resolveGenerationThinkingLevel(
         params.providerId,
@@ -1751,7 +1754,7 @@ async function prepareGeneration(
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
-      onArtifact: async (artifact, html) => {
+      onArtifact: async (artifact, html, context) => {
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
           generationId: streamId,
@@ -1769,12 +1772,16 @@ async function prepareGeneration(
           displayedHtmlIds.add(artifact.mediaId);
           displayedHtmlArtifacts.push(artifact);
         }
+        if (!htmlArtifactPlacements.has(artifact.mediaId)) {
+          htmlArtifactPlacements.set(artifact.mediaId, context.toolCallId);
+        }
         sendGeneration(streamId, "chat:artifact", {
           streamId,
           event: {
             version: CHAT_ARTIFACT_EVENT_VERSION,
             operation: "present",
             artifact,
+            toolCallId: htmlArtifactPlacements.get(artifact.mediaId),
           },
         });
         return true;
@@ -1825,6 +1832,7 @@ async function prepareGeneration(
     mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
+    htmlArtifactPlacements,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -2187,6 +2195,7 @@ export const llmClient = {
       mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
+      htmlArtifactPlacements,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -2314,6 +2323,12 @@ export const llmClient = {
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
+            htmlArtifactPlacements: displayedHtmlArtifacts.length > 0
+              ? displayedHtmlArtifacts.flatMap((artifact) => {
+                  const toolCallId = htmlArtifactPlacements.get(artifact.mediaId);
+                  return toolCallId ? [{ mediaId: artifact.mediaId, toolCallId }] : [];
+                })
+              : undefined,
           },
           {
             providerId: params.providerId,

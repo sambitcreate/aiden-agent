@@ -35,7 +35,7 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
-import { parseChatHtmlArtifacts } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatHtmlArtifacts, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
@@ -842,6 +842,10 @@ export function createChatStore(
         htmlArtifacts: assistant
           ? parseChatHtmlArtifacts(message.htmlArtifacts)
           : undefined,
+        htmlArtifactPlacements:
+          assistant && message.htmlArtifacts
+            ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
+            : undefined,
         reasoning:
           assistant &&
           typeof message.reasoning === "string" &&
@@ -1416,6 +1420,13 @@ export function createChatStore(
                     return { ...artifact, mediaId };
                   })
                 : undefined,
+            htmlArtifactPlacements:
+              message.role === "assistant" && message.htmlArtifactPlacements?.length
+                ? message.htmlArtifactPlacements.map((placement) => ({
+                    mediaId: remappedHtmlArtifactMediaId(newChatId, placement.mediaId),
+                    toolCallId: placement.toolCallId,
+                  }))
+                : undefined,
             skill:
               message.role === "user"
                 ? parseSkillProvenanceV1(message.skill)
@@ -1690,6 +1701,10 @@ export function createChatStore(
           htmlArtifacts:
             message.role === "assistant"
               ? parseChatHtmlArtifacts(message.htmlArtifacts)
+              : undefined,
+          htmlArtifactPlacements:
+            message.role === "assistant" && message.htmlArtifacts
+              ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
               : undefined,
           skill:
             message.role === "user"

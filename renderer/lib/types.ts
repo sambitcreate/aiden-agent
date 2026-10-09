@@ -623,6 +623,7 @@ export interface ChatMessage {
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
+  htmlArtifactPlacements?: import("../shared/chat-artifacts").HtmlArtifactPlacementV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseChatArtifactEventV1, parseChatArtifactV1 } from "./chat-artifacts.js";
+import { parseChatArtifactEventV1, parseChatArtifactV1, parseHtmlArtifactPlacements } from "./chat-artifacts.js";
 import { MAX_HTML_ARTIFACT_BYTES } from "./generative-ui.js";
 
 const IMAGE = {
@@ -86,4 +86,37 @@ test("unknown kinds and mixed image/html shapes drop", () => {
     parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML }),
     { version: 1, operation: "present", artifact: HTML },
   );
+});
+
+const PLACED_MEDIA = "a".repeat(64);
+
+test("placements keep valid entries and drop malformed ones individually", () => {
+  assert.equal(parseHtmlArtifactPlacements(undefined), undefined);
+  assert.equal(parseHtmlArtifactPlacements("nope"), undefined);
+  assert.deepEqual(
+    parseHtmlArtifactPlacements([
+      { mediaId: PLACED_MEDIA, toolCallId: "call_1" },
+      { mediaId: PLACED_MEDIA, toolCallId: "call_dup" },
+      { mediaId: "bad id with spaces", toolCallId: "call_2" },
+      { mediaId: "b".repeat(64), toolCallId: "" },
+      { mediaId: "c".repeat(64), toolCallId: "call_3", extra: 1 },
+      { mediaId: "d".repeat(64), toolCallId: "call_4" },
+    ]),
+    [
+      { mediaId: PLACED_MEDIA, toolCallId: "call_1" },
+      { mediaId: "d".repeat(64), toolCallId: "call_4" },
+    ],
+  );
+  assert.equal(parseHtmlArtifactPlacements([{ mediaId: "x", toolCallId: 1 }]), undefined);
+});
+
+test("present events may carry the producing toolCallId", () => {
+  const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_9" });
+  assert.equal(parsed?.operation === "present" && parsed.toolCallId, "call_9");
+  assert.equal(
+    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "" }),
+    undefined,
+  );
+  const legacy = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML });
+  assert.equal(legacy?.operation === "present" && legacy.toolCallId, undefined);
 });

@@ -133,6 +133,24 @@ test("same-generation title replaces the previous staged artifact", async () => 
   assert.notEqual(artifacts[0]?.id, artifacts[1]?.id);
 });
 
+test("onArtifact receives the producing toolCallId and replaces keep the first call", async () => {
+  const root = await workspace();
+  const seen: string[] = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    artifactNamespace: "gen-call",
+    onArtifact: (_artifact, _html, context) => {
+      seen.push(context.toolCallId);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  await tool.execute("call-first", { title: "Chart", html: "<p>a</p>" });
+  await tool.execute("call-second", { title: "Chart", html: "<p>b</p>" });
+  await tool.execute("call-other", { title: "Other", html: "<p>c</p>" });
+  assert.deepEqual(seen, ["call-first", "call-first", "call-other"]);
+});
+
 test("render_artifact refuses intermediate directory symlinks", async () => {
   if (process.platform !== "darwin") return;
   const root = await workspace();

@@ -151,6 +151,35 @@ test("clone and fork copy visible linear history with fresh identities", async (
   }
 });
 
+test("copies remap placement mediaIds together with their artifacts", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-placement-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({ title: "Placed", workspaceId: "w", providerId: "p", model: "m" });
+  const sourceMediaId = `html_${"1".repeat(43)}`;
+  await store.appendMessage(chat.id, { role: "user", content: "Chart it" });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Here it is",
+    htmlArtifacts: [{
+      version: 1, kind: "html", id: "artifact-1", title: "Chart",
+      mimeType: "text/html", size: 1, mediaId: sourceMediaId,
+    }],
+    htmlArtifactPlacements: [{ mediaId: sourceMediaId, toolCallId: "call_1" }],
+  });
+  const restarted = createChatStore(async () => directory);
+  const source = await restarted.get(chat.id);
+  assert.deepEqual(source?.messages[1]?.htmlArtifactPlacements, [
+    { mediaId: sourceMediaId, toolCallId: "call_1" },
+  ]);
+  const clone = await store.copyVisibleHistory({ sourceChatId: chat.id });
+  const copied = clone.messages[1];
+  const copiedMediaId = copied?.htmlArtifacts?.[0]?.mediaId;
+  assert.ok(copiedMediaId);
+  assert.notEqual(copiedMediaId, sourceMediaId);
+  assert.deepEqual(copied?.htmlArtifactPlacements, [{ mediaId: copiedMediaId, toolCallId: "call_1" }]);
+});
+
 test("forks record lineage, number titles, and can cut before a prompt", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

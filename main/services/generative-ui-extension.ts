@@ -79,7 +79,11 @@ export interface GenerativeUiExtensionOptions {
   existingChatHtmlBytes?: number;
   existingChatHtmlCount?: number;
   preferArtifactThisTurn?: boolean;
-  onArtifact: (artifact: ChatHtmlArtifactV1, html: string) => boolean | void | Promise<boolean | void>;
+  onArtifact: (
+    artifact: ChatHtmlArtifactV1,
+    html: string,
+    context: { toolCallId: string },
+  ) => boolean | void | Promise<boolean | void>;
   beforeArtifact?: () => void | Promise<void>;
 }
 
@@ -135,7 +139,7 @@ export function createGenerativeUiExtensionRuntime(
   let displayedCount = 0;
   let displayedBytes = 0;
   let serial = Promise.resolve();
-  const titlesInGeneration = new Map<string, { mediaId: string; size: number }>();
+  const titlesInGeneration = new Map<string, { mediaId: string; size: number; toolCallId: string }>();
 
   const tool: AgentTool = declarePiRuntimeReplay(
     {
@@ -243,14 +247,17 @@ export function createGenerativeUiExtensionRuntime(
             size,
             mediaId,
           };
-          const presented = (await options.onArtifact(artifact, html)) !== false;
+          // A same-title replace stays where the visual first appeared.
+          const placementCallId = replacing?.toolCallId ?? toolCallId;
+          const presented =
+            (await options.onArtifact(artifact, html, { toolCallId: placementCallId })) !== false;
           if (presented && !replacing) {
             displayedCount += 1;
             displayedBytes = nextBytes;
-            titlesInGeneration.set(title, { mediaId, size });
+            titlesInGeneration.set(title, { mediaId, size, toolCallId });
           } else if (presented && replacing) {
             displayedBytes = nextBytes;
-            titlesInGeneration.set(title, { mediaId: replacing.mediaId, size });
+            titlesInGeneration.set(title, { ...replacing, size });
           }
           return {
             content: [
