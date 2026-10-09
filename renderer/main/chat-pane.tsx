@@ -2521,10 +2521,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const chatTitleMenu = (
     <ChatTitleMenu
-      chatId={chatId}
       title={chat.data?.title ?? "New agent"}
       persisted={!draft && Boolean(persistedChat.data)}
+      onRename={renameChat}
       onDuplicate={() => copyChat()}
+      duplicateDisabledReason={forkDisabledReason}
     />
   );
 
@@ -2572,11 +2573,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         actions={
           <WorkspaceToolButtons
+            hasWorkspace={Boolean(effectiveWorkspace)}
             hasFolder={Boolean(effectiveWorkspace?.folderPath)}
             hasFolderAccess={Boolean(
               effectiveWorkspace?.folderPath && effectiveWorkspace.permission !== "none",
             )}
-            isRepo={git.data?.isRepo === true}
+            // A cached repository read must not outlive access being switched off.
+            isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
             terminalButton={
               <Button
                 iconOnly

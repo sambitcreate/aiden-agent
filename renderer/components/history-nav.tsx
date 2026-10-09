@@ -7,6 +7,10 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import { Button } from "./ui";
 import { historyNavigationAvailability } from "../lib/history-navigation";
 
+// `aria-disabled` rather than `disabled`: reaching the first or last entry
+// must not drop keyboard focus from the button that was just used.
+const UNAVAILABLE = "no-drag aria-disabled:opacity-45 aria-disabled:hover:bg-transparent";
+
 export function HistoryNavButtons() {
   const router = useRouter();
   // Re-render on every navigation; the entry index lives in location state.
@@ -23,11 +27,13 @@ export function HistoryNavButtons() {
         iconOnly
         size="small"
         variant="bar"
-        className="no-drag"
+        className={UNAVAILABLE}
         aria-label="Go back"
         title="Go back"
-        disabled={!canGoBack}
-        onClick={() => router.history.back()}
+        aria-disabled={!canGoBack || undefined}
+        onClick={() => {
+          if (canGoBack) router.history.back();
+        }}
       >
         <ArrowLeft />
       </Button>
@@ -35,11 +41,13 @@ export function HistoryNavButtons() {
         iconOnly
         size="small"
         variant="bar"
-        className="no-drag"
+        className={UNAVAILABLE}
         aria-label="Go forward"
         title="Go forward"
-        disabled={!canGoForward}
-        onClick={() => router.history.forward()}
+        aria-disabled={!canGoForward || undefined}
+        onClick={() => {
+          if (canGoForward) router.history.forward();
+        }}
       >
         <ArrowRight />
       </Button>

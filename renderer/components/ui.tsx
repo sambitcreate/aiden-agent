@@ -1049,7 +1049,10 @@ export function ScrollArea({
       >
         <div className="no-drag flex shrink-0 items-center">{leading}</div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <h1 className="min-w-0 truncate text-strong text-primary">{title}</h1>
+          {/* With an accessory beside it, the title keeps a readable minimum. */}
+          <h1 className={cn("min-w-0 truncate text-strong text-primary", titleAccessory && "min-w-24")}>
+            {title}
+          </h1>
           {titleAccessory}
         </div>
         <div className="no-drag flex items-center gap-2">{actions}</div>

@@ -163,7 +163,11 @@ interface EnvironmentPanelContextValue {
   closeAll: () => void;
   closeTools: () => void;
   closeQuickView: () => void;
-  reportSurfaceLayout: (layout: { inline: boolean; width: number } | null) => void;
+  /** Tools are open and visible: open, and not hidden behind a stacked Quick View. */
+  toolsPresented: boolean;
+  reportSurfaceLayout: (
+    layout: { inline: boolean; width: number; stacked?: boolean } | null,
+  ) => void;
   setTab: (tab: EnvironmentPanelTab) => void;
   showTools: (tab?: EnvironmentPanelTab) => void;
   showQuickView: () => void;
@@ -308,7 +312,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     { subagentsEnabled, devicesEnabled },
     initialEnvironmentSurfaceState,
   );
-  const [surfaceLayout, setSurfaceLayout] = React.useState({ inline: false, width: 0 });
+  const [surfaceLayout, setSurfaceLayout] = React.useState({
+    inline: false,
+    width: 0,
+    stacked: false,
+  });
   const tab = normalizeEnvironmentPanelTab(
     surfaceState.toolsTab,
     subagentsEnabled,
@@ -430,10 +438,18 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
 
   const reportSurfaceLayout = React.useCallback(
-    (layout: { inline: boolean; width: number } | null) => {
-      const next = layout ?? { inline: false, width: 0 };
+    (layout: { inline: boolean; width: number; stacked?: boolean } | null) => {
+      const next = {
+        inline: layout?.inline ?? false,
+        width: layout?.width ?? 0,
+        stacked: layout?.stacked ?? false,
+      };
       setSurfaceLayout((current) =>
-        current.inline === next.inline && current.width === next.width ? current : next,
+        current.inline === next.inline &&
+        current.width === next.width &&
+        current.stacked === next.stacked
+          ? current
+          : next,
       );
     },
     [],
@@ -1057,10 +1073,13 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   // Floating layouts do not have enough guaranteed room for both the tools
   // surface and Assistant. Let Assistant layer at the normal chat edge there.
   const dockRightInset = surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0;
+  const toolsPresented =
+    surfaceState.toolsOpen && (!surfaceLayout.stacked || surfaceState.frontSurface === "tools");
 
   const value = React.useMemo(
     () => ({
       toolsOpen: surfaceState.toolsOpen,
+      toolsPresented,
       openTabs: surfaceState.openTabs ?? [surfaceState.toolsTab],
       closeTab,
       contextDetails: contextDetails?.chat.id === activeChat.chatId ? contextDetails : null,
@@ -1183,6 +1202,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       surfaceState.frontSurface,
       surfaceState.quickViewOpen,
       surfaceState.toolsOpen,
+      toolsPresented,
       syncSubagents,
       tab,
       toggleQuickView,
@@ -1957,9 +1977,9 @@ export function EnvironmentWorkbench({
 
   const reportSurfaceLayout = panel.reportSurfaceLayout;
   React.useLayoutEffect(() => {
-    reportSurfaceLayout(fullOpen ? { inline, width: renderedWidth } : null);
+    reportSurfaceLayout(fullOpen ? { inline, width: renderedWidth, stacked } : null);
     return () => reportSurfaceLayout(null);
-  }, [fullOpen, inline, renderedWidth, reportSurfaceLayout]);
+  }, [fullOpen, inline, renderedWidth, stacked, reportSurfaceLayout]);
 
   return (
     <div

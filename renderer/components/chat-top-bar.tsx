@@ -15,7 +15,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import * as React from "react";
-import { chatsApi, workspacesApi } from "../lib/ipc";
+import { workspacesApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import type { GitInfo, Workspace } from "../lib/types";
 import { cn } from "../lib/ui-utils";
@@ -38,6 +38,12 @@ import { WORKSPACE_TOOLS } from "./workspace-tool-launcher";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
+/**
+ * Header menu triggers fill their heading's box, which clips overflow for the
+ * ellipsis, so their keyboard outline is drawn inside the edge instead.
+ */
+const INSET_FOCUS_RING = { "--keyboard-focus-offset": "-2px" } as React.CSSProperties;
+
 async function copyToClipboard(text: string, label: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
@@ -49,20 +55,21 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
 
 /**
  * The chat title as a menu trigger: rename, duplicate, or copy the title. A
- * draft (not yet saved) shows its title as plain text because none apply.
+ * draft (not yet saved) shows its title as plain text.
  */
 export function ChatTitleMenu({
-  chatId,
   title,
   persisted,
+  onRename,
   onDuplicate,
+  duplicateDisabledReason,
 }: {
-  chatId: string;
   title: string;
   persisted: boolean;
+  onRename: (title: string) => Promise<void>;
   onDuplicate: () => Promise<void>;
+  duplicateDisabledReason: string | null;
 }) {
-  const qc = useQueryClient();
   const [renaming, setRenaming] = React.useState(false);
   const [renameValue, setRenameValue] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -74,11 +81,7 @@ export function ChatTitleMenu({
     if (!next || saving) return;
     setSaving(true);
     try {
-      await chatsApi.rename(chatId, next);
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: queryKeys.chats }),
-        qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) }),
-      ]);
+      await onRename(next);
       setRenaming(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't rename this chat.");
@@ -91,15 +94,17 @@ export function ChatTitleMenu({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
+          {/* The visible title is the accessible name so the heading keeps it. */}
+          <Button
+            variant="bar"
+            size="small"
             data-chat-title-menu
-            aria-label={`Chat actions for ${title}`}
-            className="no-drag -mx-1.5 flex max-w-full min-w-0 items-center gap-1 rounded-button px-1.5 py-0.5 text-left text-strong text-primary outline-none transition-[background-color] duration-(--motion-duration) ease-standard [corner-shape:squircle] hover:bg-list-hover aria-expanded:bg-list-selection"
+            style={INSET_FOCUS_RING}
+            className="no-drag max-w-full min-w-0 shrink gap-1 px-1.5 text-strong text-primary"
           >
             <span className="min-w-0 truncate">{title}</span>
             <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-48">
           <DropdownMenuItem
@@ -112,6 +117,8 @@ export function ChatTitleMenu({
             Rename…
           </DropdownMenuItem>
           <DropdownMenuItem
+            disabled={Boolean(duplicateDisabledReason)}
+            title={duplicateDisabledReason ?? undefined}
             onSelect={() => {
               void onDuplicate().catch((error: unknown) => {
                 toast.error(error instanceof Error ? error.message : "Couldn't duplicate this chat.");
@@ -152,10 +159,14 @@ export function ChatTitleMenu({
   );
 }
 
+const CHIP_CLASS =
+  "workspace-chip no-drag min-w-0 max-w-44 gap-1 bg-control/50 px-2 text-small font-normal text-secondary [&_svg:not([class*='size-'])]:size-3.5";
+
 /**
  * The chat's workspace beside its title. Works for any workspace: Git-only
- * actions (branch, GitHub) appear only when the folder is a repository, and
- * folder actions only when the workspace has a folder.
+ * actions (branch, GitHub) appear only for a readable repository, folder
+ * actions only when the workspace has a folder Aiden may access, and a
+ * workspace without a folder shows a plain label with no menu.
  */
 export function WorkspaceChip({
   workspace,
@@ -171,7 +182,9 @@ export function WorkspaceChip({
   const qc = useQueryClient();
   const [menuOpen, setMenuOpen] = React.useState(false);
   const folderPath = workspace.folderPath;
-  const isRepo = git?.isRepo === true;
+  // Without access, Git reads report "not a repository"; never present that as fact.
+  const accessible = Boolean(folderPath) && workspace.permission !== "none";
+  const isRepo = accessible && git?.isRepo === true;
   const branch = isRepo && git?.branch && !git.detached ? git.branch : undefined;
   // The remote identity is read only once someone opens the menu.
   const identity = useQuery({
@@ -183,17 +196,31 @@ export function WorkspaceChip({
   });
   const githubUrl = identity.data ? githubRepositoryUrl(identity.data.canonicalKey) : null;
   const Icon = isRepo ? FolderGit2 : Folder;
-  const branchLine = !folderPath
-    ? "No folder"
+
+  if (!folderPath) {
+    return (
+      <span
+        data-workspace-chip
+        data-workspace-chip-static
+        title={`${workspace.name} has no folder`}
+        className={cn(
+          CHIP_CLASS,
+          "inline-flex h-7 shrink items-center rounded-button [corner-shape:squircle]",
+        )}
+      >
+        <Icon aria-hidden="true" className="shrink-0" />
+        <span className="min-w-0 truncate">{workspace.name}</span>
+      </span>
+    );
+  }
+
+  const statusLine = !accessible
+    ? "Workspace access is off"
     : git === undefined
       ? null
       : !isRepo
         ? "Not a Git repository"
-        : branch
-          ? branch
-          : git.detached
-            ? "Detached HEAD"
-            : null;
+        : (branch ?? (git.detached ? "Detached HEAD" : null));
 
   return (
     <DropdownMenu
@@ -202,7 +229,7 @@ export function WorkspaceChip({
         setMenuOpen(open);
         // Opening the menu re-reads Git state, so a folder that just became a
         // repository (or switched branch) shows it without waiting for the poll.
-        if (open && folderPath) void qc.invalidateQueries({ queryKey: queryKeys.git(workspace.id) });
+        if (open && accessible) void qc.invalidateQueries({ queryKey: queryKeys.git(workspace.id) });
       }}
     >
       <DropdownMenuTrigger asChild>
@@ -211,8 +238,8 @@ export function WorkspaceChip({
           size="small"
           data-workspace-chip
           aria-label={`Workspace ${workspace.name}`}
-          title={folderPath ?? workspace.name}
-          className="workspace-chip no-drag max-w-44 shrink-0 gap-1 bg-control/50 px-2 text-small font-normal text-secondary [&_svg:not([class*='size-'])]:size-3.5"
+          title={folderPath}
+          className={cn(CHIP_CLASS, "shrink")}
         >
           <Icon aria-hidden="true" className="shrink-0" />
           <span className="min-w-0 truncate">{workspace.name}</span>
@@ -221,21 +248,19 @@ export function WorkspaceChip({
       <DropdownMenuContent align="start" className="w-72">
         <DropdownMenuLabel className="flex min-w-0 flex-col gap-0.5">
           <span className="truncate text-primary">{workspace.name}</span>
-          {folderPath ? (
-            <span className="truncate font-normal" title={folderPath}>
-              {folderPath}
-            </span>
-          ) : null}
-          {branchLine ? (
-            <span className="flex min-w-0 items-center gap-1 font-normal" data-workspace-chip-branch>
+          <span className="truncate font-normal" title={folderPath}>
+            {folderPath}
+          </span>
+          {statusLine ? (
+            <span className="flex min-w-0 items-center gap-1 font-normal" data-workspace-chip-status>
               {branch ? <GitBranch aria-hidden="true" className="size-3 shrink-0" /> : null}
-              <span className="truncate">{branchLine}</span>
+              <span className="truncate">{statusLine}</span>
             </span>
           ) : null}
         </DropdownMenuLabel>
-        {folderPath ? (
+        <DropdownMenuSeparator />
+        {accessible ? (
           <>
-            <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => {
                 void workspacesApi.openFolder(workspace.id).catch((error: unknown) => {
@@ -261,15 +286,15 @@ export function WorkspaceChip({
               </DropdownMenuItem>
             ) : null}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => void copyToClipboard(folderPath, "Folder path")}>
-              Copy folder path
-            </DropdownMenuItem>
-            {branch ? (
-              <DropdownMenuItem onSelect={() => void copyToClipboard(branch, "Branch name")}>
-                Copy branch name
-              </DropdownMenuItem>
-            ) : null}
           </>
+        ) : null}
+        <DropdownMenuItem onSelect={() => void copyToClipboard(folderPath, "Folder path")}>
+          Copy folder path
+        </DropdownMenuItem>
+        {branch ? (
+          <DropdownMenuItem onSelect={() => void copyToClipboard(branch, "Branch name")}>
+            Copy branch name
+          </DropdownMenuItem>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -285,36 +310,54 @@ function toolDefinition(id: EnvironmentPanelTab) {
   return WORKSPACE_TOOLS.find((tool) => tool.id === id);
 }
 
-/** Below this toolbar width the individual tool buttons fold into the overflow menu. */
-const COMPACT_TOOLBAR_WIDTH = 600;
+/**
+ * Below this header content width (after the collapsed-sidebar inset) the
+ * individual tool buttons fold into the overflow menu, leaving room for a
+ * readable title and the workspace chip. The chip itself hides at 560px
+ * through the `chat-toolbar` container query, which also measures content.
+ */
+const COMPACT_TOOLBAR_CONTENT_WIDTH = 680;
 
 function useToolbarCompact(anchor: React.RefObject<HTMLElement | null>): boolean {
   const [compact, setCompact] = React.useState(false);
   React.useLayoutEffect(() => {
     const toolbar = anchor.current?.closest<HTMLElement>("[data-toolbar]");
     if (!toolbar) return;
-    const update = () => setCompact(toolbar.getBoundingClientRect().width < COMPACT_TOOLBAR_WIDTH);
+    const update = () => {
+      const style = getComputedStyle(toolbar);
+      const content =
+        toolbar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      setCompact(content < COMPACT_TOOLBAR_CONTENT_WIDTH);
+    };
     update();
+    // The collapsed-sidebar inset animates padding, which changes the content box.
     const observer = new ResizeObserver(update);
     observer.observe(toolbar);
-    return () => observer.disconnect();
+    toolbar.addEventListener("transitionend", update);
+    return () => {
+      observer.disconnect();
+      toolbar.removeEventListener("transitionend", update);
+    };
   }, [anchor]);
   return compact;
 }
 
 /**
  * One quiet button per workspace tool. Each opens the Environment panel on its
- * tab and shows as pressed while that tab is showing; pressing it again hides
+ * tab and shows as pressed while that tab is visible; pressing it again hides
  * the panel. Tools a workspace cannot use are left out rather than disabled:
- * Changes needs a Git repository, Files needs a folder.
+ * Changes needs a Git repository, Files needs a folder, and a chat with no
+ * workspace gets none.
  */
 export function WorkspaceToolButtons({
+  hasWorkspace,
   hasFolder,
   hasFolderAccess,
   isRepo,
   terminalButton,
   trailing,
 }: {
+  hasWorkspace: boolean;
   hasFolder: boolean;
   hasFolderAccess: boolean;
   isRepo: boolean;
@@ -325,6 +368,7 @@ export function WorkspaceToolButtons({
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const compact = useToolbarCompact(anchorRef);
   const available = (id: EnvironmentPanelTab): boolean => {
+    if (!hasWorkspace) return false;
     if (id === "review") return hasFolder && isRepo;
     if (id === "files") return hasFolder;
     if (id === "devices") return panel.devicesEnabled;
@@ -332,21 +376,16 @@ export function WorkspaceToolButtons({
     return true;
   };
   const blockedReason = (id: EnvironmentPanelTab): string | undefined =>
-    (id === "review" || id === "files") && !hasFolderAccess
-      ? "Workspace access is off for this folder"
-      : undefined;
-  const showing = (id: EnvironmentPanelTab) => panel.toolsOpen && panel.tab === id;
+    id === "files" && !hasFolderAccess ? "Workspace access is off for this folder" : undefined;
+  const showing = (id: EnvironmentPanelTab) => panel.toolsPresented && panel.tab === id;
   const activate = (id: EnvironmentPanelTab) => {
-    // A pressed tool that Quick View covers comes forward; otherwise it hides.
-    if (showing(id) && panel.frontSurface !== "quick-view") panel.closeTools();
+    if (showing(id)) panel.closeTools();
     else panel.showTools(id);
   };
   const buttons = TOOL_BUTTON_ORDER.filter(available);
-  const menuTools: EnvironmentPanelTab[] = [
-    ...(compact ? buttons : []),
-    "context",
-    ...(available("subagents") ? (["subagents"] as const) : []),
-  ];
+  const menuTools: EnvironmentPanelTab[] = hasWorkspace
+    ? [...(compact ? buttons : []), "context", ...(available("subagents") ? (["subagents"] as const) : [])]
+    : [];
 
   return (
     <div ref={anchorRef} className="flex items-center gap-0.5" data-workspace-tool-buttons>
@@ -383,40 +422,42 @@ export function WorkspaceToolButtons({
           {trailing}
         </>
       ) : null}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            iconOnly
-            size="small"
-            variant="bar"
-            aria-label="More workspace tools"
-            title="More workspace tools"
-            disabled={panel.gitOperationBusy}
-          >
-            <Ellipsis />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-48">
-          {menuTools.map((id) => {
-            const tool = toolDefinition(id);
-            if (!tool) return null;
-            const ToolIcon = tool.icon;
-            const reason = blockedReason(id);
-            return (
-              <DropdownMenuItem
-                key={id}
-                disabled={Boolean(reason)}
-                title={reason}
-                className={cn(showing(id) && "text-primary")}
-                onSelect={() => panel.showTools(id)}
-              >
-                <ToolIcon aria-hidden="true" className="size-4" />
-                <span className="min-w-0 flex-1">{tool.label}</span>
-              </DropdownMenuItem>
-            );
-          })}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {menuTools.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              iconOnly
+              size="small"
+              variant="bar"
+              aria-label="More workspace tools"
+              title="More workspace tools"
+              disabled={panel.gitOperationBusy}
+            >
+              <Ellipsis />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            {menuTools.map((id) => {
+              const tool = toolDefinition(id);
+              if (!tool) return null;
+              const ToolIcon = tool.icon;
+              const reason = blockedReason(id);
+              return (
+                <DropdownMenuItem
+                  key={id}
+                  disabled={Boolean(reason)}
+                  title={reason}
+                  className={cn(showing(id) && "text-primary")}
+                  onSelect={() => panel.showTools(id)}
+                >
+                  <ToolIcon aria-hidden="true" className="size-4" />
+                  <span className="min-w-0 flex-1">{tool.label}</span>
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
     </div>
   );
 }

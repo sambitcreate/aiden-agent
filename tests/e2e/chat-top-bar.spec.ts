@@ -83,7 +83,7 @@ test.describe("folder workspaces", () => {
     await startPersistedChat(page);
 
     const menu = await openChipMenu(page);
-    await expect(menu.locator("[data-workspace-chip-branch]")).toHaveText("main");
+    await expect(menu.locator("[data-workspace-chip-status]")).toHaveText("main");
     await expect(menu.getByRole("menuitem", { name: "Copy branch name" })).toBeVisible();
     await expect(menu.getByRole("menuitem", { name: "Open on GitHub" })).toBeVisible();
     await closeMenu(page);
@@ -112,6 +112,80 @@ test.describe("folder workspaces", () => {
       page.locator("[data-sidebar]").getByText("Renamed from the top bar", { exact: true }),
     ).toBeVisible();
   });
+  test("turning workspace access off hides repository and folder actions", async ({ aiden }) => {
+    const { page } = aiden;
+    execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await startPersistedChat(page);
+    await expect(page.locator('[data-workspace-tool="review"]')).toBeVisible();
+
+    await page.getByRole("button", { name: /^Workspace access: Full access/u }).click();
+    await page
+      .getByRole("radiogroup", { name: "Workspace access" })
+      .getByRole("radio", { name: /^Workspace access: No access/u })
+      .click();
+    await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
+
+    await expect(page.locator('[data-workspace-tool="review"]')).toHaveCount(0);
+    await expect(page.locator('[data-workspace-tool="files"]')).toBeDisabled();
+    const menu = await openChipMenu(page);
+    await expect(menu.locator("[data-workspace-chip-status]")).toHaveText("Workspace access is off");
+    await expect(menu.getByRole("menuitem", { name: /Show in Finder|Open folder/u })).toHaveCount(0);
+    await expect(menu.getByRole("menuitem", { name: "Copy branch name" })).toHaveCount(0);
+    await expect(menu.getByRole("menuitem", { name: "Copy folder path" })).toBeVisible();
+    await closeMenu(page);
+  });
+
+  test("a narrow window keeps the title readable and nothing overlaps", async ({ aiden }) => {
+    const { page } = aiden;
+    await startPersistedChat(page);
+    const title = page.locator("[data-chat-title-menu]");
+    const chip = page.locator("[data-workspace-chip]");
+    const tools = page.locator("[data-workspace-tool-buttons]");
+    // 680px forces the sidebar closed; 760px leaves it to the saved state.
+    for (const width of [680, 760, 900]) {
+      await aiden.app.evaluate(
+        ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800),
+        width,
+      );
+      await expect.poll(async () => {
+        const [titleBox, chipBox, toolsBox] = await Promise.all([
+          title.boundingBox(),
+          chip.isVisible().then((visible) => (visible ? chip.boundingBox() : null)),
+          tools.boundingBox(),
+        ]);
+        if (!titleBox || !toolsBox) return `missing at ${width}`;
+        if (titleBox.width < 80) return `title ${titleBox.width}px at ${width}`;
+        const titleEnd = titleBox.x + titleBox.width;
+        if (chipBox && (chipBox.x < titleEnd || chipBox.x + chipBox.width > toolsBox.x)) {
+          return `chip overlaps at ${width}`;
+        }
+        if (!chipBox && titleEnd > toolsBox.x) return `title overlaps at ${width}`;
+        return "ok";
+      }).toBe("ok");
+    }
+  });
+  test("a tool covered by Quick View reads as not showing until it comes forward", async ({ aiden }) => {
+    const { page } = aiden;
+    await startPersistedChat(page);
+    await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
+    // 890px: Quick View no longer fits beside the floating tools (they stack), while
+    // the collapsed-sidebar header is still wide enough for individual tool buttons.
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(890, 720));
+    const files = page.locator('[data-workspace-tool="files"]');
+    const tools = page.locator('[data-environment-surface="tools"]');
+    await files.click();
+    await expect(files).toHaveAttribute("aria-pressed", "true");
+    await page.locator("[data-quick-view-toggle]").click();
+    await expect(page.locator('[data-environment-stacked="true"]')).toHaveCount(1);
+    await expect(tools).toHaveAttribute("inert", "");
+    await expect(files).toHaveAttribute("aria-pressed", "false");
+
+    // Pressing it brings the tools forward rather than closing what was hidden.
+    await files.click();
+    await expect(tools).not.toHaveAttribute("inert", "");
+    await expect(files).toHaveAttribute("aria-pressed", "true");
+  });
 });
 
 test("a workspace without a folder keeps only folder-free tools", async ({ aiden }) => {
@@ -120,10 +194,10 @@ test("a workspace without a folder keeps only folder-free tools", async ({ aiden
   await expect(page.locator('[data-workspace-tool="review"]')).toHaveCount(0);
   await expect(page.locator('[data-workspace-tool="files"]')).toHaveCount(0);
   await expect(page.locator('[data-workspace-tool="browser"]')).toBeVisible();
-  const menu = await openChipMenu(page);
-  await expect(menu.getByText("No folder", { exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem")).toHaveCount(0);
-  await closeMenu(page);
+  // Nothing to act on without a folder, so the chip is a plain label, not a menu.
+  const chip = page.locator("[data-workspace-chip]");
+  await expect(chip).toBeVisible();
+  await expect(chip).not.toHaveAttribute("aria-haspopup", "menu");
 });
 
 test("back and forward move through in-app navigation", async ({ aiden }) => {
