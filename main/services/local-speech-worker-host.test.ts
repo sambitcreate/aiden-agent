@@ -83,7 +83,7 @@ interface FakeWorker {
  * A stand-in for an Electron utility process. It answers every request, and
  * exits a few milliseconds after a kill. A stubborn worker ignores its first kill.
  */
-function fakeWorker(id: string, log: string[], stubborn: boolean): FakeWorker {
+function fakeWorker(id: string, log: string[], stubborn: boolean, failing = false): FakeWorker {
   const listeners = {
     message: new Set<(value: unknown) => void>(),
     exit: new Set<(code: number) => void>(),
@@ -103,13 +103,15 @@ function fakeWorker(id: string, log: string[], stubborn: boolean): FakeWorker {
       log.push(`${id} ${message.kind}`);
       setImmediate(() => {
         if (exited) return;
-        const reply: LocalSpeechWorkerMessage = {
-          version: LOCAL_SPEECH_PROTOCOL_VERSION,
-          kind: "result",
-          requestId: message.requestId,
-          ...(message.kind === "load" ? { loadMs: 1 } : {}),
-          ...(message.kind === "transcribe" ? { text: "ok", language: null, decodeMs: 1 } : {}),
-        };
+        const reply: LocalSpeechWorkerMessage = failing
+          ? { version: LOCAL_SPEECH_PROTOCOL_VERSION, kind: "failure", requestId: message.requestId, message: "model rejected", code: "decode-failed" }
+          : {
+              version: LOCAL_SPEECH_PROTOCOL_VERSION,
+              kind: "result",
+              requestId: message.requestId,
+              ...(message.kind === "load" ? { loadMs: 1 } : {}),
+              ...(message.kind === "transcribe" ? { text: "ok", language: null, decodeMs: 1 } : {}),
+            };
         for (const listener of listeners.message) listener(reply);
       });
     },
@@ -139,13 +141,18 @@ function fakeWorker(id: string, log: string[], stubborn: boolean): FakeWorker {
   };
 }
 
-function harness(options: { stubbornWorkers?: number[]; exitWaitMs?: number } = {}) {
+function harness(options: { stubbornWorkers?: number[]; failingWorkers?: number[]; exitWaitMs?: number } = {}) {
   const log: string[] = [];
   const spawned: FakeWorker[] = [];
   let unloads = 0;
   const host = new LocalSpeechWorkerHost({
     fork: async () => {
-      const worker = fakeWorker(`w${spawned.length + 1}`, log, options.stubbornWorkers?.includes(spawned.length + 1) ?? false);
+      const worker = fakeWorker(
+        `w${spawned.length + 1}`,
+        log,
+        options.stubbornWorkers?.includes(spawned.length + 1) ?? false,
+        options.failingWorkers?.includes(spawned.length + 1) ?? false,
+      );
       spawned.push(worker);
       log.push(`${worker.id} spawn`);
       return worker.process;
@@ -163,7 +170,6 @@ test("switching models kills the old worker and waits for its exit before the ne
   const { host, log, spawned } = harness();
   const first = await host.prepare(target(parakeet));
   await first.load(parakeet.id, "/models/parakeet", parakeet);
-  host.recordLoaded({ modelId: parakeet.id, languageKey: null });
 
   const second = await host.prepare(target(canary));
   await second.load(canary.id, "/models/canary", canary);
@@ -177,7 +183,6 @@ test("an explicit release disposes the worker and waits for it to exit without s
   const { host, log, spawned, unloads } = harness();
   const worker = await host.prepare(target(parakeet));
   await worker.load(parakeet.id, "/models/parakeet", parakeet);
-  host.recordLoaded({ modelId: parakeet.id, languageKey: null });
 
   await host.retire();
 
@@ -195,7 +200,6 @@ test("an explicit release disposes the worker and waits for it to exit without s
 test("the same model requested twice reuses one worker", async () => {
   const { host, spawned } = harness();
   const first = await host.prepare(target(parakeet));
-  host.recordLoaded({ modelId: parakeet.id, languageKey: null });
   const second = await host.prepare(target(parakeet));
   assert.equal(second, first);
   assert.equal(spawned.length, 1);
@@ -204,7 +208,6 @@ test("the same model requested twice reuses one worker", async () => {
 test("a SenseVoice language change replaces the worker, and the same language keeps it", async () => {
   const { host, log, spawned } = harness();
   await host.prepare(target(senseVoice, "en"));
-  host.recordLoaded({ modelId: senseVoice.id, languageKey: "en" });
   await host.prepare(target(senseVoice, "en"));
   assert.equal(spawned.length, 1);
 
@@ -216,17 +219,27 @@ test("a SenseVoice language change replaces the worker, and the same language ke
 test("a worker that ignores its first kill is killed again and the replacement still starts", async () => {
   const { host, log, spawned } = harness({ stubbornWorkers: [1], exitWaitMs: 20 });
   await host.prepare(target(parakeet));
-  host.recordLoaded({ modelId: parakeet.id, languageKey: null });
   await host.prepare(target(canary));
 
   assert.equal(spawned[0]!.kills(), 2);
   assert.ok(log.indexOf("w2 spawn") > log.indexOf("w1 exit"));
 });
 
+test("a load that fails still leaves the worker holding its model, so the next model retires it", async () => {
+  // A failed load can leave the native recognizer partly built. The host must
+  // treat the worker as holding the requested model, not as empty.
+  const { host, spawned } = harness({ failingWorkers: [1] });
+  const worker = await host.prepare(target(parakeet));
+  await assert.rejects(worker.load(parakeet.id, "/models/parakeet", parakeet), /model rejected/);
+
+  await host.prepare(target(canary));
+  assert.equal(spawned.length, 2);
+  assert.equal(spawned[0]!.kills(), 1);
+});
+
 test("a worker that dies on its own drops the model so the next request reloads in a new worker", async () => {
   const { host, spawned, unloads } = harness();
   await host.prepare(target(parakeet));
-  host.recordLoaded({ modelId: parakeet.id, languageKey: null });
   spawned[0]!.crash();
 
   assert.equal(host.current(), null);
