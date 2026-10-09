@@ -44,7 +44,16 @@ function withProviderFallback(
   metadata: ProviderModelMetadata | undefined,
   providerId: string,
 ): ModelInfo {
-  const catalogInfo = catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  const substitute = catalog.matched ? undefined : providerInfo(modelId, metadata);
+  // Benchmark evidence can match by exact OpenRouter permaslug even when
+  // models.dev does not, so carry it onto the provider-owned description.
+  const catalogInfo = substitute
+    ? {
+        ...substitute,
+        ...(catalog.ranking ? { ranking: catalog.ranking } : {}),
+        ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
+      }
+    : catalog;
   // A model name in a public catalog is not evidence about a private server.
   // Keep descriptive enrichment, but show the same connection-bound image and
   // reasoning capabilities that resolveProviderRuntimeLimits sends to Pi.

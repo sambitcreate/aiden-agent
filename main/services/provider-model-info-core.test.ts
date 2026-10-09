@@ -191,3 +191,91 @@ test("private connection image and reasoning switches follow request capabilitie
   Object.assign(provider.modelMetadata["glm-5.3-flash"].overrides, { maxImages: 0 });
   assert.equal((await service.info(provider.id, publicInfo.id)).vision, false);
 });
+
+async function openRouterGatewayService(overrides?: { contextLength: number }) {
+  const { parseModelCatalog, resolveModelInfo } = await import("./models-catalog-core.js");
+  const { buildOpenRouterBenchmarkCache } = await import("./openrouter-benchmark-catalog-core.js");
+  const benchmarks = buildOpenRouterBenchmarkCache({
+    data: [{
+      source: "artificial-analysis",
+      model_permaslug: "acme/fresh-model-20261001",
+      display_name: "Fresh Model",
+      intelligence_index: 61.5,
+      coding_index: 70.2,
+      agentic_index: 55.8,
+    }],
+    meta: {
+      as_of: "2026-10-01T00:00:00.000Z",
+      version: "v1",
+      source: "artificial-analysis",
+      source_url: "https://artificialanalysis.ai",
+      citation: "Source: Artificial Analysis (artificialanalysis.ai) via OpenRouter (openrouter.ai/rankings).",
+      model_count: 1,
+      task_type: null,
+    },
+  });
+  // models.dev knows an unrelated model only, so the gateway model is unmatched.
+  const modelsDev = parseModelCatalog({ openrouter: { models: { "other/model": { name: "Other Model" } } } });
+  const artificialAnalysis = {
+    schema_version: 1 as const,
+    source: {
+      name: "Artificial Analysis" as const,
+      url: "https://artificialanalysis.ai/data-api" as const,
+      fetched_at: "2026-10-01T00:00:00.000Z",
+      intelligence_index_version: 4.1,
+    },
+    models: [],
+  };
+  const modelId = "acme/fresh-model-20261001";
+  const provider = {
+    id: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    modelMetadata: {
+      [modelId]: {
+        source: "provider" as const,
+        name: "Fresh Model (gateway)",
+        contextLength: 128_000,
+        ...(overrides ? { overrides } : {}),
+      },
+    },
+  };
+  const service = createProviderModelInfo({
+    modelsCatalog: {
+      info: async (catalogProvider, id) =>
+        resolveModelInfo(modelsDev, artificialAnalysis, catalogProvider, id, benchmarks),
+      infoMany: async (catalogProvider, ids) =>
+        Object.fromEntries(ids.map((id) => [
+          id,
+          resolveModelInfo(modelsDev, artificialAnalysis, catalogProvider, id, benchmarks),
+        ])),
+    },
+    legacyProvider: async () => provider,
+    codexModelInfo: () => undefined,
+  });
+  return { service, provider, modelId };
+}
+
+test("provider metadata fallback keeps exact OpenRouter benchmark scores when models.dev has no match", async () => {
+  const { service, provider, modelId } = await openRouterGatewayService();
+  const single = await service.info(provider.id, modelId);
+  assert.equal(single.name, "Fresh Model (gateway)");
+  assert.equal(single.metadataSource, "provider");
+  assert.equal(single.benchmark?.intelligence, 61.5);
+  assert.equal(single.benchmark?.coding, 70.2);
+  assert.equal(single.benchmark?.agentic, 55.8);
+  assert.equal(single.benchmark?.asOf, "2026-10-01T00:00:00.000Z");
+  const batch = (await service.infoMany(provider.id, [modelId]))[modelId]!;
+  assert.equal(batch.benchmark?.coding, 70.2);
+});
+
+test("provider metadata overrides still apply and keep the benchmark through the fallback", async () => {
+  const { service, provider, modelId } = await openRouterGatewayService({ contextLength: 64_000 });
+  const info = await service.info(provider.id, modelId);
+  assert.equal(info.contextLength, 64_000);
+  assert.equal(info.detectedCapabilities?.contextLength, 128_000);
+  assert.equal(info.benchmark?.intelligence, 61.5);
+  assert.equal(info.benchmark?.agentic, 55.8);
+  const batch = (await service.infoMany(provider.id, [modelId]))[modelId]!;
+  assert.equal(batch.contextLength, 64_000);
+  assert.equal(batch.benchmark?.coding, 70.2);
+});
