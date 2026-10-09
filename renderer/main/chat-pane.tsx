@@ -12,7 +12,10 @@ import { QueuedMessages } from "../components/queued-messages";
 import {
   saveComposerDraftText,
   seedComposerAttachments,
+  stageComposerText,
 } from "../lib/composer-draft-store";
+import { decideGuestPrompt } from "../shared/generative-ui-bridge";
+import type { GuestPromptHandler } from "../components/html-artifact-frame";
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
@@ -1704,6 +1707,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  const lastVisualPromptAtRef = React.useRef(new Map<string, number>());
+  const handleVisualPrompt = React.useCallback<GuestPromptHandler>(
+    (text, focus, mediaId) => {
+      const now = performance.now();
+      const decision = decideGuestPrompt({
+        text,
+        frameFocused: focus.frameFocused,
+        freshActivation: focus.freshActivation,
+        chatBusy: isGenerating,
+        now,
+        lastAcceptedAt: lastVisualPromptAtRef.current.get(mediaId),
+      });
+      if (decision.action === "reject") return;
+      lastVisualPromptAtRef.current.set(mediaId, now);
+      if (decision.action === "stage") {
+        stageComposerText(chatId, decision.text);
+        return;
+      }
+      // Same path as typed input: queue/steer rules, permissions, and a
+      // visible user bubble all apply.
+      void handleSend(decision.text, []).catch((error: unknown) => {
+        stageComposerText(chatId, decision.text);
+        toast.error(error instanceof Error ? error.message : "Could not send the visual's follow-up.");
+      });
+    },
+    [chatId, handleSend, isGenerating],
+  );
+
   const handleStop = React.useCallback(() => {
     if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
       const { streamId } = visibleDetachedProjection;
@@ -2987,6 +3018,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingReasoning={displayedStreamingReasoning}
             streamingArtifacts={displayedStreamingArtifacts}
             streamingArtifactPlacements={streamingArtifactPlacements}
+            onVisualPrompt={handleVisualPrompt}
             streamComplete={streamComplete || visibleDetachedProjection !== null}
             persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}

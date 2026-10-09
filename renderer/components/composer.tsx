@@ -100,6 +100,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  subscribeStagedComposerText,
   takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
@@ -441,6 +442,14 @@ export function Composer({
     dispatchDraft({ type: "update", value: text });
     saveComposerDraftText(chatId, text);
   }, [chatId]);
+  React.useEffect(
+    () =>
+      subscribeStagedComposerText(chatId, (staged) => {
+        setText((current) => mergeRestoredGuidance(current, [staged]));
+        toast.info("A visual added a follow-up to your draft.");
+      }),
+    [chatId, setText],
+  );
   React.useEffect(
     () =>
       subscribeGuidanceRestore(chatId, (guidance) => {

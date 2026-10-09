@@ -42,7 +42,13 @@ export interface GuestPromptInput {
   text: string;
   /** True only while `document.activeElement` is this frame (focus moved in by a user gesture). */
   frameFocused: boolean;
+  /**
+   * True for the first prompt after focus entered this frame. Later prompts
+   * from the same focus (a guest timer, say) are staged, never auto-sent.
+   */
+  freshActivation: boolean;
   chatBusy: boolean;
+  /** Monotonic milliseconds (performance.now), so wall-clock jumps can't lock prompts out. */
   now: number;
   lastAcceptedAt?: number;
 }
@@ -53,11 +59,11 @@ export type GuestPromptDecision =
 
 export function decideGuestPrompt(input: GuestPromptInput): GuestPromptDecision {
   if (!input.frameFocused) return { action: "reject", reason: "unfocused" };
+  if (input.text.length > MAX_GUEST_PROMPT_CHARS) return { action: "reject", reason: "too_long" };
   const text = input.text.trim();
   if (!text) return { action: "reject", reason: "empty" };
-  if (input.text.length > MAX_GUEST_PROMPT_CHARS) return { action: "reject", reason: "too_long" };
   if (input.lastAcceptedAt !== undefined && input.now - input.lastAcceptedAt < GUEST_PROMPT_COOLDOWN_MS) {
     return { action: "reject", reason: "cooldown" };
   }
-  return { action: input.chatBusy ? "stage" : "send", text };
+  return { action: input.chatBusy || !input.freshActivation ? "stage" : "send", text };
 }

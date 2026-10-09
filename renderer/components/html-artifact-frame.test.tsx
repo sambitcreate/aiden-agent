@@ -4,7 +4,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
-import { HtmlArtifactFrame } from "./html-artifact-frame";
+import { HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import {
   GENERATIVE_UI_RESIZE_MESSAGE,
   GENERATIVE_UI_PROMPT_MESSAGE,
@@ -61,7 +61,7 @@ async function waitForFrame(container: HTMLElement): Promise<HTMLIFrameElement> 
   return iframe;
 }
 
-async function mountedFrame(onGuestPrompt?: (text: string, focused: boolean) => void) {
+async function mountedFrame(onGuestPrompt?: GuestPromptHandler) {
   const view = render(<HtmlArtifactFrame chatId="chat-1" artifact={artifact()} onGuestPrompt={onGuestPrompt} />);
   const iframe = await waitForFrame(view.container);
   const guest = attachGuest(iframe);
@@ -132,13 +132,25 @@ test("theme update reaches a mounted frame without changing src", async () => {
   assert.equal(iframe.getAttribute("src"), PREVIEW);
 });
 
-test("guest prompts are relayed with whether focus is inside the frame", async () => {
-  const prompts: Array<[string, boolean]> = [];
-  const { guest } = await mountedFrame((text, focused) => prompts.push([text, focused]));
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Drill in" });
-  assert.deepEqual(prompts, [["Drill in", false]]);
+test("guest prompts report focus and consume one fresh focus entry", async () => {
+  const prompts: Array<[string, boolean, boolean]> = [];
+  const { iframe, guest } = await mountedFrame((text, focus) =>
+    prompts.push([text, focus.frameFocused, focus.freshActivation]));
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Unfocused" });
   postFrom(window, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "spoofed" });
-  assert.equal(prompts.length, 1);
+
+  // A click into the frame moves focus to it and blurs the parent window.
+  act(() => {
+    iframe.focus();
+    window.dispatchEvent(new Event("blur"));
+  });
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "First" });
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Timer" });
+  assert.deepEqual(prompts, [
+    ["Unfocused", false, false],
+    ["First", true, true],
+    ["Timer", true, false],
+  ]);
 });
 
 /** happy-dom lacks the Popover API; Chromium top-layer behavior is covered in tests/generative-ui. */

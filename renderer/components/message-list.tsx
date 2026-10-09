@@ -25,7 +25,7 @@ import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
-import { HtmlArtifactFrame } from "./html-artifact-frame";
+import { HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -58,6 +58,8 @@ interface MessageListProps {
   streamingArtifacts?: readonly ChatArtifactV1[];
   /** mediaId → producing render_artifact toolCallId for the live response. */
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
+  /** A visual asked to send a follow-up; the chat applies the admission policy. */
+  onVisualPrompt?: GuestPromptHandler;
   streamComplete?: boolean;
   /** Persisted assistant message that duplicates the completed streaming row during handoff. */
   persistedHandoffMessageId?: string | null;
@@ -387,6 +389,7 @@ export function MessageList({
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
+  onVisualPrompt,
   streamComplete,
   persistedHandoffMessageId = null,
   onStreamHandoffComplete,
@@ -482,11 +485,24 @@ export function MessageList({
   React.useEffect(() => {
     previousArtifactsByAnchor.current = htmlArtifactsByAnchor;
   }, [htmlArtifactsByAnchor]);
+  const onVisualPromptRef = React.useRef(onVisualPrompt);
+  React.useLayoutEffect(() => {
+    onVisualPromptRef.current = onVisualPrompt;
+  }, [onVisualPrompt]);
+  const stableVisualPrompt = React.useCallback<GuestPromptHandler>(
+    (text, focus, mediaId) => onVisualPromptRef.current?.(text, focus, mediaId),
+    [],
+  );
   const renderVisual = React.useCallback(
     (artifact: ChatHtmlArtifactV1) => (
-      <HtmlArtifactFrame key={`html:${artifact.mediaId}`} chatId={chatId} artifact={artifact} />
+      <HtmlArtifactFrame
+        key={`html:${artifact.mediaId}`}
+        chatId={chatId}
+        artifact={artifact}
+        onGuestPrompt={stableVisualPrompt}
+      />
     ),
-    [chatId],
+    [chatId, stableVisualPrompt],
   );
 
   React.useEffect(() => {

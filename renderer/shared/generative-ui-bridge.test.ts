@@ -43,8 +43,23 @@ test("inline visual height clamps hostile values into the visible range", () => 
   assert.equal(clampInlineVisualHeight(300.4), 301);
 });
 
+test("only a fresh focus entry may auto-send; repeat prompts from the same focus are staged", () => {
+  const base = { text: "Again", frameFocused: true, freshActivation: false, chatBusy: false, now: 10_000 };
+  assert.deepEqual(decideGuestPrompt(base), { action: "stage", text: "Again" });
+  assert.deepEqual(decideGuestPrompt({ ...base, freshActivation: true }), { action: "send", text: "Again" });
+});
+
+test("prompt length is checked before any trimming and the limit itself is accepted", () => {
+  const base = { frameFocused: true, freshActivation: true, chatBusy: false, now: 10_000 };
+  assert.equal(decideGuestPrompt({ ...base, text: "x".repeat(MAX_GUEST_PROMPT_CHARS) }).action, "send");
+  assert.deepEqual(
+    decideGuestPrompt({ ...base, text: `${" ".repeat(MAX_GUEST_PROMPT_CHARS)}x` }),
+    { action: "reject", reason: "too_long" },
+  );
+});
+
 test("guest prompts need focus, content, size, and cooldown; busy chats stage", () => {
-  const base = { text: "Explain the spike", frameFocused: true, chatBusy: false, now: 10_000 };
+  const base = { text: "Explain the spike", frameFocused: true, freshActivation: true, chatBusy: false, now: 10_000 };
   assert.deepEqual(decideGuestPrompt(base), { action: "send", text: "Explain the spike" });
   assert.deepEqual(decideGuestPrompt({ ...base, chatBusy: true }), {
     action: "stage",

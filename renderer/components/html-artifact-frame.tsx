@@ -47,6 +47,12 @@ function cachedPreview(chatId: string, artifact: ChatHtmlArtifactV1): CachedPrev
   return cached;
 }
 
+export type GuestPromptHandler = (
+  text: string,
+  focus: { frameFocused: boolean; freshActivation: boolean },
+  mediaId: string,
+) => void;
+
 interface HtmlArtifactFrameError {
   kind: "preview" | "export";
   message: string;
@@ -103,7 +109,7 @@ function HtmlArtifactIframe({
   className?: string;
   onEscape?: () => void;
   onHeight?: (height: number) => void;
-  onPrompt?: (text: string, frameFocused: boolean) => void;
+  onPrompt?: (text: string, focus: { frameFocused: boolean; freshActivation: boolean }) => void;
 }) {
   const frameRef = React.useRef<HTMLIFrameElement | null>(null);
   const handlers = React.useRef({ onEscape, onHeight, onPrompt });
@@ -112,6 +118,13 @@ function HtmlArtifactIframe({
   }, [onEscape, onHeight, onPrompt]);
 
   React.useEffect(() => {
+    // Focus entering a cross-origin frame (a click or Tab into it) blurs this
+    // window. Each entry licenses one auto-sent prompt; the guest cannot move
+    // focus into itself without a user gesture.
+    let freshActivation = false;
+    const noteFocusEntry = () => {
+      if (document.activeElement === frameRef.current) freshActivation = true;
+    };
     const receiveMessage = (event: MessageEvent) => {
       const frame = frameRef.current;
       const guest = frame?.contentWindow;
@@ -121,10 +134,19 @@ function HtmlArtifactIframe({
       if (!message) return;
       if (message.type === "escape") handlers.current.onEscape?.();
       else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
-      else handlers.current.onPrompt?.(message.text, document.activeElement === frame);
+      else {
+        const frameFocused = document.activeElement === frame;
+        const focus = { frameFocused, freshActivation: frameFocused && freshActivation };
+        if (frameFocused) freshActivation = false;
+        handlers.current.onPrompt?.(message.text, focus);
+      }
     };
+    window.addEventListener("blur", noteFocusEntry);
     window.addEventListener("message", receiveMessage);
-    return () => window.removeEventListener("message", receiveMessage);
+    return () => {
+      window.removeEventListener("blur", noteFocusEntry);
+      window.removeEventListener("message", receiveMessage);
+    };
   }, []);
 
   React.useEffect(() => {
@@ -166,7 +188,7 @@ function HtmlArtifactFrameImpl({
   chatId: string;
   artifact: ChatHtmlArtifactV1;
   /** A guest asked to send a follow-up; the caller applies the admission policy. */
-  onGuestPrompt?: (text: string, frameFocused: boolean) => void;
+  onGuestPrompt?: GuestPromptHandler;
 }) {
   const [src, setSrc] = React.useState<string | null>(
     () => cachedPreview(chatId, artifact)?.src ?? null,
@@ -186,6 +208,12 @@ function HtmlArtifactFrameImpl({
     returnFocusRequestedRef.current = true;
     setExpanded(false);
   }, []);
+
+  const relayPrompt = React.useCallback(
+    (text: string, focus: { frameFocused: boolean; freshActivation: boolean }) =>
+      onGuestPrompt?.(text, focus, artifact.mediaId),
+    [artifact.mediaId, onGuestPrompt],
+  );
 
   const recordHeight = React.useCallback(
     (next: number) => {
@@ -373,7 +401,7 @@ function HtmlArtifactFrameImpl({
             title={artifact.title}
             onEscape={expanded ? closeExpanded : undefined}
             onHeight={recordHeight}
-            onPrompt={onGuestPrompt}
+            onPrompt={relayPrompt}
           />
         ) : error ? (
           <div className="flex h-full items-center justify-center px-4 text-center">
