@@ -11,6 +11,7 @@ import {
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
+  modelPadLabelPlacement,
   modelPadLeftPercent,
   modelPadTopPercent,
 } from "../lib/model-pad-layout";
@@ -34,6 +35,61 @@ function directionForKey(key: string): ModelDirection | null {
   if (key === "ArrowUp") return "up";
   if (key === "ArrowDown") return "down";
   return null;
+}
+
+/** Half the knob (24px): start/end tags line up with the knob's outer edge. */
+const KNOB_TAG_OFFSET_PX = 12;
+/** Space kept between the tag and the Pad's edge. */
+const KNOB_TAG_EDGE_GUTTER_PX = 4;
+
+/**
+ * The widest the tag can be without leaving the Pad square, given where it is anchored.
+ * The Pad clips its content (`contain: paint`), so the tag must fit by construction.
+ */
+function knobTagMaxWidth(leftPercent: number, align: "start" | "center" | "end"): string {
+  if (align === "center") {
+    const room = 2 * Math.min(leftPercent, 100 - leftPercent);
+    return `min(12rem, calc(${room}% - ${KNOB_TAG_EDGE_GUTTER_PX * 2}px))`;
+  }
+  const room = align === "start" ? 100 - leftPercent : leftPercent;
+  return `min(12rem, calc(${room}% + ${KNOB_TAG_OFFSET_PX - KNOB_TAG_EDGE_GUTTER_PX}px))`;
+}
+
+interface ModelPadKnobTagProps {
+  point: ModelPoint;
+  label: string;
+  providerLabel: string;
+  /** Optional extra line under the provider, such as another route to the same model. */
+  secondary?: React.ReactNode;
+}
+
+/**
+ * The previewed model's name beside the knob. Visual only: the listbox announces the
+ * active option through `aria-activedescendant`, so the tag stays `aria-hidden`.
+ */
+function ModelPadKnobTag({ point, label, providerLabel, secondary }: ModelPadKnobTagProps) {
+  const { align, side } = modelPadLabelPlacement(point);
+  const leftPercent = modelPadLeftPercent(point.x);
+  return (
+    <span
+      aria-hidden="true"
+      data-model-pad-knob-tag=""
+      data-label-align={align}
+      data-label-side={side}
+      className="model-pad-knob-tag absolute z-20"
+      style={{
+        left: `${leftPercent}%`,
+        top: `${modelPadTopPercent(point.y)}%`,
+        maxWidth: knobTagMaxWidth(leftPercent, align),
+      }}
+    >
+      <span className="block truncate text-small-strong text-primary">{label}</span>
+      <span className="block truncate text-mini font-normal text-secondary">{providerLabel}</span>
+      {secondary ? (
+        <span className="block truncate text-mini font-normal text-secondary">{secondary}</span>
+      ) : null}
+    </span>
+  );
 }
 
 interface ModelPickerPadProps {
@@ -303,6 +359,14 @@ export function ModelPickerPad({
               className="size-3.5"
             />
           </span>
+        ) : null}
+
+        {puckPoint ? (
+          <ModelPadKnobTag
+            point={puckPoint}
+            label={puckPoint.label}
+            providerLabel={puckPoint.providerLabel}
+          />
         ) : null}
       </div>
       <p id={helpId} className="sr-only">

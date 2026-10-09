@@ -44,6 +44,7 @@ import {
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
   measureModelPadAvailableSize,
+  modelPadLabelPlacement,
   modelPadPlacementKind,
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_PLACEMENT_KIND_LABELS,
@@ -857,9 +858,7 @@ export function ModelPadSettings() {
                 const selected = activeValue === entry.value;
                 const dragging = dragState?.value === entry.value;
                 const placementKind = modelPadPlacementKind(sourcePlacement);
-                const labelAlign =
-                  placement.x < 0.16 ? "start" : placement.x > 0.84 ? "end" : "center";
-                const labelSide = placement.y > 0.82 ? "bottom" : "top";
+                const labelPlacement = modelPadLabelPlacement(placement);
                 const paceDescription =
                   sourcePlacement.xSource === "neutral"
                     ? "Pace unmeasured; horizontal spread is for readability"
@@ -872,8 +871,8 @@ export function ModelPadSettings() {
                     aria-pressed={selected}
                     data-placement-source={placementKind}
                     data-selected={selected ? "true" : "false"}
-                    data-label-align={labelAlign}
-                    data-label-side={labelSide}
+                    data-label-align={labelPlacement.align}
+                    data-label-side={labelPlacement.side}
                     className={cn(
                       "model-pad-chip model-pad-marker group absolute z-10 grid size-6 -translate-x-1/2 -translate-y-1/2 cursor-grab place-items-center rounded-full bg-transparent outline-none transition-[left,top,opacity] duration-150 ease-out active:cursor-grabbing focus-visible:outline-none",
                       selected && "z-30",

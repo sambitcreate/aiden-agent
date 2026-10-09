@@ -1309,6 +1309,40 @@ textarea {
     var(--elevation-control-hover);
 }
 
+/*
+ * The previewed model's name beside the composer knob. It jumps with the knob (no
+ * transform transition), uses the marker-label surface, and flips with the shared
+ * edge-aware vocabulary so it never leaves the clipped Pad square.
+ */
+.model-pad-knob-tag {
+  --model-pad-knob-tag-x: -50%;
+  --model-pad-knob-tag-y: calc(-100% - 16px);
+  width: max-content;
+  padding: 0.25rem 0.5rem;
+  overflow: hidden;
+  border-radius: var(--radius-popover);
+  background: color-mix(in srgb, var(--surface-popover) 96%, transparent);
+  box-shadow: var(--elevation-popover);
+  pointer-events: none;
+  text-align: left;
+  white-space: nowrap;
+  transform: translate(var(--model-pad-knob-tag-x), var(--model-pad-knob-tag-y));
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
+}
+
+.model-pad-knob-tag[data-label-side="bottom"] {
+  --model-pad-knob-tag-y: 16px;
+}
+
+.model-pad-knob-tag[data-label-align="start"] {
+  --model-pad-knob-tag-x: -12px;
+}
+
+.model-pad-knob-tag[data-label-align="end"] {
+  --model-pad-knob-tag-x: calc(-100% + 12px);
+}
+
 [data-toolbar] {
   container: chat-toolbar / inline-size;
 }

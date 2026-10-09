@@ -24,6 +24,22 @@ export function modelPadPlacementKind(
   return placement.xSource === "user" && placement.ySource === "user" ? "personal" : "benchmark";
 }
 
+/** Where a marker or knob label sits so it stays inside the Pad square. */
+export interface ModelPadLabelPlacement {
+  /** `start` hugs the left edge, `end` the right edge; otherwise centered on the point. */
+  align: "start" | "center" | "end";
+  /** `bottom` drops the label below the point near the top edge; otherwise it sits above. */
+  side: "top" | "bottom";
+}
+
+/** Edge-aware label placement shared by the composer knob tag and settings marker labels. */
+export function modelPadLabelPlacement(point: ModelPadPoint): ModelPadLabelPlacement {
+  return {
+    align: point.x < 0.16 ? "start" : point.x > 0.84 ? "end" : "center",
+    side: point.y > 0.82 ? "bottom" : "top",
+  };
+}
+
 export const BASE_MODEL_PAD_GRID_SIZE = 7;
 export const MODEL_PAD_GRID_DENSITY = 6;
 export const MODEL_PAD_INSET_PERCENT = 8;

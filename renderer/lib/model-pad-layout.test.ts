@@ -10,6 +10,7 @@ import {
   modelPadGridSize,
   modelPadGridSizeForPlacements,
   addModelPadPlacement,
+  modelPadLabelPlacement,
   modelPadLayoutsEqual,
   modelPadPointKey,
   moveModelPadPoint,
@@ -298,4 +299,11 @@ test("keyboard movement advances by nodes and skips occupied points on its axis"
   const next = moveModelPadPoint({ x: 0.5, y: 0.5 }, "right", 1, 7, [{ x: 4 / 6, y: 0.5 }]);
   assert.deepEqual(next, { x: 5 / 6, y: 0.5 });
   assert.deepEqual(moveModelPadPoint(next, "up", 3, 7, []), { x: 5 / 6, y: 1 });
+});
+
+test("marker labels flip below near the top edge and hug the left and right edges", () => {
+  assert.deepEqual(modelPadLabelPlacement({ x: 0.5, y: 0.5 }), { align: "center", side: "top" });
+  assert.deepEqual(modelPadLabelPlacement({ x: 0, y: 0 }), { align: "start", side: "top" });
+  assert.deepEqual(modelPadLabelPlacement({ x: 1, y: 1 }), { align: "end", side: "bottom" });
+  assert.deepEqual(modelPadLabelPlacement({ x: 0.2, y: 0.8 }), { align: "center", side: "top" });
 });
