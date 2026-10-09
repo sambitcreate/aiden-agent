@@ -61,7 +61,7 @@ test("a reply still being written is folded under Working and opens to its text"
   assert.ok(await screen.findByText("Checking your calendar now"));
 });
 
-test("a Bot's A–E question shows its card, and choosing an option answers it by wait id", async () => {
+test("a Bot's A–E question shows its card, and submitting a chosen option answers it by wait id", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () =>
       snapshot({
@@ -72,6 +72,12 @@ test("a Bot's A–E question shows its card, and choosing an option answers it b
   assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
   assert.equal(screen.queryByPlaceholderText("Ask Planner"), null, "the card takes the composer's place");
   fireEvent.click(screen.getByRole("button", { name: /Blue/u }));
+  assert.equal(
+    calls.filter((call) => call.channel === "bots:answerQuestion").length,
+    0,
+    "choosing an option selects it without answering yet",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:answerQuestion").length, 1));
   const input = calls.find((call) => call.channel === "bots:answerQuestion")!.args[0] as {
     botId: string;
