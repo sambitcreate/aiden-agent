@@ -1,6 +1,6 @@
 // IPC handlers for on-device voice: sherpa-onnx (Parakeet) engine status, model
 // download management, and local transcription. Thin — logic lives in
-// services/parakeet.ts and services/local-models.ts.
+// services/parakeet.ts and services/local-speech-models.ts.
 
 import { ipcMain } from "../platform.js";
 import {
@@ -14,7 +14,7 @@ import {
   downloadModel,
   cancelDownload,
   deleteModel,
-} from "../services/local-models.js";
+} from "../services/local-speech-models.js";
 import { configStore } from "../services/config-store.js";
 import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";

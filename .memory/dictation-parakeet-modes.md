@@ -36,3 +36,14 @@
 Independent review corrected the dictionary settings row keys to use the same locale-independent lowercase identity as parser deduplication; a Turkish-casing regression verifies distinct I/dotless-ı entries keep distinct React keys.
 
 Status (2026-10-01): merged in PR #279 (on main after 0.51.0); plan moved to `docs/plans/completed/`.
+
+## Speech model storage (STT engine foundation, Task 2, 2026-10-09)
+
+- `main/services/local-speech-downloads.ts` (`createSpeechModelManager`) replaced
+  `local-models-core.ts`; `local-speech-models.ts` is the Electron wiring. Models
+  live under `<userData>/voice-models/<id>/` (CLI: `<agentDir>/voice-models`).
+- Downloads resume from `.partial/<id>.tar.bz2.part` with `Range`, verify the
+  pinned SHA-256 before extracting into `<id>.extracting/`, prune to `spec.files`,
+  then rename. Progress phases: download (0-90) → verify (90) → extract (90-100).
+- Startup (`prepareLocalSpeechStorage`) deletes the legacy `parakeet-models/`
+  folder and stale staging; catalog-model partials are kept so a relaunch resumes.

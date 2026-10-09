@@ -16,7 +16,9 @@ test("speech service DI preserves selection, wire bounds and serialized model li
   let installed = false, selected = "", calls = 0, released = false;
   const service = new AidenRemoteSpeechServiceCore({
     configStore: { getSettings: async () => ({ localVoiceModel: selected }), setSettings: async (patch) => { selected = patch.localVoiceModel ?? ""; } },
-    listModels: () => [{ id: "parakeet-v3", name: "Parakeet", description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: true, installed }],
+    listModels: () => [{ id: "parakeet-v3", name: "Parakeet", description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: true, installed,
+      languages: ["en"], capabilities: { autoDetect: true, languageHint: false, translateToEnglish: false, maxWindowSeconds: null },
+      license: { name: "CC-BY-4.0", url: "https://creativecommons.org/licenses/by/4.0/" } }],
     localModelDownloadStates: () => [],
     downloadModel: async () => { installed = true; }, cancelDownload: () => false,
     deleteModel: async () => { assert.equal(released, true); installed = false; },

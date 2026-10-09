@@ -700,7 +700,7 @@ export interface AppSettings {
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */
   geminiUsageScope?: GeminiUsageScope;
-  /** Selected on-device speech model id (see local-models catalog). */
+  /** Selected on-device speech model id (see local-speech-catalog). */
   localVoiceModel?: string;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;

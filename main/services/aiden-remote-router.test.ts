@@ -133,6 +133,9 @@ async function fixture(options: {
       id: "parakeet-v3", name: "Parakeet", description: "Local speech",
       sizeLabel: "620 MB", quant: "int8", languagesLabel: "25 languages",
       accuracy: 0.8, speed: 0.85, recommended: true, installed: true,
+      languages: ["en"],
+      capabilities: { autoDetect: true, languageHint: false, translateToEnglish: false, maxWindowSeconds: null },
+      license: { name: "CC-BY-4.0", url: "https://creativecommons.org/licenses/by/4.0/" },
     }],
     input: { encoding: "pcm_s16le" as const, sampleRate: 16_000 as const, channels: 1 as const, maximumSeconds: 60 as const, partialResults: false as const },
   };

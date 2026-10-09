@@ -1,5 +1,5 @@
 import type { AppSettings } from "./types.js";
-import type { LocalModel, LocalModelDownloadState } from "./local-models-core.js";
+import type { LocalModel, LocalModelDownloadState } from "./local-speech-downloads.js";
 import type { UsageRequestRecord } from "./usage-store-core.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { validateAidenRemotePcm16Base64 } from "./aiden-remote-speech-codec.js";

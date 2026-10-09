@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { UtilityProcess } from "electron";
 import { pcmToFloat32 } from "../handlers/voice-codec.js";
 import { decodeAidenRemotePcm16 } from "./aiden-remote-speech-codec.js";
-import { isModelInstalled, modelDir } from "./local-models.js";
+import { isModelInstalled, modelDir } from "./local-speech-models.js";
 import {
   engineStatus as engineStatusInProcess,
   releaseRecognizer as releaseRecognizerInProcess,

@@ -13,6 +13,7 @@ import { Menu, nativeImage, nativeTheme } from "electron";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
+import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { shutdownDevices } from "./handlers/devices.js";
@@ -1822,6 +1823,10 @@ if (!ownsSingleInstanceLock) {
       ) {
         app.dock?.setBadge("DEV");
       }
+      // Local-only housekeeping for on-device speech storage; no network.
+      void prepareLocalSpeechStorage().catch((error: unknown) => {
+        logger.warn("local-speech", `Speech storage cleanup failed: ${String(error)}`);
+      });
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });

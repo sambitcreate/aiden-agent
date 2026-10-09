@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { dirname, join } from "node:path";
-import { createLocalModelManager } from "../../../main/services/local-models-core.js";
+import { rmSync } from "node:fs";
+import { createSpeechModelManager } from "../../../main/services/local-speech-downloads.js";
 import { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";
 import { ParakeetProcessClient } from "../../../main/services/parakeet-process-core.js";
 import type { AppSettings } from "../../../main/services/types.js";
@@ -10,7 +11,10 @@ import { readRegularFile } from "../../../main/services/regular-file-read.js";
 import { AIDEN_REMOTE_MAX_PCM16_BYTES } from "../../../main/services/aiden-remote-speech-codec.js";
 
 export function createCliSpeech(agentDir: string) {
-  const models = createLocalModelManager({ root: () => join(agentDir, "parakeet-models") });
+  // Pre-1.0: the unverified Parakeet folder is removed, not migrated.
+  // createCliSpeech is synchronous for its callers, so this uses rmSync.
+  try { rmSync(join(agentDir, "parakeet-models"), { recursive: true, force: true }); } catch { /* best effort */ }
+  const models = createSpeechModelManager({ root: () => join(agentDir, "voice-models") });
   const settings = new JsonStore<AppSettings>(join(agentDir, "speech.json"), {});
   let worker: Worker | undefined, client: ParakeetProcessClient | undefined;
   const getClient = () => {
