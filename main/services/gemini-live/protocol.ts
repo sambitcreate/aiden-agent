@@ -329,7 +329,9 @@ const RESUMPTION_KEYS = keys(
 );
 const GO_AWAY_KEYS = keys("timeLeft");
 const VOICE_CONSENT_KEYS = keys("signature");
-const VOICE_ACTIVITY_KEYS = keys("voiceActivityType", "audioOffset");
+// The Gemini Developer API sends the proto field `type`; the SDK renames it to
+// `voiceActivityType` only for Vertex, so accept both spellings.
+const VOICE_ACTIVITY_KEYS = keys("type", "voiceActivityType", "audioOffset");
 const VAD_SIGNAL_KEYS = keys("vadSignalType");
 const WORD_INFO_KEYS = keys("word", "startOffset", "endOffset");
 const VOICE_ACTIVITY_TYPES = new Set([
@@ -977,9 +979,11 @@ export class GeminiLiveProtocol {
         if (field === "voiceActivity") {
           if (
             !hasOnlyKeys(metadata, VOICE_ACTIVITY_KEYS) ||
-            (metadata.voiceActivityType !== undefined &&
-              (typeof metadata.voiceActivityType !== "string" ||
-                !VOICE_ACTIVITY_TYPES.has(metadata.voiceActivityType))) ||
+            [metadata.type, metadata.voiceActivityType].some(
+              (type) =>
+                type !== undefined &&
+                (typeof type !== "string" || !VOICE_ACTIVITY_TYPES.has(type)),
+            ) ||
             !validDuration(metadata.audioOffset)
           )
             this.malformed();

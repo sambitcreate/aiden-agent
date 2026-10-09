@@ -346,6 +346,8 @@ test("accepts bounded metadata declared by the pinned Live server schema", async
         audioOffset: "0.5s",
       },
     },
+    // Gemini Developer API wire shape: the SDK renames `type` only for Vertex.
+    { voiceActivity: { type: "ACTIVITY_START", audioOffset: "0.5s" } },
     {
       voiceActivityDetectionSignal: {
         vadSignalType: "VAD_SIGNAL_TYPE_SOS",
@@ -517,6 +519,7 @@ test("malformed documented metadata fails closed instead of extending provider a
     { setupComplete: { voiceConsentSignature: "bad" } },
     { voiceActivity: "bad" },
     { voiceActivity: { voiceActivityType: "BAD" } },
+    { voiceActivity: { type: "BAD" } },
     { voiceActivity: { audioOffset: "soon" } },
     { voiceActivityDetectionSignal: { vadSignalType: "START_OF_SPEECH" } },
     {
