@@ -154,6 +154,78 @@ export function modelPadTopPercent(y: number): number {
   return MODEL_PAD_INSET_PERCENT + (1 - y) * MODEL_PAD_RANGE_PERCENT;
 }
 
+/** Half the composer knob (24px). */
+export const MODEL_PAD_KNOB_RADIUS_PX = 12;
+/** Space between the knob's edge and its name tag. */
+export const MODEL_PAD_KNOB_TAG_GAP_PX = 4;
+/** Space kept between the knob tag and the Pad's edge. */
+export const MODEL_PAD_KNOB_TAG_GUTTER_PX = 4;
+export const MODEL_PAD_KNOB_TAG_MAX_WIDTH_PX = 192;
+
+/**
+ * Above the knob when the tag fits there, otherwise below; when neither side fits
+ * (a tag taller than the Pad allows), the side with more room.
+ */
+export function modelPadKnobTagSide(input: {
+  knobTop: number;
+  padHeight: number;
+  tagHeight: number;
+}): "top" | "bottom" {
+  const needed =
+    MODEL_PAD_KNOB_RADIUS_PX + MODEL_PAD_KNOB_TAG_GAP_PX + input.tagHeight + MODEL_PAD_KNOB_TAG_GUTTER_PX;
+  const roomAbove = input.knobTop;
+  const roomBelow = input.padHeight - input.knobTop;
+  if (roomAbove >= needed) return "top";
+  if (roomBelow >= needed) return "bottom";
+  return roomBelow > roomAbove ? "bottom" : "top";
+}
+
+/**
+ * Pixel layout for the composer knob's name tag inside a measured Pad. `x` is the
+ * tag's left edge (start), center (center) or right edge (end); `y` is its bottom edge
+ * (top side) or top edge (bottom side). `maxWidth` keeps it inside the Pad's gutters,
+ * because the Pad clips its content.
+ */
+export interface ModelPadKnobTagLayout extends ModelPadLabelPlacement {
+  x: number;
+  y: number;
+  maxWidth: number;
+}
+
+export function modelPadKnobTagLayout(input: {
+  point: ModelPadPoint;
+  padWidth: number;
+  padHeight: number;
+  tagHeight: number;
+}): ModelPadKnobTagLayout {
+  const { padWidth, padHeight } = input;
+  const gutter = MODEL_PAD_KNOB_TAG_GUTTER_PX;
+  const knobLeft = (modelPadLeftPercent(input.point.x) / 100) * padWidth;
+  const knobTop = (modelPadTopPercent(input.point.y) / 100) * padHeight;
+  const { align } = modelPadLabelPlacement(input.point);
+  const side = modelPadKnobTagSide({ knobTop, padHeight, tagHeight: input.tagHeight });
+  const offset = MODEL_PAD_KNOB_RADIUS_PX + MODEL_PAD_KNOB_TAG_GAP_PX;
+  let x: number;
+  let room: number;
+  if (align === "start") {
+    x = Math.max(gutter, knobLeft - MODEL_PAD_KNOB_RADIUS_PX);
+    room = padWidth - gutter - x;
+  } else if (align === "end") {
+    x = Math.min(padWidth - gutter, knobLeft + MODEL_PAD_KNOB_RADIUS_PX);
+    room = x - gutter;
+  } else {
+    x = knobLeft;
+    room = 2 * Math.min(knobLeft - gutter, padWidth - gutter - knobLeft);
+  }
+  return {
+    align,
+    side,
+    x,
+    y: side === "top" ? knobTop - offset : knobTop + offset,
+    maxWidth: Math.max(0, Math.min(MODEL_PAD_KNOB_TAG_MAX_WIDTH_PX, room)),
+  };
+}
+
 export function modelPadPointKey(point: ModelPadPoint, gridSize: number): string {
   const divisions = Math.max(1, gridSize - 1);
   return `${Math.round(point.x * divisions)}:${Math.round(point.y * divisions)}`;

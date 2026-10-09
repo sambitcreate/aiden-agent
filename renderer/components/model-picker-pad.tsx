@@ -9,8 +9,10 @@ import {
 } from "../lib/model-picker-data";
 import {
   MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_KNOB_TAG_MAX_WIDTH_PX,
   MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
+  modelPadKnobTagLayout,
   modelPadLabelPlacement,
   modelPadLeftPercent,
   modelPadTopPercent,
@@ -37,24 +39,6 @@ function directionForKey(key: string): ModelDirection | null {
   return null;
 }
 
-/** Half the knob (24px): start/end tags line up with the knob's outer edge. */
-const KNOB_TAG_OFFSET_PX = 12;
-/** Space kept between the tag and the Pad's edge. */
-const KNOB_TAG_EDGE_GUTTER_PX = 4;
-
-/**
- * The widest the tag can be without leaving the Pad square, given where it is anchored.
- * The Pad clips its content (`contain: paint`), so the tag must fit by construction.
- */
-function knobTagMaxWidth(leftPercent: number, align: "start" | "center" | "end"): string {
-  if (align === "center") {
-    const room = 2 * Math.min(leftPercent, 100 - leftPercent);
-    return `min(12rem, calc(${room}% - ${KNOB_TAG_EDGE_GUTTER_PX * 2}px))`;
-  }
-  const room = align === "start" ? 100 - leftPercent : leftPercent;
-  return `min(12rem, calc(${room}% + ${KNOB_TAG_OFFSET_PX - KNOB_TAG_EDGE_GUTTER_PX}px))`;
-}
-
 interface ModelPadKnobTagProps {
   point: ModelPoint;
   label: string;
@@ -63,25 +47,75 @@ interface ModelPadKnobTagProps {
   secondary?: React.ReactNode;
 }
 
+interface KnobTagMeasurements {
+  padWidth: number;
+  padHeight: number;
+  tagHeight: number;
+}
+
 /**
  * The previewed model's name beside the knob. Visual only: the listbox announces the
  * active option through `aria-activedescendant`, so the tag stays `aria-hidden`.
+ * It is laid out from the measured Pad and tag so it never leaves the clipped square,
+ * and stays hidden until it has been measured.
  */
 function ModelPadKnobTag({ point, label, providerLabel, secondary }: ModelPadKnobTagProps) {
-  const { align, side } = modelPadLabelPlacement(point);
-  const leftPercent = modelPadLeftPercent(point.x);
+  const tagRef = React.useRef<HTMLSpanElement>(null);
+  const [size, setSize] = React.useState<KnobTagMeasurements>({
+    padWidth: 0,
+    padHeight: 0,
+    tagHeight: 0,
+  });
+
+  const measure = React.useCallback(() => {
+    // The tag is a direct child of the Pad; a parent ref is not attached yet when this
+    // child's layout effect first runs.
+    const tag = tagRef.current;
+    const pad = tag?.parentElement;
+    if (!tag || !pad) return;
+    const next = {
+      padWidth: pad.clientWidth,
+      padHeight: pad.clientHeight,
+      tagHeight: tag.offsetHeight,
+    };
+    setSize((current) =>
+      current.padWidth === next.padWidth &&
+      current.padHeight === next.padHeight &&
+      current.tagHeight === next.tagHeight
+        ? current
+        : next,
+    );
+  }, []);
+
+  React.useLayoutEffect(measure, [measure, label, providerLabel, secondary]);
+
+  React.useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const tag = tagRef.current;
+    const pad = tag?.parentElement;
+    if (!tag || !pad) return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(pad);
+    observer.observe(tag);
+    return () => observer.disconnect();
+  }, [measure]);
+
+  const measured = size.padWidth > 0 && size.padHeight > 0 && size.tagHeight > 0;
+  const layout = measured ? modelPadKnobTagLayout({ point, ...size }) : null;
+  const fallback = modelPadLabelPlacement(point);
   return (
     <span
+      ref={tagRef}
       aria-hidden="true"
       data-model-pad-knob-tag=""
-      data-label-align={align}
-      data-label-side={side}
+      data-label-align={layout?.align ?? fallback.align}
+      data-label-side={layout?.side ?? fallback.side}
       className="model-pad-knob-tag absolute z-20"
-      style={{
-        left: `${leftPercent}%`,
-        top: `${modelPadTopPercent(point.y)}%`,
-        maxWidth: knobTagMaxWidth(leftPercent, align),
-      }}
+      style={
+        layout
+          ? { left: layout.x, top: layout.y, maxWidth: layout.maxWidth }
+          : { left: 0, top: 0, maxWidth: MODEL_PAD_KNOB_TAG_MAX_WIDTH_PX, visibility: "hidden" }
+      }
     >
       <span className="block truncate text-small-strong text-primary">{label}</span>
       <span className="block truncate text-mini font-normal text-secondary">{providerLabel}</span>

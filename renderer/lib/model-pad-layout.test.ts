@@ -10,7 +10,12 @@ import {
   modelPadGridSize,
   modelPadGridSizeForPlacements,
   addModelPadPlacement,
+  MODEL_PAD_KNOB_TAG_GUTTER_PX,
+  modelPadKnobTagLayout,
+  modelPadKnobTagSide,
   modelPadLabelPlacement,
+  modelPadLeftPercent,
+  modelPadTopPercent,
   modelPadLayoutsEqual,
   modelPadPointKey,
   moveModelPadPoint,
@@ -306,4 +311,82 @@ test("marker labels flip below near the top edge and hug the left and right edge
   assert.deepEqual(modelPadLabelPlacement({ x: 0, y: 0 }), { align: "start", side: "top" });
   assert.deepEqual(modelPadLabelPlacement({ x: 1, y: 1 }), { align: "end", side: "bottom" });
   assert.deepEqual(modelPadLabelPlacement({ x: 0.2, y: 0.8 }), { align: "center", side: "top" });
+});
+
+test("marker label thresholds are exclusive at the edges", () => {
+  assert.equal(modelPadLabelPlacement({ x: 0.16, y: 0.5 }).align, "center");
+  assert.equal(modelPadLabelPlacement({ x: 0.84, y: 0.5 }).align, "center");
+  assert.equal(modelPadLabelPlacement({ x: 0.1599, y: 0.5 }).align, "start");
+  assert.equal(modelPadLabelPlacement({ x: 0.8401, y: 0.5 }).align, "end");
+  assert.equal(modelPadLabelPlacement({ x: 0.5, y: 0.82 }).side, "top");
+  assert.equal(modelPadLabelPlacement({ x: 0.5, y: 0.8201 }).side, "bottom");
+});
+
+/** Knob center in pixels for a normalized capability on a Pad of the given height. */
+function knobTopPx(y: number, padHeight: number): number {
+  return (modelPadTopPercent(y) / 100) * padHeight;
+}
+
+test("the knob tag drops below when a short Pad has no room above the knob", () => {
+  // Minimum composer Pad (160px) with a two-line tag at a 14px UI font (38px).
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0.75, 160), padHeight: 160, tagHeight: 38 }), "bottom");
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0.8, 160), padHeight: 160, tagHeight: 38 }), "bottom");
+  // An 18px UI font (46px tag) clips even on the second row of a seven-column grid.
+  assert.equal(
+    modelPadKnobTagSide({ knobTop: knobTopPx(5 / 6, 160), padHeight: 160, tagHeight: 46 }),
+    "bottom",
+  );
+  // The same rows keep the tag above on a full-size Pad.
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0.75, 300), padHeight: 300, tagHeight: 38 }), "top");
+  // Near the bottom edge above is preferred, and it fits.
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0, 160), padHeight: 160, tagHeight: 52 }), "top");
+  // When neither side fits, the roomier side wins.
+  assert.equal(modelPadKnobTagSide({ knobTop: 20, padHeight: 60, tagHeight: 50 }), "bottom");
+  assert.equal(modelPadKnobTagSide({ knobTop: 40, padHeight: 60, tagHeight: 50 }), "top");
+});
+
+test("the knob tag stays inside the Pad gutters on every side and size", () => {
+  const gutter = MODEL_PAD_KNOB_TAG_GUTTER_PX;
+  const epsilon = 1e-9;
+  for (const padSize of [160, 216, 300]) {
+    for (const tagHeight of [38, 46, 60]) {
+      for (const x of [0, 0.1, 0.1599, 0.16, 0.3, 0.5, 0.7, 0.84, 0.8401, 0.9, 1]) {
+        for (const y of [0, 1 / 6, 0.5, 0.75, 0.8, 5 / 6, 1]) {
+          const layout = modelPadKnobTagLayout({
+            point: { x, y },
+            padWidth: padSize,
+            padHeight: padSize,
+            tagHeight,
+          });
+          const width = layout.maxWidth;
+          const [left, right] =
+            layout.align === "start"
+              ? [layout.x, layout.x + width]
+              : layout.align === "end"
+                ? [layout.x - width, layout.x]
+                : [layout.x - width / 2, layout.x + width / 2];
+          const [top, bottom] =
+            layout.side === "top" ? [layout.y - tagHeight, layout.y] : [layout.y, layout.y + tagHeight];
+          const where = `${padSize}px pad, ${tagHeight}px tag at (${x}, ${y})`;
+          assert.ok(width > 0, `${where} has room for text`);
+          assert.ok(left >= gutter - epsilon, `${where} left edge`);
+          assert.ok(right <= padSize - gutter + epsilon, `${where} right edge`);
+          assert.ok(top >= gutter - epsilon, `${where} top edge`);
+          assert.ok(bottom <= padSize - gutter + epsilon, `${where} bottom edge`);
+        }
+      }
+    }
+  }
+});
+
+test("edge-aligned knob tags line up with the knob's outer edge when there is room", () => {
+  const padWidth = 300;
+  const start = modelPadKnobTagLayout({ point: { x: 0, y: 0.5 }, padWidth, padHeight: 300, tagHeight: 38 });
+  const end = modelPadKnobTagLayout({ point: { x: 1, y: 0.5 }, padWidth, padHeight: 300, tagHeight: 38 });
+  const knobLeft = (modelPadLeftPercent(0) / 100) * padWidth;
+  const knobRight = (modelPadLeftPercent(1) / 100) * padWidth;
+  assert.equal(start.align, "start");
+  assert.equal(start.x, knobLeft - 12);
+  assert.equal(end.align, "end");
+  assert.equal(end.x, knobRight + 12);
 });

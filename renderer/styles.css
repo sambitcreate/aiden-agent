@@ -1311,12 +1311,13 @@ textarea {
 
 /*
  * The previewed model's name beside the composer knob. It jumps with the knob (no
- * transform transition), uses the marker-label surface, and flips with the shared
- * edge-aware vocabulary so it never leaves the clipped Pad square.
+ * transform transition) and uses the marker-label surface. Its pixel position and
+ * offsets come from modelPadKnobTagLayout; these rules only anchor the tag on the edge
+ * that position names (left edge, center or right edge; bottom or top edge).
  */
 .model-pad-knob-tag {
   --model-pad-knob-tag-x: -50%;
-  --model-pad-knob-tag-y: calc(-100% - 16px);
+  --model-pad-knob-tag-y: -100%;
   width: max-content;
   padding: 0.25rem 0.5rem;
   overflow: hidden;
@@ -1332,15 +1333,15 @@ textarea {
 }
 
 .model-pad-knob-tag[data-label-side="bottom"] {
-  --model-pad-knob-tag-y: 16px;
+  --model-pad-knob-tag-y: 0;
 }
 
 .model-pad-knob-tag[data-label-align="start"] {
-  --model-pad-knob-tag-x: -12px;
+  --model-pad-knob-tag-x: 0;
 }
 
 .model-pad-knob-tag[data-label-align="end"] {
-  --model-pad-knob-tag-x: calc(-100% + 12px);
+  --model-pad-knob-tag-x: -100%;
 }
 
 [data-toolbar] {

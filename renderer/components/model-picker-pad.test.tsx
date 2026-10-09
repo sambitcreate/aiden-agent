@@ -83,26 +83,76 @@ test("the knob tag rests on the selected model and follows arrow-key preview", (
   assert.match(knobTag(container).textContent ?? "", /Middle Model/u);
 });
 
-test("the knob tag stays inside the Pad near its edges", () => {
-  const cases: Array<[string, string, string]> = [
-    ["middle", "center", "top"],
-    ["east", "end", "top"],
-    ["north", "center", "bottom"],
-    ["southwest", "start", "top"],
-  ];
-  for (const [value, align, side] of cases) {
-    const { container, unmount } = render(
-      <ModelPickerPad
-        models={models}
-        gridSize={7}
-        selectedValue={value}
-        onPreview={() => {}}
-        onCommit={() => {}}
-      />,
-    );
-    const tag = knobTag(container);
-    assert.equal(tag.dataset.labelAlign, align, `${value} alignment`);
-    assert.equal(tag.dataset.labelSide, side, `${value} side`);
-    unmount();
+/** happy-dom has no layout; give the Pad and the tag measured sizes for one test. */
+function withMeasuredSizes(padSize: number, tagHeight: number, run: () => void) {
+  const proto = HTMLElement.prototype;
+  const originals = (["clientWidth", "clientHeight", "offsetHeight"] as const).map(
+    (key) => [key, Object.getOwnPropertyDescriptor(proto, key)] as const,
+  );
+  const padSide = function (this: HTMLElement) {
+    return this.getAttribute("role") === "listbox" ? padSize : 0;
+  };
+  Object.defineProperty(proto, "clientWidth", { configurable: true, get: padSide });
+  Object.defineProperty(proto, "clientHeight", { configurable: true, get: padSide });
+  Object.defineProperty(proto, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.hasAttribute("data-model-pad-knob-tag") ? tagHeight : 0;
+    },
+  });
+  try {
+    run();
+  } finally {
+    for (const [key, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(proto, key, descriptor);
+      else delete (proto as unknown as Record<string, unknown>)[key];
+    }
   }
+}
+
+function renderSelected(value: string, padModels = models) {
+  return render(
+    <ModelPickerPad
+      models={padModels}
+      gridSize={7}
+      selectedValue={value}
+      onPreview={() => {}}
+      onCommit={() => {}}
+    />,
+  );
+}
+
+test("the knob tag hugs the Pad's left and right edges and flips below at the top", () => {
+  withMeasuredSizes(300, 38, () => {
+    const cases: Array<[string, string, string]> = [
+      ["middle", "center", "top"],
+      ["east", "end", "top"],
+      ["north", "center", "bottom"],
+      ["southwest", "start", "top"],
+    ];
+    for (const [value, align, side] of cases) {
+      const { container, unmount } = renderSelected(value);
+      const tag = knobTag(container);
+      assert.equal(tag.dataset.labelAlign, align, `${value} alignment`);
+      assert.equal(tag.dataset.labelSide, side, `${value} side`);
+      assert.notEqual(tag.style.visibility, "hidden", `${value} is shown once measured`);
+      unmount();
+    }
+  });
+});
+
+test("on a short Pad the knob tag drops below a model that a tall Pad labels above", () => {
+  const upper = positionSavedModels([entry("upper", "Upper Model", "Acme Cloud")], {
+    upper: { x: 0.5, y: 0.75, xSource: "user", ySource: "user" },
+  });
+  withMeasuredSizes(300, 38, () => {
+    const { container, unmount } = renderSelected("upper", upper);
+    assert.equal(knobTag(container).dataset.labelSide, "top");
+    unmount();
+  });
+  withMeasuredSizes(160, 38, () => {
+    const { container, unmount } = renderSelected("upper", upper);
+    assert.equal(knobTag(container).dataset.labelSide, "bottom");
+    unmount();
+  });
 });
