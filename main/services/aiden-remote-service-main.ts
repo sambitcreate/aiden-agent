@@ -112,6 +112,7 @@ import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
 import { systemTimezone } from "./schedule-store.js";
@@ -579,6 +580,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               : {}),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            // Paired devices see visuals as snapshots, so turns follow Appearance.
+            inlineVisuals: async () =>
+              normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
             deviceSupportsQuestionPrompts: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
                 (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,

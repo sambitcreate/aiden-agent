@@ -11,6 +11,7 @@ import {
 } from "./generative-ui-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { remoteGenerationSurface } from "./conversation-surface-generation.js";
+import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 import { AIDEN_UI_CATALOG } from "../../renderer/shared/aiden-ui/catalog.js";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
@@ -70,23 +71,44 @@ test("visuals are available without a workspace and follow the inline-visuals mo
   assert.equal(shouldEnableGenerativeUiExtension({ ...base, excluded: true }), false);
 });
 
-test("turns sent from a paired phone do not get inline visuals until phones can show them", () => {
-  const surface = remoteGenerationSurface({
-    chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
-    workspaceId: "workspace", providerId: "provider", model: "model",
-    onTurnAccepted: () => undefined,
-  });
-  assert.equal(
-    shouldEnableGenerativeUiExtension({
+test("turns sent from a paired device follow the desktop's inline visuals setting", () => {
+  const enabledFor = (inlineVisuals?: InlineVisualsMode) => {
+    const surface = remoteGenerationSurface({
+      chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
+      workspaceId: "workspace", providerId: "provider", model: "model",
+      ...(inlineVisuals ? { inlineVisuals } : {}),
+      onTurnAccepted: () => undefined,
+    });
+    return shouldEnableGenerativeUiExtension({
       usageSource: surface.options.usageSource,
       assistantMode: false,
       workspaceRoot: "/tmp/ws",
       permission: "ask",
       excluded: false,
       inlineVisuals: surface.params.inlineVisuals,
-    }),
-    false,
-  );
+    });
+  };
+  // Phones see each visual as its snapshot, so they follow Appearance.
+  assert.equal(enabledFor("automatic"), true);
+  assert.equal(enabledFor(), true);
+  assert.equal(enabledFor("on_request"), false);
+  assert.equal(enabledFor("off"), false);
+});
+
+test("a remote turn tells the model its visuals arrive as still images", () => {
+  const surface = remoteGenerationSurface({
+    chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
+    workspaceId: "workspace", providerId: "provider", model: "model",
+    onTurnAccepted: () => undefined,
+  });
+  const remote = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: () => undefined,
+    audience: surface.options.visualAudience,
+  });
+  assert.match(remote.systemPrompt ?? "", /still image/iu);
+  const desktop = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
+  assert.doesNotMatch(desktop.systemPrompt ?? "", /still image/iu);
 });
 
 test("path rendering is refused without a workspace while inline html works", async () => {

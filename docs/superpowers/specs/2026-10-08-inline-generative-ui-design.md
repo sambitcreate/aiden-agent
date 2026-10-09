@@ -153,7 +153,7 @@ The new shared primitives (Tabs, Segmented, Slider, Checkbox, Progress, Table, S
 
 - **Agent auto-invocation.** The extension's system prompt shrinks to a short trigger list ("when a comparison, trend, structure, process or interactive what-if would be clearer as a visual than as prose; never for plain answers; never more than one visual unless asked"). It points at `visualize_guide(modules: ["catalog","charts","html","interactive"])`, which returns the detailed design guidance on demand (the same pattern as Claude's `read_me`).
 - **User invocation.** `/visualize <prompt>` stays and is available in every idle chat. A composer **Visualize** chip is deferred to a later phase.
-- **Setting.** Settings → Appearance → Chat → "Inline visuals": **Automatic** (default) / **Only when I ask** / **Off**. "Only when I ask" registers the tools only on `/visualize` turns; "Off" never registers them. Turns sent from a paired phone always run with visuals off until phones can render them (Phases 3–4). The setting follows the settings design system (grouped card, trailing `Select`).
+- **Setting.** Settings → Appearance → Chat → "Inline visuals": **Automatic** (default) / **Only when I ask** / **Off**. "Only when I ask" registers the tools only on `/visualize` turns; "Off" never registers them. Turns sent from a paired phone ran with visuals off until phones could show snapshots; since Phase 3 they follow this setting, and the model is told those readers see still images. The setting follows the settings design system (grouped card, trailing `Select`).
 - **Text alongside visuals.** The guide requires the answer to remain complete without the visual: a one-sentence takeaway in prose, and the visual's `title` doubles as alt text.
 
 ## 8. Persistence and contracts

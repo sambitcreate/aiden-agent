@@ -15,6 +15,7 @@ import {
 } from "../../renderer/shared/generation-timeline.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
+import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import {
@@ -1095,6 +1096,7 @@ export class AidenRemoteChatService {
             allowComputerUse: false;
             usageSource: "chat";
             turnId: string;
+            visualAudience?: "remote";
             botAudienceId?: string;
             excludeToolNames?: ReadonlySet<string>;
             onTurnAccepted(): void;
@@ -1121,6 +1123,8 @@ export class AidenRemoteChatService {
        * excluded from that device's turns so a prompt can never be stranded.
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+      /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
+      inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
        * Device-declared `skills:invoke` grant lookup. A turn carrying `skill`
        * is rejected with `capability_denied` unless the device negotiated the
@@ -2043,6 +2047,7 @@ export class AidenRemoteChatService {
               400,
             );
           }
+          const inlineVisuals = await this.options.inlineVisuals?.();
           const turnId = `turn_${randomUUID()}`;
           const streamId = `stream_${randomUUID()}`;
           const owner = this.options.streams.create(deviceId, streamId, chatId, turnId);
@@ -2058,6 +2063,7 @@ export class AidenRemoteChatService {
             model: selection.modelId,
             thinkingLevel: parsed.thinkingLevel,
             ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
+            ...(inlineVisuals ? { inlineVisuals } : {}),
             ...((await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
               ? {}
               : { excludeToolNames: QUESTION_PROMPT_EXCLUDED_TOOLS }),

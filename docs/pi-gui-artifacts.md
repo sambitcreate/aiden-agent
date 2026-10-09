@@ -51,7 +51,7 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
 6. **Kit.** Main serves `aiden-genui://aiden-ui.css`, a generated class kit that mirrors the shared components (`generative-ui-kit.ts`). When no renderer theme is supplied (export), the light default tokens are emitted.
 7. **Streaming drafts.** While `render_artifact` arguments stream (and only when the tool is registered for the turn), main writes the partial HTML into a single-use draft preview whose CSP allows only the bridge's nonce. Partial markup renders progressively, and model scripts wait for the final artifact. The `draft` and `draft_end` events carry only the preview URL; draft HTML never reaches the renderer as a string. The presented artifact replaces the draft in the same row: the `present` event carries a ready preview URL (`src`), and the final frame starts at the draft's last height.
 8. **Libraries.** Host Chart.js, Plotly, and KaTeX load from the `aiden-genui:` protocol (exact library names). Export inlines those libraries and the kit into one offline `.html` file and fails if a library is missing. There is no CDN.
-9. **Persistence and clients.** Persistence stores metadata, the `mediaId`, and placements on the assistant message. Pending HTML stages share the existing image-recovery composer gate. iOS and Android still show the title plus “Can't view on this device. View in Aiden Agent.”; the Remote contract is unchanged in Phase 1, and turns sent from a paired phone run with inline visuals off.
+9. **Persistence and clients.** Persistence stores metadata, the `mediaId`, and placements on the assistant message. Pending HTML stages share the existing image-recovery composer gate. Since Remote contract revision 27, paired devices show each visual as its snapshot image (see "Snapshots and paired devices" below); a client without the snapshot still shows the title plus “Can't view on this device. View in Aiden Agent.”
 
 Limits: 4 HTML artifacts per response, 40 per chat, 8 MiB staged HTML per chat, titles 1–120 characters without controls.
 
@@ -83,6 +83,14 @@ The model composes a visual from Aiden's own component catalog instead of writin
    - **Follow-ups need confirmation.** A native button's `sendPrompt` waits in the same Aiden-drawn confirmation chip as HTML visuals, because its label is model-written and need not match the text it sends.
    - **Saved state follows the newest copy.** A newer saved state re-seeds an untouched visual. In a visual the user has changed, it fills in only the keys that are missing.
 9. **Downgrade.** Older builds rebuild messages from the fields they know, so an older build that rewrites a chat drops `uiVisuals`. A reply that was only a visual then shows as an empty bubble there. HTML visuals only lose their placement.
+
+## Snapshots and paired devices
+
+1. **Capture.** After a reply commits, main renders each of its visuals in a hidden, sandboxed window on the default session (`main/services/visual-snapshot-main.ts`): HTML visuals in their sandboxed frame, native visuals through `visual-snapshot.html`, in the light theme at 720 px (column) or 1024 px (wide) and 2× scale. Captures run one at a time, each with a 6 s timeout, and never delay the reply.
+2. **Storage.** Each image is an ordinary PNG (JPEG over 2 MiB) attachment on the same message with a reserved `visual-snapshot_<sha256>` id, linked by `visualSnapshots: [{visualId, attachmentId}]`. The desktop never shows these attachments, never counts them against image limits, and never sends them to the model.
+3. **Remote.** Contract revision 27 (`chat-visuals-v1`) projects `visuals` on each assistant message: kind, title, the tool call that drew it, fallback text, and the snapshot attachment id. Markup, data and saved state stay on the Mac. A new snapshot changes the chat revision.
+4. **Phones.** iOS and Android place each snapshot after its tool row, fall back to the text description, and hide snapshot attachments from the attachment strip.
+5. **Remote turns.** Turns sent from a paired device follow the Mac's Appearance setting, and the model is told those readers see still images, so the first view should carry the answer.
 
 ## Extension points
 

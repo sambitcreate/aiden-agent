@@ -483,6 +483,8 @@ export interface GenerationExecutionOptions {
   onTurnAccepted?: () => void;
   /** Main-owned interactive delivery surface; renderer starts cannot set this. */
   interactionSurface?: "telegram";
+  /** Main-owned: a paired device sent this turn and sees visuals as snapshots. */
+  visualAudience?: "remote";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
   /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
@@ -1790,6 +1792,7 @@ async function prepareGeneration(
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
+      ...(options.visualAudience ? { audience: options.visualAudience } : {}),
       existingChatUiCount: displayedAssistantUiCount(chat.messages),
       onUiVisual: (visual, context) => {
         uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");

@@ -77,6 +77,7 @@ function fixture(
     ) => Promise<readonly SkillCatalogEntry[]>;
     resolveSkillInvocation?: (workspaceId: string, invocationId: string) => Promise<RegisteredSkill>;
     forks?: ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"];
+    inlineVisuals?: ConstructorParameters<typeof AidenRemoteChatService>[0]["inlineVisuals"];
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -86,6 +87,7 @@ function fixture(
   let begins = 0;
   let starts = 0;
   let lastGenerationOptions: Record<string, unknown> | null = null;
+  let lastParams: Record<string, unknown> | null = null;
   const preparedInvocations: PreparedSkillInvocation[] = [];
   let botArchived = fixtureOptions.botArchived === true;
   const streams = new AidenRemoteStreamService({
@@ -208,8 +210,9 @@ function fixture(
           },
         };
       },
-      start: async (streamId, _params, owner, generationOptions) => {
+      start: async (streamId, params, owner, generationOptions) => {
         starts += 1;
+        lastParams = params as unknown as Record<string, unknown>;
         lastGenerationOptions = generationOptions as Record<string, unknown>;
         if (fixtureOptions.startThrows) throw new Error("provider setup failed");
         generationOptions.onTurnAccepted();
@@ -272,6 +275,7 @@ function fixture(
       ? { resolveSkillInvocation: fixtureOptions.resolveSkillInvocation }
       : {}),
     ...(fixtureOptions.forks ? { forks: fixtureOptions.forks } : {}),
+    ...(fixtureOptions.inlineVisuals ? { inlineVisuals: fixtureOptions.inlineVisuals } : {}),
   });
   return {
     service,
@@ -282,6 +286,7 @@ function fixture(
     begins: () => begins,
     starts: () => starts,
     lastGenerationOptions: () => lastGenerationOptions,
+    lastParams: () => lastParams,
     preparedInvocations: () => [...preparedInvocations],
     current: () => current ? structuredClone(current) : null,
     setBotArchived: (value: boolean) => { botArchived = value; },
@@ -1751,6 +1756,17 @@ test("invalidated uploads remain bounded until their retained request bodies set
     lease.release();
   }
   store.beginUpload("device-2", "chat-2").release();
+});
+
+test("a remote turn draws visuals by the Mac's Appearance setting and knows they arrive as images", async () => {
+  const off = fixture(chat(), { inlineVisuals: async () => "off" });
+  await off.service.startTurn("device-1", "chat-1", "visuals-turn-001", { text: "chart this" });
+  assert.equal(off.lastParams()?.inlineVisuals, "off");
+  assert.equal(off.lastGenerationOptions()?.visualAudience, "remote");
+
+  const automatic = fixture(chat(), { inlineVisuals: async () => "automatic" });
+  await automatic.service.startTurn("device-1", "chat-1", "visuals-turn-002", { text: "chart this" });
+  assert.equal(automatic.lastParams()?.inlineVisuals, "automatic");
 });
 
 test("question tool is exposed only to devices granted the question capability", async () => {
