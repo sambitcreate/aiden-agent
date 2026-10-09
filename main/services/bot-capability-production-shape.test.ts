@@ -72,6 +72,37 @@ test("Bot provider signatures bind stored and custom authority while rejecting a
   assert.doesNotMatch(JSON.stringify(signatures), /stored-secret|oauth-a|custom-secret/u);
 });
 
+test("Bot provider signatures survive an OAuth token refresh but not a different account or sign-out", async () => {
+  let stored: Credential | undefined;
+  const sign = createBotProviderCredentialSignatureCore({
+    readBuiltinCredential: async () => stored,
+    readCustomCredential: async () => undefined,
+  });
+  const key = Buffer.alloc(32, 7);
+  const signal = new AbortController().signal;
+  const codex = {
+    id: "openai-codex",
+    kind: "openai" as const,
+    label: "ChatGPT",
+    baseUrl: "",
+    models: ["gpt"],
+    needsKey: true,
+    hasKey: true,
+    isBuiltin: true,
+  };
+
+  stored = { type: "oauth", access: "access-1", refresh: "refresh-1", expires: 1_000, accountId: "account-a" };
+  const signedIn = await sign(codex, key, signal);
+  // Pi refreshes in place: every token field rotates, the account does not.
+  stored = { type: "oauth", access: "access-2", refresh: "refresh-2", expires: 4_600_000, accountId: "account-a" };
+  assert.equal(await sign(codex, key, signal), signedIn);
+
+  stored = { type: "oauth", access: "access-3", refresh: "refresh-3", expires: 9_000, accountId: "account-b" };
+  assert.notEqual(await sign(codex, key, signal), signedIn);
+  stored = undefined;
+  assert.equal(await sign(codex, key, signal), undefined);
+});
+
 test("production-shaped catalogs keep restart identity and public ids across exact-grant rotation", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-production-catalog-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

@@ -148,7 +148,10 @@ import {
   mergeBotInboxActivityPreviews,
 } from "./bot-inbox-projection.js";
 import { createMainBotAvatarApplicationAdapter } from "./bot-avatar-store-main.js";
-import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
+import {
+  botRuntimeInventoryLeases,
+  readUnderFreshBotRuntimeInventoryLease,
+} from "./bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import {
@@ -777,18 +780,22 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               providerId,
               modelId,
             }) => {
-              const inventoryLease = botRuntimeInventoryLeases.acquire();
-              try {
-                const defaultSelection = providerId === undefined || modelId === undefined
-                  ? await models.resolve()
-                  : undefined;
-                const retained = await botCapabilityStore.getBotBinding(botId);
-                const snapshot = await botCapabilityCatalog.snapshot({
-                  audienceId,
-                  botId,
-                  ...(retained ? { retainedBindings: [retained] } : {}),
+              // A routine credential write during the snapshot must not fail
+              // the phone's send; read again under a fresh lease instead.
+              const { lease: inventoryLease, value: { defaultSelection, snapshot } } =
+                await readUnderFreshBotRuntimeInventoryLease(botRuntimeInventoryLeases, async () => {
+                  const defaultSelection = providerId === undefined || modelId === undefined
+                    ? await models.resolve()
+                    : undefined;
+                  const retained = await botCapabilityStore.getBotBinding(botId);
+                  const snapshot = await botCapabilityCatalog.snapshot({
+                    audienceId,
+                    botId,
+                    ...(retained ? { retainedBindings: [retained] } : {}),
+                  });
+                  return { defaultSelection, snapshot };
                 });
-                inventoryLease.assertCurrent();
+              try {
                 const provider = snapshot.resources.providers.find((candidate) =>
                   providerId !== undefined
                     ? candidate.option.id === providerId

@@ -166,7 +166,8 @@ const extension: BotExtensionDeps = {
     try {
       await withAdmission(botId, (admission) => admission.revalidateBeforeEffect());
       return { ok: true };
-    } catch {
+    } catch (error) {
+      logger.warn("bots", "Bot turn admission failed.", error);
       return { ok: false, reason: "access_changed" };
     }
   },

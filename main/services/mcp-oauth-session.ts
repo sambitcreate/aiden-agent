@@ -3,7 +3,7 @@ import type {
   OAuthClientInformationFull,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
 
@@ -15,6 +15,12 @@ export interface McpOAuthSession {
   codeVerifier?: string;
   /** Last granted scopes survive token invalidation and explicit step-up sign-in. */
   grantedScope?: string;
+  /**
+   * Opaque id minted for each explicit (interactive) authorization. Background
+   * token refreshes keep it, so it names the user's grant rather than whichever
+   * access/refresh token pair currently represents it.
+   */
+  grantId?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,6 +42,9 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
   }
   if (session.grantedScope !== undefined && typeof session.grantedScope !== "string") {
     throw new Error("MCP OAuth granted scope is malformed.");
+  }
+  if (session.grantId !== undefined && (typeof session.grantId !== "string" || !session.grantId)) {
+    throw new Error("MCP OAuth grant id is malformed.");
   }
   if (session.clientInformation !== undefined) {
     if (
@@ -111,6 +120,74 @@ export function sessionForFreshMcpAuthorization(
     ...(session.clientInformation ? { clientInformation: publicMcpClientInformation(session.clientInformation) } : {}),
     ...(grantedScope ? { grantedScope } : {}),
   };
+}
+
+/**
+ * The replacement session an explicit Settings authorization starts from. It
+ * carries a fresh grant id, so committing it is a grant change even when the
+ * user signs in again with the same client registration and scopes.
+ */
+export function sessionForMcpAuthorizationAttempt(
+  session: McpOAuthSession,
+  binding: string,
+): McpOAuthSession {
+  return { ...sessionForFreshMcpAuthorization(session, binding), grantId: randomUUID() };
+}
+
+/** Merge tokens the SDK hands back (code exchange or refresh) into a bound session. */
+export function sessionWithSavedMcpTokens(
+  session: McpOAuthSession,
+  binding: string,
+  tokens: OAuthTokens,
+  requestedScope?: string,
+): McpOAuthSession {
+  const grantedScope = tokens.scope || requestedScope || session.tokens?.scope || session.grantedScope;
+  return {
+    ...session,
+    authorizationBinding: binding,
+    tokens,
+    ...(grantedScope ? { grantedScope } : {}),
+  };
+}
+
+function normalizedScope(scope: string | undefined): string | null {
+  const scopes = [...new Set((scope ?? "").split(/\s+/u).filter(Boolean))].sort();
+  return scopes.length ? scopes.join(" ") : null;
+}
+
+/** Non-secret description of the authority an MCP OAuth session grants. */
+export interface McpOAuthGrantIdentity {
+  authorizationBinding: string | null;
+  clientId: string | null;
+  grantId: string | null;
+  scope: string | null;
+  authorized: boolean;
+  refreshable: boolean;
+}
+
+/**
+ * What "the same grant" means for Bot authority. Access tokens, their expiry
+ * and (rotating) refresh tokens change on every routine refresh and are left
+ * out. The grant is the resource binding, the client registration, the
+ * explicit-authorization id, the granted scope, and whether a usable
+ * (refreshable) token is held. Re-authorizing, signing out, a revoked token
+ * (`invalidateCredentials("tokens")`), a new client registration, or a scope
+ * change all change it.
+ */
+export function mcpOAuthGrantIdentity(session: McpOAuthSession): McpOAuthGrantIdentity | null {
+  if (!hasMcpOAuthSessionData(session)) return null;
+  return {
+    authorizationBinding: session.authorizationBinding ?? null,
+    clientId: session.clientInformation?.client_id ?? null,
+    grantId: session.grantId ?? null,
+    scope: normalizedScope(session.tokens?.scope || session.grantedScope),
+    authorized: Boolean(session.tokens),
+    refreshable: Boolean(session.tokens?.refresh_token),
+  };
+}
+
+export function sameMcpOAuthGrant(left: McpOAuthSession, right: McpOAuthSession): boolean {
+  return JSON.stringify(mcpOAuthGrantIdentity(left)) === JSON.stringify(mcpOAuthGrantIdentity(right));
 }
 
 /** Per-attempt state: never persisted or shared with another server's sign-in. */

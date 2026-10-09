@@ -217,6 +217,9 @@ export class ProviderRegistry {
         }, { getDeviceId: getProviderLoginDeviceId }),
       commitCredential: async (credential: unknown) => {
         await this.credentials.modify(providerId, async () => credential as Credential);
+        // An explicit sign-in is a new grant even when it looks like the old
+        // one (the store only fences grant-identity changes, not refreshes).
+        invalidateBotRuntimeInventoryAuthority("provider_credential");
         // Credential setup is an explicit network action. Publish this
         // provider's current Pi catalog before reporting setup complete so
         // newly released models appear immediately on Mac and paired clients.

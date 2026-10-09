@@ -33,8 +33,40 @@ interface EncryptedPiCredentialStoreOptions {
   /** A committed write stays successful when directory fsync is unsupported. */
   onDurabilityWarning?(error: Error): void;
   syncDirectory?(directory: string): Promise<void>;
-  beforeWritePublish?(): void;
-  afterWritePublish?(): void;
+  /** Runs around every publication; `grantChanged` is false for an in-place OAuth refresh. */
+  beforeWritePublish?(change: PiCredentialWriteChange): void;
+  afterWritePublish?(change: PiCredentialWriteChange): void;
+}
+
+export interface PiCredentialWriteChange {
+  readonly grantChanged: boolean;
+}
+
+/**
+ * OAuth fields that rotate on every refresh (or, for Copilot, are refreshed
+ * catalog metadata) rather than describing the signed-in grant.
+ */
+const VOLATILE_OAUTH_FIELDS = new Set(["access", "refresh", "expires", "availableModelIds"]);
+
+/**
+ * The non-secret-bearing part of a stored credential that identifies the
+ * grant. API keys are their whole credential. OAuth logins keep only stable
+ * metadata (account id, enterprise URL, client id, scopes, ...), so a token
+ * refresh keeps the same identity while signing out or into a different
+ * account changes it.
+ */
+export function piCredentialGrantIdentity(credential: Credential): unknown {
+  if (credential.type !== "oauth") return credential;
+  return Object.fromEntries(
+    Object.entries(credential)
+      .filter(([key]) => !VOLATILE_OAUTH_FIELDS.has(key))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+  );
+}
+
+function samePiCredentialGrant(left: Credential | undefined, right: Credential | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return JSON.stringify(piCredentialGrantIdentity(left)) === JSON.stringify(piCredentialGrantIdentity(right));
 }
 
 class AsyncMutex {
@@ -203,6 +235,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
   private async writeDocument(
     document: CredentialDocument,
     beginPublication: () => void,
+    change: PiCredentialWriteChange = { grantChanged: true },
   ): Promise<void> {
     const destination = await this.resolvedFilePath();
     const directory = path.dirname(destination);
@@ -216,10 +249,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
       await handle.sync();
       await handle.close();
       handle = undefined;
-      this.options.beforeWritePublish?.();
+      this.options.beforeWritePublish?.(change);
       beginPublication();
       await fs.rename(temporary, destination);
-      this.options.afterWritePublish?.();
+      this.options.afterWritePublish?.(change);
     } catch (error) {
       await handle?.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
@@ -338,7 +371,9 @@ export class EncryptedPiCredentialStore implements CredentialStore {
             const document = await this.readDocument();
             options?.signal?.throwIfAborted();
             document.entries[providerId] = encrypted;
-            await this.writeDocument(document, beginPublication);
+            await this.writeDocument(document, beginPublication, {
+              grantChanged: !samePiCredentialGrant(current, next),
+            });
           });
           return next;
         },
