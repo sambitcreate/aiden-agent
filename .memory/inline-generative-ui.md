@@ -15,9 +15,26 @@ Spec: `docs/superpowers/specs/2026-10-08-inline-generative-ui-design.md`. Plan: 
 - **Handoff.** Visuals render inside `AssistantResponse` rows, so the iframe remounts once at stream→settled handoff. A module-level preview/height cache avoids a refetch and a height jump, but guest state set during a running turn resets. This is an accepted trade-off, open for a later restructure.
 - **Availability.** Visuals are available in every attended desktop chat. `path` needs a workspace with file access. `AppearanceConfig.inlineVisuals` is sent per turn as `GenerationParams.inlineVisuals`.
 - **Remote/mobile.** Unchanged in Phase 1 (contract revision 26). Turns sent from a phone run with `inlineVisuals: "off"` (`remoteGenerationSurface`) until phones can render visuals. Placements and drafts are desktop-only until Phase 3 (`chat-visuals-v1`).
+- **Phase 2: native visuals (`render_ui`).** Branch `feature/inline-generative-ui-catalog` is stacked on PR #429. The full design is in `docs/pi-gui-artifacts.md` (Native visuals).
+  - **Tool registration.** `render_ui` lives in the same generative-ui extension as `render_artifact` (one gate, setting and registration). It is offered only when the host passes `onUiVisual`, which desktop does and Design runs do not.
+  - **Compiler and catalog.** The compiler and catalog are shared pure TypeScript in `renderer/shared/aiden-ui/`.
+    - Parser rules: `Code`, `Math`, `Markdown` and `Data` bodies are raw text, so braces in LaTeX and code never parse as expressions. `Text` accepts inline `Kbd`, `Badge`, `Icon` and `Math`.
+    - The expression AST keys (`op`, `v`, `name`, `of`, `key`, `o`, `l`, `r`, `e`, `test`, `then`, `else`, `fn`, `a`; actions `act`, `text`, `key`, `value`, `url`) and every catalog prop are wire-safe (`isWireSafeKey` mirrors the phones' private-key validators). Keep it that way, or Phase 4 cannot ship trees to phones.
+  - **Storage.** `ChatMessage.uiVisuals` is parsed leniently. Local state is saved with `chats:updateUiVisualState` (no metadata bump), 800 ms after the last change. State changed while the visual is still streaming is not saved and resets at settle.
+  - **Live events.** `ui` and `ui_draft`, retracted with `draft_end`. llm-client fans one `visualDrafts` object out to the HTML and UI draft sessions.
+  - **Renderer.**
+    - `AidenUiBlock` and the catalog component map live in `renderer/components/aiden-ui/`. Placement uses `renderer/lib/ui-visual-transcript.ts`.
+    - Chart.js is imported lazily (`chart.js/auto`, its own chunk) behind the `setChartModuleLoader` test seam.
+    - Radix roving focus moves asynchronously in happy-dom, so wait for it with `waitFor`. A modal Dialog hides the rest of the page from role queries until it closes.
+  - **Shared primitives.** `renderer/components/ui-primitives.tsx` holds Segmented, Tabs, Checkbox, Slider, Progress, Tooltip, Disclosure, Kbd, Stat and DataTable.
+    - Scheduled tasks' status filter is a Segmented radio group, so its e2e uses role `radio` and `aria-checked`.
+    - The update and runtime-install progress bars use `Progress`.
+    - The global `:focus-visible` rule already draws the neutral ring for buttons, radios, checkboxes and `[tabindex]`, so primitives add no focus classes.
+  - **Onboarding.** Tile `inlineVisuals` with `features/inline-visuals.png`, an SVG composed in the clay style and rasterized with Playwright `omitBackground`. `npm run assets:onboarding` also rewrote `tool-scripts.png`; restore unrelated assets after running it.
 
 ## Tests
 
 - `npm run test:generative-ui`: units, the vendor-script test, and Chromium containment (bridge, draft, shrink, rem).
 - happy-dom component tests: `renderer/components/html-artifact-frame.test.tsx`, `message-list-visuals.test.tsx`. Compare DOM nodes as booleans; printing a happy-dom node in an assert diff hangs.
 - e2e: `settings-unification.spec.ts` "inline visuals preference…".
+- Phase 2: `renderer/shared/aiden-ui/*.test.ts` (parser vectors including every streaming prefix, `fixtures/expressions.json`, the compile corpus in `fixtures/markup/*.aum`), `renderer/components/ui-primitives.test.tsx`, `renderer/components/aiden-ui/aiden-ui-block.test.tsx` (Chart.js stubbed), `main/services/aiden-ui-{tool,draft}.test.ts`, `main/handlers/chat-ui-visual-state.test.ts`, `renderer/lib/ui-visual-transcript.test.ts`. The CLI needs `npm ci` in `packages/cli` before `npm run build && npm test`.

@@ -55,6 +55,29 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
 
 Limits: 4 HTML artifacts per response, 40 per chat, 8 MiB staged HTML per chat, titles 1–120 characters without controls.
 
+## Native visuals (`render_ui`)
+
+The model composes a visual from Aiden's own component catalog instead of writing HTML. The guide and system prompt tell it to prefer `render_ui` and keep `render_artifact` for custom drawing or scripting.
+
+1. **Markup.** `render_ui({ title, layout?, markup })` takes Aiden UI Markup (AUM): JSX-like catalog elements, `{expressions}` over `<Data name="…">{json}</Data>` and `<Visual state={{…}}>`, and actions (`sendPrompt`, `setState`, `openUrl`, `copy`). The catalog (`renderer/shared/aiden-ui/catalog.ts`) is the single source of truth. The `visualize_guide` `catalog` module is generated from it, and a test keeps the guide's example compiling cleanly.
+2. **Compiler.** `renderer/shared/aiden-ui/` holds the shared pure TypeScript used by main, the renderer and the CLI:
+   - **Parser (`parse.ts`).** Tolerant: auto-closes elements at a stream cut, drops an unfinished attribute, and treats `Data`, `Code`, `Math` and `Markdown` bodies as raw text.
+   - **Expressions (`expression.ts`).** Expressions become a JSON AST and never JS. There is no `-`, `*`, `/`, method call or arrow function.
+   - **Compile (`compile.ts`).** Unknown elements are dropped but their content kept; bad props are dropped. Every repair becomes a diagnostic returned to the model in the tool result.
+   - **Evaluator (`evaluate.ts`).** Pure, own-properties only, prototype keys blocked, with a step budget and a 10,000-item list cap. Its semantics are pinned by `fixtures/expressions.json`, which the Swift and Kotlin ports will reuse.
+   - **Fallback text (`fallback-text.ts`).** Renders the visual's initial state as Markdown-ish text for memory, the CLI and clients without a renderer.
+3. **Contract.** `ChatUiVisualV1 { version, kind: "ui", id, toolCallId?, title, catalogVersion, tree, dataJson?, state?, fallbackText, layout? }` lives in the message field `uiVisuals`. It is parsed leniently per entry, so one bad visual never hides the others. Key names avoid every key Aiden Remote clients treat as private (`isWireSafeKey`), and the model's data is stored as a JSON string (`dataJson`) so its keys are never wire keys.
+4. **Limits.** 2,000 nodes, depth 24, 64 KiB of data, a 256 KiB tree, 4 KiB of state, 8 visuals per response and 60 per chat; `<Each>` repeats at most 500 times.
+5. **Live.** While `markup` streams, main compiles drafts every 250 ms and sends `ui_draft` events; `draft_end` retracts them. The presented visual arrives as a `ui` event, and a same-title revision keeps its first id and position.
+6. **Renderer.** `AidenUiBlock` (`renderer/components/aiden-ui/`) draws the tree with the shared primitives in `ui.tsx` and `ui-primitives.tsx`. Visuals are placed after their tool row like HTML visuals.
+   - Bound inputs and `setState` run locally.
+   - `sendPrompt` goes through the shared visual follow-up path, and is added to the composer while a reply runs.
+   - `openUrl` accepts only https links and always asks first.
+   - `copy` uses the clipboard.
+   - Local state is saved 800 ms after the last change (`chats:updateUiVisualState`).
+   - Charts use a lazily loaded Chart.js with the live `--chart-1…8` tokens, and every chart has a screen-reader table of its numbers.
+7. **CLI.** `render_ui` compiles with the same compiler and prints the fallback text.
+
 ## Extension points
 
 - Add future payloads to the closed `ChatArtifactV1` union in `renderer/shared/chat-artifacts.ts`; do not weaken an existing parser. Interactive HTML widgets use kind `"html"` and a sandboxed frame, not Markdown HTML.
