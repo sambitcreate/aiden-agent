@@ -4,7 +4,7 @@
 import { effectiveTask } from "../../renderer/shared/voice-language.js";
 import { speechEngine, type EngineTranscribeRequest, type EngineTranscribeResult } from "./local-speech-engine.js";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
-import { decodeOggOpusToPcm16k } from "./local-speech-opus.js";
+import { decodeOggOpusToPcm16k, OggOpusTooLongError } from "./local-speech-opus.js";
 import {
   isLocalSpeechParentMessage,
   LOCAL_SPEECH_PROTOCOL_VERSION,
@@ -24,7 +24,7 @@ export interface LocalSpeechWorkerEngine {
 
 export interface LocalSpeechWorkerOptions {
   /** Ogg/Opus → 16 kHz mono float samples. Without one, Ogg/Opus is unsupported audio. */
-  decodeOggOpus?: (bytes: Uint8Array) => Promise<Float32Array>;
+  decodeOggOpus?: (bytes: Uint8Array, options: { maxSamples: number }) => Promise<Float32Array>;
 }
 
 class UnsupportedAudioError extends Error {
@@ -40,9 +40,17 @@ function pcm16ToFloat32(pcm: Int16Array): Float32Array {
 async function decodeAudio(audio: LocalSpeechAudio, options: LocalSpeechWorkerOptions): Promise<Float32Array> {
   if (audio.kind === "pcm16") return pcm16ToFloat32(audio.pcm);
   if (!options.decodeOggOpus) throw new UnsupportedAudioError("On-device voice can't decode Ogg/Opus audio yet.");
-  const samples = await options.decodeOggOpus(audio.bytes);
-  // PCM frames are bounded by the protocol guard; compressed notes are only
-  // bounded once decoded, so enforce the same 30-minute limit here.
+  let samples: Float32Array;
+  try {
+    // The decoder stops at the cap while decoding, so an over-long note never
+    // holds its full PCM. The check below still guards any injected decoder.
+    samples = await options.decodeOggOpus(audio.bytes, { maxSamples: MAX_PCM_SAMPLES });
+  } catch (error) {
+    if (error instanceof OggOpusTooLongError) throw new UnsupportedAudioError(error.message);
+    throw error;
+  }
+  // PCM frames are bounded by the protocol guard; compressed notes are bounded
+  // by the decoder, and the trimmed length is checked here as well.
   if (samples.length > MAX_PCM_SAMPLES) {
     throw new UnsupportedAudioError("This voice note is too long for on-device transcription.");
   }

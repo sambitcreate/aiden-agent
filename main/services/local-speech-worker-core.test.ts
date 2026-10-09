@@ -4,7 +4,8 @@ import { speechModel, type SpeechModelSpec } from "./local-speech-catalog.js";
 import { ModelMissingError, type EngineTranscribeRequest } from "./local-speech-engine.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechParentMessage } from "./local-speech-protocol.js";
 import { readFile } from "node:fs/promises";
-import { decodeOggOpusToPcm16k } from "./local-speech-opus.js";
+import { decodeOggOpusToPcm16k, OggOpusTooLongError } from "./local-speech-opus.js";
+import { MAX_PCM_SAMPLES } from "./local-speech-protocol.js";
 import {
   createLocalSpeechMessageHandler,
   replyToWorkerFrame,
@@ -134,6 +135,21 @@ test("ogg-opus audio is decoded when a decoder is provided", async () => {
   );
   assert.equal(reply.kind, "result");
   assert.equal(fake.requests[0]!.samples, decoded);
+});
+
+test("the decoder is given the 30-minute cap and its too-long rejection maps to unsupported audio", async () => {
+  const fake = fakeEngine();
+  const caps: Array<number | undefined> = [];
+  const reply = await createLocalSpeechMessageHandler(fake.engine, {
+    decodeOggOpus: async (_bytes, options) => {
+      caps.push(options?.maxSamples);
+      throw new OggOpusTooLongError();
+    },
+  })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }));
+  assert.deepEqual(caps, [MAX_PCM_SAMPLES]);
+  assert.equal(reply.kind === "failure" && reply.code, "unsupported-audio");
+  assert.equal(reply.kind === "failure" && reply.message, "This voice note is too long for on-device transcription.");
+  assert.equal(fake.requests.length, 0);
 });
 
 test("an Ogg/Opus note that decodes past 30 minutes fails cleanly without reaching the engine", async () => {
