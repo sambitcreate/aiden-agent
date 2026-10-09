@@ -232,7 +232,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. Keep audio on your Mac with on-device models, or explicitly connect cloud transcription and review what it can access.",
+      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. On-device models keep audio on this computer, or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     size: "standard",
   },
