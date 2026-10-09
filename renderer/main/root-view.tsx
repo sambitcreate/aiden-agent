@@ -290,6 +290,7 @@ function RootContent() {
         queryClient.invalidateQueries({
           queryKey: ["chat-pull-request-pending", ...(scoped ? [chatId] : [])],
         }),
+        queryClient.invalidateQueries({ queryKey: ["chat-pull-requests-sidebar"] }),
       ]);
     });
   }, [queryClient]);
