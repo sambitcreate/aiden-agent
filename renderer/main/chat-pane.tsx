@@ -142,7 +142,7 @@ import {
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
+import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
 import {
   CODEX_THINKING_LEVELS,
   normalizeCodexThinkingLevel,
@@ -1284,6 +1284,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             setVisualDrafts((current) => reduceVisualDrafts(current, event));
             if (event.operation === "draft" || event.operation === "draft_end") return;
+            if (event.operation === "ui" || event.operation === "ui_draft") return;
             if (event.operation === "reset") {
               setStreamingArtifacts([]);
               streamingArtifactsRef.current = [];
@@ -2462,7 +2463,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     toolActivity,
   });
   const visualizingLive =
-    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||
+      hasActiveToolStep(displayedGenerationTimeline, RENDER_UI_TOOL_NAME)) &&
     !streamComplete && !visibleDetachedProjection;
   const timelineActivity = visualizingLive &&
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
@@ -2479,7 +2481,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
     visualizingVisible:
       visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" && step.toolName === RENDER_ARTIFACT_TOOL_NAME)) === true,
+        row.steps.some((step) => step.kind === "tool" &&
+          (step.toolName === RENDER_ARTIFACT_TOOL_NAME || step.toolName === RENDER_UI_TOOL_NAME))) === true,
     toolVisible:
       chronologicalLiveRows?.some((row) => row.kind === "activity" &&
         row.steps.some((step) => step.kind === "tool" &&

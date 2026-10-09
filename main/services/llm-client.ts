@@ -395,6 +395,9 @@ import {
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
+import { createUiDraftSession } from "./aiden-ui-draft.js";
+import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
 import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
@@ -828,6 +831,9 @@ async function prepareGeneration(
   const displayedHtmlIds = new Set<string>();
   /** mediaId → the render_artifact call it renders after. */
   const htmlArtifactPlacements = createArtifactPlacementLedger();
+  const displayedUiVisuals: ChatUiVisualV1[] = [];
+  /** visual id → the render_ui call it renders after. */
+  const uiVisualPlacements = createArtifactPlacementLedger();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
@@ -887,6 +893,8 @@ async function prepareGeneration(
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      displayedUiVisuals,
+      uiVisualPlacements,
       supportsImages: runtimeSupportsImages(designModel),
       thinkingLevel: resolveGenerationThinkingLevel(
         params.providerId,
@@ -1780,6 +1788,20 @@ async function prepareGeneration(
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
+      existingChatUiCount: displayedAssistantUiCount(chat.messages),
+      onUiVisual: (visual, context) => {
+        uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");
+        const toolCallId = uiVisualPlacements.publicIdFor(visual.id);
+        const placed: ChatUiVisualV1 = toolCallId ? { ...visual, toolCallId } : visual;
+        const index = displayedUiVisuals.findIndex((item) => item.id === visual.id);
+        if (index >= 0) displayedUiVisuals[index] = placed;
+        else displayedUiVisuals.push(placed);
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui", visual: placed },
+        });
+        return true;
+      },
       onArtifact: async (artifact, html, context) => {
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
@@ -1860,6 +1882,8 @@ async function prepareGeneration(
     displayedImages,
     displayedHtmlArtifacts,
     htmlArtifactPlacements,
+    displayedUiVisuals,
+    uiVisualPlacements,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -2223,6 +2247,8 @@ export const llmClient = {
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      displayedUiVisuals,
+      uiVisualPlacements,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -2296,16 +2322,41 @@ export const llmClient = {
     }
     // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
     htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    uiVisualPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     // Drafts only stream when render_artifact is really registered this turn
     // (not when visuals are Off, or for surfaces that never get the tool).
     const visualsRegistered = generationExtensions.some(
       (extension) => extension.id === GENERATIVE_UI_EXTENSION_ID,
     );
-    const visualDrafts = createGenerativeUiDraftSession({
+    const htmlVisualDrafts = createGenerativeUiDraftSession({
       enabled: visualsRegistered,
       publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
       send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
     });
+    const uiVisualDrafts = createUiDraftSession({
+      enabled: visualsRegistered,
+      publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
+      send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
+    });
+    // Each session ignores tool calls that are not its own.
+    const visualDrafts = {
+      delta(rawToolCallId: string, toolName: string, args: unknown) {
+        htmlVisualDrafts.delta(rawToolCallId, toolName, args);
+        uiVisualDrafts.delta(rawToolCallId, toolName, args);
+      },
+      end(rawToolCallId: string) {
+        htmlVisualDrafts.end(rawToolCallId);
+        uiVisualDrafts.end(rawToolCallId);
+      },
+      cancel(rawToolCallId: string) {
+        htmlVisualDrafts.cancel(rawToolCallId);
+        uiVisualDrafts.cancel(rawToolCallId);
+      },
+      dispose() {
+        htmlVisualDrafts.dispose();
+        uiVisualDrafts.dispose();
+      },
+    };
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
@@ -2326,7 +2377,8 @@ export const llmClient = {
         !subagents &&
         !providerFailure &&
         assistantAttachments.length === 0 &&
-        displayedHtmlArtifacts.length === 0
+        displayedHtmlArtifacts.length === 0 &&
+        displayedUiVisuals.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -2363,6 +2415,12 @@ export const llmClient = {
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
             htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
+            uiVisuals: displayedUiVisuals.length
+              ? displayedUiVisuals.map((visual) => {
+                  const toolCallId = uiVisualPlacements.publicIdFor(visual.id);
+                  return toolCallId ? { ...visual, toolCallId } : visual;
+                })
+              : undefined,
           },
           {
             providerId: params.providerId,
@@ -4209,6 +4267,7 @@ export const llmClient = {
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
               displayedHtmlArtifacts.length +
+              displayedUiVisuals.length +
               (designRun?.acceptedCount() ?? 0),
           ) &&
           !wasCancelled

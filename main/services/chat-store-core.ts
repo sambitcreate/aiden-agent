@@ -36,6 +36,7 @@ import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
@@ -846,6 +847,7 @@ export function createChatStore(
           assistant && message.htmlArtifacts
             ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
             : undefined,
+        uiVisuals: assistant ? parseChatUiVisuals(message.uiVisuals) : undefined,
         reasoning:
           assistant &&
           typeof message.reasoning === "string" &&
@@ -922,7 +924,8 @@ export function createChatStore(
         message.role === "assistant" &&
         (message.content.trim().length > 0 ||
           (message.attachments?.length ?? 0) > 0 ||
-          (message.htmlArtifacts?.length ?? 0) > 0) &&
+          (message.htmlArtifacts?.length ?? 0) > 0 ||
+          (message.uiVisuals?.length ?? 0) > 0) &&
         Number.isSafeInteger(message.createdAt) &&
         message.createdAt >= 0,
       );
@@ -1402,6 +1405,7 @@ export function createChatStore(
             charge(artifact.title);
             charge(artifact.mediaId);
           }
+          for (const visual of message.uiVisuals ?? []) charge(JSON.stringify(visual));
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
@@ -1428,6 +1432,8 @@ export function createChatStore(
                     ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
                   }))
                 : undefined,
+            uiVisuals:
+              message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
             skill:
               message.role === "user"
                 ? parseSkillProvenanceV1(message.skill)
@@ -1707,6 +1713,8 @@ export function createChatStore(
             message.role === "assistant" && message.htmlArtifacts
               ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
               : undefined,
+          uiVisuals:
+            message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
           skill:
             message.role === "user"
               ? parseSkillProvenanceV1(message.skill)

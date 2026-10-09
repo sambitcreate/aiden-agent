@@ -83,6 +83,15 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         sourceId: attachment.id,
       });
     }
+    for (const visual of message.uiVisuals ?? []) {
+      documents.push({
+        id: metadataId(chat.id, "ui-visual", visual.id),
+        kind: "artifact",
+        text: boundedMetadataText(`Visual ${visual.title}. ${visual.fallbackText}`),
+        chatId: chat.id,
+        sourceId: visual.id,
+      });
+    }
     for (const artifact of message.htmlArtifacts ?? []) {
       documents.push({
         id: metadataId(chat.id, "artifact", artifact.id),

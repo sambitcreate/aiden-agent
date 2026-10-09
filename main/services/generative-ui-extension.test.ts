@@ -12,6 +12,9 @@ import {
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import { AIDEN_UI_CATALOG } from "../../renderer/shared/aiden-ui/catalog.js";
+import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
+import { AIDEN_UI_GUIDE_EXAMPLE } from "./generative-ui-guide.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -26,6 +29,35 @@ async function workspace(): Promise<string> {
   temporaryDirectories.push(directory);
   return directory;
 }
+
+test("render_ui is offered only when the host can present native visuals", async () => {
+  const presented: string[] = [];
+  const withUi = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: () => undefined,
+    onUiVisual: (visual) => {
+      presented.push(visual.title);
+    },
+  });
+  const names = withUi.tools?.map((tool) => tool.name);
+  assert.deepEqual(names, [GENERATIVE_UI_TOOL_NAME, "render_ui", "visualize_guide"]);
+  const renderUi = withUi.tools?.find((tool) => tool.name === "render_ui");
+  await renderUi?.execute("call-1", { title: "Board", markup: "<Visual><Text>Hi</Text></Visual>" });
+  assert.deepEqual(presented, ["Board"]);
+  const htmlOnly = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
+  assert.deepEqual(htmlOnly.tools?.map((tool) => tool.name), [GENERATIVE_UI_TOOL_NAME, "visualize_guide"]);
+});
+
+test("the catalog guide documents every component and its example compiles cleanly", async () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
+  const guide = extension.tools?.find((tool) => tool.name === "visualize_guide");
+  const result = await guide!.execute("g", { modules: ["catalog"] });
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+  for (const name of Object.keys(AIDEN_UI_CATALOG)) assert.match(text, new RegExp(`\`${name}\``, "u"), name);
+  const compiled = compileAum(AIDEN_UI_GUIDE_EXAMPLE);
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(text.includes(AIDEN_UI_GUIDE_EXAMPLE));
+});
 
 test("visuals are available without a workspace and follow the inline-visuals mode", () => {
   const base = { usageSource: "chat", assistantMode: false, permission: "none", excluded: false };

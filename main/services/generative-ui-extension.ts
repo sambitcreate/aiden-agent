@@ -31,6 +31,7 @@ import {
   isGenerativeUiGuideModule,
 } from "./generative-ui-guide.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
+import { createRenderUiTool, type RenderUiToolOptions } from "./aiden-ui-tool.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
@@ -98,6 +99,9 @@ export interface GenerativeUiExtensionOptions {
     context: { toolCallId: string; layout: HtmlArtifactLayout },
   ) => boolean | void | Promise<boolean | void>;
   beforeArtifact?: () => void | Promise<void>;
+  /** Registers render_ui (Aiden's native catalog) when the host can present it. */
+  onUiVisual?: RenderUiToolOptions["onUiVisual"];
+  existingChatUiCount?: number;
 }
 
 function resolveWorkspaceHtml(
@@ -338,11 +342,24 @@ export function createGenerativeUiExtensionRuntime(
     extension: {
       id: GENERATIVE_UI_EXTENSION_ID,
       systemPrompt:
-        "Aiden can draw inline visuals in this chat with render_artifact. Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden desktop chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before html) when it needs room, such as a dashboard, UI mockup, multi-panel layout, or wide table, and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (design, html, charts, interactive). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
+        (options.onUiVisual
+          ? "Aiden can draw inline visuals in this chat. Prefer render_ui, which composes Aiden's own native components (charts, stats, tables, comparisons, checklists, steps, simple filters and tabs); use render_artifact (sandboxed HTML) only for custom drawing or scripting. "
+          : "Aiden can draw inline visuals in this chat with render_artifact. ") +
+        "Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden desktop chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before the markup or html) when it needs room, such as a dashboard, UI mockup, multi-panel layout, or wide table, and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (catalog for render_ui; design, html, charts, interactive for render_artifact). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
         (options.preferArtifactThisTurn
           ? " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
           : ""),
-      tools: [tool, guideTool],
+      tools: options.onUiVisual
+        ? [
+            tool,
+            createRenderUiTool({
+              namespace: `${artifactNamespace}:ui`,
+              existingChatUiCount: options.existingChatUiCount ?? 0,
+              onUiVisual: options.onUiVisual,
+            }),
+            guideTool,
+          ]
+        : [tool, guideTool],
     },
   };
 }
