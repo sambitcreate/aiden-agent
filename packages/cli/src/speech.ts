@@ -77,6 +77,8 @@ export function createCliSpeech(agentDir: string) {
       const result = await runWithCrashRetry(async () => {
         if (needsFreshWorker(loaded, target)) await retireWorker();
         current = getClient();
+        // Recorded before the request is sent: a failed transcribe can still leave the model held.
+        loaded = { modelId, languageKey: speechLanguageKey(spec.family, request.language) };
         return current.transcribe(request);
       }, {
         isCancelled: () => false,
@@ -87,7 +89,6 @@ export function createCliSpeech(agentDir: string) {
           dropClient(current);
         },
       });
-      loaded = { modelId, languageKey: speechLanguageKey(spec.family, request.language) };
       return result.text;
     },
     recordUsage: (record) => recordUsageRecord(agentDir, record),

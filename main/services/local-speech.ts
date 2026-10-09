@@ -23,7 +23,7 @@ import {
 } from "./local-speech-process-core.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechAudio } from "./local-speech-protocol.js";
 import { handleLocalSpeechMessage } from "./local-speech-worker-core.js";
-import { LocalSpeechWorkerHost, speechLanguageKey, type SpeechWorkerTarget } from "./local-speech-worker-host.js";
+import { LocalSpeechWorkerHost, type SpeechWorkerTarget } from "./local-speech-worker-host.js";
 import type { LocalSpeechState } from "../../renderer/shared/local-speech-state.js";
 import { LocalSpeechModelState } from "./local-speech-model-state.js";
 
@@ -193,7 +193,6 @@ export async function warmLocalVoice(modelId: string): Promise<void> {
           const worker = await host.prepare({ modelId, family: model.spec.family, language: null });
           request.announceLoad();
           await worker.load(modelId, model.directory, model.spec);
-          host.recordLoaded({ modelId, languageKey: speechLanguageKey(model.spec.family, null) });
         } catch (error) {
           if (!isolationUnavailable(error)) throw error;
           request.announceLoad();
@@ -257,9 +256,7 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
                 signal.throwIfAborted();
               }
               load.announceLoad();
-              const reply = await activeClient.transcribe(request);
-              host.recordLoaded({ modelId, languageKey: speechLanguageKey(model.spec.family, request.language) });
-              return reply;
+              return activeClient.transcribe(request);
             },
             {
               isCancelled: () => signal?.aborted === true,

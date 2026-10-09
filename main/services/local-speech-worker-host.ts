@@ -120,15 +120,15 @@ export class LocalSpeechWorkerHost {
   /**
    * The worker to run `target` on. A worker that holds a different model, or a
    * SenseVoice recognizer for another language, is retired (and awaited) first.
+   * The target is recorded as held before the caller sends its load or
+   * transcribe: a load that then fails can leave the native model partly built,
+   * so the next request must not reuse this worker for another model.
    */
   async prepare(target: SpeechWorkerTarget): Promise<LocalSpeechProcessClient> {
     if (needsFreshWorker(this.loaded, target)) await this.retire();
-    return this.acquire();
-  }
-
-  /** Call after a worker answered a load or transcribe with success. */
-  recordLoaded(model: LoadedSpeechModel): void {
-    this.loaded = model;
+    const client = await this.acquire();
+    this.loaded = { modelId: target.modelId, languageKey: speechLanguageKey(target.family, target.language) };
+    return client;
   }
 
   /**
