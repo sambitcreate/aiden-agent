@@ -53,10 +53,15 @@ export class BotRoutineProposalNotFoundError extends Error {
 
 export interface BotRoutineProposalServiceDependencies {
   profileDir(): string;
-  routines: Pick<BotRoutineService, "create">;
+  routines: Pick<BotRoutineService, "create" | "findBySourceProposal">;
   defaultTimezone(): string;
   /** Append a display entry to the Bot's conversation (used outside a tool call). */
   appendEntry(botId: string, kind: string, data: Record<string, unknown>): Promise<void>;
+  /**
+   * The Bot's active conversation entries: the same entries the live
+   * projection turns into cards. Accepting reads the proposal from here.
+   */
+  conversationEntries(botId: string): Promise<readonly { kind: string; data?: unknown }[]>;
   now?(): number;
   newId?(): string;
 }
@@ -148,9 +153,83 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     await writeJsonAtomic(fileOf(botId), { version: 1, proposals: kept }, { mode: 0o600, mkdirMode: 0o700 });
   }
 
+  /**
+   * Settle `records[index]`: the card first (status entry), then the record.
+   * Either write failing leaves the record unsettled, and the next answer or
+   * read settles it again; a repeated status entry folds the same way.
+   */
+  async function settle(
+    botId: string,
+    records: BotRoutineProposalRecord[],
+    index: number,
+    status: Exclude<BotRoutineProposalStatus, "pending">,
+    routineId?: string,
+  ): Promise<BotRoutineProposalRecord> {
+    const record = records[index]!;
+    const data: BotRoutineProposalStatusEntryData = {
+      proposalId: record.proposalId,
+      status,
+      ...(routineId !== undefined ? { routineId } : {}),
+    };
+    await dependencies.appendEntry(botId, BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND, { ...data });
+    const { routineId: _previous, ...rest } = record;
+    const next: BotRoutineProposalRecord = {
+      ...rest,
+      status,
+      ...(routineId !== undefined ? { routineId } : {}),
+      decidedAt: now(),
+    };
+    records[index] = next;
+    await save(botId, records);
+    return next;
+  }
+
+  /**
+   * A routine created from a proposal is the committed answer, whatever the
+   * record says: an Add routine cut short after creating it (a failed status
+   * write, a quit) settles as accepted rather than staying open or turning
+   * into Not added. Must run inside `serial(botId)`.
+   */
+  async function reconcile(botId: string, records: BotRoutineProposalRecord[]): Promise<BotRoutineProposalRecord[]> {
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]!;
+      if (record.status === "accepted") continue;
+      const created = await dependencies.routines.findBySourceProposal(botId, record.proposalId);
+      if (created) await settle(botId, records, index, "accepted", created.id);
+    }
+    return records;
+  }
+
+  /**
+   * The proposal exactly as its card shows it, from the conversation entry
+   * the live projection renders, never from `routine-proposals.json` (which
+   * a Full-access shell can rewrite). A missing, unreadable or ambiguous
+   * card is no longer something the person agreed to.
+   */
+  async function shownProposal(botId: string, proposalId: string) {
+    const shown = new Map<string, ReturnType<typeof parseBotRoutineCreate> & { timezone: string }>();
+    for (const entry of await dependencies.conversationEntries(botId)) {
+      if (entry.kind !== BOT_ROUTINE_PROPOSAL_ENTRY_KIND) continue;
+      const data = entry.data as Partial<BotRoutineProposalEntryData> | null;
+      if (!data || typeof data !== "object" || data.proposalId !== proposalId) continue;
+      let parsed;
+      try {
+        if (typeof data.timezone !== "string") throw new Error("missing timezone");
+        parsed = parseBotRoutineCreate({ botId, name: data.name, schedule: data.schedule, prompt: data.prompt, timezone: data.timezone });
+      } catch {
+        throw new BotRoutineProposalNotFoundError();
+      }
+      const proposal = { ...parsed, timezone: parsed.timezone ?? data.timezone };
+      shown.set(JSON.stringify([proposal.name, proposal.prompt, proposal.schedule, proposal.timezone]), proposal);
+    }
+    if (shown.size !== 1) throw new BotRoutineProposalNotFoundError();
+    return [...shown.values()][0]!;
+  }
+
   return {
-    async list(botId: string): Promise<BotRoutineProposalRecord[]> {
-      return load(botId);
+    /** The stored proposals, settling any whose routine already exists. */
+    list(botId: string): Promise<BotRoutineProposalRecord[]> {
+      return serial(botId, async () => reconcile(botId, await load(botId)));
     },
 
     /**
@@ -174,7 +253,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         if (reason !== undefined && [...reason].length > BOT_ROUTINE_PROPOSAL_REASON_LIMIT) {
           return { ok: false, code: "invalid", error: `The reason is at most ${BOT_ROUTINE_PROPOSAL_REASON_LIMIT} characters.` };
         }
-        const records = await load(botId);
+        const records = await reconcile(botId, await load(botId));
         if (records.filter((record) => record.status === "pending").length >= BOT_ROUTINE_PROPOSAL_PENDING_LIMIT) {
           return {
             ok: false,
@@ -203,9 +282,10 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     },
 
     /**
-     * The person's answer. Accept creates the routine (idempotent by the
-     * proposal id); either decision appends a status entry. A repeated answer
-     * returns the settled status unchanged, whichever device sent it.
+     * The person's answer. Accept creates the routine the card shows
+     * (idempotent by the proposal id); either decision appends a status
+     * entry. Once a routine exists for the proposal every answer, from any
+     * device, settles as accepted; otherwise a repeat returns the settled status.
      */
     respond(input: BotRoutineProposalRespondInput): Promise<BotRoutineProposalRespondResult> {
       return serial(input.botId, async () => {
@@ -213,36 +293,14 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         const index = records.findIndex((record) => record.proposalId === input.proposalId);
         const record = records[index];
         if (!record) throw new BotRoutineProposalNotFoundError();
+        if (record.status === "accepted") return settled(record);
+        const created = await dependencies.routines.findBySourceProposal(input.botId, record.proposalId);
+        if (created) return settled(await settle(input.botId, records, index, "accepted", created.id));
         if (record.status !== "pending") return settled(record);
-        let routineId: string | undefined;
-        if (input.decision === "accept") {
-          const routine = await dependencies.routines.create({
-            botId: input.botId,
-            name: record.name,
-            schedule: record.schedule,
-            prompt: record.prompt,
-            timezone: record.timezone,
-            sourceProposalId: record.proposalId,
-          });
-          routineId = routine.id;
-        }
-        const status = input.decision === "accept" ? "accepted" : "dismissed";
-        const data: BotRoutineProposalStatusEntryData = {
-          proposalId: record.proposalId,
-          status,
-          ...(routineId !== undefined ? { routineId } : {}),
-        };
-        // The card settles before the record does: a crash in between
-        // re-runs the answer, and a repeated status entry folds the same way.
-        await dependencies.appendEntry(input.botId, BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND, { ...data });
-        const next: BotRoutineProposalRecord = {
-          ...record,
-          status,
-          ...(routineId !== undefined ? { routineId } : {}),
-          decidedAt: now(),
-        };
-        await save(input.botId, records.map((candidate, at) => (at === index ? next : candidate)));
-        return settled(next);
+        if (input.decision === "dismiss") return settled(await settle(input.botId, records, index, "dismissed"));
+        const shown = await shownProposal(input.botId, record.proposalId);
+        const routine = await dependencies.routines.create({ ...shown, sourceProposalId: record.proposalId });
+        return settled(await settle(input.botId, records, index, "accepted", routine.id));
       });
     },
   };

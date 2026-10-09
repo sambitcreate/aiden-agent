@@ -493,6 +493,14 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
     if (!(await dependencies.botExists(botId))) throw new Error("This Bot no longer exists.");
   };
 
+  const findBySourceProposal = async (botId: string, proposalId: string): Promise<BotRoutine | undefined> => {
+    const task = (await dependencies.store.list()).find(
+      (candidate): candidate is ScheduledTask & { botId: string } =>
+        candidate.botId === botId && candidate.sourceProposalId === proposalId,
+    );
+    return task ? projectBotRoutine(task, now()) : undefined;
+  };
+
   return {
     async list(botId: string): Promise<BotRoutine[]> {
       const at = now();
@@ -502,14 +510,14 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
         .map((task) => projectBotRoutine(task, at));
     },
 
+    /** The routine a Bot proposal created when the person accepted it, if it still exists. */
+    findBySourceProposal,
+
     async create(input: BotRoutineCreateInput): Promise<BotRoutine> {
       await requireBot(input.botId);
       if (input.sourceProposalId !== undefined) {
-        const accepted = (await dependencies.store.list()).find(
-          (task): task is ScheduledTask & { botId: string } =>
-            task.botId === input.botId && task.sourceProposalId === input.sourceProposalId,
-        );
-        if (accepted) return projectBotRoutine(accepted, now());
+        const accepted = await findBySourceProposal(input.botId, input.sourceProposalId);
+        if (accepted) return accepted;
       }
       const task = await dependencies.service.save({
         name: input.name,

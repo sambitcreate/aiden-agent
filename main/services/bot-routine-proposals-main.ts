@@ -18,4 +18,10 @@ export const botRoutineProposals = createBotRoutineProposalService({
     const conversation = await (await botSessionRuntime()).conversation(botId);
     await conversation.submit({ type: "write", entry: { kind, data: data as JsonValue } }, BACKGROUND_CONTEXT);
   },
+  // The active entries the live projection renders as cards.
+  async conversationEntries(botId) {
+    const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+    const conversation = await (await botSessionRuntime()).conversation(botId);
+    return (await conversation.context(BACKGROUND_CONTEXT)).entries;
+  },
 });
