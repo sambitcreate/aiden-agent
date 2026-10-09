@@ -357,7 +357,7 @@ export function transcribeLocalPcm16(pcm: Int16Array, modelId: string, signal?: 
   return transcribeAudio({ kind: "pcm16", pcm }, modelId, signal);
 }
 
-/** Ogg/Opus voice notes (Telegram). The worker rejects them until the decoder ships. */
+/** Ogg/Opus voice notes (Telegram). The worker decodes them to 16 kHz and rejects notes over 30 minutes. */
 export function transcribeLocalOggOpus(bytes: Uint8Array, modelId: string, signal?: AbortSignal): Promise<string> {
   return transcribeAudio({ kind: "ogg-opus", bytes }, modelId, signal);
 }

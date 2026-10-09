@@ -136,6 +136,26 @@ test("ogg-opus audio is decoded when a decoder is provided", async () => {
   assert.equal(fake.requests[0]!.samples, decoded);
 });
 
+test("an Ogg/Opus note that decodes past 30 minutes fails cleanly without reaching the engine", async () => {
+  const fake = fakeEngine();
+  const tooLong = new Float32Array(16_000 * 60 * 30 + 1);
+  const reply = await createLocalSpeechMessageHandler(fake.engine, { decodeOggOpus: async () => tooLong })(
+    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }),
+  );
+  assert.equal(reply.kind, "failure");
+  assert.equal(reply.kind === "failure" && reply.message, "This voice note is too long for on-device transcription.");
+  assert.equal(reply.kind === "failure" && reply.code, "unsupported-audio");
+  assert.equal(fake.requests.length, 0);
+});
+
+test("an Ogg/Opus note of exactly 30 minutes is still transcribed", async () => {
+  const fake = fakeEngine();
+  const reply = await createLocalSpeechMessageHandler(fake.engine, {
+    decodeOggOpus: async () => new Float32Array(16_000 * 60 * 30),
+  })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }));
+  assert.equal(reply.kind, "result");
+});
+
 test("status, load and release answer with engine results", async () => {
   const fake = fakeEngine();
   const handle = createLocalSpeechMessageHandler(fake.engine);

@@ -123,3 +123,14 @@ test("committed live text survives an empty or failed final handshake", () => {
   assert.equal(recoverCommittedLiveTranscript("", " already visible "), "already visible");
   assert.equal(recoverCommittedLiveTranscript(" final ", "older"), "final");
 });
+
+test("an on-device engine that can't start advises a restart, not a model download", () => {
+  const message = voiceErrorMessage(
+    new Error(
+      "Error invoking remote method 'voice:transcribeLocal': Error: On-device voice couldn't start. Restart Aiden, or choose a cloud provider in Settings → Voice.",
+    ),
+  );
+  assert.match(message, /couldn.t start/u);
+  assert.match(message, /Restart Aiden/u);
+  assert.doesNotMatch(message, /Download/u);
+});

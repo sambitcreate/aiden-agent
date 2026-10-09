@@ -1,3 +1,4 @@
+import { effectiveLocalModelId } from "../../renderer/shared/voice-provider.js";
 import type { AppSettings } from "./types.js";
 import type { LocalModel, LocalModelDownloadState } from "./local-speech-downloads.js";
 import type { UsageRequestRecord } from "./usage-store-core.js";
@@ -68,13 +69,16 @@ export class AidenRemoteSpeechServiceCore {
     const settings = await this.dependencies.configStore.getSettings();
     const downloads = new Map(this.dependencies.localModelDownloadStates().map((value) => [value.id, value]));
     const engine = await this.dependencies.engineStatus();
+    const models = this.dependencies.listModels();
+    const installed = models.filter((model) => model.installed).map((model) => model.id);
     return {
       engine: {
         ready: engine.ready,
         error: engine.ready ? null : "The desktop speech engine is unavailable. Restart Aiden Agent and try again.",
       },
-      selectedModelId: settings.localVoiceModel || null,
-      models: this.dependencies.listModels().map((model) => ({
+      // The model desktop dictation uses now, so Automatic still shows one.
+      selectedModelId: effectiveLocalModelId(settings.localVoiceModel || undefined, installed) ?? null,
+      models: models.map((model) => ({
         ...model,
         ...(downloads.get(model.id)
           ? {
@@ -161,9 +165,9 @@ export class AidenRemoteSpeechServiceCore {
           true,
         );
       }
-      // Validate the bounded wire payload without allocating its decoded sample
-      // buffer in Electron main. PCM16 conversion and inference stay isolated
-      // inside the utility process.
+      // Validate the bounded wire payload before decoding it. The transcriber
+      // decodes base64 to PCM16 once in main and hands those samples to the
+      // speech worker, which normalizes them and runs inference in isolation.
       const pcmBase64 = validateAidenRemotePcm16Base64(value.pcmBase64);
       return completeAidenRemoteSpeechTranscription(pcmBase64, id, {
         transcribe: this.dependencies.transcribePcm16Base64,

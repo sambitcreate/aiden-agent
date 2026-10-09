@@ -4,6 +4,7 @@ import { speechModel } from "./local-speech-catalog.js";
 import {
   LocalSpeechProcessClient,
   runWithCrashRetry,
+  audioSeconds,
   transcribeDeadlineMs,
   WorkerCrashError,
   type LocalSpeechProcessPort,
@@ -102,6 +103,26 @@ test("worker failures surface their message and code", async () => {
   client.dispose();
 });
 
+test("an engine that cannot start fails with restart advice, not the loader's wording", async () => {
+  const fake = fakePort((message) => ({
+    version: 2,
+    kind: "failure",
+    requestId: message.requestId,
+    message: "On-device engine failed to load: dlopen(sherpa-onnx.node) image not found",
+    code: "engine-unavailable",
+  }));
+  const client = new LocalSpeechProcessClient(fake.port);
+  await assert.rejects(client.transcribe(transcribeInput()), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal((error as Error & { code?: string }).code, "engine-unavailable");
+    assert.match(error.message, /couldn't start/);
+    assert.match(error.message, /Restart Aiden/);
+    assert.doesNotMatch(error.message, /dlopen|Download/);
+    return true;
+  });
+  client.dispose();
+});
+
 test("an invalid-request failure is a plain error and is not retried", async () => {
   let attempts = 0;
   const fake = fakePort((message) => {
@@ -133,6 +154,14 @@ test("an invalid-request failure is a plain error and is not retried", async () 
 test("deadlines scale with audio length", () => {
   assert.equal(transcribeDeadlineMs(3), 120_000);
   assert.equal(transcribeDeadlineMs(600), 12_000_000);
+});
+
+test("an Ogg/Opus deadline is capped at the 30-minute audio bound", () => {
+  // Telegram's 20 MB limit would otherwise estimate ~2.8 hours of speech.
+  const telegramMax = { kind: "ogg-opus", bytes: new Uint8Array(20 * 1024 * 1024) } as const;
+  assert.equal(transcribeDeadlineMs(audioSeconds(telegramMax)), transcribeDeadlineMs(1_800));
+  const short = { kind: "ogg-opus", bytes: new Uint8Array(20_000) } as const;
+  assert.equal(audioSeconds(short), 10);
 });
 
 test("a hung request kills the worker and rejects as a crash", async () => {

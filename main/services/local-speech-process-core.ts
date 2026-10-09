@@ -2,10 +2,12 @@
 // correlation, per-request deadlines, crash detection and a stderr tail.
 
 import { randomUUID } from "node:crypto";
+import { voiceSetupMessage } from "../../renderer/shared/voice-provider.js";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
 import {
   isLocalSpeechWorkerMessage,
   LOCAL_SPEECH_PROTOCOL_VERSION,
+  MAX_PCM_SAMPLES,
   type LocalSpeechAudio,
   type LocalSpeechFailureCode,
   type LocalSpeechParentMessage,
@@ -24,8 +26,14 @@ export function transcribeDeadlineMs(audioSeconds: number): number {
   return Math.max(120_000, Math.ceil(20_000 * audioSeconds));
 }
 
+/**
+ * Audio length used to size the transcribe deadline. The Ogg/Opus estimate is
+ * capped at the worker's 30-minute bound: a longer note is rejected after
+ * decoding, so it never needs a longer deadline.
+ */
 export function audioSeconds(audio: LocalSpeechAudio): number {
-  return audio.kind === "pcm16" ? audio.pcm.length / SAMPLE_RATE : audio.bytes.length / OGG_OPUS_BYTES_PER_SECOND;
+  if (audio.kind === "pcm16") return audio.pcm.length / SAMPLE_RATE;
+  return Math.min(audio.bytes.length / OGG_OPUS_BYTES_PER_SECOND, MAX_PCM_SAMPLES / SAMPLE_RATE);
 }
 
 /** The worker exited or stopped answering; the request may be retried in a fresh worker. */
@@ -33,14 +41,20 @@ export class WorkerCrashError extends Error {
   override name = "WorkerCrashError";
 }
 
-/** The worker answered with a failure frame. */
+/**
+ * The worker answered with a failure frame. An engine that cannot start gets
+ * stable restart advice in place of the native loader's wording, which stays
+ * available as `detail` for diagnostics.
+ */
 export class LocalSpeechWorkerError extends Error {
   override name = "LocalSpeechWorkerError";
+  readonly detail: string;
   constructor(
     message: string,
     readonly code?: LocalSpeechFailureCode,
   ) {
-    super(message);
+    super(code === "engine-unavailable" ? voiceSetupMessage("local-engine-unavailable") : message);
+    this.detail = message;
   }
 }
 

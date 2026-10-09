@@ -78,10 +78,15 @@ const WRONG_RANGE = "The download server returned an unexpected range. Press Dow
 const OVERSIZE = "The download is larger than expected and was corrupted. Try again.";
 const CORRUPTED = "The download was corrupted. Try again.";
 const INTERRUPTED = "The download was interrupted. Press Download to resume.";
-const diskFailure = (error: unknown) => {
+/** User-facing copy for a local write failure; only a full disk or quota asks for space. */
+export function diskFailureMessage(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "unknown error";
-  return `Aiden couldn't write the voice model to disk: ${code}. Free up space and try again.`;
-};
+  const advice =
+    code === "ENOSPC" || code === "EDQUOT"
+      ? "Free up space and try again."
+      : "Check that Aiden can write to its data folder and try again.";
+  return `Aiden couldn't write the voice model to disk: ${code}. ${advice}`;
+}
 
 /** Tags an error raised by the network (fetch or body reader) rather than by Aiden. */
 class NetworkFailure extends Error {
@@ -92,7 +97,7 @@ class NetworkFailure extends Error {
 /** Tags an error raised by the partial file's write stream. */
 class DiskFailure extends Error {
   constructor(readonly original: unknown) {
-    super(diskFailure(original));
+    super(diskFailureMessage(original));
   }
 }
 

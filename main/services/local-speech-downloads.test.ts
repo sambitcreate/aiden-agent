@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
-import { createSpeechModelManager } from "./local-speech-downloads.js";
+import { createSpeechModelManager, diskFailureMessage } from "./local-speech-downloads.js";
 
 type Mode = "normal" | "ignore-range" | "wrong-offset" | "cut-after-half" | "stall" | "oversize" | "unsatisfiable" | "short";
 
@@ -261,7 +261,22 @@ test("a partial that cannot be written reports a disk error, not an interruption
   assert.ok(error instanceof Error);
   assert.match(error.message, /disk/i);
   assert.doesNotMatch(error.message, /interrupted/i);
+  // Not a space problem: the advice points at permissions, not free space.
+  assert.doesNotMatch(error.message, /free up space/i);
+  assert.match(error.message, /Check that Aiden can write to its data folder and try again\./);
   assert.equal(manager.isModelInstalled("fixture"), false);
+});
+
+test("only a full disk or exhausted quota asks the user to free up space", () => {
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+  for (const code of ["ENOSPC", "EDQUOT"]) {
+    assert.match(diskFailureMessage(errno(code)), /Free up space and try again\./);
+  }
+  for (const code of ["EACCES", "EISDIR", "EROFS"]) {
+    const message = diskFailureMessage(errno(code));
+    assert.doesNotMatch(message, /free up space/i);
+    assert.match(message, /Check that Aiden can write to its data folder and try again\./);
+  }
 });
 
 test("a body that ends cleanly but short keeps the partial and resumes later", async (t) => {

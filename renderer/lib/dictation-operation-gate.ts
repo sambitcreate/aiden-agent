@@ -1,3 +1,4 @@
+import { voiceSetupMessage } from "../shared/voice-provider";
 import { stripIpcErrorPrefix } from "./ipc-error";
 
 /** Invalidates async capture/transcription work when dictation is cancelled. */
@@ -126,6 +127,9 @@ export function voiceErrorMessage(error: unknown): string {
   }
   if (/cancel/iu.test(message)) return "Transcription was cancelled.";
   if (/no speech/iu.test(message)) return "No speech detected.";
+  // Main replaces an engine-unavailable worker failure with this stable copy.
+  const engineUnavailable = voiceSetupMessage("local-engine-unavailable");
+  if (message === engineUnavailable) return engineUnavailable;
   if (/couldn.t finish \(decode-failed\)/iu.test(message)) {
     return "On-device transcription couldn’t finish. Try again.";
   }

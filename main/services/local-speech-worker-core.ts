@@ -8,6 +8,7 @@ import { decodeOggOpusToPcm16k } from "./local-speech-opus.js";
 import {
   isLocalSpeechParentMessage,
   LOCAL_SPEECH_PROTOCOL_VERSION,
+  MAX_PCM_SAMPLES,
   type LocalSpeechAudio,
   type LocalSpeechFailureCode,
   type LocalSpeechParentMessage,
@@ -39,7 +40,13 @@ function pcm16ToFloat32(pcm: Int16Array): Float32Array {
 async function decodeAudio(audio: LocalSpeechAudio, options: LocalSpeechWorkerOptions): Promise<Float32Array> {
   if (audio.kind === "pcm16") return pcm16ToFloat32(audio.pcm);
   if (!options.decodeOggOpus) throw new UnsupportedAudioError("On-device voice can't decode Ogg/Opus audio yet.");
-  return options.decodeOggOpus(audio.bytes);
+  const samples = await options.decodeOggOpus(audio.bytes);
+  // PCM frames are bounded by the protocol guard; compressed notes are only
+  // bounded once decoded, so enforce the same 30-minute limit here.
+  if (samples.length > MAX_PCM_SAMPLES) {
+    throw new UnsupportedAudioError("This voice note is too long for on-device transcription.");
+  }
+  return samples;
 }
 
 function failureCode(

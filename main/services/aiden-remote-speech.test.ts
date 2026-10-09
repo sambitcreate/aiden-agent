@@ -196,3 +196,33 @@ test("remote speech status lists the pinned catalog with capabilities and passes
   assert.equal(validate(status), true, JSON.stringify(validate.errors));
   assert.equal(validate(fixture.speechStatus), true, JSON.stringify(validate.errors));
 });
+
+test("remote speech status reports the model Automatic actually uses", async () => {
+  const model = (id: string, installed: boolean) => ({
+    id, name: id, description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: false, installed,
+    languages: ["en"], capabilities: { autoDetect: true, languageHint: false, translateToEnglish: false, maxWindowSeconds: null },
+    license: { name: "CC-BY-4.0", url: "https://creativecommons.org/licenses/by/4.0/" },
+  });
+  let selected = "";
+  let models = [model("parakeet-v3", false), model("whisper-turbo", true)];
+  const service = new AidenRemoteSpeechServiceCore({
+    configStore: { getSettings: async () => ({ localVoiceModel: selected }), setSettings: async () => {} },
+    listModels: () => models,
+    localModelDownloadStates: () => [],
+    downloadModel: async () => {}, cancelDownload: () => false, deleteModel: async () => {},
+    releaseRecognizer: async () => {}, engineStatus: async () => ({ ready: true, error: null }),
+    transcribePcm16Base64: async () => "", recordUsage: async () => {},
+  });
+
+  // No explicit choice: dictation falls back to the installed model.
+  assert.equal((await service.status()).selectedModelId, "whisper-turbo");
+  // A stale choice that is no longer installed is not what dictation uses.
+  selected = "parakeet-v3";
+  assert.equal((await service.status()).selectedModelId, "whisper-turbo");
+  // An installed explicit choice wins.
+  models = [model("parakeet-v3", true), model("whisper-turbo", true)];
+  assert.equal((await service.status()).selectedModelId, "parakeet-v3");
+  // Nothing installed: nothing selected.
+  models = [model("parakeet-v3", false)];
+  assert.equal((await service.status()).selectedModelId, null);
+});
