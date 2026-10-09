@@ -1,5 +1,7 @@
 # Dictation Parakeet lifecycle, modes, and dictionary — 2026-09-27
 
+> 2026-10-09: the `parakeet*` modules were renamed to engine-neutral `local-speech*` (see `.memory/stt-engine-foundation.md`); the Parakeet names below are historical.
+
 - Branch `feature/dictation-parakeet-modes`. Plan: `docs/plans/completed/dictation-parakeet-modes-plan.md`.
 - **Shared, pure modules:**
   - `renderer/shared/dictation-preferences.ts` holds the mode resolution, idle-minute validation, and `parseDictationPreferencePatch`, which `settings:set` uses.

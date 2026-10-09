@@ -145,3 +145,54 @@ test("a failed asynchronous Mac transcript preserves its original error when usa
   );
   assert.equal(usageWrites, 1);
 });
+
+test("remote speech status lists the pinned catalog with capabilities and passes a verify phase through", async (t) => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { createSpeechModelManager } = await import("./local-speech-downloads.js");
+  const root = mkdtempSync(path.join(tmpdir(), "aiden-remote-speech-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // The real catalog manager, so the projection is checked against what the
+  // desktop actually lists; nothing is downloaded.
+  const manager = createSpeechModelManager({ root: () => root, fetchImpl: () => Promise.reject(new Error("no network in tests")) });
+  const service = new AidenRemoteSpeechServiceCore({
+    configStore: { getSettings: async () => ({ localVoiceModel: "" }), setSettings: async () => {} },
+    listModels: manager.listModels,
+    localModelDownloadStates: () => [{ id: "whisper-turbo", percentage: 100, phase: "verify", status: "downloading" }],
+    downloadModel: async () => {}, cancelDownload: () => false, deleteModel: async () => {},
+    releaseRecognizer: async () => {}, engineStatus: async () => ({ ready: true, error: null }),
+    transcribePcm16Base64: async () => "", recordUsage: async () => {},
+  });
+
+  const status = await service.status();
+  assert.deepEqual(
+    status.models.map((model) => model.id),
+    ["parakeet-v3", "parakeet-v2", "canary-180m-flash", "whisper-turbo", "sense-voice", "moonshine-base-en"],
+  );
+  for (const model of status.models) {
+    assert.ok(model.languages.length > 0, `${model.id} languages`);
+    assert.equal(typeof model.capabilities.translateToEnglish, "boolean", `${model.id} capabilities`);
+    assert.match(model.license.url, /^https:\/\//u, `${model.id} license`);
+    assert.equal(model.installed, false);
+  }
+  assert.equal(status.models[0]!.sizeLabel, "487 MB");
+  assert.deepEqual(status.models.find((model) => model.id === "canary-180m-flash")!.capabilities, {
+    autoDetect: false, languageHint: true, translateToEnglish: true, maxWindowSeconds: null,
+  });
+  assert.deepEqual(status.models.find((model) => model.id === "whisper-turbo")!.download, {
+    id: "whisper-turbo", percentage: 100, phase: "verify", status: "downloading",
+  });
+  assert.equal(status.models.find((model) => model.id === "parakeet-v3")!.download, undefined);
+
+  // The normative contract must accept what the desktop actually serves, and
+  // the shared fixture the native clients decode.
+  const { readFile } = await import("node:fs/promises");
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const protocolDir = new URL("../../protocol/aiden-remote/v1/", import.meta.url);
+  const spec = JSON.parse(await readFile(new URL("openapi.json", protocolDir), "utf8")) as { components: object };
+  const fixture = JSON.parse(await readFile(new URL("fixtures/contract.json", protocolDir), "utf8")) as { speechStatus: unknown };
+  const validate = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/SpeechStatus", components: spec.components });
+  assert.equal(validate(status), true, JSON.stringify(validate.errors));
+  assert.equal(validate(fixture.speechStatus), true, JSON.stringify(validate.errors));
+});

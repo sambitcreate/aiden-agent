@@ -60,8 +60,13 @@
 - Fallback taken per spec §11: `opus-decoder@0.7.12` + `codec-parser@2.5.0` (exact pins) used
   directly by `main/services/local-speech-opus.ts`. Same measurement ≈ **0.42 MB** (opus-decoder,
   codec-parser, @wasm-audio-decoders/common, @eshaz/web-worker, simple-yenc). WASM is inlined
-  in JS, so nothing needs `asarUnpack`. A real packaged `--dir` delta is still pending
-  (Task 10 packaging verification).
+  in JS, so nothing needs `asarUnpack`.
+- Packaged `--dir` delta, measured 2026-10-09 (Task 10, `npm run package`, arm64 development):
+  the five packages occupy **0.413 MB** of app.asar (opus-decoder 0.178, codec-parser 0.134,
+  @wasm-audio-decoders/common 0.059, @eshaz/web-worker 0.026, simple-yenc 0.015), matching the
+  on-disk estimate. Whole app 459 MB, app.asar 96 MB. `Resources/speech/silero_vad.onnx`
+  (643,854 bytes) and `build/main/local-speech-worker.js` are present; `npm run package:verify`
+  passes.
 - Both are ESM-only and loaded through a dynamic `import()` on first decode, so the main
   bundle does not compile libopus at startup. The CLI build bundles them as lazy chunks of
   `dist/app/speech-worker.js`.

@@ -1,6 +1,6 @@
 # On-device speech engine foundation (STT sub-project 1)
 
-Status: Spec — approved in design review on 2026-10-09; awaiting written-spec review before the implementation plan.
+Status: Implemented on this branch (2026-10-09), PR pending. Plan: `docs/superpowers/plans/2026-10-09-stt-engine-foundation.md`; verification results are in its `## Progress`.
 Branch: `feature/speech-to-text-update-203d37`.
 Reference: Handy (`cjpais/handy`, MIT) at `f6b3f82` (2026-10-08), local checkout `/Users/sambitbiswas/projects/opp/handy`. Handy is Rust/Tauri, so Aiden ports behavior and algorithms as original TypeScript. No Handy source is copied.
 
@@ -453,9 +453,9 @@ All tests are behavioral. They are registered in `test:voice`, and a new file ad
 
 - **Structured clone of typed arrays** over `utilityProcess` and `ipcRenderer.invoke` in Electron 43. There is a fallback in §7.
 - **Gemini batch language field** existence (§10). The fallback is no hint.
-- **Moonshine v2 `.ort` files** need ONNX Runtime ORT-format support in sherpa's bundled runtime. If loading fails on 1.13.8, drop Moonshine from the catalog for this sub-project and record why. The other five don't depend on it.
+- **Moonshine v2 `.ort` files** need ONNX Runtime ORT-format support in sherpa's bundled runtime. If loading fails on 1.13.8, drop Moonshine from the catalog for this sub-project and record why. The other five don't depend on it. *Verified 2026-10-09: Moonshine loads and transcribes on 1.13.8; it stays.*
 - **`ogg-opus-decoder` size** (§11) has a defined fallback.
-- **Memory:** Whisper turbo int8 is expected to peak around 1–1.5 GB RSS in the worker. The single-slot rule and idle unload bound it. Record the measured peak in the PR.
+- **Memory:** Whisper turbo int8 is expected to peak around 1–1.5 GB RSS in the worker. The single-slot rule and idle unload bound it. Record the measured peak in the PR. *Measured 2026-10-09: about 2.5 GB after load and 2.8 GB peak in a fresh process (short clips); the Parakeet models are about 2 GB. Revisit in sub-project 2.*
 - **Handy scores** were measured on transcribe.cpp. They are relative display hints only.
 
 ## Licensing and attribution
