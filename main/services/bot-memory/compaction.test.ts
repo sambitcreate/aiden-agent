@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
@@ -11,7 +11,8 @@ import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memor
 import { createBotRegistry, type BotCompaction, type BotExtensionDeps } from "../bot-runtime/bot-extension.js";
 import { createBotSessionService } from "../bot-runtime/bot-session-service.js";
 import { botIngressAllowsTool } from "../bot-runtime/bot-tool-policy.js";
-import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { fakeMemoryAuthority, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
 import { createFauxModels, FAUX_MODEL, FAUX_MODEL_REF, FAUX_PROVIDER, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "./compaction.js";
 import { renderBotMemorySection } from "./prompt.js";
@@ -47,12 +48,16 @@ function lastUserText(messages: Message[]): string {
   return typeof user.content === "string" ? user.content : user.content.map((part) => (part.type === "text" ? part.text : "")).join("");
 }
 
-async function harnessFor(memory: BotMemoryRuntime, fauxModels: FauxModels) {
+async function harnessFor(memory: BotMemoryRuntime, fauxModels: FauxModels, authority = fakeMemoryAuthority(), settings = SMALL_CONTEXT) {
   let conversation: Conversation | undefined;
   const steering = createBotCompactionSteering({
     memory,
-    model: async () => ({ models: fauxModels.models, model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)! }),
-    reserveTokens: SMALL_CONTEXT.compaction.reserveTokens,
+    admit: async () => ({
+      ok: true,
+      model: { models: fauxModels.models, model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)! },
+      lease: authority.lease,
+    }),
+    reserveTokens: settings.compaction.reserveTokens,
     appendEntry: async (_botId, kind, data) => {
       await conversation!.submit({ type: "write", entry: { kind, data: { ...data } } }, ctx);
     },
@@ -66,7 +71,7 @@ async function harnessFor(memory: BotMemoryRuntime, fauxModels: FauxModels) {
   };
   const registry = createBotRegistry(BOT, deps);
   await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry, settings: SMALL_CONTEXT }, ctx);
+  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry, settings }, ctx);
   registry.attachHarness(harness);
   conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   return { harness, conversation };
@@ -162,6 +167,90 @@ test("a failing summarizer falls back to Pi Durable's own summary", async () => 
     const entries = await allEntries(conversation);
     assert.match(JSON.stringify(entries.find((entry) => CompactionEntry.is(entry))?.model), /PI SUMMARY/u);
     assert.equal(entries.some((entry) => entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND), false, "no add, no marker");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+const ROUTINE_ANSWER = `ROUTINE BRIEF: ${"Rain is expected in Pune today, carry an umbrella. ".repeat(120)}`;
+/** Compacts only once the routine's long answer is in context (~1,500 tokens), so the first compaction is attended. */
+const ROUTINE_CONTEXT = { compaction: { reserveTokens: 198_500, keepRecentTokens: 100, backgroundTokens: 0 } };
+
+test("an attended compaction never flushes routine history into memory", async () => {
+  const { memory, userFile } = memoryProfile();
+  const flushes: string[] = [];
+  const turnAnswers = ["Noted.", ROUTINE_ANSWER, "Sure."];
+  const fauxModels = createFauxModels(
+    Array.from({ length: 12 }, () => (context: { messages: Message[] }) => {
+      const system = systemPromptOf(context.messages);
+      if (system.includes("keep a helper Bot's long-term memory")) {
+        const user = lastUserText(context.messages);
+        flushes.push(user);
+        // A model that reads routine content would save a fact derived from it.
+        return /ROUTINE BRIEF|Morning brief prompt/u.test(user) && flushes.length === 1
+          ? fauxAssistantMessage(
+              [fauxToolCall("bot_memory", { target: "user", operations: [{ action: "add", content: "Lives where it rains a lot." }] })],
+              { stopReason: "toolUse" },
+            )
+          : fauxAssistantMessage("NOTHING");
+      }
+      if (system.includes("context summarization assistant")) return fauxAssistantMessage("STEERED SUMMARY.");
+      return fauxAssistantMessage(turnAnswers.shift() ?? "ok");
+    }),
+  );
+  const { harness, conversation } = await harnessFor(memory, fauxModels, fakeMemoryAuthority(), ROUTINE_CONTEXT);
+  try {
+    await (await conversation.submit({ type: "input", content: "Mia has piano on Tuesdays." }, ctx)).wait(ctx);
+    // A routine run, labelled the way the session service labels it.
+    const requestId = "routine:task-1:2026-10-09T07:00:00.000Z";
+    await conversation.submit(
+      { type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "routine", label: "Morning brief", requestId } } },
+      ctx,
+    );
+    await (await conversation.submit({ type: "input", content: "Morning brief prompt.", requestId }, ctx)).wait(ctx);
+    // The person's next message crosses the threshold in an attended run.
+    await (await conversation.submit({ type: "input", content: "What's on this week?" }, ctx)).wait(ctx);
+
+    const entries = await allEntries(conversation);
+    assert.ok(entries.some((entry) => CompactionEntry.is(entry)), "the routine history was compacted");
+    assert.equal(flushes.length, 1, "the person's history is still flushed");
+    assert.match(flushes[0]!, /Mia has piano on Tuesdays/u);
+    assert.doesNotMatch(flushes[0]!, /Morning brief prompt|ROUTINE BRIEF/u, "routine input and output never reach the flush");
+    assert.equal(existsSync(userFile), false, "nothing derived from the routine is saved");
+    assert.equal(entries.some((entry) => entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND), false);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("access revoked during the flush stops its save and the steered summary", async () => {
+  const { memory, userFile } = memoryProfile();
+  const authority = fakeMemoryAuthority();
+  const kinds: string[] = [];
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage(LONG_REPLY),
+    (context) => {
+      kinds.push(systemPromptOf(context.messages).includes("long-term memory") ? "flush" : "other");
+      // Access changes while the flush's answer is on its way.
+      authority.revoke();
+      return fauxAssistantMessage(
+        [fauxToolCall("bot_memory", { target: "user", operations: [{ action: "add", content: "Mia has piano on Tuesdays." }] })],
+        { stopReason: "toolUse" },
+      );
+    },
+    (context) => {
+      kinds.push(lastUserText(context.messages).includes(BOT_COMPACTION_FOCUS) ? "steered" : "pi");
+      return fauxAssistantMessage("PI SUMMARY");
+    },
+    fauxAssistantMessage("Sure."),
+  ]);
+  const { harness, conversation } = await harnessFor(memory, fauxModels, authority);
+  try {
+    await (await conversation.submit({ type: "input", content: LONG_INTRO }, ctx)).wait(ctx);
+    await (await conversation.submit({ type: "input", content: "What's on this week?" }, ctx)).wait(ctx);
+    assert.deepEqual(kinds, ["flush", "pi"], "no second flush request and no steered summary after the revocation");
+    assert.equal(existsSync(userFile), false, "the flush's answer is not saved");
+    assert.equal(authority.counts.releases, 1, "the admission is released");
   } finally {
     await harness.close(ctx);
   }

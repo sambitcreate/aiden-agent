@@ -26,7 +26,9 @@
 //   fails closed (no provider request) when its access changed.
 // - Memory: a final answer notifies the background review (`afterReply`)
 //   without waiting for it; a compaction asks `beforeCompact` first, which
-//   flushes memory and may supply a steered summary.
+//   flushes memory and may supply a steered summary. `memoryOffered` gates
+//   the flush by the current run; the compacted conversation is handed over
+//   too, so the flush also reads each historical entry's own ingress.
 
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
@@ -36,6 +38,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   CompactionTask,
   createRegistry,
+  type Conversation,
   defineExtension,
   GenerationTask,
   hook,
@@ -133,11 +136,13 @@ export interface BotExtensionDeps {
   /**
    * A compaction is about to summarize. Return a summary to use instead of Pi
    * Durable's own, or `undefined` to let it summarize. Errors fall back too.
+   * `offer.conversation` is the conversation being compacted, so each
+   * compacted entry's own provenance can be read (absent when unreadable).
    */
   beforeCompact?(
     botId: string,
     compaction: BotCompaction,
-    offer: { memoryOffered: boolean },
+    offer: { memoryOffered: boolean; conversation?: Conversation },
     context: Context,
   ): Promise<{ summary: string } | undefined>;
   currentTools(bot: BotDefinition, turn: BotTurnContext): Promise<BotToolEntry[]>;
@@ -288,7 +293,13 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       beforeCompact: async (compaction, api, context) => {
         if (deps.beforeCompact === undefined) return undefined;
         const offered = await memoryOffered(api, context).catch(() => false);
-        return deps.beforeCompact(botId, compaction, { memoryOffered: offered }, context);
+        const conversation = await harness?.conversation(api.conversationId, context).catch(() => undefined);
+        return deps.beforeCompact(
+          botId,
+          compaction,
+          { memoryOffered: offered, ...(conversation === undefined ? {} : { conversation }) },
+          context,
+        );
       },
     }),
     hook(ToolTask, {

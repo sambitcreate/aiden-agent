@@ -15,6 +15,7 @@ import {
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
 import { DEVICE_ID_PATTERN } from "../../renderer/shared/devices.js";
 import { parseBotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
+import { BOT_MEMORY_LIMITS } from "../../renderer/shared/bot-memory.js";
 import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   MAX_FORK_SUMMARY_TEXT_CHARS,
@@ -1021,8 +1022,10 @@ export const AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES = ["memory_update", "routine_prop
 
 // --- Contract revision 27: Bot memory and proactivity.
 
-export const AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS = 500;
-export const AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES = 64;
+// The host store enforces the same bounds on write and read (`BOT_MEMORY_LIMITS`),
+// so every memory view a host can load is representable here and on phones.
+export const AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS = BOT_MEMORY_LIMITS.entryChars;
+export const AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES = BOT_MEMORY_LIMITS.maxEntries;
 export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX = 100;
 export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS = 160;
 

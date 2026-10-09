@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { BotMemoryEditInput, BotMemoryEditResult, BotMemoryView } from "../../renderer/shared/bot-memory.js";
 import type { BotRoutineProposalRespondInput } from "../../renderer/shared/bot-routine-proposals.js";
@@ -38,6 +38,8 @@ import { spawnHarnessChild } from "./bot-runtime/test-support/child.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./bot-runtime/test-support/faux.js";
 import { countingTool, recordingDeps } from "./bot-runtime/test-support/fixtures.js";
 import { BOT_ROUTINE_SILENT_INSTRUCTION, type BotRoutine } from "./scheduled-bot-routines.js";
+import { botMemoryDirectory, botMemoryFile } from "./bot-memory/files.js";
+import { createBotMemoryStore, memoryView as memoryStoreView } from "./bot-memory/store.js";
 
 const BOT_ID = "bot_session_1";
 const DEVICE_ID = "device_1";
@@ -1074,6 +1076,34 @@ test("phones read memory in the shared fixture's shape", async () => {
     fixture.botMemory,
   );
   await assert.rejects(service.memory("bot_missing"), (error: { code?: string }) => error.code === "not_found");
+});
+
+test("every memory view the store can load is one phones accept", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-memory-"));
+  try {
+    // The Bot's session directory exists once its harness has opened.
+    mkdirSync(path.dirname(botMemoryDirectory(root, BOT_ID)), { recursive: true });
+    const store = createBotMemoryStore({ profileDir: root });
+    // 65 short, individually valid facts fit the 1,375-character budget many times over.
+    const facts = Array.from({ length: 65 }, (_, index) => `Likes tea ${index + 1}.`);
+    assert.ok(facts.join("\n§\n").length < 1_375);
+    for (const fact of facts) await store.apply(BOT_ID, "user", [{ action: "add", content: fact }]);
+    const saved = memoryStoreView(await store.load(BOT_ID));
+    assert.equal(saved.user.entries.length, 64, "the 65th save is refused");
+    assert.equal(projectAidenRemoteBotMemory(saved).user.entries.length, 64);
+
+    // A shell edit can plant any number of entries: the view stays loadable and holds what the Bot reads.
+    writeFileSync(botMemoryFile(root, BOT_ID, "user"), Array.from({ length: 90 }, (_, index) => `Planted ${index + 1}.`).join("\n§\n"));
+    const planted = projectAidenRemoteBotMemory(memoryStoreView(await store.load(BOT_ID)));
+    assert.equal(planted.user.entries.length, 64);
+    assert.equal(planted.user.entries[0]!.text, "Planted 1.");
+    // The person can still erase from the phone view.
+    const erased = await store.edit(BOT_ID, { kind: "remove", target: "user", entryId: planted.user.entries[0]!.id });
+    assert.equal(erased.ok, true);
+    assert.equal(projectAidenRemoteBotMemory(memoryStoreView(await store.load(BOT_ID))).user.entries[0]!.text, "Planted 2.");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("a memory edit is idempotent per request key and its failures carry the documented codes", async () => {

@@ -8,7 +8,10 @@
 //
 // Everything here is pure except `readMemoryFile`. Every load validates
 // (§6.3): the shell can write these files under Full access, so a blocked,
-// oversize or duplicate entry is dropped on read rather than trusted.
+// oversize or duplicate entry is dropped on read rather than trusted. So is
+// any valid entry past the first `BOT_MEMORY_LIMITS.maxEntries`: the Bot
+// never reads it, every view (desktop and phone) shows exactly what the Bot
+// reads, and the next save or Erase all removes it from disk.
 
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -97,11 +100,11 @@ export interface ValidatedStore {
   texts: string[];
   /** Entries dropped by the threat scan. */
   blockedCount: number;
-  /** Entries dropped for being empty of meaning, too long or holding a delimiter line. */
+  /** Entries dropped for being empty of meaning, too long, holding a delimiter line or past the entry cap. */
   droppedCount: number;
 }
 
-/** Read validation (§6.3): drop blocked, oversize and duplicate entries. */
+/** Read validation (§6.3): drop blocked, oversize and duplicate entries, and keep at most `maxEntries`. */
 export function validateEntries(rawEntries: readonly string[]): ValidatedStore {
   const texts: string[] = [];
   const seen = new Set<string>();
@@ -120,6 +123,10 @@ export function validateEntries(rawEntries: readonly string[]): ValidatedStore {
     }
     const key = normalizeForMatch(text);
     if (seen.has(key)) continue;
+    if (texts.length >= BOT_MEMORY_LIMITS.maxEntries) {
+      droppedCount += 1;
+      continue;
+    }
     seen.add(key);
     texts.push(text);
   }

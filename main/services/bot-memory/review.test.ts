@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
@@ -10,7 +10,7 @@ import { Harness, MemoryStorage, type Conversation, type EntryRecord } from "@ea
 import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
 import { createBotRegistry } from "../bot-runtime/bot-extension.js";
 import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
-import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { fakeMemoryAuthority, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL, FAUX_MODEL_REF, FAUX_PROVIDER, waitFor, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { createBotMemoryReview, type BotMemoryReviewDeps } from "./review.js";
 import { createBotMemoryService } from "./service.js";
@@ -61,12 +61,16 @@ async function setup(steps: FauxResponseStep[], overrides: Partial<BotMemoryRevi
   registry.attachHarness(harness);
   const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   const errors: unknown[] = [];
+  const authority = fakeMemoryAuthority();
   const review = createBotMemoryReview({
     memory,
     conversation: async () => conversation,
     isIdle: async () => true,
-    readmit: async () => true,
-    model: async () => ({ models: fauxModels.models, model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)! }),
+    admit: async () => ({
+      ok: true,
+      model: { models: fauxModels.models, model: fauxModels.models.getModel(FAUX_PROVIDER, FAUX_MODEL)! },
+      lease: authority.lease,
+    }),
     onError: (_botId, error) => errors.push(error),
     ...overrides,
   });
@@ -87,7 +91,7 @@ async function setup(steps: FauxResponseStep[], overrides: Partial<BotMemoryRevi
     await conversation.submit({ type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "hidden_input", requestId: "intro:bot-1" } } }, ctx);
     await (await conversation.submit({ type: "input", content: "Introduce yourself.", requestId: "intro:bot-1" }, ctx)).wait(ctx);
   };
-  return { harness, conversation, memory, review, fauxModels, errors, personTurns, routineTurn, introTurn, userFile: path.join(memoryDir, "USER.md") };
+  return { harness, conversation, memory, review, fauxModels, errors, authority, personTurns, routineTurn, introTurn, userFile: path.join(memoryDir, "USER.md") };
 }
 
 async function markers(conversation: Conversation): Promise<unknown[]> {
@@ -215,6 +219,55 @@ test("replies schedule one debounced review; a busy or modelless Bot is skipped"
     await waitFor(async () => (await markers(conversation)).length > 0, { what: "the review marker" });
     await new Promise((resolve) => setTimeout(resolve, 60));
     assert.equal(script.reviewRequests.length, 1);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("access revoked while a review answer is pending stops its save and any further request", async () => {
+  let revoke = () => {};
+  const script = scripted([
+    () => {
+      // The grant changes while this answer is on its way.
+      revoke();
+      return addFact("Has two kids.")();
+    },
+    nothing,
+  ]);
+  const { harness, conversation, review, personTurns, userFile, authority } = await setup(script.steps);
+  revoke = () => authority.revoke();
+  try {
+    await personTurns(10);
+    assert.deepEqual(await review.runNow(BOT), { kind: "revoked", added: 0, targets: [] });
+    assert.equal(script.reviewRequests.length, 1, "no request after the revocation");
+    assert.equal(existsSync(userFile), false, "the pending answer is not saved");
+    assert.deepEqual(await markers(conversation), [], "nothing was saved, so the next reply tries again");
+    assert.equal(authority.counts.releases, 1, "the admission is released");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("access lost after a save stops the next review request", async () => {
+  const script = scripted([addFact("Has two kids."), addFact("Lives in Pune.")]);
+  let revoke = () => {};
+  const { harness, conversation, review, personTurns, userFile, authority, memory } = await setup(script.steps, {
+    memory: {
+      view: (botId) => memory.view(botId),
+      apply: async (...args) => {
+        const result = await memory.apply(...args);
+        revoke();
+        return result;
+      },
+    },
+  });
+  revoke = () => authority.revoke();
+  try {
+    await personTurns(10);
+    assert.deepEqual(await review.runNow(BOT), { kind: "revoked", added: 1, targets: ["user"] });
+    assert.equal(script.reviewRequests.length, 1, "the second round is never requested");
+    assert.equal(readFileSync(userFile, "utf8"), "Has two kids.");
+    assert.deepEqual(await markers(conversation), [{ source: "review", added: 1, targets: ["user"] }], "what was saved is still shown");
   } finally {
     await harness.close(ctx);
   }

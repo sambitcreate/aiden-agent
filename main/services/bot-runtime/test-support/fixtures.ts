@@ -74,6 +74,34 @@ export function countingTool(
   };
 }
 
+/**
+ * A held admission for memory review or compaction work, shaped as
+ * `admitMemoryWork` returns it: `revoke()` aborts its signal and makes every
+ * later revalidation fail, the way a changed or removed grant does.
+ */
+export function fakeMemoryAuthority() {
+  const controller = new AbortController();
+  let revoked = false;
+  const counts = { revalidations: 0, releases: 0 };
+  return {
+    counts,
+    lease: {
+      signal: controller.signal,
+      async revalidate() {
+        counts.revalidations += 1;
+        if (revoked) throw new Error("This Bot's access changed.");
+      },
+      release() {
+        counts.releases += 1;
+      },
+    },
+    revoke() {
+      revoked = true;
+      controller.abort(new Error("This Bot's access changed."));
+    },
+  };
+}
+
 /** Never settles until its signal aborts. */
 export function blockingUntilAborted(signal: AbortSignal | undefined): Promise<never> {
   return new Promise((_resolve, reject) => {

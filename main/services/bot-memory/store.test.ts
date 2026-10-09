@@ -236,6 +236,53 @@ test("read validation drops blocked entries and reports a store over budget", as
   assert.equal(shrink.ok, true, "removing is allowed");
 });
 
+test("a store holds at most 64 entries, however short", async () => {
+  const p = profile();
+  const store = createBotMemoryStore({ profileDir: p.root });
+  const facts = Array.from({ length: 64 }, (_, index) => `Tea ${index + 1}.`);
+  assert.equal((await store.apply(BOT, "memory", facts.map((content) => ({ action: "add" as const, content })))).ok, true);
+  const before = readFileSync(p.file("MEMORY.md"), "utf8");
+
+  const more = await store.apply(BOT, "memory", [{ action: "add", content: "Coffee on Sundays." }]);
+  assert.equal(!more.ok && more.code, "over_budget");
+  assert.match(!more.ok ? more.error : "", /at most 64/u);
+  assert.equal(readFileSync(p.file("MEMORY.md"), "utf8"), before, "nothing is written");
+  const merged = await store.apply(BOT, "memory", [
+    { action: "remove", match: "Tea 1." },
+    { action: "remove", match: "Tea 2." },
+    { action: "add", content: "Coffee on Sundays." },
+  ]);
+  assert.equal(merged.ok, true, "a consolidating batch still fits");
+
+  // Undo at the cap is refused like any other growth.
+  const [first] = memoryView(await store.load(BOT)).memory.entries;
+  assert.equal((await store.edit(BOT, { kind: "remove", target: "memory", entryId: first!.id })).ok, true);
+  const refill = await store.apply(BOT, "memory", [
+    { action: "add", content: "Coffee on Mondays." },
+    { action: "add", content: "Coffee on Tuesdays." },
+  ]);
+  assert.equal(refill.ok && refill.texts.length, 64);
+  const undo = await store.edit(BOT, { kind: "replace", target: "memory", entryId: first!.id, text: first!.text });
+  assert.equal(!undo.ok && undo.code, "over_budget");
+});
+
+test("a shell-planted store past the entry cap reads as its first 64 entries", async () => {
+  const p = profile();
+  const store = createBotMemoryStore({ profileDir: p.root });
+  handWrite(p.file("USER.md"), Array.from({ length: 70 }, (_, index) => `Planted ${index + 1}.`).join("\n§\n"));
+  const view = memoryView(await store.load(BOT));
+  assert.equal(view.user.entries.length, 64);
+  assert.equal(view.user.entries[63]!.text, "Planted 64.");
+  assert.equal(view.user.usedChars, view.user.entries.map(({ text }) => text).join("\n§\n").length, "usage counts what is shown");
+
+  // The next save keeps only what was shown; Erase all removes everything.
+  assert.equal((await store.edit(BOT, { kind: "remove", target: "user", entryId: view.user.entries[0]!.id })).ok, true);
+  assert.doesNotMatch(readFileSync(p.file("USER.md"), "utf8"), /Planted 65\./u);
+  handWrite(p.file("USER.md"), Array.from({ length: 70 }, (_, index) => `Planted ${index + 1}.`).join("\n§\n"));
+  assert.equal((await store.edit(BOT, { kind: "clear" })).ok, true);
+  assert.equal(readFileSync(p.file("USER.md"), "utf8"), "");
+});
+
 test("an unreadable file makes memory unreadable until it is erased", async () => {
   const p = profile();
   const store = createBotMemoryStore({ profileDir: p.root });

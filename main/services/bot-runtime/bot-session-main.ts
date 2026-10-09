@@ -5,6 +5,8 @@
 // turn re-admits the Bot's authority through `botRuntimeAuthority`, the same
 // admission path the legacy generation used, and releases it immediately:
 // per-call policy checks admit again, so no long-lived lease spans a restart.
+// The one exception is memory review and compaction steering, which hold an
+// in-process admission for their run (`admitMemoryWork`).
 //
 // Tools are the legacy Bot set, built by `bot-tool-sources-main.ts` and
 // filtered by `bot-tool-assembly.ts` against the Bot's Full/Custom authority.
@@ -53,7 +55,7 @@ import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
-import { createBotMemoryReview, type MemoryReviewModel } from "../bot-memory/review.js";
+import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 
 import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
@@ -141,31 +143,53 @@ const toolSources = createBotToolSources({
 
 const tools = createBotToolAssembly({ admit, sources: toolSources });
 
-/** The Bot's own model for memory review and compaction, or null without one. */
-async function memoryModel(botId: string): Promise<MemoryReviewModel | null> {
-  const ref = await resolveModel(botId);
-  if (ref === null) return null;
-  const models = runtimeModels.modelsFor(botId);
-  const model = models.getModel(ref.provider, ref.modelId);
-  return model === undefined ? null : { models, model };
-}
-
-async function readmitted(botId: string): Promise<boolean> {
-  return (await extension.readmit(botId)).ok;
+/**
+ * Memory review and compaction work: admit the Bot's authority, keep the
+ * admission (unlike `withAdmission`) until the work releases it, and resolve
+ * the Bot's model from that admission rather than the model cache, so the
+ * work runs on exactly the grant it holds. Its signal aborts the work when
+ * access changes; `revalidate` fences every provider request and memory write.
+ */
+async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
+  if ((await botCapabilityStore.getBotModelAuthority(botId)) === undefined) return { ok: false, reason: "no_model" };
+  if (!(await botStore.get(botId))) return { ok: false, reason: "not_admitted" };
+  let admission: BotRuntimeAuthorityAdmission | undefined;
+  try {
+    admission = await admit(botId);
+    await admission.revalidateBeforeEffect();
+    const { sourceProviderId, sourceModelId } = admission.authority.provider;
+    const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
+    runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
+    const models = runtimeModels.modelsFor(botId);
+    const model = models.getModel(runtime.model.provider, runtime.model.id);
+    if (model === undefined) {
+      admission.release();
+      return { ok: false, reason: "no_model" };
+    }
+    const held = admission;
+    return {
+      ok: true,
+      model: { models, model },
+      lease: { signal: held.signal, revalidate: () => held.revalidateBeforeEffect(), release: () => held.release() },
+    };
+  } catch (error) {
+    admission?.release();
+    logger.warn("bots", `Bot ${botId} memory work was not admitted.`, error);
+    return { ok: false, reason: "not_admitted" };
+  }
 }
 
 const memoryReview = createBotMemoryReview({
   memory,
   conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
   isIdle: async (botId) => (await (await botSessionRuntime()).state(botId)).kind === "idle",
-  readmit: readmitted,
-  model: memoryModel,
+  admit: admitMemoryWork,
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} memory review failed.`, error),
 });
 
 const compactionSteering = createBotCompactionSteering({
   memory,
-  model: memoryModel,
+  admit: admitMemoryWork,
   appendEntry: async (botId, kind, data) => {
     const conversation = await (await botSessionRuntime()).conversation(botId);
     await conversation.submit({ type: "write", entry: { kind, data: { ...data } } }, BACKGROUND_CONTEXT);

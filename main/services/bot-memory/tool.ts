@@ -15,7 +15,7 @@
 
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { BotMemoryTarget } from "../../../renderer/shared/bot-memory.js";
+import { BOT_MEMORY_LIMITS, type BotMemoryTarget } from "../../../renderer/shared/bot-memory.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "../bot-runtime/bot-intro.js";
 import type { BotToolEntry } from "../bot-runtime/bot-extension.js";
 import { memoryLimit, usedChars } from "./files.js";
@@ -41,9 +41,9 @@ const DESCRIPTION = [
   "",
   "Write declarative facts (\"Prefers short answers.\"), never commands to yourself.",
   "",
-  "HOW: make every change in ONE call. List all operations; they apply together and the size limit is checked only on the final result. 'replace' and 'remove' locate one entry by 'match' (its exact text, or a part of it that only that entry contains). For 'replace', 'content' is the WHOLE new entry.",
+  `HOW: make every change in ONE call. List all operations; they apply together and the size and entry-count limits (at most ${BOT_MEMORY_LIMITS.maxEntries} entries per target) are checked only on the final result. 'replace' and 'remove' locate one entry by 'match' (its exact text, or a part of it that only that entry contains). For 'replace', 'content' is the WHOLE new entry.`,
   "",
-  "IF FULL: the call is refused and shows the store's entries. Retry as ONE call that removes or shortens stale entries and adds the new one.",
+  "IF FULL: the call is refused and shows the store's entries. Retry as ONE call that removes, shortens or merges stale entries and adds the new one.",
 ].join("\n");
 
 const ADD_ONLY_NOTE = "\n\nOnly 'add' is available here.";

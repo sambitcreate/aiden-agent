@@ -9,11 +9,22 @@
 // count. A run always ends with an `aiden.memory-review` marker, even a failed
 // one, so a failing model backs off another 10 inputs.
 //
+// Provenance: which inputs the person typed is read from the transcript's own
+// history, never from whoever is running now. Each routine or self-intro
+// input has a notice naming its request id; that id's submission says exactly
+// which `pi.user` entry it became and which entry answered it, so the input
+// and everything the Bot produced for it stay out of every review and flush.
+//
+// Authority: a review or flush holds the Bot's admission (a lease) for its
+// whole run. The lease's revocation aborts the run, and it is revalidated
+// right before every provider request and every memory write, so access that
+// changes mid-run stops the next request and the next save.
+//
 // The same runner (`runMemoryReview`) does the compaction flush (§9).
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Api, AssistantMessage, Message, Model, Models, Tool, ToolCall } from "@earendil-works/pi-ai";
-import type { Conversation, EntryRecord } from "@earendil-works/pi-durable";
+import type { Conversation, EntryId, EntryRecord } from "@earendil-works/pi-durable";
 import {
   BOT_MEMORY_REVIEW_ENTRY_KIND,
   type BotMemoryReviewEntryData,
@@ -33,14 +44,42 @@ export const BOT_MEMORY_REVIEW_MAX_ROUNDS = 3;
 export const BOT_MEMORY_REVIEW_TRANSCRIPT_CHARS = 16_000;
 const REVIEW_MAX_TOKENS = 1_024;
 const ENTRY_PAGE = 200;
-/** How Pi Durable opens a compaction summary message. */
-const EARLIER_SUMMARY_PREFIX = "The conversation history before this point was compacted";
 /** Never scan further back than this many entries for a watermark. */
 const ENTRY_SCAN_LIMIT = 5_000;
+/** Never scan further back than this many entries for routine and self-intro notices. */
+const NOTICE_SCAN_LIMIT = 50_000;
 
 export interface MemoryReviewModel {
   models: Models;
   model: Model<Api>;
+}
+
+/** The Bot's admitted authority, held for one whole review or flush. */
+export interface BotMemoryAuthorityLease {
+  /** Aborts when the authority is revoked or changes. */
+  readonly signal: AbortSignal;
+  /** Rejects when the authority no longer admits the Bot. Awaited right before every effect. */
+  revalidate(): Promise<void>;
+  release(): void;
+}
+
+/** Admission for memory work: the Bot's model, resolved under the lease that holds its authority. */
+export type BotMemoryAdmission =
+  | { ok: true; model: MemoryReviewModel; lease: BotMemoryAuthorityLease }
+  | { ok: false; reason: "no_model" | "not_admitted" };
+
+/** The authority behind a review or flush was revoked or changed while it ran. */
+export class BotMemoryAuthorityLostError extends Error {
+  constructor(
+    /** What the run had already saved before the loss. */
+    readonly added: number,
+    readonly targets: BotMemoryTarget[],
+    /** Why the authority no longer holds. */
+    readonly reason?: unknown,
+  ) {
+    super("The Bot's access changed during the memory review.");
+    this.name = "BotMemoryAuthorityLostError";
+  }
 }
 
 const REVIEW_SYSTEM_PROMPT = [
@@ -68,22 +107,6 @@ export function newestChars(text: string, limit = BOT_MEMORY_REVIEW_TRANSCRIPT_C
   return lineStart >= 0 && lineStart < limit / 4 ? tail.slice(lineStart + 1) : tail;
 }
 
-/** Person and Bot text as a plain transcript. Tool calls and results are left out. */
-export function serializeMessagesForReview(messages: readonly Message[]): string {
-  const lines: string[] = [];
-  for (const message of messages) {
-    if (message.role === "user") {
-      const text = textOf(message.content).trim();
-      // An earlier compaction summary is the Bot's own recap, not the person speaking.
-      if (text && !text.startsWith(EARLIER_SUMMARY_PREFIX)) lines.push(`[Person]: ${text}`);
-    } else if (message.role === "assistant") {
-      const text = textOf(message.content).trim();
-      if (text) lines.push(`[Bot]: ${text}`);
-    }
-  }
-  return lines.join("\n\n");
-}
-
 function memoryBlock(memory: Awaited<ReturnType<BotMemoryRuntime["view"]>>): string {
   const store = (target: BotMemoryTarget, tag: string) => {
     const texts = memory[target].entries.map(({ text }) => text);
@@ -97,6 +120,8 @@ export interface MemoryReviewRun {
   botId: string;
   memory: Pick<BotMemoryRuntime, "apply" | "view">;
   model: MemoryReviewModel;
+  /** Held by the caller for the whole run; revalidated before every request and write. */
+  authority: Pick<BotMemoryAuthorityLease, "signal" | "revalidate">;
   /** Already serialized; the newest `BOT_MEMORY_REVIEW_TRANSCRIPT_CHARS` are used. */
   transcript: string;
   maxRounds: number;
@@ -112,10 +137,30 @@ export interface MemoryReviewResult {
 /**
  * One add-only review: up to `maxRounds` requests, each answered tool call
  * applied through the memory service. Throws when the model fails or the run
- * times out or is aborted.
+ * times out or is aborted, and `BotMemoryAuthorityLostError` when its
+ * authority is revoked or no longer revalidates.
  */
 export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryReviewResult> {
-  const signal = AbortSignal.any([AbortSignal.timeout(run.timeoutMs), ...(run.signal ? [run.signal] : [])]);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(run.timeoutMs),
+    run.authority.signal,
+    ...(run.signal ? [run.signal] : []),
+  ]);
+  let added = 0;
+  const targets = new Set<BotMemoryTarget>();
+  const lost = () => new BotMemoryAuthorityLostError(added, [...targets], run.authority.signal.reason);
+  /** Right before an effect: still running, and the authority still admits the Bot. */
+  const fence = async () => {
+    if (run.authority.signal.aborted) throw lost();
+    signal.throwIfAborted();
+    try {
+      await run.authority.revalidate();
+    } catch (error) {
+      throw new BotMemoryAuthorityLostError(added, [...targets], error);
+    }
+    if (run.authority.signal.aborted) throw lost();
+    signal.throwIfAborted();
+  };
   const tool = createBotMemoryTool(run.botId, run.memory, { addOnly: true });
   const declaration: Tool = { name: tool.name, description: tool.description, parameters: tool.parameters };
   const view = await run.memory.view(run.botId);
@@ -128,15 +173,21 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
       timestamp: Date.now(),
     },
   ];
-  let added = 0;
-  const targets = new Set<BotMemoryTarget>();
   for (let round = 0; round < run.maxRounds; round += 1) {
-    signal.throwIfAborted();
-    const answer: AssistantMessage = await run.model.models.completeSimple(
-      run.model.model,
-      { systemPrompt: REVIEW_SYSTEM_PROMPT, messages, tools: [declaration] },
-      { maxTokens: REVIEW_MAX_TOKENS, signal },
-    );
+    await fence();
+    let answer: AssistantMessage;
+    try {
+      answer = await run.model.models.completeSimple(
+        run.model.model,
+        { systemPrompt: REVIEW_SYSTEM_PROMPT, messages, tools: [declaration] },
+        { maxTokens: REVIEW_MAX_TOKENS, signal },
+      );
+    } catch (error) {
+      if (run.authority.signal.aborted) throw lost();
+      throw error;
+    }
+    // A revocation while the answer was pending: nothing it asks for is applied.
+    if (run.authority.signal.aborted) throw lost();
     signal.throwIfAborted();
     if (answer.stopReason === "error" || answer.stopReason === "aborted") {
       throw new Error(answer.errorMessage ?? `The memory review ${answer.stopReason === "error" ? "failed" : "stopped"}.`);
@@ -156,6 +207,7 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
         });
         continue;
       }
+      await fence();
       const result = await tool.execute(call.id, call.arguments as never, signal);
       const details = result.details as BotMemoryToolDetails;
       added += details.changed;
@@ -174,12 +226,142 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
 }
 
 /* ------------------------------------------------------------------------- */
-/* Background review scheduling                                              */
+/* Provenance: the person's own turns                                         */
 /* ------------------------------------------------------------------------- */
+
+/** A routine or self-intro input: the `pi.user` entry it became and the entry that answered it. */
+export interface UnattendedInput {
+  entry: EntryId;
+  answer?: EntryId;
+}
+
+/** Unattended inputs by request id. */
+export type UnattendedInputs = ReadonlyMap<string, UnattendedInput>;
 
 interface NoticeData {
   notice?: unknown;
+  requestId?: unknown;
 }
+
+/** The request id a routine label or hidden (self-intro) notice announces, if `entry` is one. */
+function unattendedNoticeRequestId(entry: EntryRecord): string | undefined {
+  if (entry.kind !== BOT_NOTICE_ENTRY_KIND) return undefined;
+  const data = entry.data as NoticeData | undefined;
+  if (data?.notice !== "routine" && data?.notice !== "hidden_input") return undefined;
+  return typeof data.requestId === "string" ? data.requestId : undefined;
+}
+
+/**
+ * Every routine and self-intro input of `conversation` from the newest entry
+ * back past `floor` (the oldest entry the caller will classify), located
+ * exactly through the submission its notice names.
+ */
+export async function unattendedInputs(
+  conversation: Conversation,
+  options: { floor?: EntryId | undefined; signal?: AbortSignal } = {},
+): Promise<Map<string, UnattendedInput>> {
+  const requestIds = new Set<string>();
+  let cursor: Parameters<Conversation["entries"]>[2];
+  let scanned = 0;
+  let floorAt: number | undefined;
+  const done = () =>
+    scanned >= NOTICE_SCAN_LIMIT ||
+    (options.floor === undefined ? scanned >= ENTRY_SCAN_LIMIT : floorAt !== undefined && scanned - floorAt >= ENTRY_PAGE);
+  do {
+    options.signal?.throwIfAborted();
+    const page = await conversation.entries({}, ENTRY_PAGE, cursor, BACKGROUND_CONTEXT);
+    for (const entry of page.items) {
+      scanned += 1;
+      const requestId = unattendedNoticeRequestId(entry);
+      if (requestId !== undefined) requestIds.add(requestId);
+      if (floorAt === undefined && entry.id === options.floor) floorAt = scanned;
+    }
+    cursor = page.next;
+  } while (cursor !== undefined && !done());
+  const ids = [...requestIds];
+  if (ids.length === 0) return new Map();
+  const records = await conversation.commit(
+    (tx) => Promise.all(ids.map((requestId) => tx.submissionByRequest(conversation.id, requestId))),
+    BACKGROUND_CONTEXT,
+  );
+  const inputs = new Map<string, UnattendedInput>();
+  records.forEach((record, index) => {
+    if (record?.type !== "input" || record.entry === undefined) return;
+    inputs.set(ids[index]!, { entry: record.entry, ...(record.status === "done" ? { answer: record.answer } : {}) });
+  });
+  return inputs;
+}
+
+export interface ReviewWindow {
+  /** Person inputs among the entries (routine and self-intro inputs excluded). */
+  personInputs: number;
+  /** Person and Bot text of the person's turns, oldest first. */
+  transcript: string;
+}
+
+/**
+ * The person's own turns among `entries` (oldest first): their inputs and the
+ * Bot's text in reply. A routine or self-intro input is left out together
+ * with everything the Bot produced until the run serving it answered (or,
+ * without an answer, until the person's next input). A notice whose input
+ * `unattended` does not locate marks the next input instead, the order they
+ * are written in.
+ */
+export function personTurns(entries: readonly EntryRecord[], unattended: UnattendedInputs = new Map()): ReviewWindow {
+  const unattendedEntries = new Map<EntryId, EntryId | undefined>();
+  for (const input of unattended.values()) unattendedEntries.set(input.entry, input.answer);
+  const present = new Set(entries.map((entry) => entry.id));
+  const openAnswers = new Set<EntryId>();
+  // A run that started before `entries` and answers inside them owns their first replies.
+  for (const [entry, answer] of unattendedEntries) {
+    if (answer !== undefined && !present.has(entry) && present.has(answer)) openAnswers.add(answer);
+  }
+  const guessed = new Set<EntryId>();
+  let pendingGuess = false;
+  for (const entry of entries) {
+    const requestId = unattendedNoticeRequestId(entry);
+    if (requestId !== undefined) {
+      if (!unattended.has(requestId)) pendingGuess = true;
+      continue;
+    }
+    if (entry.kind === "pi.user" && pendingGuess && !unattendedEntries.has(entry.id)) {
+      guessed.add(entry.id);
+      pendingGuess = false;
+    }
+  }
+
+  let personInputs = 0;
+  let unattendedTurn = false;
+  const lines: string[] = [];
+  for (const entry of entries) {
+    const message = entry.model?.[0];
+    if (entry.kind === "pi.user" && message?.role === "user") {
+      if (unattendedEntries.has(entry.id) || guessed.has(entry.id)) {
+        unattendedTurn = true;
+        const answer = unattendedEntries.get(entry.id);
+        if (answer !== undefined) openAnswers.add(answer);
+        continue;
+      }
+      unattendedTurn = false;
+      personInputs += 1;
+      const text = textOf(message.content).trim();
+      if (text) lines.push(`[Person]: ${text}`);
+      continue;
+    }
+    if (entry.kind === "pi.assistant" && message?.role === "assistant") {
+      const owned = unattendedTurn || openAnswers.size > 0;
+      openAnswers.delete(entry.id);
+      if (owned) continue;
+      const text = textOf(message.content).trim();
+      if (text) lines.push(`[Bot]: ${text}`);
+    }
+  }
+  return { personInputs, transcript: lines.join("\n\n") };
+}
+
+/* ------------------------------------------------------------------------- */
+/* Background review scheduling                                              */
+/* ------------------------------------------------------------------------- */
 
 function isMemoryResult(entry: EntryRecord): boolean {
   if (entry.kind !== "pi.tool-result") return false;
@@ -187,19 +369,12 @@ function isMemoryResult(entry: EntryRecord): boolean {
   return message?.role === "toolResult" && message.toolName === BOT_MEMORY_TOOL_NAME && !message.isError;
 }
 
-export interface ReviewWindow {
-  /** Person inputs since the watermark (routine and self-intro inputs excluded). */
-  personInputs: number;
-  /** Person and Bot text of the person's turns since the watermark, oldest first. */
-  transcript: string;
-}
-
 /**
  * Person inputs and their conversation since the later of the last review
  * marker and the last successful `bot_memory` result. `entries` are oldest
  * first and must reach back to the watermark (or the start).
  */
-export function reviewWindow(entries: readonly EntryRecord[]): ReviewWindow {
+export function reviewWindow(entries: readonly EntryRecord[], unattended: UnattendedInputs = new Map()): ReviewWindow {
   let start = 0;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
@@ -208,33 +383,7 @@ export function reviewWindow(entries: readonly EntryRecord[]): ReviewWindow {
       break;
     }
   }
-  let personInputs = 0;
-  let unattendedNext = false;
-  let personTurn = false;
-  const lines: string[] = [];
-  for (const entry of entries.slice(start)) {
-    if (entry.kind === BOT_NOTICE_ENTRY_KIND) {
-      const notice = (entry.data as NoticeData | undefined)?.notice;
-      // A routine label or a hidden (self-intro) prompt precedes an input the person never typed.
-      if (notice === "routine" || notice === "hidden_input") unattendedNext = true;
-      continue;
-    }
-    const message = entry.model?.[0];
-    if (entry.kind === "pi.user" && message?.role === "user") {
-      personTurn = !unattendedNext;
-      unattendedNext = false;
-      if (!personTurn) continue;
-      personInputs += 1;
-      const text = textOf(message.content).trim();
-      if (text) lines.push(`[Person]: ${text}`);
-      continue;
-    }
-    if (entry.kind === "pi.assistant" && message?.role === "assistant" && personTurn) {
-      const text = textOf(message.content).trim();
-      if (text) lines.push(`[Bot]: ${text}`);
-    }
-  }
-  return { personInputs, transcript: lines.join("\n\n") };
+  return personTurns(entries.slice(start), unattended);
 }
 
 /** Oldest-first entries back to the newest watermark (or the start of history). */
@@ -257,17 +406,20 @@ export type BotMemoryReviewOutcome =
   | { kind: "skipped"; reason: "busy" | "not_idle" | "no_model" | "not_admitted" | "too_soon" }
   | { kind: "reviewed"; added: number; targets: BotMemoryTarget[] }
   | { kind: "failed" }
-  | { kind: "aborted" };
+  | { kind: "aborted" }
+  /** The Bot's access changed mid-run: nothing more was requested or saved. */
+  | { kind: "revoked"; added: number; targets: BotMemoryTarget[] };
 
 export interface BotMemoryReviewDeps {
   memory: Pick<BotMemoryRuntime, "apply" | "view">;
   conversation(botId: string): Promise<Conversation>;
   /** No turn is running or paused. */
   isIdle(botId: string): Promise<boolean>;
-  /** The Bot's authority still admits a turn. */
-  readmit(botId: string): Promise<boolean>;
-  /** The Bot's own model, or null when it has none. */
-  model(botId: string): Promise<MemoryReviewModel | null>;
+  /**
+   * Admit the Bot's authority and resolve its own model under it. The
+   * scheduler holds the lease for the whole review and releases it after.
+   */
+  admit(botId: string): Promise<BotMemoryAdmission>;
   /** Logged once per failed run. */
   onError?(botId: string, error: unknown): void;
   delayMs?: number;
@@ -299,35 +451,51 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
   }
 
   async function review(botId: string, controller: AbortController): Promise<BotMemoryReviewOutcome> {
-    const signal = controller.signal;
     if (!(await deps.isIdle(botId))) return { kind: "skipped", reason: "not_idle" };
-    const model = await deps.model(botId).catch(() => null);
-    if (model === null) return { kind: "skipped", reason: "no_model" };
-    if (!(await deps.readmit(botId).catch(() => false))) return { kind: "skipped", reason: "not_admitted" };
-    const conversation = await deps.conversation(botId);
-    const window = reviewWindow(await entriesSinceWatermark(conversation, signal));
-    if (window.personInputs < interval) return { kind: "skipped", reason: "too_soon" };
-    let result: MemoryReviewResult;
+    const admission = await deps.admit(botId).catch((): BotMemoryAdmission => ({ ok: false, reason: "not_admitted" }));
+    if (!admission.ok) return { kind: "skipped", reason: admission.reason };
+    const { lease, model } = admission;
     try {
-      result = await runMemoryReview({
-        botId,
-        memory: deps.memory,
-        model,
-        transcript: window.transcript,
-        maxRounds: BOT_MEMORY_REVIEW_MAX_ROUNDS,
-        timeoutMs: deps.timeoutMs ?? BOT_MEMORY_REVIEW_TIMEOUT_MS,
-        signal,
-      });
+      const signal = AbortSignal.any([controller.signal, lease.signal]);
+      const conversation = await deps.conversation(botId);
+      const entries = await entriesSinceWatermark(conversation, signal);
+      const window = reviewWindow(entries, await unattendedInputs(conversation, { floor: entries[0]?.id, signal }));
+      if (window.personInputs < interval) return { kind: "skipped", reason: "too_soon" };
+      let result: MemoryReviewResult;
+      try {
+        result = await runMemoryReview({
+          botId,
+          memory: deps.memory,
+          model,
+          authority: lease,
+          transcript: window.transcript,
+          maxRounds: BOT_MEMORY_REVIEW_MAX_ROUNDS,
+          timeoutMs: deps.timeoutMs ?? BOT_MEMORY_REVIEW_TIMEOUT_MS,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        // Cancelled (delete, shutdown): the Bot's conversation may be gone, so no marker.
+        if (controller.signal.aborted) return { kind: "aborted" };
+        // Access changed: stop here. A marker records only what was already saved;
+        // with nothing saved, the next reply tries again once access is back.
+        if (error instanceof BotMemoryAuthorityLostError) {
+          if (error.added > 0) await writeMarker(botId, { source: "review", added: error.added, targets: error.targets });
+          return { kind: "revoked", added: error.added, targets: error.targets };
+        }
+        // A model error or the timeout still writes the marker, so the next try waits another interval.
+        deps.onError?.(botId, error);
+        await writeMarker(botId, { source: "review", added: 0, targets: [], failed: true });
+        return { kind: "failed" };
+      }
+      await writeMarker(botId, { source: "review", added: result.added, targets: result.targets });
+      return { kind: "reviewed", added: result.added, targets: result.targets };
     } catch (error) {
-      // Cancelled (delete, shutdown): the Bot's conversation may be gone, so no marker.
-      if (signal.aborted) return { kind: "aborted" };
-      // A model error or the timeout still writes the marker, so the next try waits another interval.
-      deps.onError?.(botId, error);
-      await writeMarker(botId, { source: "review", added: 0, targets: [], failed: true });
-      return { kind: "failed" };
+      // Revoked before the run started (while reading the transcript).
+      if (!controller.signal.aborted && lease.signal.aborted) return { kind: "revoked", added: 0, targets: [] };
+      throw error;
+    } finally {
+      lease.release();
     }
-    await writeMarker(botId, { source: "review", added: result.added, targets: result.targets });
-    return { kind: "reviewed", added: result.added, targets: result.targets };
   }
 
   async function runNow(botId: string): Promise<BotMemoryReviewOutcome> {

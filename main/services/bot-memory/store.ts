@@ -6,7 +6,8 @@
 //   tool reports `unreadable` and the person can only erase.
 // - Writes are serialized per Bot and published with `writeFileAtomic`. A
 //   batch applies to an in-memory copy, checks the budget on the final result
-//   only, and writes once; any failing operation aborts the whole batch.
+//   and entry count only, and writes once; any failing operation aborts the
+//   whole batch.
 // - Writes rewrite the file from its validated entries, so a blocked or
 //   oversize entry the shell planted is cleaned out by the next save.
 // - The `memory/` directory is created on the first write, but never its
@@ -14,12 +15,13 @@
 //   instead of resurrecting it. `forgetBot` refuses every later write.
 
 import * as fs from "node:fs/promises";
-import type {
-  BotMemoryEdit,
-  BotMemoryEditErrorCode,
-  BotMemoryStoreView,
-  BotMemoryTarget,
-  BotMemoryView,
+import {
+  BOT_MEMORY_LIMITS,
+  type BotMemoryEdit,
+  type BotMemoryEditErrorCode,
+  type BotMemoryStoreView,
+  type BotMemoryTarget,
+  type BotMemoryView,
 } from "../../../renderer/shared/bot-memory.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import {
@@ -315,6 +317,13 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
               "Retry as ONE call that removes or shortens stale entries and adds this one.",
           );
         }
+        if (texts.length > BOT_MEMORY_LIMITS.maxEntries && texts.length > current.length) {
+          return fail(
+            "over_budget",
+            `${STORE_LABEL[target]} would hold ${texts.length} entries; it can hold at most ${BOT_MEMORY_LIMITS.maxEntries}. ` +
+              "Retry as ONE call that removes or merges stale entries and adds this one.",
+          );
+        }
         await writeStore(botId, target, texts);
         return { ok: true, target, changed, texts, loaded: await load(botId) };
       });
@@ -369,7 +378,8 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
         }
         const limit = memoryLimit(target);
         const after = usedChars(texts);
-        if (after > limit && after > usedChars(current)) {
+        const tooMany = texts.length > BOT_MEMORY_LIMITS.maxEntries && texts.length > current.length;
+        if ((after > limit && after > usedChars(current)) || tooMany) {
           return fail("over_budget", "That's more than this memory can hold. Shorten it or delete something first.");
         }
         await writeStore(botId, target, texts);

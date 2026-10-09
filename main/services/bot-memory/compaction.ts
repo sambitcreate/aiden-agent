@@ -3,22 +3,36 @@
 // summarized away.
 //
 // 1. Flush: when `bot_memory` would be offered, an add-only review of the
-//    messages being compacted (newest 16,000 characters, 20 s, 2 rounds)
-//    saves facts that would otherwise only live in the summary. Any add is
-//    recorded as an `aiden.memory-review { source: "compaction" }` entry. A
-//    replay after a crash re-runs it harmlessly: duplicate adds are no-ops.
+//    person's own turns among the entries being compacted (newest 16,000
+//    characters, 20 s, 2 rounds) saves facts that would otherwise only live in
+//    the summary. Routine and self-intro inputs, and what the Bot produced for
+//    them, are left out by each entry's own provenance (`personTurns`), not by
+//    whoever is running now. Any add is recorded as an
+//    `aiden.memory-review { source: "compaction" }` entry. A replay after a
+//    crash re-runs it harmlessly: duplicate adds are no-ops.
 // 2. Steered summary: Pi Durable's own summarization prompt plus a focus on
 //    what the person shared and what the Bot promised, through the Bot's own
 //    model. Any failure or timeout returns `undefined`, so Pi summarizes as it
 //    would have anyway.
 // 3. Refresh: the memory snapshot is marked stale, so the first request after
 //    compaction carries the current memory.
+//
+// The flush and the steered summary run under one admission of the Bot's
+// authority, held until both finish: its revocation aborts them, and it is
+// revalidated before every provider request and memory write.
 
 import type { Context } from "@earendil-works/chord";
 import type { Message, TextContent } from "@earendil-works/pi-ai";
+import type { Conversation } from "@earendil-works/pi-durable";
 import { BOT_MEMORY_REVIEW_ENTRY_KIND, type BotMemoryReviewEntryData } from "../../../renderer/shared/bot-memory.js";
 import type { BotCompaction } from "../bot-runtime/bot-extension.js";
-import { runMemoryReview, serializeMessagesForReview, type MemoryReviewModel } from "./review.js";
+import {
+  BotMemoryAuthorityLostError,
+  personTurns,
+  runMemoryReview,
+  unattendedInputs,
+  type BotMemoryAdmission,
+} from "./review.js";
 import type { BotMemoryRuntime } from "./service.js";
 
 /** What a Bot's compaction summary must keep. Also the `/new` instructions. */
@@ -115,8 +129,8 @@ export function steeredSummaryPrompt(messages: readonly Message[], instructions:
 
 export interface BotCompactionSteeringDeps {
   memory: Pick<BotMemoryRuntime, "apply" | "view" | "markStale">;
-  /** The Bot's own model, or null when it has none. */
-  model(botId: string): Promise<MemoryReviewModel | null>;
+  /** Admit the Bot's authority and resolve its own model under it; released when steering ends. */
+  admit(botId: string): Promise<BotMemoryAdmission>;
   /** Append a bookkeeping entry to the Bot's conversation. */
   appendEntry(botId: string, kind: string, data: BotMemoryReviewEntryData): Promise<void>;
   /** The harness's `reserveTokens` (Pi Durable's default when absent). */
@@ -126,39 +140,61 @@ export interface BotCompactionSteeringDeps {
   summaryTimeoutMs?: number;
 }
 
+/** What the run being compacted offers, and the conversation its entries come from. */
+export interface BotCompactionOffer {
+  memoryOffered: boolean;
+  /** Where each entry's provenance is read; without it nothing is flushed. */
+  conversation?: Conversation;
+}
+
 export type BotCompactionSteering = (
   botId: string,
   compaction: BotCompaction,
-  offer: { memoryOffered: boolean },
+  offer: BotCompactionOffer,
   context: Context,
 ) => Promise<{ summary: string } | undefined>;
 
 export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): BotCompactionSteering {
   return async (botId, compaction, offer, context) => {
+    let release: (() => void) | undefined;
     try {
-      const model = await deps.model(botId).catch(() => null);
-      if (model === null) return undefined;
+      const admission = await deps.admit(botId).catch((): BotMemoryAdmission => ({ ok: false, reason: "not_admitted" }));
+      if (!admission.ok) return undefined;
+      const { model, lease } = admission;
+      release = () => lease.release();
+      const callerSignal = context.abortSignal === undefined ? {} : { signal: context.abortSignal };
 
-      if (offer.memoryOffered) {
+      if (offer.memoryOffered && offer.conversation !== undefined) {
         try {
-          const flushed = await runMemoryReview({
-            botId,
-            memory: deps.memory,
-            model,
-            transcript: serializeMessagesForReview(compaction.messages),
-            maxRounds: BOT_COMPACTION_FLUSH_MAX_ROUNDS,
-            timeoutMs: deps.flushTimeoutMs ?? BOT_COMPACTION_FLUSH_TIMEOUT_MS,
-            ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
-          });
-          if (flushed.added > 0) {
-            await deps.appendEntry(botId, BOT_MEMORY_REVIEW_ENTRY_KIND, {
-              source: "compaction",
-              added: flushed.added,
-              targets: flushed.targets,
+          const unattended = await unattendedInputs(offer.conversation, { floor: compaction.entries[0]?.id, ...callerSignal });
+          const { transcript } = personTurns(compaction.entries, unattended);
+          if (transcript.length > 0) {
+            const flushed = await runMemoryReview({
+              botId,
+              memory: deps.memory,
+              model,
+              authority: lease,
+              transcript,
+              maxRounds: BOT_COMPACTION_FLUSH_MAX_ROUNDS,
+              timeoutMs: deps.flushTimeoutMs ?? BOT_COMPACTION_FLUSH_TIMEOUT_MS,
+              ...callerSignal,
             });
+            if (flushed.added > 0) {
+              await deps.appendEntry(botId, BOT_MEMORY_REVIEW_ENTRY_KIND, {
+                source: "compaction",
+                added: flushed.added,
+                targets: flushed.targets,
+              });
+            }
           }
         } catch (error) {
           if (context.abortSignal?.aborted) throw error;
+          // Access changed mid-flush: record only what was already saved.
+          if (error instanceof BotMemoryAuthorityLostError && error.added > 0) {
+            await deps
+              .appendEntry(botId, BOT_MEMORY_REVIEW_ENTRY_KIND, { source: "compaction", added: error.added, targets: error.targets })
+              .catch((appendError: unknown) => deps.onError?.(botId, appendError));
+          }
           deps.onError?.(botId, error);
         }
       }
@@ -171,8 +207,12 @@ export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): Bo
         );
         const signal = AbortSignal.any([
           AbortSignal.timeout(deps.summaryTimeoutMs ?? BOT_COMPACTION_SUMMARY_TIMEOUT_MS),
+          lease.signal,
           ...(context.abortSignal === undefined ? [] : [context.abortSignal]),
         ]);
+        // The steered summary is a provider request under the same authority.
+        await lease.revalidate();
+        signal.throwIfAborted();
         const answer = await model.models.completeSimple(
           model.model,
           {
@@ -187,6 +227,7 @@ export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): Bo
           },
           { maxTokens, signal },
         );
+        if (lease.signal.aborted) return undefined;
         if (answer.stopReason !== "stop" || answer.content.some((part) => part.type === "toolCall")) return undefined;
         const summary = answer.content
           .flatMap((part) => (part.type === "text" ? [part.text] : []))
@@ -199,6 +240,7 @@ export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): Bo
         return undefined;
       }
     } finally {
+      release?.();
       deps.memory.markStale(botId);
     }
   };
