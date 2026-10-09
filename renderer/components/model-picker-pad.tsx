@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   findDirectionalModel,
+  MODEL_PAD_CAPTURE_RADIUS,
   modelOptionId,
   nearestModel,
   type ModelDirection,
@@ -175,16 +176,24 @@ export function ModelPickerPad({
     ),
   );
 
+  // Pointer input only reaches models within the capture radius; empty areas of the
+  // Pad leave the preview where it is.
+  const modelNearPoint = React.useCallback(
+    (point: ModelPoint) =>
+      nearestModel(models, point, activeValueRef.current, undefined, MODEL_PAD_CAPTURE_RADIUS),
+    [models],
+  );
+
   const applyPoint = React.useCallback(
     (point: ModelPoint) => {
-      const nearest = nearestModel(models, point, activeValueRef.current);
+      const nearest = modelNearPoint(point);
       if (nearest && nearest.value !== activeValueRef.current) {
         activeValueRef.current = nearest.value;
         setConfirmedValue(undefined);
         onPreview(nearest.value);
       }
     },
-    [models, onPreview],
+    [modelNearPoint, onPreview],
   );
 
   const flushQueuedPoint = React.useCallback(() => {
@@ -239,9 +248,13 @@ export function ModelPickerPad({
     if (!draggingRef.current) return;
     event.preventDefault();
     const rect = rectRef.current ?? event.currentTarget.getBoundingClientRect();
-    queuedPointRef.current = pointFromPointer(event, rect);
+    const releasePoint = pointFromPointer(event, rect);
+    queuedPointRef.current = releasePoint;
     flushQueuedPoint();
-    const committed = models.find((model) => model.value === activeValueRef.current);
+    // A release in an empty area chooses nothing, even after previewing a model.
+    const committed = modelNearPoint(releasePoint)
+      ? models.find((model) => model.value === activeValueRef.current)
+      : undefined;
     draggingRef.current = false;
     setDragging(false);
     rectRef.current = null;

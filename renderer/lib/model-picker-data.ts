@@ -422,11 +422,18 @@ function distance(a: ModelPoint, b: ModelPoint): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/**
+ * How far (in normalized Pad units, the space of model x/y) a pointer may be from a
+ * model and still preview or choose it. Points in empty areas of the Pad pick nothing.
+ */
+export const MODEL_PAD_CAPTURE_RADIUS = 0.2;
+
 export function nearestModel(
   models: PositionedModel[],
   point: ModelPoint,
   currentValue?: string,
   hysteresis = 0.025,
+  maxDistance = Number.POSITIVE_INFINITY,
 ): PositionedModel | undefined {
   if (models.length === 0) return undefined;
   let nearest = models[0];
@@ -438,11 +445,14 @@ export function nearestModel(
       nearestDistance = candidateDistance;
     }
   }
+  if (nearestDistance > maxDistance) return undefined;
 
   const current = currentValue ? models.find((model) => model.value === currentValue) : undefined;
   if (current && current.value !== nearest.value) {
     const currentDistance = distance(current, point);
-    if (currentDistance - nearestDistance < hysteresis) return current;
+    if (currentDistance <= maxDistance && currentDistance - nearestDistance < hysteresis) {
+      return current;
+    }
   }
   return nearest;
 }

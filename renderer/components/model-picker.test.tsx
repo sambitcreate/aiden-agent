@@ -46,7 +46,7 @@ const placedSettings: AppSettings = {
 
 async function mountPicker(
   server: ReturnType<typeof settingsServer>,
-  options: { hidden?: string[] } = {},
+  options: { hidden?: string[]; onChange?: (providerId: string, model: string) => void } = {},
 ) {
   await mountWithBotRouter(
     <>
@@ -54,7 +54,7 @@ async function mountPicker(
         providers={[provider]}
         providerId="acme"
         model="current-model"
-        onChange={() => {}}
+        onChange={options.onChange ?? (() => {})}
         hiddenModelsByProvider={options.hidden ? { acme: options.hidden } : undefined}
       />
       <Toaster />
@@ -72,7 +72,7 @@ async function mountPicker(
 
 async function openPicker(
   server: ReturnType<typeof settingsServer>,
-  options: { hidden?: string[] } = {},
+  options: Parameters<typeof mountPicker>[1] = {},
 ) {
   await mountPicker(server, options);
   return screen.findByRole("listbox", { name: /Model pad/u });
@@ -162,4 +162,24 @@ test("a failed Add to Pad says why and keeps offering the model", async () => {
   await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add to Pad" })));
   assert.equal(pad.getAttribute("aria-activedescendant"), null);
   assert.equal(within(pad).getAllByRole("option").length, 2);
+});
+
+test("choosing a model on the Pad closes the picker after the confirm pulse", async () => {
+  const server = settingsServer(placedSettings);
+  const changes: string[] = [];
+  const pad = await openPicker(server, {
+    onChange: (providerId, model) => changes.push(`${providerId}::${model}`),
+  });
+
+  fireEvent.keyDown(pad, { key: "ArrowUp" });
+  fireEvent.keyDown(pad, { key: "Enter" });
+
+  assert.deepEqual(changes, ["acme::placed-one"]);
+  // The knob confirms the choice before the popover goes away.
+  assert.ok(screen.getByRole("listbox", { name: /Model pad/u }));
+  assert.equal(pad.querySelector(".model-pad-knob")?.getAttribute("data-confirmed"), "true");
+  // (assert.ok rather than comparing the element: inspecting a DOM node can hang the runner.)
+  await waitFor(() =>
+    assert.ok(!screen.queryByRole("listbox", { name: /Model pad/u }), "the picker closed"),
+  );
 });

@@ -343,6 +343,17 @@ function useStableModelInfo(
   return same ? previous : data;
 }
 
+/** Matches the knob's 250ms confirm transition closely enough to read as one beat. */
+const PAD_COMMIT_CLOSE_DELAY_MS = 200;
+
+function prefersReducedMotion(): boolean {
+  if (document.documentElement.dataset.reduceMotion === "true") return true;
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 export function ModelPicker({
   providers,
   providerId,
@@ -502,6 +513,28 @@ export function ModelPicker({
     },
     [onChange, selectedValue],
   );
+
+  // Choosing on the Pad closes the picker once the knob's confirm pulse has shown,
+  // like choosing in the list. The timer never outlives the popover it was set for.
+  const padCloseTimerRef = React.useRef<number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (padCloseTimerRef.current !== null) window.clearTimeout(padCloseTimerRef.current);
+      padCloseTimerRef.current = null;
+    },
+    [open],
+  );
+  const commitFromPad = (entry: ModelEntry) => {
+    commit(entry);
+    if (padCloseTimerRef.current !== null) window.clearTimeout(padCloseTimerRef.current);
+    padCloseTimerRef.current = window.setTimeout(
+      () => {
+        padCloseTimerRef.current = null;
+        setOpen(false);
+      },
+      prefersReducedMotion() ? 0 : PAD_COMMIT_CLOSE_DELAY_MS,
+    );
+  };
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -685,7 +718,7 @@ export function ModelPicker({
                 selectedValue={selectedValue}
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
-                onCommit={(entry) => commit(entry)}
+                onCommit={commitFromPad}
               />
             ) : (
               <EmptyModelPad

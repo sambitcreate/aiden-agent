@@ -240,3 +240,57 @@ test("the Pad captions its axes without exposing them to assistive tech", () => 
     assert.ok(element.closest('[aria-hidden="true"]'), `${caption} is hidden from assistive tech`);
   }
 });
+
+/** Pixel position on a 300px Pad for a normalized model point. */
+function padPixel(point: { x: number; y: number }) {
+  const size = 300;
+  return {
+    clientX: (0.08 + point.x * 0.84) * size,
+    clientY: (0.08 + (1 - point.y) * 0.84) * size,
+  };
+}
+
+function renderPointerPad(onCommit: (value: string) => void) {
+  const previews: Array<string | undefined> = [];
+  render(
+    <ModelPickerPad
+      models={models}
+      gridSize={7}
+      selectedValue="middle"
+      onPreview={(value) => previews.push(value)}
+      onCommit={(model) => onCommit(model.value)}
+    />,
+  );
+  const listbox = screen.getByRole("listbox");
+  listbox.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width: 300, height: 300, right: 300, bottom: 300 }) as DOMRect;
+  listbox.setPointerCapture = () => {};
+  listbox.hasPointerCapture = () => false;
+  return { listbox, previews };
+}
+
+test("a pointer release far from every model commits nothing", () => {
+  const commits: string[] = [];
+  const { listbox, previews } = renderPointerPad((value) => commits.push(value));
+  // The top-left corner is empty: the nearest model is more than 0.4 away.
+  const empty = padPixel({ x: 0.05, y: 0.95 });
+  fireEvent.pointerDown(listbox, { button: 0, pointerId: 1, ...empty });
+  fireEvent.pointerUp(listbox, { button: 0, pointerId: 1, ...empty });
+  assert.deepEqual(commits, []);
+  assert.deepEqual(previews, [], "the preview stays where it was");
+
+  // Previewing a model and then letting go in the empty corner chooses nothing either.
+  fireEvent.pointerDown(listbox, { button: 0, pointerId: 2, ...padPixel({ x: 0.5, y: 0.97 }) });
+  fireEvent.pointerUp(listbox, { button: 0, pointerId: 2, ...empty });
+  assert.deepEqual(previews, ["north"]);
+  assert.deepEqual(commits, []);
+});
+
+test("a pointer release near a model commits it", () => {
+  const commits: string[] = [];
+  const { listbox, previews } = renderPointerPad((value) => commits.push(value));
+  fireEvent.pointerDown(listbox, { button: 0, pointerId: 1, ...padPixel({ x: 0.55, y: 0.93 }) });
+  assert.deepEqual(previews, ["north"]);
+  fireEvent.pointerUp(listbox, { button: 0, pointerId: 1, ...padPixel({ x: 0.55, y: 0.93 }) });
+  assert.deepEqual(commits, ["north"]);
+});

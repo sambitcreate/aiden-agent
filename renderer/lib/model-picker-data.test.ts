@@ -6,6 +6,7 @@ import {
   decodeSelection,
   encodeSelection,
   findDirectionalModel,
+  MODEL_PAD_CAPTURE_RADIUS,
   modelGridSize,
   nearestModel,
   modelBenchmarkPercentiles,
@@ -742,4 +743,26 @@ test("nearest selection has hysteresis and directional navigation favors aligned
   assert.equal(findDirectionalModel(models, "left", "right")?.value, "right");
   assert.equal(findDirectionalModel(models, "left", "up")?.value, "up");
   assert.equal(findDirectionalModel(models, "left", "left")?.value, "left");
+});
+
+test("nearest selection ignores points beyond the capture radius of every model", () => {
+  const models = positionSavedModels([entry("center"), entry("corner")], {
+    center: { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
+    corner: { x: 0, y: 0, xSource: "user", ySource: "user" },
+  });
+  // About 0.32 from the center model and 0.45 from the corner one.
+  const empty = { x: 0.95, y: 0.95 };
+  assert.equal(nearestModel(models, empty, undefined, 0.025, MODEL_PAD_CAPTURE_RADIUS), undefined);
+  assert.equal(nearestModel(models, empty, "center", 0.025, MODEL_PAD_CAPTURE_RADIUS), undefined);
+  // Without a limit the nearest model still wins, as keyboard fallbacks expect.
+  assert.equal(nearestModel(models, empty)?.value, "center");
+  // Within the radius the nearest model is returned.
+  assert.equal(
+    nearestModel(models, { x: 0.12, y: 0.1 }, undefined, 0.025, MODEL_PAD_CAPTURE_RADIUS)?.value,
+    "corner",
+  );
+  assert.equal(
+    nearestModel(models, { x: 0.6, y: 0.62 }, "corner", 0.025, MODEL_PAD_CAPTURE_RADIUS)?.value,
+    "center",
+  );
 });
