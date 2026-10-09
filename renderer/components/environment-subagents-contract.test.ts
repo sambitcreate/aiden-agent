@@ -157,11 +157,8 @@ test("floating Environment remains non-modal across every app-level interaction 
   const assistant = source("./assistant/assistant-dock.tsx");
 
   assert.match(environment, /data-surface-mode=\{inline \? "tools-pinned" : "tools-floating"\}/u);
-  // Floating geometry and titlebar clearance are exercised in Electron.
-  assert.match(
-    environment,
-    /reportSurfaceLayout\(fullOpen \? \{ inline, width: renderedWidth \} : null\)/u,
-  );
+  // Floating geometry, titlebar clearance, and the stacked tools state the
+  // workbench reports are exercised in Electron (workspace-panel, chat-top-bar).
   assert.match(environment, /const toggleTools = React\.useCallback/u);
   assert.match(
     environment,

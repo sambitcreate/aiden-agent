@@ -1546,6 +1546,13 @@ textarea {
   }
 }
 
+/* The title keeps priority over the workspace chip on narrow chat columns. */
+@container chat-toolbar (max-width: 560px) {
+  .workspace-chip {
+    display: none;
+  }
+}
+
 .usage-profile-content {
   container: usage-profile / inline-size;
 }
