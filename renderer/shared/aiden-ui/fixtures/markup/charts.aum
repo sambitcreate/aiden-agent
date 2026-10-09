@@ -1,0 +1,10 @@
+<Visual title="Weekly active users">
+  <Row gap={3}>
+    <Stat label="This week" value={max($data.weeks, "users")} format="number" trend={0.08} caption="vs last week" />
+    <Stat label="Three-week total" value={sum($data.weeks, "users")} format="number" />
+  </Row>
+  <Chart kind="line" data={$data.weeks} x="week" y="users" height={220} label="Users per week" />
+  <Sparkline values={[3, 5, 4, 8, 9, 12]} label="Signups" />
+  <BarList items={[{label:"Web",value:620},{label:"iOS",value:410},{label:"Android",value:280}]} label="label" value="value" format="number" />
+  <Data name="data">{"weeks": [{"week": "W1", "users": 1180}, {"week": "W2", "users": 1240}, {"week": "W3", "users": 1310}]}</Data>
+</Visual>

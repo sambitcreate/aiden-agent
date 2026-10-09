@@ -1,0 +1,19 @@
+<Visual title="Open issues by team" state={{team: "all", showClosed: false, limit: 3}}>
+  <Row gap={2} wrap>
+    <Select bind="team" label="Team" options={[{value:"all",label:"All teams"},{value:"core",label:"Core"},{value:"mobile",label:"Mobile"}]} />
+    <Switch bind="showClosed" label="Show closed" />
+    <Slider bind="limit" label="Rows" min={1} max={5} step={1} />
+  </Row>
+  <List>
+    <Each in={$team == "all" ? $data.issues : filter($data.issues, "team", $team)} as="issue">
+      <If test={$showClosed || $issue.state == "open"}>
+        <ListRow title={$issue.title} description={$issue.team} meta={$issue.state} icon="bug" action={sendPrompt("Summarize issue: " + $issue.title)} />
+      </If>
+    </Each>
+  </List>
+  <Data name="data">{"issues": [
+    {"title": "Crash on launch", "team": "mobile", "state": "open"},
+    {"title": "Slow search", "team": "core", "state": "open"},
+    {"title": "Typo in settings", "team": "core", "state": "closed"}
+  ]}</Data>
+</Visual>

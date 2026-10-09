@@ -19,6 +19,10 @@ const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 class BudgetExceeded extends Error {}
 
+function hasOwn(target: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(target, key);
+}
+
 export function truthy(value: unknown): boolean {
   if (typeof value === "number") return value !== 0 && !Number.isNaN(value);
   return value !== undefined && value !== null && value !== false && value !== "";
@@ -34,7 +38,7 @@ function readMember(base: unknown, key: unknown): unknown {
   }
   if (!isRecord(base)) return undefined;
   const name = typeof key === "number" ? String(key) : key;
-  if (typeof name !== "string" || BLOCKED_KEYS.has(name) || !Object.hasOwn(base, name)) return undefined;
+  if (typeof name !== "string" || BLOCKED_KEYS.has(name) || !hasOwn(base, name)) return undefined;
   return base[name];
 }
 
@@ -164,7 +168,7 @@ function run(expr: AidenUiExprV1, scope: AidenUiScope, budget: { steps: number }
     case "json":
       return expr.v;
     case "var":
-      return Object.hasOwn(scope.vars, expr.name) ? scope.vars[expr.name] : undefined;
+      return hasOwn(scope.vars, expr.name) ? scope.vars[expr.name] : undefined;
     case "get":
       return readMember(run(expr.of, scope, budget), run(expr.key, scope, budget));
     case "not":

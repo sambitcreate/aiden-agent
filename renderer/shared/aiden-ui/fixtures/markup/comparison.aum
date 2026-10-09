@@ -1,0 +1,13 @@
+<Visual title="Postgres vs SQLite for a desktop app">
+  <Grid columns={2} gap={3}>
+    <Card title="SQLite">
+      <Badge color="green" icon="check">Embedded</Badge>
+      <KeyValue items={[{label:"Setup",value:"None"},{label:"Concurrency",value:"Single writer"},{label:"Footprint",value:"~1 MB"}]} />
+    </Card>
+    <Card title="Postgres">
+      <Badge color="blue" icon="server">Server</Badge>
+      <KeyValue items={[{label:"Setup",value:"Install and run a service"},{label:"Concurrency",value:"Many writers"},{label:"Footprint",value:"~50 MB"}]} />
+    </Card>
+  </Grid>
+  <Callout color="green" title="Recommendation">Use SQLite for a single-user desktop app; move to Postgres when several processes write at once.</Callout>
+</Visual>

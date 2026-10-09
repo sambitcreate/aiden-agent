@@ -1,0 +1,6 @@
+<Visual title="Release checklist">
+  <Progress value={len(filter($data.steps, "done", true))} max={len($data.steps)} label="Steps done" />
+  <Checklist items={$data.steps} />
+  <Timeline items={[{title:"Branch cut",time:"Mon"},{title:"Beta",time:"Wed",description:"TestFlight and internal track"},{title:"Release",time:"Fri"}]} />
+  <Data name="data">{"steps": [{"label": "Bump version", "done": true}, {"label": "Run full test suite", "done": true}, {"label": "Tag release", "done": false}]}</Data>
+</Visual>

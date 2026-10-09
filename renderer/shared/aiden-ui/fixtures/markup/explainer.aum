@@ -1,0 +1,13 @@
+<Visual title="How compound interest grows" state={{years: 10}}>
+  <Heading level="2">Compound interest</Heading>
+  <Markdown>Money grows on its **past growth**, not just the original amount.</Markdown>
+  <Math display>A = P\left(1 + \frac{r}{n}\right)^{nt}</Math>
+  <Slider bind="years" label="Years" min={1} max={30} step={1} />
+  <Text tone="secondary">After {$years} years at 5%, $1,000 becomes about {fmt($data.table[$years], "currency")}.</Text>
+  <Disclosure title="Show the code">
+    <Code lang="python">def grow(p, r, n, t):
+    return p * (1 + r / n) ** (n * t)</Code>
+  </Disclosure>
+  <Text>Press <Kbd>⌘</Kbd> to copy.</Text>
+  <Data name="data">{"table": {"1": 1050, "5": 1276.28, "10": 1628.89, "20": 2653.3, "30": 4321.94}}</Data>
+</Visual>

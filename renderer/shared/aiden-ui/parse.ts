@@ -26,7 +26,7 @@ export type AumNode = AumElement | { kind: "text"; text: string } | { kind: "exp
 
 const NAME_START = /[A-Za-z]/u;
 const NAME_CHAR = /[A-Za-z0-9_.-]/u;
-const RAW_TEXT_ELEMENTS = new Set(["Data"]);
+const RAW_TEXT_ELEMENTS = new Set(["Data", "Code", "Math", "Markdown"]);
 
 interface Frame {
   element: AumElement | null;
