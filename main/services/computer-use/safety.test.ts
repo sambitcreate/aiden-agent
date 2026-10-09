@@ -262,9 +262,64 @@ test("normalizeComputerUseArgs modifiers canonicalization on click", () => {
       action: "click",
       element: 1,
       button: "left",
-      delivery_mode: "background",
+      // macOS needs physical modifier state, so a modified click is foreground.
+      delivery_mode: "foreground",
       modifiers: ["option", "shift", "cmd"],
     },
+  );
+  assertSafetyError("foreground_required", () =>
+    normalizeComputerUseArgs({
+      action: "middle_click",
+      coordinate: [1, 1],
+      modifiers: ["cmd"],
+      delivery_mode: "background",
+    } as never),
+  );
+  // right_click keeps its background modifier route, on the pixel path only.
+  assert.equal(
+    (
+      normalizeComputerUseArgs({
+        action: "right_click",
+        coordinate: [4, 5],
+        modifiers: ["cmd"],
+      } as never) as Record<string, unknown>
+    ).delivery_mode,
+    "background",
+  );
+  assert.throws(
+    () =>
+      normalizeComputerUseArgs({
+        action: "right_click",
+        element: 1,
+        modifiers: ["cmd"],
+      } as never),
+    (error: unknown) =>
+      error instanceof ComputerUseSafetyError &&
+      error.code === "unsupported_modifiers" &&
+      /coordinate/u.test(error.message),
+  );
+  // The approval names the held modifiers and the foreground delivery.
+  const modified = summarizeComputerUseApproval({
+    action: "click",
+    element: 5,
+    modifiers: ["shift", "cmd"],
+  } as never);
+  assert.match(modified, /\bshift\+cmd\b/u);
+  assert.match(modified, /element 5/u);
+  assert.match(modified, /VISIBLE FOREGROUND/u);
+  assert.match(
+    summarizeComputerUseApproval({ action: "click", element: 5, button: "right" } as never),
+    /\bright\b/u,
+  );
+  assert.match(
+    summarizeComputerUseApproval({
+      action: "drag",
+      from_coordinate: [1, 1],
+      to_coordinate: [2, 2],
+      button: "middle",
+      modifiers: ["option"],
+    } as never),
+    /option.*drag.*middle/u,
   );
   // More than four modifiers is rejected.
   assertSafetyError("invalid_modifiers", () =>
@@ -306,7 +361,7 @@ test("normalizeComputerUseArgs delivery mode + bring_to_front", () => {
 test("normalizeComputerUseArgs drag branch requires one source and one target", () => {
   assert.deepEqual(
     normalizeComputerUseArgs({ action: "drag", from_element: 1, to_element: 2 } as never),
-    { action: "drag", from_element: 1, to_element: 2, button: "left", delivery_mode: "background" },
+    { action: "drag", from_element: 1, to_element: 2, button: "left", delivery_mode: "foreground" },
   );
   assert.deepEqual(
     normalizeComputerUseArgs({
@@ -319,8 +374,21 @@ test("normalizeComputerUseArgs drag branch requires one source and one target", 
       from_coordinate: [0, 0],
       to_coordinate: [5, 5],
       button: "left",
-      delivery_mode: "background",
+      delivery_mode: "foreground",
     },
+  );
+  // macOS has no background drag route; the approval shows the foreground.
+  assertSafetyError("foreground_required", () =>
+    normalizeComputerUseArgs({
+      action: "drag",
+      from_element: 1,
+      to_element: 2,
+      delivery_mode: "background",
+    } as never),
+  );
+  assert.match(
+    summarizeComputerUseApproval({ action: "drag", from_element: 1, to_element: 2 } as never),
+    /VISIBLE FOREGROUND/u,
   );
   // Missing one side.
   assertSafetyError("invalid_drag", () =>
@@ -681,4 +749,154 @@ test("ComputerUseGrantLedger.clear() empties pending grants", () => {
   assert.equal(ledger.size, 0);
   // After clear, consume must fail.
   assertSafetyError("approval_required", () => ledger.consume("call-1", args));
+});
+
+test("verify is read-only and mirrors verify_state's predicate bounds", () => {
+  const verify = (fields: Record<string, unknown>) =>
+    normalizeComputerUseArgs({ action: "verify", ...fields } as never);
+  assert.equal(
+    computerUseNeedsApproval(verify({ expect: [{ window: { exists: true } }] })),
+    false,
+  );
+  assert.deepEqual(
+    verify({
+      expect: [{ element: { role: " AXButton ", label_contains: "Save", selected: false } }],
+      stable_samples: 3,
+      timeout_ms: 2_000,
+      include_screenshot: true,
+    }),
+    {
+      action: "verify",
+      expect: [{ element: { role: "AXButton", label_contains: "Save", selected: false } }],
+      stable_samples: 3,
+      timeout_ms: 2_000,
+      include_screenshot: true,
+    },
+  );
+  for (const expect of [
+    [],
+    Array.from({ length: 9 }, () => ({ window: { exists: true } })),
+    [{}],
+    [{ element: { label_contains: "A" }, window: { exists: true } }],
+    [{ element: { value_equals: "x" } }],
+    [{ element: { label_contains: "   " } }],
+    [{ element: { label_contains: "A", exists: false } }],
+    [{ window: {} }],
+    [{ window: { bounds: { x: 0, y: 0, width: 0, height: 10 } } }],
+    [{ window: { bounds: { x: 0, y: 0, width: 10, height: 10, tolerance_px: 101 } } }],
+  ]) {
+    assertSafetyError("invalid_predicate", () => verify({ expect }));
+  }
+  assertSafetyError("invalid_verify", () =>
+    verify({ expect: [{ window: { exists: true } }], stable_samples: 6 }),
+  );
+  assertSafetyError("invalid_verify", () =>
+    verify({ expect: [{ window: { exists: true } }], timeout_ms: 10_001 }),
+  );
+  // One sample cannot prove stability across several.
+  assertSafetyError("invalid_verify", () =>
+    verify({ expect: [{ window: { exists: true } }], timeout_ms: 0, stable_samples: 2 }),
+  );
+  assertSafetyError("irrelevant_argument", () =>
+    verify({ expect: [{ window: { exists: true } }], capture_after: true }),
+  );
+});
+
+test("menu needs approval, is foreground-only, and shows its exact path", () => {
+  const menu = normalizeComputerUseArgs({
+    action: "menu",
+    menu_path: ["Format", " Font ", "Bold"],
+  } as never);
+  assert.deepEqual(menu, {
+    action: "menu",
+    menu_path: ["Format", "Font", "Bold"],
+    delivery_mode: "foreground",
+  });
+  assert.equal(computerUseNeedsApproval(menu), true);
+  const menuSummary = summarizeComputerUseApproval(menu);
+  for (const title of ["Format", "Font", "Bold"]) assert.ok(menuSummary.includes(title), title);
+  assert.match(menuSummary, /VISIBLE FOREGROUND/u);
+  // Menu commands as destructive as the blocked shortcuts are refused outright.
+  for (const menuPath of [
+    ["Safari", "Quit Safari"],
+    ["File", "  QUIT  "],
+    ["Apple", "System Settings…"],
+    ["\uf8ff", "About This Mac"],
+    ["Finder", "Empty Trash..."],
+    ["Finder", "empty trash…"],
+    ["Finder", "Empty Bin"],
+    ["Apple Menu Extras", "Log Out Ada…"],
+    ["X", "Shut Down…"],
+    ["X", "Restart..."],
+    ["X", "Sleep"],
+    ["X", "Lock Screen"],
+    ["X", "Force Quit…"],
+    // invoke_menu presses intermediate segments, so a trailing suffix must not hide them.
+    ["Safari", "Quit Safari", "anything"],
+    ["Finder", "Empty Trash…", "Now"],
+  ]) {
+    assertSafetyError("blocked_menu", () =>
+      normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never),
+    );
+  }
+  for (const menuPath of [
+    ["File", "Save As…"],
+    ["Edit", "Quite Useful Item"],
+    ["View", "Enter Full Screen"],
+    ["Format", "Font", "Show Fonts"],
+  ]) {
+    assert.deepEqual(
+      (normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never) as Record<
+        string,
+        unknown
+      >).menu_path,
+      menuPath,
+    );
+  }
+  assertSafetyError("foreground_required", () =>
+    normalizeComputerUseArgs({
+      action: "menu",
+      menu_path: ["File"],
+      delivery_mode: "background",
+    } as never),
+  );
+  for (const menuPath of [[], Array.from({ length: 17 }, () => "A"), [""], ["x".repeat(201)], [1]]) {
+    assertSafetyError("invalid_menu", () =>
+      normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never),
+    );
+  }
+});
+
+test("set_window_frame needs approval and bounds its integer frame", () => {
+  const frame = normalizeComputerUseArgs({
+    action: "set_window_frame",
+    x: -1200,
+    y: 0,
+    width: 800,
+    height: 600,
+  } as never);
+  assert.equal(computerUseNeedsApproval(frame), true);
+  const frameSummary = summarizeComputerUseApproval(frame);
+  for (const value of ["-1200", "800", "600"]) assert.ok(frameSummary.includes(value), value);
+  assert.doesNotMatch(frameSummary, /FOREGROUND/u);
+  for (const bad of [
+    { x: 0, y: 0, width: 0, height: 600 },
+    { x: 0.5, y: 0, width: 800, height: 600 },
+    { x: 0, y: 100_001, width: 800, height: 600 },
+    { x: 0, y: 0, width: 800 },
+  ]) {
+    assertSafetyError("invalid_frame", () =>
+      normalizeComputerUseArgs({ action: "set_window_frame", ...bad } as never),
+    );
+  }
+  assertSafetyError("irrelevant_argument", () =>
+    normalizeComputerUseArgs({
+      action: "set_window_frame",
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+      delivery_mode: "foreground",
+    } as never),
+  );
 });

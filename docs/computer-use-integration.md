@@ -17,11 +17,14 @@ fit a signed desktop product.
 
 ## Driver release policy
 
-Aiden pins the macOS universal `cua-driver` 0.8.3 artifact from tag
-`cua-driver-rs-v0.8.3` and source commit
-`0612c26b2c7b8556f6de7f6b4f3927ecac914e4f`. Both the archive and extracted
-binary SHA-256 values are recorded in
-`resources/computer-use/cua-driver-artifact.json`. The security-critical binary
+Aiden pins the macOS universal `cua-driver` 0.34.1 artifact from tag
+`cua-driver-rs-v0.34.1` and source commit
+`0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc` (upgraded from 0.8.3 on 2026-10-09;
+see [the upgrade plan](plans/cua-driver-0-34-upgrade-plan.md)). Both the archive
+and extracted binary SHA-256 values are recorded in
+`resources/computer-use/cua-driver-artifact.json`. The release archive now holds
+five signed files (CLI, cursor theme, SDK dylib, Node runtime, C header); Aiden
+vendors only the `cua-driver` executable and rejects any other staged entry. The security-critical binary
 hash, Cua signing identifier, and Cua Team ID are also compiled into Aiden and
 the broker rather than trusted from that mutable metadata. Driver updates
 happen only in reviewed Aiden releases.
@@ -29,10 +32,23 @@ happen only in reviewed Aiden releases.
 The runtime never executes Cua's moving installer, never resolves a production
 driver from `PATH`, never follows an executable path returned by the driver's
 manifest, and never invokes its self-updater. Upstream telemetry and update
-checks are disabled in every child process. The MIT notice ships beside the
-helper.
+checks are disabled in every child process, including upstream's
+`DO_NOT_TRACK=1` opt-out, which takes precedence over persisted driver
+configuration. The MIT notice ships beside the helper.
 
-The pinned 0.8.3 release is currently marked pre-release upstream. Aiden treats
+Upstream publishes a cosign (Sigstore) bundle beside each release asset. The
+pinned archive SHA-256 stays the authority; `npm run computer-use:vendor --
+--verify-sigstore` additionally verifies the bundle against the exact
+`cd-rust-cua-driver.yml` release-workflow identity when `cosign` is installed.
+
+The kernel launch requirement embedded in `darwin_security.m` is generated from
+the reviewed pins by `node scripts/generate-cua-launch-requirement.mjs`
+(`--check` verifies the checked-in bytes, `--write` rewrites them; update the
+length and SHA-256 pinned in `driver.rs` afterwards). The generator uses Apple's
+LightweightCodeRequirements encoder and reproduces the former 0.8.3 bytes
+exactly.
+
+Every upstream `cua-driver-rs` release, including the pinned 0.34.1, is marked pre-release. Aiden treats
 Computer Use as a gated beta until the real-driver smoke matrix and release
 signing checks in Phase 4 pass. The bare universal asset carries Cua's valid
 Developer ID signature (`YCK386LBJ7`) but Gatekeeper does not accept it as an
@@ -70,9 +86,13 @@ authentication.
 After authentication, the broker:
 
 1. starts the pinned driver as
-   `cua-driver mcp --embedded --host-bundle-id com.sambitcreate.aiden-agent.cua-driver`
+   `cua-driver mcp --embedded --direct --host-bundle-id com.sambitcreate.aiden-agent.cua-driver`
    with anonymous stdin/stdout pipes, so the driver's permission report names
-   the separately granted signed broker that owns TCC responsibility;
+   the separately granted signed broker that owns TCC responsibility. Since
+   0.34, embedded `mcp` requires either a private `--socket` service or
+   `--direct`; Aiden uses `--direct` so the MCP child owns its runtime and no
+   pathname socket exists. Direct mode disables the driver's on-screen agent
+   cursor overlay, which Aiden does not use;
 2. establishes occupied broker and driver-supervision groups before any
    privileged child exists, then uses macOS's kernel-enforced launch requirement
    to admit only the reviewed Cua signing identity, Team ID,
@@ -95,6 +115,16 @@ host identity with Apple's public APIs, rewrites the driver call to a status-onl
 recheck, and grants no prompt authority to expanded or malformed calls. Aiden
 then tears down that driver and checks readiness with a fresh helper so a stale
 per-process TCC cache cannot report the pre-prompt state.
+
+Since 0.34 the driver runs its live ScreenCaptureKit probe only on a prompting
+call, so in embedded mode `screen_recording_capturable` is always `null`
+(`direct_capture_status: "not_checked"`). Readiness therefore rests on the
+Accessibility and Screen Recording TCC preflight booleans; an explicit `false`
+from a probe that did run still vetoes. This is weaker than the 0.8.3 live
+probe: a stale preflight can report ready, after which the first screenshot
+capture fails and the controller refuses pixel actions. Packaged acceptance
+must confirm the report still carries `embedded: true` and
+`attribution: "host"` under `--direct`.
 
 An internal anonymous-pipe guard occupies the broker group and receives no
 public arguments. Before calling Foundation or Security, the dormant launcher
@@ -234,7 +264,8 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
 
 - Hermes: `tools/computer_use/schema.py`, `tool.py`, `cua_backend.py`,
   `permissions.py`, and multimodal routing in `run_agent.py`.
-- Cua: the 0.8.3 release/checksums, `Skills/cua-driver/EMBEDDING.md`, telemetry
+- Cua: the 0.8.3 and 0.34.1 release checksums, `Skills/cua-driver/EMBEDDING.md`,
+  `WORKFLOW.md` and `MACOS.md` (0.34.1), the action-result contract, telemetry
   documentation, platform support, installer scripts, and release workflow.
 - Aiden: Pi agent/tool types, `llm-client.ts`, generic MCP manager, approval UI,
   config/chat persistence, Electron lifecycle, preload allowlists, and packaging.

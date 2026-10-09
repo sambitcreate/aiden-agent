@@ -11,10 +11,8 @@ pub(crate) const ALLOWED_TOOLS: &[&str] = &[
     "check_permissions",
     "list_apps",
     "list_windows",
-    "get_screen_size",
-    "get_accessibility_tree",
-    "get_desktop_state",
     "get_window_state",
+    "verify_state",
     "bring_to_front",
     "click",
     "double_click",
@@ -25,6 +23,8 @@ pub(crate) const ALLOWED_TOOLS: &[&str] = &[
     "press_key",
     "hotkey",
     "set_value",
+    "invoke_menu",
+    "set_window_frame",
 ];
 
 #[derive(Debug, Eq, PartialEq)]
@@ -224,8 +224,46 @@ mod tests {
             "replay_recording",
             "check_for_update",
             "config_set",
+            "set_config",
+            "clipboard_read",
+            "clipboard_write",
+            "browser_navigate",
+            "install_extension",
+            // Superseded by get_window_state; Aiden never calls them.
+            "get_screen_size",
+            "get_accessibility_tree",
+            "get_desktop_state",
         ] {
-            assert!(!ALLOWED_TOOLS.contains(&forbidden));
+            assert!(
+                !ALLOWED_TOOLS.contains(&forbidden),
+                "{forbidden} is allowlisted"
+            );
+            let denied = process_client_message(
+                format!(
+                    r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{forbidden}","arguments":{{}}}}}}"#
+                )
+                .as_bytes(),
+                &mut pending(),
+            )
+            .unwrap();
+            assert!(
+                matches!(denied, ClientMessage::Respond(_)),
+                "{forbidden} reached the driver"
+            );
+        }
+        for added in ["verify_state", "invoke_menu", "set_window_frame"] {
+            let forwarded = process_client_message(
+                format!(
+                    r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{added}","arguments":{{}}}}}}"#
+                )
+                .as_bytes(),
+                &mut pending(),
+            )
+            .unwrap();
+            assert!(
+                matches!(forwarded, ClientMessage::Forward(_)),
+                "{added} was not forwarded"
+            );
         }
     }
 
