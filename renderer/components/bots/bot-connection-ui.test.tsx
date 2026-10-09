@@ -10,7 +10,7 @@ import {
   type ConnectCardEntry,
 } from "../../shared/bot-connections";
 import { ConnectCard } from "./connect-card";
-import { ConnectionChips, toggleConnection } from "./connection-chips";
+import { ConnectionChips } from "./connection-chips";
 
 const FORWARD_REF = Symbol.for("react.forward_ref");
 
@@ -76,7 +76,7 @@ test("a pending card asks to connect, explains why, and offers Connect and Not n
   assert.match(view.text, /Connect Gmail/u);
   assert.match(view.text, /So I can sort your inbox each morning\./u);
   assert.deepEqual(
-    view.buttons.map((button) => button.name),
+    view.buttons.map((button) => button.name).sort(),
     ["Connect Gmail", "Not now for Gmail"],
   );
   assert.equal(view.byRole("group")[0]?.getAttribute("aria-label"), "Connect Gmail");
@@ -128,7 +128,7 @@ test("phones can relabel Connect without changing its accessible name", () => {
     />,
   );
   assert.match(view.text, /Finish on your Mac/u);
-  assert.equal(view.buttons[0]?.name, "Connect Gmail");
+  assert.ok(view.buttons.some((button) => button.name === "Connect Gmail"));
 });
 
 test("a card for an unknown plugin renders nothing", () => {
@@ -144,64 +144,40 @@ const suggestions = ["gmail", "google-calendar", "notion"].map(
   (id) => connectionSuggestionFor(id) as BotConnectionSuggestion,
 );
 
-test("chips name each connection and report which are selected", () => {
+test("chips offer to connect each app, and an app that is already connected offers nothing to press", () => {
   const view = renderDocument(
-    <ConnectionChips
-      suggestions={suggestions}
-      selected={new Set(["notion"])}
-      onToggle={noop}
-      onSkip={noop}
-    />,
+    <ConnectionChips suggestions={suggestions} connected={new Set(["notion"])} onConnect={noop} />,
   );
-  assert.deepEqual(view.buttons, [
-    { name: "Connect Gmail", pressed: "false" },
-    { name: "Connect Google Calendar", pressed: "false" },
-    { name: "Connect Notion", pressed: "true" },
-    { name: "Skip", pressed: null },
-  ]);
-  assert.equal(view.byRole("group")[0]?.getAttribute("aria-label"), "Suggested connections");
+  assert.deepEqual(
+    view.buttons.map((button) => button.name),
+    ["Connect Gmail", "Connect Google Calendar"],
+  );
+  assert.match(view.text, /Notion/u);
+  assert.match(view.text, /connected/u);
 });
 
-test("the ranked defaults render, including the Composio chip", () => {
+test("the ranked defaults render, and Composio's chip says what it is", () => {
   const view = renderDocument(
-    <ConnectionChips suggestions={rankConnections("")} selected={new Set()} onToggle={noop} />,
+    <ConnectionChips suggestions={rankConnections("")} connected={new Set()} onConnect={noop} />,
   );
   assert.ok(view.buttons.some((button) => button.name === "Connect Composio"));
-  assert.match(view.text, /500\+ apps/u);
-  assert.equal(view.buttons.some((button) => button.name === "Skip"), false);
+  assert.match(view.text, /More apps \(Composio\)/u);
+  assert.doesNotMatch(view.text, /500\+/u);
 });
 
-test("pressing chips toggles them on and off, and Skip is one tap", () => {
-  let selected: ReadonlySet<string> = new Set();
-  let skipped = 0;
-  const render = () => (
-    <ConnectionChips
-      suggestions={suggestions}
-      selected={selected}
-      onToggle={(pluginId) => {
-        selected = toggleConnection(selected, pluginId);
-      }}
-      onSkip={() => {
-        skipped += 1;
-      }}
-    />
+test("pressing a chip starts that app's setup and selects nothing else", () => {
+  const connects: string[] = [];
+  const element = (
+    <ConnectionChips suggestions={suggestions} connected={new Set()} onConnect={(pluginId) => connects.push(pluginId)} />
   );
-  press(buttonNamed(render(), "Connect Gmail"));
-  press(buttonNamed(render(), "Connect Notion"));
-  assert.deepEqual([...selected].sort(), ["gmail", "notion"]);
-  press(buttonNamed(render(), "Connect Gmail"));
-  assert.deepEqual([...selected], ["notion"]);
-  assert.equal(
-    renderDocument(render()).buttons.find((button) => button.name === "Connect Notion")?.pressed,
-    "true",
-  );
-  press(buttonNamed(render(), "Skip"));
-  assert.equal(skipped, 1);
+  press(buttonNamed(element, "Connect Gmail"));
+  press(buttonNamed(element, "Connect Notion"));
+  assert.deepEqual(connects, ["gmail", "notion"]);
 });
 
-test("toggleConnection never mutates the previous selection", () => {
-  const before = new Set(["gmail"]);
-  const after = toggleConnection(before, "notion");
-  assert.deepEqual([...before], ["gmail"]);
-  assert.deepEqual([...after].sort(), ["gmail", "notion"]);
+test("chips can't be pressed while the Bot is being created", () => {
+  const element = (
+    <ConnectionChips suggestions={suggestions} connected={new Set()} disabled onConnect={() => assert.fail("pressed")} />
+  );
+  assert.throws(() => press(buttonNamed(element, "Connect Gmail")), /disabled/u);
 });

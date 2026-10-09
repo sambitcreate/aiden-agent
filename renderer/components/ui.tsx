@@ -359,6 +359,7 @@ export function Field({
         className,
       )}
     >
+      {label || description || orientation === "horizontal" ? (
       <div className="min-w-0">
         {label ? (
           <div id={labelId} className="text-strong text-primary">
@@ -371,6 +372,7 @@ export function Field({
           </div>
         ) : null}
       </div>
+      ) : null}
       <div className="settings-field-control min-w-0">{children}</div>
     </div>
   );
@@ -853,9 +855,16 @@ export function ScrollArea({
   showScrollToBottomButton,
   scrollToBottomButtonOffset = 0,
   scrollContentBottomOffset = 0,
+  scrollRestorationId,
   className,
   children,
 }: React.PropsWithChildren<{
+  /**
+   * Names this scrollport for the router's scroll restoration, so a page never
+   * inherits another page's offset just because their scrollports sit at the
+   * same place in the tree.
+   */
+  scrollRestorationId?: string;
   title?: React.ReactNode;
   leading?: React.ReactNode;
   actions?: React.ReactNode;
@@ -1043,6 +1052,7 @@ export function ScrollArea({
       ) : null}
       <div
         ref={viewport}
+        data-scroll-restoration-id={scrollRestorationId}
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
         className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
@@ -1110,6 +1120,11 @@ type DialogProps = React.PropsWithChildren<{
   cancelDisabled?: boolean;
   cancelLabel?: string;
   onCancel?: () => void | Promise<void>;
+  /**
+   * The cancel button runs `onCancel` without closing the dialog, for a step
+   * back inside a multi-step dialog. Escape and outside clicks still close it.
+   */
+  cancelKeepsOpen?: boolean;
   allowCancelWhileBusy?: boolean;
   actionClassName?: string;
   busy?: boolean;
@@ -1137,6 +1152,7 @@ export function Dialog({
   cancelDisabled,
   cancelLabel,
   onCancel,
+  cancelKeepsOpen = false,
   allowCancelWhileBusy,
   actionClassName,
   busy,
@@ -1213,7 +1229,7 @@ export function Dialog({
           ) : null}
           <div className="mt-4 min-h-0 overflow-y-auto px-0.5">{children}</div>
           <div className="mt-5 flex shrink-0 justify-end gap-2">
-            <DialogPrimitive.Close asChild>
+            {cancelKeepsOpen ? (
               <Button
                 ref={cancelRef}
                 variant="filled"
@@ -1223,7 +1239,19 @@ export function Dialog({
               >
                 {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
               </Button>
-            </DialogPrimitive.Close>
+            ) : (
+              <DialogPrimitive.Close asChild>
+                <Button
+                  ref={cancelRef}
+                  variant="filled"
+                  className={actionClassName}
+                  disabled={dismissBlocked}
+                  onClick={() => void onCancel?.()}
+                >
+                  {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
+                </Button>
+              </DialogPrimitive.Close>
+            )}
             {confirmHidden ? null : (
               <Button
                 variant="accent"

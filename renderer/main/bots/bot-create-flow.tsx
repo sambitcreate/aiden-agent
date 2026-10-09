@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Callout, Dialog, Input, Text, Textarea } from "../../components/ui";
+import { Callout, Dialog, FieldLabel, Input, Text, Textarea } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { queryKeys } from "../../lib/queries";
@@ -18,7 +18,7 @@ import {
   type BotCapabilityCatalog,
 } from "../../shared/bot-capabilities";
 import { firstAvailableModel, firstAvailableVisionModel } from "./bot-access-draft";
-import { ConnectionChips, toggleConnection } from "../../components/bots/connection-chips";
+import { ConnectionChips } from "../../components/bots/connection-chips";
 import { rankConnections } from "../../shared/bot-connections";
 import { useConnectionSetup } from "./use-connection-setup";
 
@@ -79,8 +79,10 @@ export function recommendedFullAccess(catalog: BotCapabilityCatalog): {
 }
 
 /**
- * Two short steps: name and "What should it help with?", then optional
- * connection chips. Everything else has a default; Skip is one tap.
+ * Two short steps: name and "What should it help with?", then optional app
+ * connections. A new Bot gets Full access, which covers every app connected on
+ * this Mac, so the chips only start a connection's setup; nothing is selected
+ * per Bot. Back returns to the first step with the draft kept.
  */
 export function BotCreateFlow({
   open,
@@ -92,10 +94,14 @@ export function BotCreateFlow({
   onCreated(bot: BotDefinition, options: { needsModel: boolean }): void | Promise<void>;
 }) {
   const qc = useQueryClient();
+  const nameId = React.useId();
+  const helpId = React.useId();
   const [step, setStep] = React.useState<1 | 2>(1);
   const [name, setName] = React.useState("");
   const [help, setHelp] = React.useState("");
-  const [connected, setConnected] = React.useState<ReadonlySet<string>>(() => new Set());
+  // Apps set up from this dialog. Apps reached through Composio aren't visible
+  // to Aiden afterwards, so the chip remembers the finished setup.
+  const [justConnected, setJustConnected] = React.useState<ReadonlySet<string>>(() => new Set());
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const suggestions = React.useMemo(() => rankConnections(help), [help]);
@@ -103,15 +109,24 @@ export function BotCreateFlow({
   const connectionSetup = useConnectionSetup(() => {
     const pluginId = pendingPlugin.current;
     pendingPlugin.current = null;
-    if (pluginId) setConnected((current) => toggleConnection(current, pluginId));
+    if (pluginId) setJustConnected((current) => new Set(current).add(pluginId));
   });
-  const openSetup = connectionSetup.open;
+  const { open: openSetup, isConnected } = connectionSetup;
+  const connected = React.useMemo(
+    () =>
+      new Set(
+        suggestions
+          .map((suggestion) => suggestion.pluginId)
+          .filter((pluginId) => justConnected.has(pluginId) || isConnected(pluginId)),
+      ),
+    [isConnected, justConnected, suggestions],
+  );
   React.useEffect(() => {
     if (!open) return;
     setStep(1);
     setName("");
     setHelp("");
-    setConnected(new Set());
+    setJustConnected(new Set());
     setError(null);
   }, [open]);
 
@@ -155,14 +170,19 @@ export function BotCreateFlow({
     }
   };
 
-  const toggleChip = (pluginId: string) => {
-    if (connected.has(pluginId)) {
-      setConnected((current) => toggleConnection(current, pluginId));
-      return;
-    }
+  const connect = (pluginId: string) => {
     pendingPlugin.current = pluginId;
     if (!openSetup(pluginId)) pendingPlugin.current = null;
   };
+
+  const displayName = name.trim() || "This Bot";
+  const errorCallout = error ? (
+    <Callout color="red" role="alert">
+      <Text variant="small-strong" color="red">
+        {error}
+      </Text>
+    </Callout>
+  ) : null;
 
   return (
     <>
@@ -170,65 +190,67 @@ export function BotCreateFlow({
         open={open}
         onOpenChange={onOpenChange}
         title={step === 1 ? "New Bot" : "Connections"}
-        description={step === 2 ? `Optional. Connect what ${name.trim() || "this Bot"} can use.` : undefined}
+        description={
+          step === 2
+            ? `Optional. ${displayName} can use any app you connect on this Mac.`
+            : undefined
+        }
         confirmLabel={step === 1 ? "Next" : "Create"}
         confirmDisabled={step === 1 ? !name.trim() : busy}
         busy={busy}
-        cancelLabel={step === 2 ? "Back" : undefined}
-        onCancel={step === 2 ? () => setStep(1) : undefined}
+        {...(step === 2
+          ? { cancelLabel: "Back", cancelKeepsOpen: true, onCancel: () => setStep(1) }
+          : {})}
         allowCancelWhileBusy={false}
         onConfirm={step === 1 ? () => setStep(2) : create}
         submitOnEnter
       >
         {step === 1 ? (
           <div className="space-y-4">
-            {error ? (
-              <Callout color="red" role="alert">
-                {error}
-              </Callout>
-            ) : null}
-            <label className="block">
-              <Text variant="small-strong">Name</Text>
+            {errorCallout}
+            <div className="flex flex-col gap-1.5">
+              <FieldLabel htmlFor={nameId} className="text-small-strong">
+                Name
+              </FieldLabel>
               <Input
+                id={nameId}
                 autoFocus
-                className="mt-1.5"
                 value={name}
                 maxLength={BOT_LIMITS.nameChars}
                 placeholder="Meal Planner"
                 disabled={busy}
                 onChange={(event) => setName(event.target.value)}
               />
-            </label>
-            <label className="block">
-              <Text variant="small-strong">What should it help with?</Text>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <FieldLabel htmlFor={helpId} className="text-small-strong">
+                What should it help with?
+              </FieldLabel>
               <Textarea
-                className="mt-1.5 min-h-20 resize-none"
+                id={helpId}
+                className="min-h-20"
                 value={help}
                 maxLength={BOT_LIMITS.descriptionChars}
                 placeholder="Plan my meals and grocery list every week"
                 disabled={busy}
                 onChange={(event) => setHelp(event.target.value)}
               />
-            </label>
-            <Text as="p" variant="small" color="tertiary">
+            </div>
+            <Text as="p" variant="small" color="secondary">
               It can use everything Aiden can on this Mac. You can change this later in Advanced.
             </Text>
           </div>
         ) : (
           <div className="space-y-4">
-            {error ? (
-              <Callout color="red" role="alert">
-                {error}
-              </Callout>
-            ) : null}
+            {errorCallout}
             <ConnectionChips
               suggestions={suggestions}
-              selected={connected}
-              onToggle={toggleChip}
-              onSkip={() => void create()}
+              connected={connected}
+              onConnect={connect}
+              disabled={busy}
             />
-            <Text as="p" variant="small" color="tertiary">
-              Each connection is optional. You can add more later in Advanced.
+            <Text as="p" variant="small" color="secondary">
+              Skip this if you like. You can connect more apps any time in Settings.
             </Text>
           </div>
         )}
