@@ -17,7 +17,7 @@ import {
 
 export interface LocalSpeechWorkerEngine {
   status(): { ready: boolean; error: string | null };
-  load(spec: SpeechModelSpec, dir: string): { loadMs: number };
+  load(spec: SpeechModelSpec, dir: string, language?: string | null): { loadMs: number };
   transcribe(request: EngineTranscribeRequest): EngineTranscribeResult;
   release(): void;
 }
@@ -79,7 +79,11 @@ export function createLocalSpeechMessageHandler(
         case "status":
           return { ...base, kind: "result", ...engine.status() };
         case "load":
-          return { ...base, kind: "result", loadMs: engine.load(message.spec, message.modelDirectory).loadMs };
+          return {
+            ...base,
+            kind: "result",
+            loadMs: engine.load(message.spec, message.modelDirectory, message.language ?? null).loadMs,
+          };
         case "release":
           engine.release();
           return { ...base, kind: "result" };

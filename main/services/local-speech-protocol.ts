@@ -16,7 +16,16 @@ type V = typeof LOCAL_SPEECH_PROTOCOL_VERSION;
 
 export type LocalSpeechParentMessage =
   | { version: V; kind: "status"; requestId: string }
-  | { version: V; kind: "load"; requestId: string; modelId: string; modelDirectory: string; spec: SpeechModelSpec }
+  | {
+      version: V;
+      kind: "load";
+      requestId: string;
+      modelId: string;
+      modelDirectory: string;
+      spec: SpeechModelSpec;
+      /** The language the recognizer is built for (SenseVoice); absent or null leaves it to the model. */
+      language?: string | null;
+    }
   | {
       version: V;
       kind: "transcribe";
@@ -135,7 +144,11 @@ export function isLocalSpeechParentMessage(value: unknown): value is LocalSpeech
     case "release":
       return true;
     case "load":
-      return isNonEmptyString(value.modelDirectory) && isSpecFor(value.spec, value.modelId);
+      return (
+        isNonEmptyString(value.modelDirectory) &&
+        isSpecFor(value.spec, value.modelId) &&
+        (value.language === undefined || value.language === null || (typeof value.language === "string" && LANGUAGE.test(value.language)))
+      );
     case "transcribe":
       return (
         isNonEmptyString(value.modelDirectory) &&

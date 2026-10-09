@@ -170,9 +170,14 @@ export class LocalSpeechProcessClient {
     return { ready: result.ready === true, error: result.error ?? null };
   }
 
-  async load(modelId: string, modelDirectory: string, spec: SpeechModelSpec): Promise<{ loadMs: number }> {
+  async load(
+    modelId: string,
+    modelDirectory: string,
+    spec: SpeechModelSpec,
+    language: string | null = null,
+  ): Promise<{ loadMs: number }> {
     const result = LocalSpeechProcessClient.unwrap(
-      await this.request({ kind: "load", modelId, modelDirectory, spec }, this.deadlines.load),
+      await this.request({ kind: "load", modelId, modelDirectory, spec, language }, this.deadlines.load),
     );
     return { loadMs: result.loadMs ?? 0 };
   }
