@@ -1,24 +1,32 @@
 import * as React from "react";
-import { ChevronRight, Plus, RotateCcw } from "lucide-react";
+import { CalendarClock, ChevronRight, Plus, RotateCcw } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Text } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import type { BotRoutine } from "../../../main/services/scheduled-bot-routines";
 import type { BotDefinition } from "../../shared/bots";
+import { formatBotRoutineLabel } from "../../shared/bot-routine-label";
+import { BOT_DAILY_CHECKIN_SUGGESTION } from "../../shared/bot-routine-proposals";
 import { BotRoutineEditor } from "./bot-routine-editor";
 
 export const botRoutinesKey = (botId: string) => ["bot-routines", botId] as const;
 
-/** The Bot's routines: one row per routine, and "+ Add routine". */
+type Editing = BotRoutine | "new" | "suggestion" | null;
+
+/**
+ * The Bot's routines: one row per routine, and "+ Add routine". With no
+ * routines yet, "Try a daily check-in" opens the editor prefilled; nothing is
+ * created until the person saves it.
+ */
 export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }) {
   const qc = useQueryClient();
   const routines = useQuery({
     queryKey: botRoutinesKey(bot.id),
     queryFn: () => botsApi.routines.list(bot.id),
   });
-  const [editing, setEditingState] = React.useState<BotRoutine | "new" | null>(null);
+  const [editing, setEditingState] = React.useState<Editing>(null);
   const [editorSession, setEditorSession] = React.useState(0);
-  const setEditing = (next: BotRoutine | "new" | null) => {
+  const setEditing = (next: Editing) => {
     if (next !== null) setEditorSession((value) => value + 1);
     setEditingState(next);
   };
@@ -55,14 +63,26 @@ export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }
             </Button>
           </div>
         ) : list.length === 0 ? (
-          <Text
-            as="p"
-            variant="small"
-            color="secondary"
-            className="relative px-4 py-3 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator"
-          >
-            No routines yet. A routine has {bot.name} check in on a schedule.
-          </Text>
+          <>
+            <Text
+              as="p"
+              variant="small"
+              color="secondary"
+              className="relative px-4 py-3 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator"
+            >
+              No routines yet. A routine has {bot.name} check in on a schedule.
+            </Text>
+            <button type="button" className={rowClass} onClick={() => setEditing("suggestion")}>
+              <CalendarClock aria-hidden="true" className="size-4 shrink-0 text-secondary" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-regular text-primary">Try a daily check-in</span>
+                <span className="mt-0.5 block truncate text-small text-secondary">
+                  {formatBotRoutineLabel(BOT_DAILY_CHECKIN_SUGGESTION.schedule)}
+                </span>
+              </span>
+              <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+            </button>
+          </>
         ) : (
           <ul aria-label="Routines">
             {list.map((routine) => (
@@ -91,7 +111,16 @@ export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }
         // Each opening starts a fresh form from the routine it edits (or a blank one).
         key={editorSession}
         bot={bot}
-        {...(editing && editing !== "new" ? { routine: editing } : {})}
+        {...(editing && typeof editing === "object" ? { routine: editing } : {})}
+        {...(editing === "suggestion"
+          ? {
+              draft: {
+                name: BOT_DAILY_CHECKIN_SUGGESTION.name,
+                prompt: BOT_DAILY_CHECKIN_SUGGESTION.prompt,
+                schedule: BOT_DAILY_CHECKIN_SUGGESTION.schedule,
+              },
+            }
+          : {})}
         open={editing !== null}
         onOpenChange={(open) => {
           if (!open) setEditing(null);

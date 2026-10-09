@@ -4,10 +4,13 @@
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, FileText, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
+import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
@@ -22,6 +25,7 @@ import { useBotLive } from "../../lib/use-bot-live";
 import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
+import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import { BotChatActions, BotChatBackButton, BotChatNamePill } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
@@ -30,6 +34,7 @@ import { BotFilesDialog } from "./bot-files-dialog";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
+import { botRoutinesKey } from "./bot-routines";
 import { BotUpdates } from "./bot-updates";
 import { useConnectionSetup } from "./use-connection-setup";
 
@@ -266,6 +271,23 @@ function BotFileChip({ path, operation, onOpen }: { path: string; operation: "wr
   );
 }
 
+/** "Memory updated": a quiet, centred caption that opens Profile → Memory. */
+function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
+  return (
+    <div className="flex justify-center py-1">
+      <button
+        type="button"
+        aria-label="Memory updated. Open Memory"
+        className="inline-flex items-center gap-1.5 rounded-button px-2 py-1 text-small text-tertiary outline-none transition-colors duration-(--motion-duration) ease-standard hover:bg-list-hover hover:text-secondary focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
+        onClick={onOpen}
+      >
+        <MemoryCardIcon aria-hidden="true" className="size-3.5" />
+        Memory updated
+      </button>
+    </div>
+  );
+}
+
 /** Chat transcript rows: bubbles, one Updates line per reply, chips, cards. */
 function TranscriptEntries({
   name,
@@ -278,6 +300,8 @@ function TranscriptEntries({
   onOpenFile,
   onReply,
   onRetry,
+  onOpenMemory,
+  onRespondToProposal,
 }: {
   name: string;
   entries: readonly BotTranscriptEntry[];
@@ -289,6 +313,11 @@ function TranscriptEntries({
   onOpenFile(path: string): void;
   onReply(text: string): void;
   onRetry(text: string): void;
+  onOpenMemory(): void;
+  onRespondToProposal(
+    proposalId: string,
+    decision: BotRoutineProposalDecision,
+  ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
 }) {
   const rows = botTranscriptRows(entries, partial, running);
   return (
@@ -349,6 +378,17 @@ function TranscriptEntries({
                 onRetry={() => row.retryText !== null && onRetry(row.retryText)}
               />
             );
+          case "memory_update":
+            return <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} />;
+          case "routine_proposal":
+            return (
+              <RoutineProposalCard
+                key={row.id}
+                proposal={row.proposal}
+                status={row.status}
+                onRespond={(decision) => onRespondToProposal(row.proposal.proposalId, decision)}
+              />
+            );
         }
       })}
     </>
@@ -369,6 +409,7 @@ function BotChatSkeleton() {
 
 export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const bot = useBot(botId);
   const live = useBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
@@ -581,6 +622,25 @@ export function BotChatPane({ botId }: { botId: string }) {
     });
   };
 
+  const respondToProposal = async (proposalId: string, decision: BotRoutineProposalDecision) => {
+    try {
+      const result = await botsApi.routineProposals.respond({ botId: current.id, proposalId, decision });
+      if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
+      return result.status;
+    } catch (error) {
+      toast.error(
+        userFacingErrorMessage(
+          error,
+          decision === "accept" ? "Aiden couldn’t add that routine." : "Aiden couldn’t save that choice.",
+        ),
+      );
+      throw error;
+    }
+  };
+
+  const openMemory = () =>
+    void navigate({ to: "/bots/$botId", params: { botId: current.id }, search: { page: "memory" } });
+
   const dismissConnection = async (pluginId: string) => {
     try {
       await botsApi.dismissConnection(current.id, pluginId);
@@ -661,6 +721,8 @@ export function BotChatPane({ botId }: { botId: string }) {
           onOpenFile={(path) => setFiles({ open: true, path })}
           onReply={reply}
           onRetry={(text) => void retry(text)}
+          onOpenMemory={openMemory}
+          onRespondToProposal={respondToProposal}
         />
       </MessageAttachmentPreviewProvider>
       {state?.kind === "interrupted" ? (

@@ -375,7 +375,7 @@ const featureBentos: FeatureBento[] = [
     group: "control",
     title: "Meet your Bots",
     description:
-      "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers its instructions, and can run on a schedule.",
+      "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers what matters to you, and can check in on a schedule.",
     icon: Bot,
     imageUrl: FEATURE_ILLUSTRATIONS.bots,
     size: "standard",

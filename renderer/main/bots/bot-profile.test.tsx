@@ -115,7 +115,7 @@ test("the Profile ••• menu holds Advanced and Delete Bot", async () => {
   assert.ok(within(dialog).getByRole("heading", { name: "Delete Planner?" }));
 });
 
-test("Advanced shows the model, image model, access, greeting, and Telegram controls", async () => {
+test("Advanced shows the model, image model, access and Telegram controls, and no opening greeting", async () => {
   botStoreIpc(botFixture(), {
     "bots:getCapabilityCatalog": () => catalogFixture(),
     "bots:getBotAccess": () => ({
@@ -135,7 +135,8 @@ test("Advanced shows the model, image model, access, greeting, and Telegram cont
   assert.ok(screen.getByRole("button", { name: /Use recommended/u }));
   const access = screen.getByRole("radiogroup", { name: "What it can use" });
   assert.equal(within(access).getByRole("radio", { name: "Everything" }).getAttribute("aria-checked"), "true");
-  assert.ok(screen.getByRole("textbox", { name: "Opening greeting" }));
+  assert.equal(screen.queryByRole("textbox", { name: "Opening greeting" }), null);
+  assert.equal(screen.queryByText(/Opening greeting/u), null);
   assert.ok(await screen.findByRole("button", { name: /Connect Telegram/u }));
   assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true);
 
@@ -146,7 +147,7 @@ test("Advanced shows the model, image model, access, greeting, and Telegram cont
 
 function advancedIpc() {
   const accessUpdates: unknown[] = [];
-  const store = botStoreIpc(botFixture({ openingGreeting: "Hi!" }), {
+  const store = botStoreIpc(botFixture(), {
     "bots:getCapabilityCatalog": () => catalogFixture(),
     "bots:getBotAccess": () => ({
       access: { botId: "bot-1", revision: "acc-1", policyEpoch: "e", summary: "", accessMode: "full" },
@@ -162,15 +163,12 @@ function advancedIpc() {
   return { ...store, accessUpdates };
 }
 
-test("Advanced saves access and the greeting together with one Save, then has nothing left to save", async () => {
+test("Advanced saves access with the toolbar's one Save, then has nothing left to save", async () => {
   const store = advancedIpc();
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
   const access = await screen.findByRole("radiogroup", { name: "What it can use" });
   fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Opening greeting" }), {
-    target: { value: "Hello! Where to next?" },
-  });
-  // No separate greeting or access save buttons: the toolbar's Save is the only one.
+  // No separate access save button: the toolbar's Save is the only one.
   assert.deepEqual(
     screen.getAllByRole("button").map((button) => button.textContent).filter((text) => /save/iu.test(text ?? "")),
     ["Save"],
@@ -178,21 +176,18 @@ test("Advanced saves access and the greeting together with one Save, then has no
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   await waitFor(() => assert.equal(store.accessUpdates.length, 1));
-  await waitFor(() => assert.equal(store.updates.length, 1));
   assert.deepEqual((store.accessUpdates[0] as { access: { accessMode: string } }).access.accessMode, "custom");
-  assert.equal(store.updates[0]!.openingGreeting, "Hello! Where to next?");
-  assert.equal(store.updates[0]!.instructions, "Plan trips.", "the greeting save keeps other identity fields");
+  assert.equal(store.updates.length, 0, "an access save leaves the Bot's identity alone");
   await waitFor(() =>
     assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true),
   );
 });
 
-test("Advanced Back with an unsaved greeting asks before discarding it", async () => {
+test("Advanced Back with an unsaved access change asks before discarding it", async () => {
   const store = advancedIpc();
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
-  fireEvent.change(await screen.findByRole("textbox", { name: "Opening greeting" }), {
-    target: { value: "Changed my mind" },
-  });
+  const access = await screen.findByRole("radiogroup", { name: "What it can use" });
+  fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }));
   await screen.findByRole("button", { name: "Instructions" });

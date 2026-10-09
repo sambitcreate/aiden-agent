@@ -20,7 +20,6 @@ import {
   SelectValue,
   Switch,
   Text,
-  Textarea,
   toast,
 } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
@@ -39,7 +38,7 @@ import {
   type BotCapabilityCatalog,
   type BotCapabilityOption,
 } from "../../shared/bot-capabilities";
-import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
+import type { BotDefinition } from "../../shared/bots";
 import {
   accessDraftFromState,
   botAccessDiffers,
@@ -49,7 +48,6 @@ import {
   firstAvailableVisionModel,
   type BotAccessDraft,
 } from "./bot-access-draft";
-import { updateBotIdentity } from "./bot-identity";
 import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
 
 type ToggleKey = "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds";
@@ -397,35 +395,6 @@ function AccessSection({
   );
 }
 
-function GreetingSection({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: string;
-  disabled: boolean;
-  onChange(next: string): void;
-}) {
-  return (
-    <FieldSet title="Opening greeting">
-      <Field
-        orientation="vertical"
-        description="The first message in a new chat. Changing it won’t edit an existing chat."
-      >
-        <Textarea
-          aria-label="Opening greeting"
-          className="min-h-20"
-          value={value}
-          maxLength={BOT_LIMITS.openingGreetingChars}
-          disabled={disabled}
-          placeholder="Hi! What should we start with?"
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </Field>
-    </FieldSet>
-  );
-}
-
 /**
  * Telegram is an account link, not a setting: Connect opens a chooser and
  * Disconnect acts at once, as the provider and connection rows in Settings do.
@@ -555,8 +524,8 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
 }
 
 /**
- * Power settings for one Bot: model, what it can use, and the opening
- * greeting are edited as one draft and saved together by the toolbar's Save;
+ * Power settings for one Bot: model and what it can use are edited as one
+ * draft and saved together by the toolbar's Save;
  * Back with unsaved edits asks before discarding them. Telegram is a
  * connection with its own Connect and Disconnect actions.
  */
@@ -568,8 +537,6 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
   const catalog = catalogQuery.data;
   const [draft, setDraft] = React.useState<BotAccessDraft | null>(null);
   const [baseline, setBaseline] = React.useState<BotAccessDraft | null>(null);
-  const [greeting, setGreeting] = React.useState(bot.openingGreeting ?? "");
-  const [greetingBaseline, setGreetingBaseline] = React.useState(bot.openingGreeting ?? "");
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
@@ -580,8 +547,7 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
   }, [accessQuery.data, accessQuery.isSuccess, catalog, draft]);
 
   const accessChanged = draft !== null && !sameDraft(draft, baseline);
-  const greetingChanged = greeting.trim() !== greetingBaseline.trim();
-  const dirty = accessChanged || greetingChanged;
+  const dirty = accessChanged;
   const guard = useDiscardChangesGuard({
     dirty,
     onLeave: onClose,
@@ -624,12 +590,6 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
     setSaving(true);
     try {
       if (accessChanged && draft && baseline) await saveAccess(draft, baseline);
-      if (greetingChanged) {
-        const saved = await updateBotIdentity(qc, bot.id, { openingGreeting: greeting });
-        const next = saved.openingGreeting ?? "";
-        setGreeting(next);
-        setGreetingBaseline(next);
-      }
       toast.success("Saved");
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t save these settings."));
@@ -692,7 +652,6 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
           <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
         </>
       )}
-      <GreetingSection value={greeting} disabled={saving} onChange={setGreeting} />
       <TelegramSection bot={bot} />
       {guard.dialog}
     </BotPageShell>
