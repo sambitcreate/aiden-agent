@@ -12,6 +12,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { finished } from "node:stream/promises";
 import { promisify } from "node:util";
 import {
   SPEECH_MODELS,
@@ -77,6 +78,23 @@ const WRONG_RANGE = "The download server returned an unexpected range. Press Dow
 const OVERSIZE = "The download is larger than expected and was corrupted. Try again.";
 const CORRUPTED = "The download was corrupted. Try again.";
 const INTERRUPTED = "The download was interrupted. Press Download to resume.";
+const diskFailure = (error: unknown) => {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "unknown error";
+  return `Aiden couldn't write the voice model to disk: ${code}. Free up space and try again.`;
+};
+
+/** Tags an error raised by the network (fetch or body reader) rather than by Aiden. */
+class NetworkFailure extends Error {
+  constructor(readonly original: unknown) {
+    super(String(original));
+  }
+}
+/** Tags an error raised by the partial file's write stream. */
+class DiskFailure extends Error {
+  constructor(readonly original: unknown) {
+    super(diskFailure(original));
+  }
+}
 
 function tarBinary(): string {
   return fs.existsSync("/usr/bin/tar") ? "/usr/bin/tar" : "tar";
@@ -286,9 +304,16 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
       if (reason === "connect") return new Error(CONNECT_TIMEOUT);
       if (reason === "stall") return new Error(STALLED);
       if (reason === "oversize") return new Error(OVERSIZE);
-      // Network-level failures (reset, DNS, "terminated") keep the partial for resume.
-      deps.info?.(`Speech model download for "${spec.id}" interrupted: ${String(error)}`);
-      return new Error(INTERRUPTED);
+      if (error instanceof DiskFailure) {
+        deps.info?.(`Speech model download for "${spec.id}" could not write: ${String(error.original)}`);
+        return new Error(error.message);
+      }
+      if (error instanceof NetworkFailure) {
+        // Network-level failures (reset, DNS, "terminated") keep the partial for resume.
+        deps.info?.(`Speech model download for "${spec.id}" interrupted: ${error.message}`);
+        return new Error(INTERRUPTED);
+      }
+      return error instanceof Error ? error : new Error(String(error));
     };
 
     const connectTimer = setTimeout(() => abortFor("connect"), connectMs);
@@ -300,7 +325,7 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
         headers: have > 0 ? { Range: `bytes=${have}-` } : undefined,
       });
     } catch (error) {
-      throw failure(error);
+      throw failure(new NetworkFailure(error));
     } finally {
       clearTimeout(connectTimer);
     }
@@ -325,7 +350,7 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
     if (!res.body) throw new Error(`Download failed: ${res.status}`);
 
     const file = fs.createWriteStream(part, { flags: start > 0 ? "a" : "w", mode: 0o600 });
-    const fileError = new Promise<never>((_, reject) => file.once("error", reject));
+    const fileError = new Promise<never>((_, reject) => file.once("error", (error) => reject(new DiskFailure(error))));
     fileError.catch(() => {});
     const reader = res.body.getReader();
     let downloaded = start;
@@ -339,7 +364,10 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
     try {
       armStall();
       for (;;) {
-        const { done, value } = await Promise.race([reader.read(), fileError]);
+        const read = reader.read().catch((error: unknown) => {
+          throw new NetworkFailure(error);
+        });
+        const { done, value } = await Promise.race([read, fileError]);
         if (done) break;
         armStall();
         const chunk = Buffer.from(value);
@@ -357,13 +385,24 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
           emit("download", downloaded, total);
         }
       }
+      clearTimeout(stallTimer);
+      file.end();
+      await Promise.race([finished(file), fileError]);
       emit("download", downloaded, total);
+      if (downloaded < total) {
+        // The server ended cleanly but early. Keep the partial so the next run resumes.
+        deps.info?.(`Speech model download for "${spec.id}" ended early at ${downloaded} of ${total} bytes`);
+        throw new Error(INTERRUPTED);
+      }
     } catch (error) {
       throw failure(error);
     } finally {
       clearTimeout(stallTimer);
       await reader.cancel().catch(() => {});
-      await new Promise<void>((resolve) => file.end(resolve));
+      if (!file.closed) {
+        file.end();
+        await finished(file).catch(() => {});
+      }
       if (reason === "oversize") await fs.promises.rm(part, { force: true });
     }
   }
