@@ -162,6 +162,7 @@
         "main/services/opencode-session-attribution.test.ts",
         "main/services/local-speech-idle-unload.test.ts",
         "main/services/local-speech-process-core.test.ts",
+        "main/services/local-speech-worker-host.test.ts",
         "main/services/local-speech-protocol.test.ts",
         "main/services/local-speech-lane.test.ts",
         "main/services/local-speech-catalog.test.ts",

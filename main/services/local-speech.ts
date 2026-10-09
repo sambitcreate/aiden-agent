@@ -3,7 +3,6 @@
 // with per-request deadlines and one retry in a fresh worker after a crash.
 
 import * as path from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { UtilityProcess } from "electron";
 import { localVoiceIdleUnloadMs } from "../../renderer/shared/dictation-preferences.js";
@@ -16,23 +15,20 @@ import { LocalSpeechIdleUnloader } from "./local-speech-idle-unload.js";
 import { LocalSpeechLane } from "./local-speech-lane.js";
 import { isModelInstalled, modelDir, specFor } from "./local-speech-models.js";
 import {
-  LocalSpeechProcessClient,
   LocalSpeechWorkerError,
   runWithCrashRetry,
   WorkerCrashError,
+  type LocalSpeechProcessClient,
   type LocalSpeechTranscribeInput,
 } from "./local-speech-process-core.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechAudio } from "./local-speech-protocol.js";
 import { handleLocalSpeechMessage } from "./local-speech-worker-core.js";
+import { LocalSpeechWorkerHost, speechLanguageKey, type SpeechWorkerTarget } from "./local-speech-worker-host.js";
 import type { LocalSpeechState } from "../../renderer/shared/local-speech-state.js";
 import { LocalSpeechModelState } from "./local-speech-model-state.js";
 
 const MODEL_MISSING_MESSAGE = "The selected voice model isn't downloaded. Download it in Settings → Voice.";
 
-let client: LocalSpeechProcessClient | null = null;
-let child: UtilityProcess | null = null;
-let launching: Promise<LocalSpeechProcessClient> | null = null;
-let processGeneration = 0;
 const lane = new LocalSpeechLane();
 const stateListeners = new Set<(state: LocalSpeechState) => void>();
 /** The model the worker (or the in-process fallback) currently holds. */
@@ -64,7 +60,15 @@ function markUnloaded(): void {
 }
 
 // Terminating the utility process is the only way to return the native
-// sherpa-onnx allocations to the OS, so idle unload disposes the worker.
+// sherpa-onnx allocations to the OS, so every path that drops a model retires
+// the worker and waits for it to exit (see local-speech-worker-host.ts).
+const host = new LocalSpeechWorkerHost({
+  fork: forkSpeechWorker,
+  onUnloaded: () => {
+    markUnloaded();
+    if (idleUnloader.inFlight === 0) idleUnloader.forget();
+  },
+});
 const idleUnloader = new LocalSpeechIdleUnloader({
   setTimer: (callback, delayMs) => {
     const timer = setTimeout(callback, delayMs);
@@ -79,19 +83,12 @@ const idleUnloader = new LocalSpeechIdleUnloader({
   unload: () => unloadIdleModel(),
 });
 
-function shutDownWorker(): void {
-  processGeneration += 1;
-  const current = client;
-  client = null;
-  launching = null;
-  current?.dispose();
-  child = null;
-}
-
 function unloadIdleModel(): void {
-  shutDownWorker();
-  speechEngine.release();
-  markUnloaded();
+  // Through the lane so a request queued behind the unload waits for the exit.
+  void lane.run(async () => {
+    await host.retire();
+    speechEngine.release();
+  });
 }
 
 /** Hold the model loaded for the duration of `operation`, then restart the idle countdown. */
@@ -113,86 +110,20 @@ async function warn(event: string, details: Record<string, unknown>): Promise<vo
   }
 }
 
-function attachUtilityProcess(processHandle: UtilityProcess, onHang: () => void): LocalSpeechProcessClient {
-  return new LocalSpeechProcessClient(
-    {
-      postMessage: (message) => processHandle.postMessage(message),
-      onMessage: (handler) => {
-        const listener = (message: unknown) => handler(message);
-        processHandle.on("message", listener);
-        return () => {
-          processHandle.removeListener("message", listener);
-        };
-      },
-      onExit: (handler) => {
-        const listener = (code: number) => handler(code);
-        processHandle.on("exit", listener);
-        return () => {
-          processHandle.removeListener("exit", listener);
-        };
-      },
-      kill: () => {
-        processHandle.kill();
-      },
-    },
-    { onHang },
-  );
-}
-
-async function launchClient(generation: number): Promise<LocalSpeechProcessClient> {
+async function forkSpeechWorker(): Promise<UtilityProcess> {
   const { utilityProcess } = await import("electron");
   if (typeof utilityProcess?.fork !== "function") {
     throw new Error("Cannot find package 'electron'");
   }
   const entry = fileURLToPath(new URL("./local-speech-worker.js", import.meta.url));
-  const launched = utilityProcess.fork(entry, [], {
+  return utilityProcess.fork(entry, [], {
     serviceName: "Aiden Voice Transcription",
     stdio: "pipe",
   });
-  // A hung request: terminate this worker so the retry forks a fresh one.
-  const created: LocalSpeechProcessClient = attachUtilityProcess(launched, () => disposeClientIfCurrent(created));
-  if (launched.stderr) {
-    createInterface({ input: launched.stderr }).on("line", (line) => created.pushStderr(line));
-  }
-  launched.stdout?.resume();
-  if (generation !== processGeneration) {
-    created.dispose();
-    throw new Error("Local speech host was replaced.");
-  }
-  launched.on("exit", () => {
-    if (child === launched) child = null;
-    if (client === created) {
-      client = null;
-      // A crash exit drops the model; say so before any retry reloads it.
-      markUnloaded();
-      if (idleUnloader.inFlight === 0) idleUnloader.forget();
-    }
-  });
-  child = launched;
-  client = created;
-  return created;
-}
-
-async function getClient(): Promise<LocalSpeechProcessClient> {
-  if (client) return client;
-  if (!launching) {
-    const pending = launchClient(processGeneration);
-    const tracked = pending.finally(() => {
-      if (launching === tracked) launching = null;
-    });
-    launching = tracked;
-  }
-  return launching;
 }
 
 function isolationUnavailable(error: unknown): boolean {
   return /Cannot find package 'electron'|Cannot find module ['"]electron['"]/i.test(errorMessage(error));
-}
-
-function disposeClientIfCurrent(expected: LocalSpeechProcessClient): void {
-  if (client !== expected) return;
-  shutDownWorker();
-  markUnloaded();
 }
 
 async function vadModelPath(): Promise<string> {
@@ -223,7 +154,7 @@ export async function engineStatus(): Promise<{ ready: boolean; error: string | 
   if (knownEngineStatus) return knownEngineStatus;
   return withModelLease(async () => {
     try {
-      knownEngineStatus = await (await getClient()).status();
+      knownEngineStatus = await (await host.acquire()).status();
       return knownEngineStatus;
     } catch (error) {
       if (isolationUnavailable(error)) {
@@ -254,14 +185,18 @@ export async function warmLocalVoice(modelId: string): Promise<void> {
   if (!model) return;
   await lane.run(() =>
     withModelLease(async () => {
-      if (modelState.loaded === modelId && client) return;
+      if (modelState.loaded === modelId && host.current()) return;
       const request = modelState.request(modelId);
-      request.announceLoad();
       try {
         try {
-          await (await getClient()).load(modelId, model.directory, model.spec);
+          // The worker is chosen before the load is announced, so a retired model reports unloaded first.
+          const worker = await host.prepare({ modelId, family: model.spec.family, language: null });
+          request.announceLoad();
+          await worker.load(modelId, model.directory, model.spec);
+          host.recordLoaded({ modelId, languageKey: speechLanguageKey(model.spec.family, null) });
         } catch (error) {
           if (!isolationUnavailable(error)) throw error;
+          request.announceLoad();
           speechEngine.load(model.spec, model.directory);
         }
         request.succeed();
@@ -281,8 +216,9 @@ export function reconfigureLocalSpeechIdleUnload(): Promise<void> {
 export async function releaseRecognizer(modelId: string): Promise<void> {
   await lane.run(async () => {
     if (modelState.loaded !== modelId) return;
-    if (client) await client.release();
-    else speechEngine.release();
+    // Releasing the process frees the native recognizer; a release frame would keep it allocated.
+    await host.retire();
+    speechEngine.release();
     markUnloaded();
   });
 }
@@ -303,6 +239,7 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
     vadModelPath: await vadModelPath(),
   };
 
+  const target: SpeechWorkerTarget = { modelId, family: model.spec.family, language: request.language };
   let activeClient: LocalSpeechProcessClient | null = null;
   return lane.run(
     () =>
@@ -312,14 +249,17 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
           const result = await runWithCrashRetry(
             async () => {
               // Each attempt re-checks: a crash drops a loaded model, so the
-              // retry's reload is announced too.
-              load.announceLoad();
-              activeClient = await getClient();
+              // retry's reload is announced too. A worker that holds another
+              // model or language is retired first, so the announcement follows it.
+              activeClient = await host.prepare(target);
               if (signal?.aborted) {
-                disposeClientIfCurrent(activeClient);
+                host.disposeIfCurrent(activeClient);
                 signal.throwIfAborted();
               }
-              return activeClient.transcribe(request);
+              load.announceLoad();
+              const reply = await activeClient.transcribe(request);
+              host.recordLoaded({ modelId, languageKey: speechLanguageKey(model.spec.family, request.language) });
+              return reply;
             },
             {
               isCancelled: () => signal?.aborted === true,
@@ -327,7 +267,7 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
               onCrash: (_error, attempt) => {
                 const crashed = activeClient;
                 void warn("worker crashed", { attempt, stderr: crashed?.stderrTail().join("\n") ?? "" });
-                if (crashed) disposeClientIfCurrent(crashed);
+                if (crashed) host.disposeIfCurrent(crashed);
               },
             },
           ).catch(async (error: unknown) => {
@@ -347,7 +287,7 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
     {
       signal,
       onCancelActive: () => {
-        if (activeClient) disposeClientIfCurrent(activeClient);
+        if (activeClient) host.disposeIfCurrent(activeClient);
       },
     },
   );
@@ -369,6 +309,6 @@ export function transcribePcm16Base64(pcmBase64: string, modelId: string): Promi
 
 export function disposeLocalSpeech(): void {
   idleUnloader.forget();
-  shutDownWorker();
+  host.shutDown();
   markUnloaded();
 }
