@@ -111,6 +111,8 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect(page.getByRole("heading", { name: "Which area matters most this week?" })).toBeVisible();
   await expect(composer).toBeHidden();
   await page.getByRole("button", { name: /Family/u }).click();
+  await expect(page.getByRole("button", { name: /Family/u })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Submit" }).click();
 
   await expect
     .poll(() =>
