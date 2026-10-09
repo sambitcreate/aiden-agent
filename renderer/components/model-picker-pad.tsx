@@ -459,7 +459,7 @@ export function ModelPickerPad({
       </div>
       <p id={helpId} className="sr-only">
         Drag or point to preview the nearest model. Use the arrow keys to move between models, then
-        press Enter or Space to select.
+        press Enter or Space to select. Type to search the list.
       </p>
     </>
   );

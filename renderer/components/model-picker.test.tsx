@@ -381,11 +381,11 @@ test("typing on the Pad switches to the List and filters by the typed character"
   const server = settingsServer(placedSettings);
   const pad = await openPicker(server);
 
-  const notPrevented = fireEvent.keyDown(pad, { key: "T" });
+  const notPrevented = fireEvent.keyDown(pad, { key: "W", shiftKey: true });
   assert.equal(notPrevented, false);
 
   const filter = (await screen.findByLabelText("Filter chat models")) as HTMLInputElement;
-  assert.equal(filter.value, "T");
+  assert.equal(filter.value, "W");
   assert.ok(!screen.queryByRole("listbox", { name: /Model pad/u }));
   await waitFor(() => assert.equal(document.activeElement, filter));
   assert.equal(screen.getByRole("tab", { name: "List" }).getAttribute("aria-selected"), "true");
@@ -393,21 +393,30 @@ test("typing on the Pad switches to the List and filters by the typed character"
     screen.getByRole("tab", { name: "Personal Model Pad" }).getAttribute("aria-selected"),
     "false",
   );
+  await waitFor(() => {
+    const options = screen.getAllByRole("option");
+    assert.equal(options.length, 1);
+    assert.match(options[0].textContent ?? "", /Placed Two/u);
+  });
 });
 
 test("navigation keys and shortcuts on the Pad keep the Pad", async () => {
   const server = settingsServer(placedSettings);
   const pad = await openPicker(server);
 
+  // The current model is off the Pad, so nothing is active yet: Enter and Space
+  // have nothing to commit and must not start a search either. (Escape closes the
+  // picker here, so it is left to its own tests.)
   for (const init of [
-    { key: "ArrowUp" },
-    { key: "ArrowRight" },
+    { key: "Enter" },
     { key: " " },
     { key: "Tab" },
     { key: "c", metaKey: true },
     { key: "c", ctrlKey: true },
     { key: "c", altKey: true },
     { key: "c", isComposing: true },
+    { key: "ArrowUp" },
+    { key: "ArrowRight" },
   ]) {
     fireEvent.keyDown(pad, init);
   }
@@ -416,18 +425,44 @@ test("navigation keys and shortcuts on the Pad keep the Pad", async () => {
   assert.ok(!screen.queryByLabelText("Filter chat models"));
 });
 
-test("the filter seeded from the Pad is cleared when the picker reopens", async () => {
+test("typing right after choosing on the Pad does not reopen the list", async () => {
   const server = settingsServer(placedSettings);
   const pad = await openPicker(server);
-  fireEvent.keyDown(pad, { key: "p" });
+  fireEvent.keyDown(pad, { key: "ArrowUp" });
+  fireEvent.keyDown(pad, { key: "Enter" });
+
+  fireEvent.keyDown(pad, { key: "c" });
+
+  assert.ok(screen.queryByRole("listbox", { name: /Model pad/u }));
+  assert.ok(!screen.queryByLabelText("Filter chat models"));
+  await waitFor(() => assert.ok(!screen.queryByRole("listbox", { name: /Model pad/u })));
+});
+
+test("the list filter is cleared when the picker reopens", async () => {
+  const server = settingsServer({});
+  await mountPicker(server);
   const filter = (await screen.findByLabelText("Filter chat models")) as HTMLInputElement;
-  assert.equal(filter.value, "p");
+  fireEvent.change(filter, { target: { value: "pl" } });
+  assert.equal(filter.value, "pl");
 
   fireEvent.keyDown(filter, { key: "Escape" });
   await waitFor(() => assert.ok(!screen.queryByLabelText("Filter chat models")));
   fireEvent.click(screen.getByRole("button", { name: /Choose a model/u }));
-  fireEvent.click(await screen.findByRole("tab", { name: "List" }));
 
   const reopened = (await screen.findByLabelText("Filter chat models")) as HTMLInputElement;
   assert.equal(reopened.value, "");
+});
+
+test("re-selecting the List tab keeps the typed filter", async () => {
+  const server = settingsServer({});
+  await mountPicker(server);
+  const filter = (await screen.findByLabelText("Filter chat models")) as HTMLInputElement;
+  fireEvent.change(filter, { target: { value: "pla" } });
+
+  const listTab = screen.getByRole("tab", { name: "List" });
+  fireEvent.click(listTab);
+  fireEvent.keyDown(listTab, { key: "ArrowLeft" });
+  fireEvent.keyDown(listTab, { key: "Home" });
+
+  assert.equal((screen.getByLabelText("Filter chat models") as HTMLInputElement).value, "pla");
 });

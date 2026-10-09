@@ -597,8 +597,10 @@ export function ModelPicker({
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
-    setSearch("");
     if (next) {
+      // Cleared on open rather than close, so the list keeps its filter while the
+      // popover animates out.
+      setSearch("");
       setView(hasPadModels ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
     } else {
@@ -607,8 +609,9 @@ export function ModelPicker({
   };
 
   const switchView = (next: "pad" | "list", focusPanel = true, seed = "") => {
+    // Re-selecting the current view keeps what was typed in the filter.
+    if (next !== view || seed) setSearch(seed);
     setView(next);
-    setSearch(seed);
     setPreviewValue(selectedValue || positioned[0]?.value);
     if (!focusPanel) return;
     requestAnimationFrame(() => {
@@ -804,7 +807,11 @@ export function ModelPicker({
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
                 onCommit={commitFromPad}
-                onTypeToSearch={(character) => switchView("list", true, character)}
+                onTypeToSearch={(character) => {
+                  // A model was just chosen and the picker is about to close.
+                  if (padCloseTimerRef.current !== null) return;
+                  switchView("list", true, character);
+                }}
               />
             ) : (
               <EmptyModelPad
