@@ -4,7 +4,6 @@ import type { Attachment } from "../lib/types";
 import { cn } from "../lib/ui-utils";
 import { isCanonicalRasterImageMimeType } from "../shared/attachment-contract";
 import { Dialog } from "./ui";
-import { withoutVisualSnapshots } from "../shared/visual-snapshots";
 
 const EMPTY_FAILED_IMAGE_IDS: ReadonlySet<string> = new Set();
 
@@ -158,17 +157,15 @@ export function MessageAttachments({
   role: "user" | "assistant";
 }) {
   const controller = React.useContext(MessageAttachmentPreviewContext);
-  // Visual snapshots exist for phones; the desktop already draws the visual.
-  const visible = withoutVisualSnapshots(attachments);
-  if (visible.length === 0) return null;
+  if (attachments.length === 0) return null;
   if (!controller) {
     return (
       <MessageAttachmentPreviewProvider>
-        <MessageAttachmentsContent attachments={visible} role={role} />
+        <MessageAttachmentsContent attachments={attachments} role={role} />
       </MessageAttachmentPreviewProvider>
     );
   }
-  return <MessageAttachmentsContent attachments={visible} role={role} />;
+  return <MessageAttachmentsContent attachments={attachments} role={role} />;
 }
 
 function MessageAttachmentsContent({

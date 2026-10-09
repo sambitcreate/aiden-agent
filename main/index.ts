@@ -156,7 +156,8 @@ import { botSkillContentWatcher } from "./services/bot-capability-services-main.
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
-import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
+import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from "./application-lifecycle-core.js";
+import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 
@@ -1707,6 +1708,19 @@ if (!ownsSingleInstanceLock) {
   });
 
   app.on("second-instance", () => showMainWindow());
+  // A hidden snapshot window must not keep a closing app alive.
+  app.on("browser-window-created", (_event, created) => {
+    created.on("closed", () => {
+      if (isAuxiliaryWindow(created)) return;
+      const remaining = BrowserWindow.getAllWindows()
+        .filter((window) => !window.isDestroyed())
+        .map((window) => ({ auxiliary: isAuxiliaryWindow(window) }));
+      if (shouldReleaseAuxiliaryWindows(process.platform, aidenRemoteServiceKeepsApplicationAlive(), remaining)) {
+        disposeVisualSnapshots();
+      }
+    });
+  });
+
   app.on("window-all-closed", () => {
     const backgroundServiceRunning = aidenRemoteServiceKeepsApplicationAlive();
     logger.info("electron-lifecycle", "All application windows closed", {

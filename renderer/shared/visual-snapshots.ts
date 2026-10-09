@@ -38,6 +38,28 @@ export function parseVisualSnapshots(value: unknown): VisualSnapshotRefV1[] | un
   return refs.length ? refs : undefined;
 }
 
+/**
+ * The attachments the desktop shows beside a message. A snapshot is hidden
+ * only when this message draws the visual it pictures; a paired Mac's chat
+ * carries nothing this desktop can draw, so there the snapshot is the visual.
+ */
+export function attachmentsShownWithVisuals<T extends { id: string }>(message: {
+  attachments?: readonly T[];
+  visualSnapshots?: unknown;
+  uiVisuals?: readonly { id: string }[];
+  htmlArtifacts?: readonly { mediaId: string }[];
+}): readonly T[] {
+  const attachments = message.attachments ?? [];
+  const refs = parseVisualSnapshots(message.visualSnapshots);
+  if (!refs || attachments.length === 0) return attachments;
+  const drawn = new Set([
+    ...(message.uiVisuals ?? []).map((visual) => visual.id),
+    ...(message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
+  ]);
+  const hidden = new Set(refs.filter((ref) => drawn.has(ref.visualId)).map((ref) => ref.attachmentId));
+  return hidden.size > 0 ? attachments.filter((attachment) => !hidden.has(attachment.id)) : attachments;
+}
+
 /** Drops snapshot attachments; returns the same array when there were none. */
 export function withoutVisualSnapshots<T extends { id: string }>(attachments: readonly T[]): readonly T[] {
   return attachments.some((attachment) => isVisualSnapshotAttachmentId(attachment.id))

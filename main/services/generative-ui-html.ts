@@ -50,7 +50,17 @@ export interface GenerativeUiWrapOptions {
   inline?: boolean;
   /** Draft previews block model scripts; only the nonce'd bridge may run. */
   bridgeNonce?: string;
+  /** Snapshot capture: charts draw at their final values instead of animating in. */
+  stillImage?: boolean;
 }
+
+/** Runs after the host libraries, before model code creates any chart. */
+const STILL_IMAGE_SCRIPT = `<script>
+(() => {
+  const Chart = window.Chart;
+  if (Chart && Chart.defaults) Chart.defaults.animation = false;
+})();
+</script>`;
 
 const NONCE = /^[A-Za-z0-9+/=]{16,64}$/u;
 
@@ -405,6 +415,7 @@ function guestDocumentHead(
 <title>${safeTitle}</title>
 ${guestBridgeScript(options.bridgeNonce)}
 ${hostLibraryTags()}
+${options.stillImage ? STILL_IMAGE_SCRIPT : ""}
 <style>
 :root {
   color-scheme: ${tokens.colorScheme};

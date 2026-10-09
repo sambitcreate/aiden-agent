@@ -49,8 +49,15 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * The host page may frame only the guest's preview URL: a guest can always
+ * navigate its own frame, so the host's frame-src is what keeps it offline,
+ * exactly as the main window's CSP does.
+ */
+const HOST_PAGE_CSP = "default-src 'none'; frame-src aiden-genui:; script-src 'unsafe-inline'; style-src 'unsafe-inline'";
+
 function hostPage(src: string, width: number): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HOST_PAGE_CSP}"><style>
 html,body{margin:0;background:${CANVAS};}
 body{padding:${PADDING}px;}
 iframe{border:0;display:block;width:${width}px;height:${MIN_INLINE_VISUAL_HEIGHT}px;}
@@ -71,6 +78,8 @@ export function createElectronVisualSnapshotCapture(deps: {
 }) {
   let window: InstanceType<typeof BrowserWindow> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  // The one frame URL the current capture may load.
+  let allowedFrameUrl: string | null = null;
 
   const closeWindow = () => {
     if (idleTimer) clearTimeout(idleTimer);
@@ -101,6 +110,10 @@ export function createElectronVisualSnapshotCapture(deps: {
     markAuxiliaryWindow(window);
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event) => event.preventDefault());
+    window.webContents.on("will-frame-navigate", (event) => {
+      if (!event.isMainFrame && event.url === allowedFrameUrl) return;
+      event.preventDefault();
+    });
     return window;
   };
 
@@ -131,7 +144,12 @@ export function createElectronVisualSnapshotCapture(deps: {
     const html = await deps.htmlFor(job.chatId, visual.visualId);
     if (!html || signal.aborted) return null;
     const width = visual.layout === "wide" ? WIDE_WIDTH : COLUMN_WIDTH;
-    const src = registerGenerativeUiPreviewDocument(wrapGenerativeUiHtml(html, visual.title, LIGHT_THEME, { inline: false }));
+    // Inline, as the desktop draws it: the same font size and a body that
+    // measures its own margins. The host page paints the opaque canvas.
+    const src = registerGenerativeUiPreviewDocument(
+      wrapGenerativeUiHtml(html, visual.title, LIGHT_THEME, { inline: true, stillImage: true }),
+    );
+    allowedFrameUrl = src;
     const target = ensureWindow();
     target.setContentSize(width + PADDING * 2, 400);
     await target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(hostPage(src, width))}`);
@@ -150,6 +168,7 @@ export function createElectronVisualSnapshotCapture(deps: {
 
   const captureUi = async (visual: Extract<SnapshotVisual, { kind: "ui" }>, signal: AbortSignal): Promise<CapturedImage | null> => {
     const width = visual.layout === "wide" ? WIDE_WIDTH : COLUMN_WIDTH;
+    allowedFrameUrl = null;
     const target = ensureWindow();
     target.setContentSize(width + PADDING * 2, 400);
     await target.loadURL(getWindowUrl("visual-snapshot.html"));

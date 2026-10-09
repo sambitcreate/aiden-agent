@@ -25,6 +25,7 @@ import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
+import { attachmentsShownWithVisuals } from "../shared/visual-snapshots";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../shared/aiden-ui/types";
@@ -411,7 +412,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             content={message.content}
             timeline={message.timeline}
             reasoning={message.reasoning}
-            attachments={message.attachments}
+            // Snapshots exist for phones; this desktop draws the visual itself.
+            attachments={attachmentsShownWithVisuals(message)}
             readAloud={readAloud}
             richLinks={richLinks}
             footer={settledTurnFooter(message)}
