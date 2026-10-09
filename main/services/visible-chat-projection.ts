@@ -3,6 +3,7 @@ import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js"
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
+import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import {
   parseProviderFailureV1,
@@ -33,6 +34,7 @@ export interface VisibleChatMessage {
   htmlArtifacts?: import("../../renderer/shared/chat-artifacts.js").ChatHtmlArtifactV1[];
   htmlArtifactPlacements?: import("../../renderer/shared/chat-artifacts.js").HtmlArtifactPlacementV1[];
   uiVisuals?: import("../../renderer/shared/aiden-ui/types.js").ChatUiVisualV1[];
+  visualSnapshots?: import("../../renderer/shared/visual-snapshots.js").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
   providerFailure?: ProviderFailureV1;
 }
@@ -170,6 +172,7 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
         ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
         : undefined,
     uiVisuals: message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
+    visualSnapshots: message.role === "assistant" ? parseVisualSnapshots(message.visualSnapshots) : undefined,
     skill:
       message.role === "user"
         ? parseSkillProvenanceV1(message.skill)

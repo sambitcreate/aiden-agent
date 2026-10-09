@@ -396,6 +396,7 @@ import {
 } from "./generative-ui-extension.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
+import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
@@ -837,7 +838,7 @@ async function prepareGeneration(
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
-    snapshot: chat.messages.flatMap((message) => message.attachments ?? []),
+    snapshot: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
     generated: responseImages,
     readCurrent: async (referenceSignal) => {
       signal.throwIfAborted();
@@ -846,7 +847,7 @@ async function prepareGeneration(
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
       if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
-      return current.messages.flatMap((message) => message.attachments ?? []);
+      return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
     },
   });
   const shareImage = (attachment: Attachment) => {
@@ -1540,7 +1541,7 @@ async function prepareGeneration(
         botContext && !supportsImages && botContext.admission.authority.visionProvider
           ? createVisionAnalysisTool(
               {
-                attachments: chat.messages.flatMap((message) => message.attachments ?? []),
+                attachments: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
                 authority: {
                   providerId: botContext.admission.authority.visionProvider.sourceProviderId,
                   modelId: botContext.admission.authority.visionProvider.sourceModelId,

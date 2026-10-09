@@ -319,3 +319,25 @@ test("memory indexes a native visual by its title and plain-text rendering", () 
   assert.match(visual.text, /Q3 revenue/u);
   assert.match(visual.text, /Total: \$6,930\.00/u);
 });
+
+test("memory does not index visual snapshots as attachments", () => {
+  const documents = memoryMetadataForChat(
+    chat({
+      messages: [
+        {
+          id: "m-2",
+          role: "assistant",
+          content: "Here.",
+          createdAt: 1,
+          attachments: [
+            { id: `visual-snapshot_${"a".repeat(64)}`, name: "Board.png", mimeType: "image/png", kind: "image", size: 70 },
+            { id: "photo-1", name: "Photo.png", mimeType: "image/png", kind: "image", size: 70 },
+          ],
+        },
+      ],
+    }),
+  );
+  const sources = documents.map((document) => document.sourceId);
+  assert.ok(sources.includes("photo-1"));
+  assert.equal(sources.some((source) => source?.startsWith("visual-snapshot_")), false);
+});
