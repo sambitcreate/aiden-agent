@@ -136,6 +136,20 @@ test("draft events carry a preview URL for one tool call and nothing else", () =
   }
 });
 
+test("present events may carry a ready preview URL and nothing else", () => {
+  const src = `aiden-genui://preview/${"b".repeat(64)}`;
+  const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src });
+  assert.equal(parsed?.operation === "present" && parsed.src, src);
+  assert.equal(
+    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src: "https://x.test/a" }),
+    undefined,
+  );
+  assert.equal(
+    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, src: "<p>html</p>" }),
+    undefined,
+  );
+});
+
 test("present events may carry the producing toolCallId", () => {
   const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_9" });
   assert.equal(parsed?.operation === "present" && parsed.toolCallId, "call_9");

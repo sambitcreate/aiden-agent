@@ -55,6 +55,8 @@ export type ChatArtifactEventV1 =
       artifact: ChatArtifactV1;
       /** The render_artifact call that produced it, for in-row placement. */
       toolCallId?: string;
+      /** A ready main-built preview, so the final frame mounts without a round trip. */
+      src?: string;
     }
   | {
       version: typeof CHAT_ARTIFACT_EVENT_VERSION;
@@ -79,7 +81,7 @@ const HTML_ARTIFACT_KEYS = new Set(["version", "kind", "id", "title", "mimeType"
 const IMAGE_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
 const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
-const PRESENT_EVENT_WITH_CALL_KEYS = new Set(["version", "operation", "artifact", "toolCallId"]);
+const PRESENT_EVENT_ALLOWED_KEYS = new Set(["version", "operation", "artifact", "toolCallId", "src"]);
 const PLACEMENT_KEYS = new Set(["mediaId", "toolCallId"]);
 const DRAFT_EVENT_KEYS = new Set(["version", "operation", "toolCallId", "src"]);
 const DRAFT_EVENT_WITH_TITLE_KEYS = new Set(["version", "operation", "toolCallId", "title", "src"]);
@@ -259,14 +261,24 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
     };
   }
   if (event.operation !== "present") return undefined;
-  const withCall = hasExactKeys(event, PRESENT_EVENT_WITH_CALL_KEYS);
-  if (!withCall && !hasExactKeys(event, PRESENT_EVENT_KEYS)) return undefined;
-  if (withCall && !isToolCallId(event.toolCallId)) return undefined;
+  if (!Object.keys(event).every((key) => PRESENT_EVENT_ALLOWED_KEYS.has(key))) return undefined;
+  if (![...PRESENT_EVENT_KEYS].every((key) => key in event)) return undefined;
+  if (event.toolCallId !== undefined && !isToolCallId(event.toolCallId)) return undefined;
+  if (
+    event.src !== undefined &&
+    (typeof event.src !== "string" || !generativeUiPreviewTokenFromUrl(event.src))
+  ) {
+    return undefined;
+  }
   const artifact = parseChatArtifactV1(event.artifact);
   if (!artifact) return undefined;
-  return withCall
-    ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "present", artifact, toolCallId: event.toolCallId as string }
-    : { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "present", artifact };
+  return {
+    version: CHAT_ARTIFACT_EVENT_VERSION,
+    operation: "present",
+    artifact,
+    ...(event.toolCallId !== undefined ? { toolCallId: event.toolCallId as string } : {}),
+    ...(event.src !== undefined ? { src: event.src as string } : {}),
+  };
 }
 
 function isToolCallId(value: unknown): value is string {

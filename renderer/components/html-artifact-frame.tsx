@@ -5,6 +5,7 @@ import { GENERATIVE_UI_IFRAME_SANDBOX } from "../shared/generative-ui";
 import {
   GENERATIVE_UI_THEME_MESSAGE,
   clampInlineVisualHeight,
+  guestUserActivation,
   parseGuestBridgeMessage,
 } from "../shared/generative-ui-bridge";
 import { chatsApi } from "../lib/ipc";
@@ -40,6 +41,28 @@ function cacheKey(chatId: string, mediaId: string): string {
   return `${chatId}\u0000${mediaId}`;
 }
 
+/** Last height each streaming draft reported, by its public toolCallId. */
+const draftHeights = new Map<string, number>();
+
+export function rememberDraftHeight(toolCallId: string, height: number): void {
+  draftHeights.set(toolCallId, height);
+  if (draftHeights.size > 64) draftHeights.delete(draftHeights.keys().next().value!);
+}
+
+/**
+ * Seed the preview main built when it presented this artifact, so the final
+ * frame replaces its draft with a loaded document instead of a placeholder.
+ */
+export function primeInlineVisualPreview(
+  chatId: string,
+  artifact: ChatHtmlArtifactV1,
+  src: string,
+): void {
+  const key = cacheKey(chatId, artifact.mediaId);
+  const height = previewCache.get(key)?.height;
+  previewCache.set(key, { id: artifact.id, src, fetchedAt: Date.now(), ...(height ? { height } : {}) });
+}
+
 function cachedPreview(chatId: string, artifact: ChatHtmlArtifactV1): CachedPreview | undefined {
   const cached = previewCache.get(cacheKey(chatId, artifact.mediaId));
   if (!cached || cached.id !== artifact.id || Date.now() - cached.fetchedAt > PREVIEW_REUSE_MS) {
@@ -58,9 +81,38 @@ function postThemeTo(guest: Window): void {
 
 export type GuestPromptHandler = (
   text: string,
-  focus: { frameFocused: boolean; freshActivation: boolean },
+  focus: GuestPromptFocus,
   mediaId: string,
 ) => void;
+
+export interface GuestPromptFocus {
+  frameFocused: boolean;
+  /** The user interacted inside a frame just now; see guestUserActivation. */
+  userActivated: boolean;
+  /** Identifies one entry of focus into this frame; changes on every entry. */
+  focusEntry: number;
+}
+
+/** Last pointer or key input on the app page itself (not inside a frame). */
+let lastParentInputAt: number | undefined;
+let parentInputTrackerInstalled = false;
+let focusEntrySequence = 0;
+
+function nextFocusEntry(): number {
+  focusEntrySequence += 1;
+  return focusEntrySequence;
+}
+
+function installParentInputTracker(): void {
+  if (parentInputTrackerInstalled) return;
+  parentInputTrackerInstalled = true;
+  const note = () => {
+    lastParentInputAt = performance.now();
+  };
+  for (const type of ["pointerdown", "keydown"] as const) {
+    document.addEventListener(type, note, { capture: true, passive: true });
+  }
+}
 
 interface HtmlArtifactFrameError {
   kind: "preview" | "export";
@@ -119,7 +171,7 @@ function HtmlArtifactIframe({
   className?: string;
   onEscape?: () => void;
   onHeight?: (height: number) => void;
-  onPrompt?: (text: string, focus: { frameFocused: boolean; freshActivation: boolean }) => void;
+  onPrompt?: (text: string, focus: GuestPromptFocus) => void;
   /** Focus moved into (true) or out of (false) the guest document. */
   onGuestFocus?: (focused: boolean) => void;
 }) {
@@ -130,11 +182,13 @@ function HtmlArtifactIframe({
   }, [onEscape, onHeight, onPrompt, onGuestFocus]);
 
   React.useEffect(() => {
-    // Focus entering a cross-origin frame (a click or Tab into it) blurs this
-    // window. Each entry licenses one auto-sent prompt; the guest cannot move
-    // focus into itself without a user gesture. The iframe element itself
-    // never matches :focus-visible, so focus is reported for the host to draw.
-    let freshActivation = false;
+    // Focus entering a cross-origin frame blurs this window. That happens for
+    // a click or Tab into it, but also when the guest calls focus() itself,
+    // so focus never authorizes sending: transient user activation does (see
+    // guestUserActivation). The iframe never matches :focus-visible, so focus
+    // is reported for the host to draw a ring.
+    installParentInputTracker();
+    let focusEntry = 0;
     let guestFocused = false;
     const setGuestFocused = (next: boolean) => {
       if (guestFocused === next) return;
@@ -143,7 +197,7 @@ function HtmlArtifactIframe({
     };
     const noteFocusEntry = () => {
       if (document.activeElement !== frameRef.current) return;
-      freshActivation = true;
+      focusEntry = nextFocusEntry();
       setGuestFocused(true);
     };
     const noteFocusReturn = () => setGuestFocused(false);
@@ -164,9 +218,14 @@ function HtmlArtifactIframe({
       else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
       else {
         const frameFocused = document.activeElement === frame;
-        const focus = { frameFocused, freshActivation: frameFocused && freshActivation };
-        if (frameFocused) freshActivation = false;
-        handlers.current.onPrompt?.(message.text, focus);
+        const userActivated =
+          frameFocused &&
+          guestUserActivation({
+            parentActivationActive: navigator.userActivation?.isActive === true,
+            now: performance.now(),
+            lastParentInputAt,
+          });
+        handlers.current.onPrompt?.(message.text, { frameFocused, userActivated, focusEntry });
       }
     };
     window.addEventListener("blur", noteFocusEntry);
@@ -211,17 +270,23 @@ function HtmlArtifactFrameImpl({
   chatId,
   artifact,
   onGuestPrompt,
+  placementCallId,
 }: {
   chatId: string;
   artifact: ChatHtmlArtifactV1;
   /** A guest asked to send a follow-up; the caller applies the admission policy. */
   onGuestPrompt?: GuestPromptHandler;
+  /** The render_artifact call it came from; its draft's height seeds this frame. */
+  placementCallId?: string;
 }) {
   const [src, setSrc] = React.useState<string | null>(
     () => cachedPreview(chatId, artifact)?.src ?? null,
   );
   const [height, setHeight] = React.useState<number>(
-    () => cachedPreview(chatId, artifact)?.height ?? INITIAL_VISUAL_HEIGHT,
+    () =>
+      cachedPreview(chatId, artifact)?.height ??
+      (placementCallId ? draftHeights.get(placementCallId) : undefined) ??
+      INITIAL_VISUAL_HEIGHT,
   );
   const [error, setError] = React.useState<HtmlArtifactFrameError | null>(null);
   const [expanded, setExpanded] = React.useState(false);
@@ -239,7 +304,7 @@ function HtmlArtifactFrameImpl({
   }, []);
 
   const relayPrompt = React.useCallback(
-    (text: string, focus: { frameFocused: boolean; freshActivation: boolean }) =>
+    (text: string, focus: GuestPromptFocus) =>
       onGuestPrompt?.(text, focus, artifact.mediaId),
     [artifact.mediaId, onGuestPrompt],
   );
@@ -463,8 +528,24 @@ export const HtmlArtifactFrame = React.memo(HtmlArtifactFrameImpl);
  * call streams (model scripts stay blocked), then the presented frame takes
  * its place in the same row.
  */
-function HtmlArtifactDraftFrameImpl({ src, title }: { src: string; title?: string }) {
+function HtmlArtifactDraftFrameImpl({
+  src,
+  title,
+  toolCallId,
+}: {
+  src: string;
+  title?: string;
+  /** Remembers the draft's height so the presented frame starts at it. */
+  toolCallId?: string;
+}) {
   const [height, setHeight] = React.useState(INITIAL_VISUAL_HEIGHT);
+  const recordHeight = React.useCallback(
+    (next: number) => {
+      setHeight(next);
+      if (toolCallId) rememberDraftHeight(toolCallId, next);
+    },
+    [toolCallId],
+  );
   const label = title ? `Visualizing ${title}` : "Visualizing";
   return (
     <section
@@ -481,7 +562,7 @@ function HtmlArtifactDraftFrameImpl({ src, title }: { src: string; title?: strin
         </Text>
       </div>
       <div className="aiden-inline-visual-frame" data-inline-visual-frame="" style={{ height }}>
-        <HtmlArtifactIframe src={src} title={label} onHeight={setHeight} />
+        <HtmlArtifactIframe src={src} title={label} onHeight={recordHeight} />
       </div>
     </section>
   );

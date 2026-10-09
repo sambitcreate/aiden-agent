@@ -112,7 +112,7 @@ interface AssistantResponseProps {
   visuals?: readonly ChatHtmlArtifactV1[];
   /** mediaId → render_artifact toolCallId. */
   visualPlacements?: ReadonlyMap<string, string>;
-  renderVisual?: (artifact: ChatHtmlArtifactV1) => React.ReactNode;
+  renderVisual?: (artifact: ChatHtmlArtifactV1, placementCallId?: string) => React.ReactNode;
   /** Live drafts by toolCallId; only the streaming response passes these. */
   visualDrafts?: VisualDrafts;
 }
@@ -145,10 +145,17 @@ function AssistantResponse({
   );
   const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements, visualDrafts);
   const visualNodes = (artifacts: readonly ChatHtmlArtifactV1[] | undefined) =>
-    renderVisual && artifacts?.length ? artifacts.map(renderVisual) : null;
+    renderVisual && artifacts?.length
+      ? artifacts.map((artifact) => renderVisual(artifact, visualPlacements.get(artifact.mediaId)))
+      : null;
   const draftNodes = (drafts: readonly PlacedVisualDraft[] | undefined) =>
     drafts?.map((draft) => (
-      <HtmlArtifactDraftFrame key={`draft:${draft.toolCallId}`} src={draft.src} title={draft.title} />
+      <HtmlArtifactDraftFrame
+        key={`draft:${draft.toolCallId}`}
+        src={draft.src}
+        title={draft.title}
+        toolCallId={draft.toolCallId}
+      />
     )) ?? null;
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
   const active =
@@ -290,7 +297,7 @@ interface SettledMessageRowProps {
   /** HTML visuals this row currently owns (live copies win during handoff). */
   visuals?: readonly ChatHtmlArtifactV1[];
   /** Stable across renders so settled rows stay memoized. */
-  renderVisual?: (artifact: ChatHtmlArtifactV1) => React.ReactNode;
+  renderVisual?: (artifact: ChatHtmlArtifactV1, placementCallId?: string) => React.ReactNode;
 }
 
 /**
@@ -507,12 +514,13 @@ export function MessageList({
     [],
   );
   const renderVisual = React.useCallback(
-    (artifact: ChatHtmlArtifactV1) => (
+    (artifact: ChatHtmlArtifactV1, placementCallId?: string) => (
       <HtmlArtifactFrame
         key={`html:${artifact.mediaId}`}
         chatId={chatId}
         artifact={artifact}
         onGuestPrompt={stableVisualPrompt}
+        placementCallId={placementCallId}
       />
     ),
     [chatId, stableVisualPrompt],

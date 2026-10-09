@@ -47,13 +47,15 @@ export function clampInlineVisualHeight(height: number): number {
 
 export interface GuestPromptInput {
   text: string;
-  /** True only while `document.activeElement` is this frame (focus moved in by a user gesture). */
+  /** `document.activeElement` is this frame. Necessary, not sufficient: a guest can focus itself. */
   frameFocused: boolean;
   /**
-   * True for the first prompt after focus entered this frame. Later prompts
-   * from the same focus (a guest timer, say) are staged, never auto-sent.
+   * The user just interacted inside a frame: the parent holds transient user
+   * activation that no parent-page input produced (see `guestUserActivation`).
    */
-  freshActivation: boolean;
+  userActivated: boolean;
+  /** An ungestured prompt from this frame was already staged since focus entered it. */
+  stagedThisFocus: boolean;
   chatBusy: boolean;
   /** Monotonic milliseconds (performance.now), so wall-clock jumps can't lock prompts out. */
   now: number;
@@ -62,7 +64,7 @@ export interface GuestPromptInput {
 
 export type GuestPromptDecision =
   | { action: "send" | "stage"; text: string }
-  | { action: "reject"; reason: "unfocused" | "empty" | "too_long" | "cooldown" };
+  | { action: "reject"; reason: "unfocused" | "empty" | "too_long" | "cooldown" | "repeat" };
 
 export function decideGuestPrompt(input: GuestPromptInput): GuestPromptDecision {
   if (!input.frameFocused) return { action: "reject", reason: "unfocused" };
@@ -72,5 +74,26 @@ export function decideGuestPrompt(input: GuestPromptInput): GuestPromptDecision 
   if (input.lastAcceptedAt !== undefined && input.now - input.lastAcceptedAt < GUEST_PROMPT_COOLDOWN_MS) {
     return { action: "reject", reason: "cooldown" };
   }
-  return { action: input.chatBusy || !input.freshActivation ? "stage" : "send", text };
+  if (input.userActivated) return { action: input.chatBusy ? "stage" : "send", text };
+  // Without a gesture the guest may suggest a follow-up once per focus entry,
+  // into the composer for the user to review; it can never send or flood.
+  return input.stagedThisFocus ? { action: "reject", reason: "repeat" } : { action: "stage", text };
+}
+
+/** Chromium's transient user activation lifetime. */
+export const USER_ACTIVATION_WINDOW_MS = 5000;
+
+/**
+ * Whether the parent's current transient activation came from the user
+ * interacting inside a child frame. A click or key press inside the guest
+ * activates the parent too, but a guest's scripted `focus()` does not; parent
+ * input (typing in the composer) also activates it, so that is excluded.
+ */
+export function guestUserActivation(input: {
+  parentActivationActive: boolean;
+  now: number;
+  lastParentInputAt?: number;
+}): boolean {
+  if (!input.parentActivationActive) return false;
+  return input.lastParentInputAt === undefined || input.now - input.lastParentInputAt > USER_ACTIVATION_WINDOW_MS;
 }

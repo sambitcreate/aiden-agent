@@ -410,6 +410,26 @@ test("bridge height follows content down as well as up, independent of the frame
   }
 });
 
+for (const [label, html, minimum] of [
+  ["an absolutely positioned diagram", '<div style="position:absolute;top:0;left:0;width:200px;height:500px"></div>', 500],
+  ["an absolute child inside a relative box", '<div style="position:relative;height:45px"><div style="position:absolute;top:30px;height:500px;width:10px"></div></div>', 530],
+  ["a fixed-height box that overflows", '<div style="height:50px"><div style="height:500px"></div></div>', 500],
+] as const) {
+  test(`bridge height includes ${label}`, async ({ page }) => {
+    const guest = await loadWrappedGuest(page, html);
+    try {
+      await expect
+        .poll(async () => {
+          const resizes = ofType(await guest.messages(), "aiden:generative-ui:resize");
+          return resizes[resizes.length - 1]?.height ?? 0;
+        })
+        .toBeGreaterThanOrEqual(minimum);
+    } finally {
+      await guest.close();
+    }
+  });
+}
+
 test("wrapped documents keep the browser's 16px rem in inline and standalone modes", async ({ page }) => {
   for (const inline of [true, false]) {
     const doc = wrapGenerativeUiHtml('<p id="p" style="width:10rem">x</p>', "Rem", undefined, { inline });
@@ -467,6 +487,53 @@ test("theme messages from the parent update guest variables without reloading", 
     expect(await paragraph.evaluate(() => (window as unknown as { __loaded: number }).__loaded)).toBe(1);
   } finally {
     await guest.close();
+  }
+});
+
+test("a guest can steal focus without a gesture, but only a real click activates the parent", async ({ page }) => {
+  // The sendPrompt admission relies on this platform behavior: scripted focus
+  // moves activeElement to the frame, yet only user input inside it grants
+  // the parent transient activation. Playwright's evaluate() itself counts as
+  // a gesture, so the parent records state when each guest message arrives.
+  const guestHtml = `<input id="field"><button id="b" onclick="aiden.sendPrompt('clicked')">go</button>
+<script>setTimeout(() => { document.getElementById("field").focus(); setTimeout(() => aiden.sendPrompt("scripted"), 100); }, 200)</script>`;
+  const guest = wrapGenerativeUiHtml(guestHtml, "Activation probe", undefined, { inline: true });
+  const site = await listen((request, response) => {
+    if (request.url === "/guest") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": GENERATIVE_UI_GUEST_CSP,
+      });
+      response.end(guest);
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!DOCTYPE html><html><body>
+      <script>
+        window.__probes = [];
+        window.addEventListener("message", (e) => {
+          if (!e.data || e.data.type !== "aiden:generative-ui:prompt") return;
+          window.__probes.push({ text: e.data.text, active: navigator.userActivation.isActive, tag: document.activeElement && document.activeElement.tagName });
+          console.log("probe:" + e.data.text);
+        });
+      </script>
+      <iframe id="artifact" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="/guest" style="width:600px;height:300px"></iframe>
+    </body></html>`);
+  });
+  try {
+    const scripted = page.waitForEvent("console", (message) => message.text() === "probe:scripted");
+    await page.goto(site.origin);
+    await scripted;
+    const clicked = page.waitForEvent("console", (message) => message.text() === "probe:clicked");
+    await page.frameLocator("#artifact").locator("#b").click();
+    await clicked;
+    const probes = await page.evaluate(() => (window as unknown as { __probes: unknown[] }).__probes);
+    expect(probes).toEqual([
+      { text: "scripted", active: false, tag: "IFRAME" },
+      { text: "clicked", active: true, tag: "IFRAME" },
+    ]);
+  } finally {
+    await site.close();
   }
 });
 

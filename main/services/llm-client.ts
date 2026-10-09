@@ -395,6 +395,9 @@ import {
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
+import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
+import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
+import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
 import { createArtifactPlacementLedger } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
@@ -786,6 +789,23 @@ function savedGenerationThinkingLevel(
               customModelThinkingLevels(provider.modelMetadata?.[model]?.overrides))
           ? settings.providerThinkingByModel?.[providerId]?.[model]
           : undefined;
+}
+
+/**
+ * A ready inline preview for a just-presented visual, so the renderer swaps
+ * the draft for a loaded document. The guest asks for the live theme on
+ * load. Best effort: without it the renderer fetches a preview as usual.
+ */
+function readyPreviewSrc(title: string, html: string): { src?: string } {
+  try {
+    return {
+      src: registerGenerativeUiPreviewDocument(
+        wrapGenerativeUiHtml(html, title, undefined, { inline: true }),
+      ),
+    };
+  } catch {
+    return {};
+  }
 }
 
 async function prepareGeneration(
@@ -1787,6 +1807,7 @@ async function prepareGeneration(
             operation: "present",
             artifact,
             ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
+            ...(readyPreviewSrc(artifact.title, html)),
           },
         });
         return true;
@@ -2274,7 +2295,13 @@ export const llmClient = {
     }
     // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
     htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    // Drafts only stream when render_artifact is really registered this turn
+    // (not when visuals are Off, or for surfaces that never get the tool).
+    const visualsRegistered = generationExtensions.some(
+      (extension) => extension.id === GENERATIVE_UI_EXTENSION_ID,
+    );
     const visualDrafts = createGenerativeUiDraftSession({
+      enabled: visualsRegistered,
       publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
       send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
     });
@@ -3701,8 +3728,10 @@ export const llmClient = {
                 : event.isError
                   ? "failed"
                   : "completed";
-            // A visual that will never present must not leave its draft behind.
-            if (terminalStatus !== "completed") visualDrafts.cancel(event.toolCallId);
+            // Retract the call's draft whatever the outcome: a successful call
+            // has already presented (and a same-title replace presents under
+            // the first call's id, so its own draft would otherwise linger).
+            visualDrafts.cancel(event.toolCallId);
             if (
               attendedAssistant &&
               event.isError &&
@@ -3738,7 +3767,7 @@ export const llmClient = {
       });
     } catch (error) {
       cacheWarmer?.dispose();
-            visualDrafts.dispose();
+      visualDrafts.dispose();
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       formFill?.revoke();
@@ -3975,7 +4004,7 @@ export const llmClient = {
         );
       });
       cacheWarmer?.dispose();
-            visualDrafts.dispose();
+      visualDrafts.dispose();
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       formFill?.revoke();
@@ -4254,7 +4283,7 @@ export const llmClient = {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
           cacheWarmer?.dispose();
-            visualDrafts.dispose();
+          visualDrafts.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
           await computerUse?.close().catch(() => {});

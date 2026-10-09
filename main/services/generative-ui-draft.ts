@@ -57,6 +57,8 @@ export interface DraftStreamHandle {
 }
 
 export interface GenerativeUiDraftSessionOptions {
+  /** False when render_artifact is not registered this turn: every call is a no-op. */
+  enabled?: boolean;
   /** Pi's raw tool-call id → the timeline's public `call-N` id. */
   publicToolCallId: (rawToolCallId: string) => string | undefined;
   send: (event: ChatArtifactEventV1) => void;
@@ -143,7 +145,7 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
 
   return {
     delta(rawToolCallId: string, toolName: string, args: unknown): void {
-      if (toolName !== RENDER_ARTIFACT_TOOL_NAME) return;
+      if (options.enabled === false || toolName !== RENDER_ARTIFACT_TOOL_NAME) return;
       let call = calls.get(rawToolCallId);
       if (!call) {
         call = { admitted: "", stopped: false };

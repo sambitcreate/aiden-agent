@@ -16,7 +16,7 @@ import {
 } from "../lib/composer-draft-store";
 import { decideGuestPrompt } from "../shared/generative-ui-bridge";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
-import type { GuestPromptHandler } from "../components/html-artifact-frame";
+import { primeInlineVisualPreview, type GuestPromptHandler } from "../components/html-artifact-frame";
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
@@ -714,7 +714,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingText(null);
     setStreamingReasoning(null);
     clearTextStreaming();
-    setStreamingArtifacts([]); setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setPersistedHandoffMessageId(null);
@@ -1197,7 +1198,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setStreamingText("");
       setStreamingReasoning(null);
       clearTextStreaming();
-      setStreamingArtifacts([]); setVisualDrafts(NO_VISUAL_DRAFTS);
+      setStreamingArtifacts([]);
+      setVisualDrafts(NO_VISUAL_DRAFTS);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
       setPersistedHandoffMessageId(null);
@@ -1287,6 +1289,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            // Seed main's ready preview before the frame mounts so the final
+            // visual replaces its draft without a loading placeholder.
+            if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
             if (artifact.kind === "html" && event.toolCallId) {
               const toolCallId = event.toolCallId;
               // mediaIds are unique per generation, so this map only grows;
@@ -1427,7 +1432,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setLiveSubagents([]);
               setStreamingText(null);
               setStreamingReasoning(null);
-              setStreamingArtifacts([]); setVisualDrafts(NO_VISUAL_DRAFTS);
+              setStreamingArtifacts([]);
+              setVisualDrafts(NO_VISUAL_DRAFTS);
               streamingArtifactsRef.current = [];
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
@@ -1508,7 +1514,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   Boolean((partial || hasUnpersistedArtifact) && !updatedChat),
                 );
                 if (updatedChat) {
-                  setStreamingArtifacts([]); setVisualDrafts(NO_VISUAL_DRAFTS);
+                  setStreamingArtifacts([]);
+                  setVisualDrafts(NO_VISUAL_DRAFTS);
                   streamingArtifactsRef.current = [];
                 }
                 setIsStoppingGeneration(false);
@@ -1714,20 +1721,26 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const lastVisualPromptAtRef = React.useRef(new Map<string, number>());
+  /** mediaId → focus entry whose one ungestured suggestion was already staged. */
+  const stagedVisualFocusRef = React.useRef(new Map<string, number>());
+  /** Anything that makes an immediate send unsafe; refreshed below once the queue is known. */
+  const visualPromptBusyRef = React.useRef(false);
   const handleVisualPrompt = React.useCallback<GuestPromptHandler>(
     (text, focus, mediaId) => {
       const now = performance.now();
       const decision = decideGuestPrompt({
         text,
         frameFocused: focus.frameFocused,
-        freshActivation: focus.freshActivation,
-        chatBusy: isGenerating,
+        userActivated: focus.userActivated,
+        stagedThisFocus: stagedVisualFocusRef.current.get(mediaId) === focus.focusEntry,
+        chatBusy: visualPromptBusyRef.current,
         now,
         lastAcceptedAt: lastVisualPromptAtRef.current.get(mediaId),
       });
       if (decision.action === "reject") return;
       lastVisualPromptAtRef.current.set(mediaId, now);
       if (decision.action === "stage") {
+        if (!focus.userActivated) stagedVisualFocusRef.current.set(mediaId, focus.focusEntry);
         stageComposerText(chatId, decision.text);
         return;
       }
@@ -1738,7 +1751,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.error(error instanceof Error ? error.message : "Could not send the visual's follow-up.");
       });
     },
-    [chatId, handleSend, isGenerating],
+    [chatId, handleSend],
   );
 
   const handleStop = React.useCallback(() => {
@@ -1807,6 +1820,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
       );
     },
   });
+  // A visual's follow-up must never race a starting run, a detached run, or
+  // queued messages; in those states it is staged instead of sent.
+  const visualPromptBusy =
+    isGenerating ||
+    isStartingGeneration ||
+    visibleDetachedProjection !== null ||
+    queuedState.messages.length > 0;
+  React.useLayoutEffect(() => {
+    visualPromptBusyRef.current = visualPromptBusy;
+  }, [visualPromptBusy]);
 
   // Main refuses a fork's sends while its summary is pending or failed, so
   // follow-ups wait in the queue until the summary is ready or skipped.
@@ -1933,7 +1956,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     streamHandoffRef.current = null;
     setStreamingText(null);
     setStreamingReasoning(null);
-    setStreamingArtifacts([]); setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);

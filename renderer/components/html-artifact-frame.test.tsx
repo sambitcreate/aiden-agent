@@ -4,7 +4,13 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
-import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
+import {
+  HtmlArtifactDraftFrame,
+  HtmlArtifactFrame,
+  primeInlineVisualPreview,
+  rememberDraftHeight,
+  type GuestPromptHandler,
+} from "./html-artifact-frame";
 import {
   GENERATIVE_UI_RESIZE_MESSAGE,
   GENERATIVE_UI_PROMPT_MESSAGE,
@@ -179,25 +185,47 @@ test("a guest announcing ready receives the current theme before its document fi
   assert.equal(typeof themeMessage?.vars, "object");
 });
 
-test("guest prompts report focus and consume one fresh focus entry", async () => {
-  const prompts: Array<[string, boolean, boolean]> = [];
+function setParentActivation(isActive: boolean): void {
+  Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive, hasBeenActive: isActive } });
+}
+
+test("guest prompts count as gestured only with activation the parent page did not cause", async (t) => {
+  t.after(() => setParentActivation(false));
+  setParentActivation(false);
+  const prompts: Array<{ text: string; focused: boolean; activated: boolean; entry: number }> = [];
   const { iframe, guest } = await mountedFrame((text, focus) =>
-    prompts.push([text, focus.frameFocused, focus.freshActivation]));
+    prompts.push({ text, focused: focus.frameFocused, activated: focus.userActivated, entry: focus.focusEntry }));
   postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Unfocused" });
   postFrom(window, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "spoofed" });
 
-  // A click into the frame moves focus to it and blurs the parent window.
-  act(() => {
+  // The guest focuses itself from a timer: focus moves in, but no gesture.
+  const enterFrame = () => act(() => {
     iframe.focus();
     window.dispatchEvent(new Event("blur"));
   });
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "First" });
-  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Timer" });
-  assert.deepEqual(prompts, [
+  enterFrame();
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Scripted" });
+  // The user clicks inside the frame: the parent gains transient activation.
+  setParentActivation(true);
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Clicked" });
+  // Typing in the composer also activates the parent; that must not count.
+  act(() => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+  });
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "AfterTyping" });
+
+  assert.deepEqual(prompts.map(({ text, focused, activated }) => [text, focused, activated]), [
     ["Unfocused", false, false],
-    ["First", true, true],
-    ["Timer", true, false],
+    ["Scripted", true, false],
+    ["Clicked", true, true],
+    ["AfterTyping", true, false],
   ]);
+  const firstEntry = prompts[1]!.entry;
+  assert.equal(prompts[2]!.entry, firstEntry);
+  act(() => window.dispatchEvent(new Event("focus")));
+  enterFrame();
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Reentered" });
+  assert.notEqual(prompts[prompts.length - 1]!.entry, firstEntry);
 });
 
 /** happy-dom lacks the Popover API; Chromium top-layer behavior is covered in tests/generative-ui. */
@@ -240,6 +268,19 @@ test("Expand promotes the same frame to a modal dialog and Close returns to the 
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
   assert.ok(screen.getByRole("figure", { name: "Revenue" }));
   assert.equal(view.container.querySelector("iframe"), iframe);
+});
+
+test("a presented visual replaces its draft at the draft's height with a ready preview", () => {
+  const visual = artifact();
+  const src = `aiden-genui://preview/${"e".repeat(64)}`;
+  rememberDraftHeight("call-7", 333);
+  primeInlineVisualPreview("chat-1", visual, src);
+  const fetchesBefore = calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length;
+  const view = render(<HtmlArtifactFrame chatId="chat-1" artifact={visual} placementCallId="call-7" />);
+  // No loading placeholder and no round trip: the iframe is there on first render.
+  assert.equal(view.container.querySelector("iframe")?.getAttribute("src"), src);
+  assert.equal(view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height, "333px");
+  assert.equal(calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length, fetchesBefore);
 });
 
 test("a remount at stream handoff reuses the cached preview and height", async () => {

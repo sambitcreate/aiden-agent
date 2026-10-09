@@ -10,6 +10,7 @@ import {
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
+import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 
 const temporaryDirectories: string[] = [];
@@ -35,6 +36,25 @@ test("visuals are available without a workspace and follow the inline-visuals mo
   assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request", visualize: true }), true);
   assert.equal(shouldEnableGenerativeUiExtension({ ...base, usageSource: "scheduled" }), false);
   assert.equal(shouldEnableGenerativeUiExtension({ ...base, excluded: true }), false);
+});
+
+test("turns sent from a paired phone do not get inline visuals until phones can show them", () => {
+  const surface = remoteGenerationSurface({
+    chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
+    workspaceId: "workspace", providerId: "provider", model: "model",
+    onTurnAccepted: () => undefined,
+  });
+  assert.equal(
+    shouldEnableGenerativeUiExtension({
+      usageSource: surface.options.usageSource,
+      assistantMode: false,
+      workspaceRoot: "/tmp/ws",
+      permission: "ask",
+      excluded: false,
+      inlineVisuals: surface.params.inlineVisuals,
+    }),
+    false,
+  );
 });
 
 test("path rendering is refused without a workspace while inline html works", async () => {

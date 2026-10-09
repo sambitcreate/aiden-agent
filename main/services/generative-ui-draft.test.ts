@@ -52,6 +52,28 @@ function fakeSession(publicIds: Record<string, string> = { raw1: "call-1", raw2:
   return { session, events, streams, flush };
 }
 
+test("a disabled draft session never opens streams or emits events", () => {
+  const events: unknown[] = [];
+  let opened = 0;
+  const session = createGenerativeUiDraftSession({
+    enabled: false,
+    publicToolCallId: () => "call-1",
+    send: (event) => events.push(event),
+    open: () => {
+      opened += 1;
+      return { src: "x", append: () => undefined, close: () => undefined };
+    },
+    schedule: (run) => { run(); return 1; },
+    cancelScheduled: () => undefined,
+  });
+  session.delta("raw1", "render_artifact", { title: "T", html: "<p>a" });
+  session.end("raw1");
+  session.cancel("raw1");
+  session.dispose();
+  assert.equal(opened, 0);
+  assert.deepEqual(events, []);
+});
+
 test("a draft session throttles deltas, then opens one stream and appends suffixes", () => {
   const { session, events, streams, flush } = fakeSession();
   session.delta("raw1", "render_artifact", { title: "Revenue", html: "<div>" });

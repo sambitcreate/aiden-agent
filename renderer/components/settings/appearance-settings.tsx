@@ -11,12 +11,6 @@ import {
   toast,
 } from "../ui";
 import { isInlineVisualsMode, type InlineVisualsMode } from "../../shared/appearance";
-
-const INLINE_VISUALS_LABELS: Record<InlineVisualsMode, string> = {
-  automatic: "Automatic",
-  on_request: "Only when I ask",
-  off: "Off",
-};
 import { settingsApi } from "../../lib/ipc";
 import {
   APPEARANCE_CHANGE_EVENT,
@@ -49,6 +43,12 @@ import {
   type ThemeVariantConfig,
 } from "../../shared/appearance";
 import type { NativeThemeInfo } from "../../preload";
+
+const INLINE_VISUALS_LABELS: Record<InlineVisualsMode, string> = {
+  automatic: "Automatic",
+  on_request: "Only when I ask",
+  off: "Off",
+};
 
 type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
 

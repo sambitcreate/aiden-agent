@@ -73,15 +73,31 @@ function guestBridgeScript(nonce?: string): string {
   let frame = 0;
   const report = () => {
     frame = 0;
-    // The root's own box tracks content both ways; scrollHeight never drops
-    // below the frame's viewport, so a shrinking visual would never report.
-    const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    // The inline body is a positioned flow root without min-height, so its
+    // scrollHeight is the content (absolute and overflowing children
+    // included) and shrinks with it; the root's scrollHeight never drops
+    // below the frame's viewport.
+    const body = document.body;
+    const height = Math.ceil(
+      body ? body.scrollHeight : document.documentElement.getBoundingClientRect().height,
+    );
     if (Math.abs(height - lastHeight) < 2) return;
     lastHeight = height;
     post({ type: ${JSON.stringify(GENERATIVE_UI_RESIZE_MESSAGE)}, height });
   };
   const schedule = () => { if (!frame) frame = requestAnimationFrame(report); };
-  new ResizeObserver(schedule).observe(document.documentElement);
+  const sizes = new ResizeObserver(schedule);
+  sizes.observe(document.documentElement);
+  // Absolute children change scrollHeight without resizing any observed box.
+  // The callback must never mutate the DOM itself, or it would re-trigger.
+  let observedBody = null;
+  new MutationObserver(() => {
+    if (document.body && document.body !== observedBody) {
+      observedBody = document.body;
+      sizes.observe(observedBody);
+    }
+    schedule();
+  }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
   window.addEventListener("load", schedule);
   const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const applyChartDefaults = () => {
@@ -339,9 +355,10 @@ html, body {
   font-family: var(--font-ui-family, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
 }
 /* Body only, so rem stays the browser's 16px for authored layouts. Inline
-   bodies contain their children's margins so the root box is the content. */
+   bodies are positioned flow roots so their scrollHeight is the content,
+   absolute and overflowing children included. */
 body {
-  ${options.inline ? "font-size: var(--ui-font-size, 14px);\n  display: flow-root;" : ""}
+  ${options.inline ? "font-size: var(--ui-font-size, 14px);\n  display: flow-root;\n  position: relative;" : ""}
 }
 button, input, select, textarea {
   color: inherit;

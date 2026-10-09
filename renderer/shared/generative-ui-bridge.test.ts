@@ -8,6 +8,8 @@ import {
   MIN_INLINE_VISUAL_HEIGHT,
   clampInlineVisualHeight,
   decideGuestPrompt,
+  guestUserActivation,
+  USER_ACTIVATION_WINDOW_MS,
   parseGuestBridgeMessage,
 } from "./generative-ui-bridge.js";
 
@@ -45,14 +47,38 @@ test("inline visual height clamps hostile values into the visible range", () => 
   assert.equal(clampInlineVisualHeight(300.4), 301);
 });
 
-test("only a fresh focus entry may auto-send; repeat prompts from the same focus are staged", () => {
-  const base = { text: "Again", frameFocused: true, freshActivation: false, chatBusy: false, now: 10_000 };
+test("only a real user gesture in the visual may auto-send; ungestured prompts stage once per focus", () => {
+  // A guest can focus itself from a timer, so focus alone proves nothing.
+  const base = {
+    text: "Again", frameFocused: true, userActivated: false, stagedThisFocus: false, chatBusy: false, now: 10_000,
+  };
   assert.deepEqual(decideGuestPrompt(base), { action: "stage", text: "Again" });
-  assert.deepEqual(decideGuestPrompt({ ...base, freshActivation: true }), { action: "send", text: "Again" });
+  assert.deepEqual(decideGuestPrompt({ ...base, stagedThisFocus: true }), { action: "reject", reason: "repeat" });
+  assert.deepEqual(decideGuestPrompt({ ...base, userActivated: true }), { action: "send", text: "Again" });
+  assert.deepEqual(decideGuestPrompt({ ...base, userActivated: true, stagedThisFocus: true }), {
+    action: "send",
+    text: "Again",
+  });
+});
+
+test("only activation the parent page did not produce itself counts as a gesture in a visual", () => {
+  assert.equal(guestUserActivation({ parentActivationActive: false, now: 10_000 }), false);
+  assert.equal(guestUserActivation({ parentActivationActive: true, now: 10_000 }), true);
+  // Typing in the composer activates the parent; a visual that then steals focus gets nothing.
+  assert.equal(
+    guestUserActivation({ parentActivationActive: true, now: 10_000, lastParentInputAt: 10_000 - 1_000 }),
+    false,
+  );
+  assert.equal(
+    guestUserActivation({
+      parentActivationActive: true, now: 10_000, lastParentInputAt: 10_000 - USER_ACTIVATION_WINDOW_MS - 1,
+    }),
+    true,
+  );
 });
 
 test("prompt length is checked before any trimming and the limit itself is accepted", () => {
-  const base = { frameFocused: true, freshActivation: true, chatBusy: false, now: 10_000 };
+  const base = { frameFocused: true, userActivated: true, stagedThisFocus: false, chatBusy: false, now: 10_000 };
   assert.equal(decideGuestPrompt({ ...base, text: "x".repeat(MAX_GUEST_PROMPT_CHARS) }).action, "send");
   assert.deepEqual(
     decideGuestPrompt({ ...base, text: `${" ".repeat(MAX_GUEST_PROMPT_CHARS)}x` }),
@@ -61,7 +87,9 @@ test("prompt length is checked before any trimming and the limit itself is accep
 });
 
 test("guest prompts need focus, content, size, and cooldown; busy chats stage", () => {
-  const base = { text: "Explain the spike", frameFocused: true, freshActivation: true, chatBusy: false, now: 10_000 };
+  const base = {
+    text: "Explain the spike", frameFocused: true, userActivated: true, stagedThisFocus: false, chatBusy: false, now: 10_000,
+  };
   assert.deepEqual(decideGuestPrompt(base), { action: "send", text: "Explain the spike" });
   assert.deepEqual(decideGuestPrompt({ ...base, chatBusy: true }), {
     action: "stage",
