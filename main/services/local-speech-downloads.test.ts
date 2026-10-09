@@ -288,6 +288,18 @@ test("a regular partial reports its byte count and a missing one reports zero", 
   assert.equal(await partialDownloadBytes(partial), 5);
 });
 
+test("a partial that cannot be inspected is a disk failure, not a fresh download", async () => {
+  const root = mkdtempSync(join(tmpdir(), "speech-root-"));
+  // A regular file where the .partial folder belongs: looking inside it fails with ENOTDIR.
+  writeFileSync(join(root, ".partial"), "not a folder");
+  const error = await partialDownloadBytes(join(root, ".partial", "fixture.tar.bz2.part")).then(
+    () => undefined,
+    (reason: unknown) => reason as Error,
+  );
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /disk.*ENOTDIR|ENOTDIR.*disk/i);
+});
+
 test("only a full disk or exhausted quota asks the user to free up space", () => {
   const errno = (code: string) => Object.assign(new Error(code), { code });
   for (const code of ["ENOSPC", "EDQUOT"]) {

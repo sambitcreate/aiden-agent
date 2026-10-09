@@ -123,8 +123,10 @@ export async function partialDownloadBytes(file: string): Promise<number> {
   let stat: fs.Stats;
   try {
     stat = await fs.promises.lstat(file);
-  } catch {
-    return 0;
+  } catch (error) {
+    // No partial yet is the normal first attempt. Any other failure to inspect it is a local problem.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw new DiskFailure(error);
   }
   if (!stat.isFile()) {
     const code = stat.isDirectory() ? "EISDIR" : "EEXIST";
