@@ -1,3 +1,4 @@
+import { readCachedAppearance } from "../lib/appearance-runtime";
 import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
@@ -730,7 +731,7 @@ export function Composer({
       hasLatestAssistantResponse: Boolean(latestAssistantResponse),
       hasAuthenticatedProvider: authenticatedProviders.length > 0,
       hasWorkspace: Boolean(workspace),
-      hasWorkspaceArtifactAccess: workspace?.permission !== "none",
+      inlineVisualsOff: readCachedAppearance()?.inlineVisuals === "off",
       hasManagedWorktreeFlow: Boolean(
         workspace?.folderPath && gitBranch && onCreateGitWorktree && !gitUnborn,
       ),

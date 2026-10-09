@@ -26,6 +26,64 @@ async function workspace(): Promise<string> {
   return directory;
 }
 
+test("visuals are available without a workspace and follow the inline-visuals mode", () => {
+  const base = { usageSource: "chat", assistantMode: false, permission: "none", excluded: false };
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base }), true);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "automatic" }), true);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "off", visualize: true }), false);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request" }), false);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request", visualize: true }), true);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, usageSource: "scheduled" }), false);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, excluded: true }), false);
+});
+
+test("path rendering is refused without a workspace while inline html works", async () => {
+  const artifacts: ChatHtmlArtifactV1[] = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: (artifact) => {
+      artifacts.push(artifact);
+    },
+  });
+  const tool = extension.tools?.find((candidate) => candidate.name === GENERATIVE_UI_TOOL_NAME);
+  assert.ok(tool);
+  await assert.rejects(tool.execute("c1", { title: "T", path: "a.html" }), /workspace/iu);
+  await tool.execute("c2", { title: "T", html: "<p>x</p>" });
+  assert.equal(artifacts.length, 1);
+});
+
+test("visualize_guide returns only the requested design modules", async () => {
+  const root = await workspace();
+  const extension = createGenerativeUiExtension({ workspaceRoot: root, onArtifact: () => undefined });
+  const guide = extension.tools?.find((candidate) => candidate.name === "visualize_guide");
+  assert.ok(guide);
+  assert.equal(piRuntimeReplayPolicy(guide), "never");
+  const text = async (modules: unknown) => {
+    const result = await guide.execute("g1", { modules });
+    return result.content[0]?.type === "text" ? result.content[0].text : "";
+  };
+  const charts = await text(["charts"]);
+  assert.match(charts, /aiden\.series\(\)/u);
+  assert.doesNotMatch(charts, /## HTML structure/u);
+  const html = await text(["html", "design"]);
+  assert.match(html, /## HTML structure/u);
+  assert.match(html, /aiden-card/u);
+  assert.match(html, /do not (re)?declare `aiden`/iu);
+  await assert.rejects(guide.execute("g2", { modules: ["nope"] }), /module/iu);
+});
+
+test("the system prompt points the model at the guide and keeps replies complete without visuals", () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
+  assert.match(extension.systemPrompt ?? "", /visualize_guide/u);
+  assert.match(extension.systemPrompt ?? "", /takeaway/iu);
+  const preferred = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    preferArtifactThisTurn: true,
+    onArtifact: () => undefined,
+  });
+  assert.match(preferred.systemPrompt ?? "", /\/visualize/u);
+});
+
 test("generative UI enablement matches the display_image chat gate", () => {
   assert.equal(
     shouldEnableGenerativeUiExtension({

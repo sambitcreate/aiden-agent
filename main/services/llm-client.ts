@@ -1727,6 +1727,8 @@ async function prepareGeneration(
       workspaceRoot: folderPath,
       permission,
       excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
+      inlineVisuals: params.inlineVisuals,
+      visualize: params.visualize === true,
     })
   ) {
     const htmlStoreAvailability = generativeUiArtifactStore.availability();
@@ -1751,7 +1753,9 @@ async function prepareGeneration(
     }
     const visualize = params.visualize === true;
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
-      workspaceRoot: folderPath!,
+      // Inline HTML works in every chat; reading a workspace .html file
+      // additionally needs a workspace with file access.
+      workspaceRoot: folderPath && permission !== "none" ? folderPath : undefined,
       artifactNamespace: `${streamId}:html`,
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,

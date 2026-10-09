@@ -917,6 +917,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this attended turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals; automatic when absent. */
+  inlineVisuals?: import("../../renderer/shared/appearance.js").InlineVisualsMode;
   messages: Array<{
     role: ChatRole;
     content: string;

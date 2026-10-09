@@ -10,7 +10,8 @@ export interface SlashCommandActionContext {
   hasLatestAssistantResponse: boolean;
   hasAuthenticatedProvider?: boolean;
   hasWorkspace: boolean;
-  hasWorkspaceArtifactAccess?: boolean;
+  /** Settings → Appearance → Inline visuals is Off. */
+  inlineVisualsOff?: boolean;
   hasManagedWorktreeFlow?: boolean;
   idle: boolean;
   idleBlockedReason?: string;
@@ -144,9 +145,9 @@ export function slashCommandAvailability(
   if (
     command.action.kind === "composer-instruction" &&
     command.action.instruction === "visualize" &&
-    context.hasWorkspaceArtifactAccess === false
+    context.inlineVisualsOff
   ) {
-    return unavailable("Allow workspace access before creating an interactive artifact.");
+    return unavailable("Inline visuals are off. Turn them on in Settings → Appearance.");
   }
   if (
     command.action.kind === "composer-instruction" &&

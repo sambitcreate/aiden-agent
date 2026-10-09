@@ -7,9 +7,16 @@ import {
 } from "lucide-react";
 import {
   Button,
-  Field, FieldSet, Switch,
+  Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch,
   toast,
 } from "../ui";
+import { isInlineVisualsMode, type InlineVisualsMode } from "../../shared/appearance";
+
+const INLINE_VISUALS_LABELS: Record<InlineVisualsMode, string> = {
+  automatic: "Automatic",
+  on_request: "Only when I ask",
+  off: "Off",
+};
 import { settingsApi } from "../../lib/ipc";
 import {
   APPEARANCE_CHANGE_EVENT,
@@ -518,6 +525,24 @@ export function AppearanceSettings() {
       <FieldSet title="Chat">
         <Field label="Show context usage in composer" description="Show the token meter beside your message. Context details remain available in the workspace panel.">
           <Switch checked={config.showComposerContextUsage} onCheckedChange={(checked) => update((current) => ({ ...current, showComposerContextUsage: checked }))} aria-label="Show context usage in composer" />
+        </Field>
+        <Field label="Inline visuals" description="Let Aiden draw charts, diagrams, and interactive explainers in the chat.">
+          <Select
+            value={config.inlineVisuals}
+            onValueChange={(inlineVisuals) => {
+              if (!isInlineVisualsMode(inlineVisuals)) return;
+              update((current) => ({ ...current, inlineVisuals }));
+            }}
+          >
+            <SelectTrigger size="small" className="w-44 max-w-full" aria-label="Inline visuals">
+              <SelectValue>{INLINE_VISUALS_LABELS[config.inlineVisuals]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {(["automatic", "on_request", "off"] as const).map((mode) => (
+                <SelectItem key={mode} value={mode}>{INLINE_VISUALS_LABELS[mode]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
       </FieldSet>
       <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-chat-width-title">

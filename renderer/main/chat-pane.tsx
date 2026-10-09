@@ -1242,6 +1242,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
+          inlineVisuals: readCachedAppearance()?.inlineVisuals ?? "automatic",
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported

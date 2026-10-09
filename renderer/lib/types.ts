@@ -1110,6 +1110,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals for this turn. */
+  inlineVisuals?: import("../shared/appearance").InlineVisualsMode;
 }
 
 export interface ApprovalRequest {

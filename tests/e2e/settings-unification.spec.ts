@@ -550,6 +550,31 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
 });
 
 
+test("inline visuals preference is chosen in Appearance and survives relaunch", async ({ aiden }) => {
+  test.setTimeout(120_000);
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const openAppearance = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+  };
+  await openAppearance();
+  const control = page.getByRole("combobox", { name: "Inline visuals" });
+  await expect(control).toHaveText("Automatic");
+  await control.click();
+  await page.getByRole("option", { name: "Off" }).click();
+  await expect(control).toHaveText("Off");
+  await expect.poll(async () => {
+    const appearance = JSON.parse(
+      await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+    ).settings?.appearance;
+    return appearance?.inlineVisuals;
+  }).toBe("off");
+  page = await aiden.relaunch();
+  await openAppearance();
+  await expect(page.getByRole("combobox", { name: "Inline visuals" })).toHaveText("Off");
+});
+
 test("composer context usage visibility updates immediately from Appearance", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);

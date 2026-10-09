@@ -25,8 +25,15 @@ import {
   createSubagentFileMutatorClient,
   SubagentFileMutatorError,
 } from "./subagents/subagent-file-mutator-io.js";
+import {
+  GENERATIVE_UI_GUIDE_MODULES,
+  generativeUiGuide,
+  isGenerativeUiGuideModule,
+} from "./generative-ui-guide.js";
+import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
+export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
 import { RENDER_ARTIFACT_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
 
 export const GENERATIVE_UI_TOOL_NAME = RENDER_ARTIFACT_TOOL_NAME;
@@ -38,18 +45,23 @@ export interface GenerativeUiExtensionScope {
   usageSource?: string;
   interactionSurface?: string;
   assistantMode: boolean;
+  /** Only needed for `path` rendering; inline HTML works in every chat. */
   workspaceRoot?: string;
   permission: string;
   excluded: boolean;
+  /** The user's Settings → Appearance choice; automatic when absent. */
+  inlineVisuals?: InlineVisualsMode;
+  /** The user invoked /visualize for this turn. */
+  visualize?: boolean;
 }
 
 export function shouldEnableGenerativeUiExtension(scope: GenerativeUiExtensionScope): boolean {
+  const mode = scope.inlineVisuals ?? "automatic";
+  if (mode === "off" || (mode === "on_request" && scope.visualize !== true)) return false;
   return (
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
     !scope.assistantMode &&
-    Boolean(scope.workspaceRoot) &&
-    scope.permission !== "none" &&
     !scope.excluded
   );
 }
@@ -74,7 +86,8 @@ export function displayedAssistantHtmlUsage(
 }
 
 export interface GenerativeUiExtensionOptions {
-  workspaceRoot: string;
+  /** Absent in chats without workspace access: only inline `html` renders. */
+  workspaceRoot?: string;
   artifactNamespace?: string;
   existingChatHtmlBytes?: number;
   existingChatHtmlCount?: number;
@@ -113,18 +126,24 @@ function resolveWorkspaceHtml(
   return { relative };
 }
 
+function resolveWorkspaceRoot(workspaceRoot: string) {
+  const canonicalRoot = realpathSync(path.resolve(workspaceRoot));
+  const rootIdentity = statSync(canonicalRoot, { bigint: true });
+  if (!rootIdentity.isDirectory()) throw new Error("The workspace root is not a directory.");
+  return {
+    canonicalRoot,
+    identity: Object.freeze({
+      canonicalPath: canonicalRoot,
+      device: rootIdentity.dev.toString(10),
+      inode: rootIdentity.ino.toString(10),
+    }),
+  };
+}
+
 export function createGenerativeUiExtensionRuntime(
   options: GenerativeUiExtensionOptions,
 ): { extension: PiAgentRuntimeExtension } {
-  const lexicalRoot = path.resolve(options.workspaceRoot);
-  const canonicalRoot = realpathSync(lexicalRoot);
-  const rootIdentity = statSync(canonicalRoot, { bigint: true });
-  if (!rootIdentity.isDirectory()) throw new Error("The workspace root is not a directory.");
-  const workspaceRootIdentity = Object.freeze({
-    canonicalPath: canonicalRoot,
-    device: rootIdentity.dev.toString(10),
-    inode: rootIdentity.ino.toString(10),
-  });
+  const workspace = options.workspaceRoot ? resolveWorkspaceRoot(options.workspaceRoot) : undefined;
   const existingChatHtmlBytes = options.existingChatHtmlBytes ?? 0;
   const existingChatHtmlCount = options.existingChatHtmlCount ?? 0;
   if (
@@ -162,7 +181,8 @@ export function createGenerativeUiExtensionRuntime(
         ),
         path: Type.Optional(
           Type.String({
-            description: "Workspace-relative .html file to copy into Aiden-owned storage.",
+            description:
+              "Workspace-relative .html file to copy into Aiden-owned storage. Needs workspace access; otherwise pass html.",
             minLength: 1,
             maxLength: 4096,
           }),
@@ -187,10 +207,13 @@ export function createGenerativeUiExtensionRuntime(
           let html: string;
           let sourceLabel = "inline HTML";
           if (hasPath) {
-            const resolved = resolveWorkspaceHtml(canonicalRoot, input.path as string);
+            if (!workspace) {
+              throw new Error("render_artifact path requires workspace access; pass html instead.");
+            }
+            const resolved = resolveWorkspaceHtml(workspace.canonicalRoot, input.path as string);
             const relative = resolved.relative.split(path.sep).join("/");
             const reader = createSubagentFileMutatorClient({
-              workspaceRoot: workspaceRootIdentity,
+              workspaceRoot: workspace.identity,
             });
             try {
               html = await reader.readHtml(randomUUID(), relative, signal);
@@ -276,15 +299,40 @@ export function createGenerativeUiExtensionRuntime(
     "never",
   );
 
+  const guideTool: AgentTool = declarePiRuntimeReplay(
+    {
+      name: VISUALIZE_GUIDE_TOOL_NAME,
+      label: "Visualize Guide",
+      description:
+        "Read Aiden's design guidance for inline visuals before your first render_artifact call in a conversation. Request only the modules you need.",
+      parameters: Type.Object({
+        modules: Type.Array(
+          Type.Union(GENERATIVE_UI_GUIDE_MODULES.map((module) => Type.Literal(module))),
+          { minItems: 1, maxItems: GENERATIVE_UI_GUIDE_MODULES.length },
+        ),
+      }),
+      execute: async (_toolCallId, params): Promise<AgentToolResult<null>> => {
+        const modules = (params as { modules?: unknown }).modules;
+        if (!Array.isArray(modules) || modules.length === 0 || !modules.every(isGenerativeUiGuideModule)) {
+          throw new Error(
+            `visualize_guide modules must be one or more of: ${GENERATIVE_UI_GUIDE_MODULES.join(", ")}.`,
+          );
+        }
+        return { content: [{ type: "text", text: generativeUiGuide(modules) }], details: null };
+      },
+    },
+    "never",
+  );
+
   return {
     extension: {
       id: GENERATIVE_UI_EXTENSION_ID,
       systemPrompt:
-        "Aiden can render interactive HTML visualizations inline with the render_artifact tool. Use it for charts, diagrams, dashboards, interactive explainers, and UI mockups instead of dumping large tables or asking the user to open a browser. Prefer vanilla HTML/CSS/JS. Chart.js, Plotly, and KaTeX are injected by the host—never fetch remote scripts or call network APIs from the artifact. Do not use render_artifact for ordinary prose or raster images (use display_image). Do not claim inline artifacts are unavailable while this tool is present." +
+        "Aiden can draw inline visuals in this chat with render_artifact. Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Before your first visual in a conversation, call visualize_guide with the modules you need (design, html, charts, interactive). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
         (options.preferArtifactThisTurn
           ? " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
           : ""),
-      tools: [tool],
+      tools: [tool, guideTool],
     },
   };
 }
