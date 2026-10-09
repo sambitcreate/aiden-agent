@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ArrowUp, Mic, Plus, ShieldQuestion, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/ui-utils";
+import type { KeyboardPlatform } from "../../shared/keybindings";
 
 /**
  * Building blocks for the onboarding feature-tour art. Each vignette is a
@@ -8,6 +9,11 @@ import { cn } from "../../lib/ui-utils";
  * only the words that carry meaning stay real. Styling lives in
  * `onboarding-art.css`; place parts with inline `left`/`top`/`width` styles.
  */
+
+/** What a vignette may need to know about the machine it is shown on. */
+export interface ArtProps {
+  platform: KeyboardPlatform;
+}
 
 interface BoxProps {
   className?: string;

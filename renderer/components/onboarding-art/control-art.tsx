@@ -33,7 +33,18 @@ import { AidenActivityMark } from "../aiden-activity-mark";
 import { AvatarFace } from "../bot-avatar";
 import { ProviderIcon } from "../provider-icon";
 import { THEME_PRESETS, type ThemePresetId } from "../../shared/appearance";
-import { ArtButton, ArtChip, ArtIcon, ArtWindow, Bar, Radio, Toggle, TrafficLights } from "./art-kit";
+import { COMMAND_BY_ID, prettyAcceleratorForPlatform, type CommandId } from "../../shared/keybindings";
+import {
+  ArtButton,
+  ArtChip,
+  ArtIcon,
+  ArtWindow,
+  Bar,
+  Radio,
+  Toggle,
+  TrafficLights,
+  type ArtProps,
+} from "./art-kit";
 
 /* Art for the "Automate and stay in control" tiles. */
 
@@ -290,16 +301,21 @@ export function VoiceDictationArt() {
   );
 }
 
-const PALETTE_COMMANDS: ReadonlyArray<{ title: string; icon: LucideIcon; keys?: string }> = [
-  { title: "New chat", icon: MessageSquare, keys: "⌘N" },
-  { title: "Search chats", icon: MessageSquare, keys: "⇧⌘F" },
-  { title: "Toggle terminal", icon: Wrench, keys: "⌘J" },
+const PALETTE_COMMANDS: ReadonlyArray<{ title: string; icon: LucideIcon; command?: CommandId }> = [
+  { title: "New chat", icon: MessageSquare, command: "chat.new" },
+  { title: "Search chats", icon: MessageSquare, command: "chat.search" },
+  { title: "Toggle terminal", icon: Wrench, command: "terminal.toggle" },
   { title: "Change model", icon: Search },
-  { title: "Open Settings", icon: Settings, keys: "⌘," },
+  { title: "Open Settings", icon: Settings, command: "settings.open" },
 ];
 
+/** A command's default shortcut as this platform's palette prints it. */
+function shortcut(command: CommandId, platform: ArtProps["platform"]): string {
+  return prettyAcceleratorForPlatform(COMMAND_BY_ID[command].defaultBinding, platform);
+}
+
 /** The command palette, root mode, with the first command selected. */
-export function CommandPaletteArt() {
+export function CommandPaletteArt({ platform }: ArtProps) {
   return (
     <ArtWindow raised className="oa-cmd" style={{ left: 12, top: 10, width: 170 }}>
       <div className="oa-cmd-crumb">
@@ -310,7 +326,7 @@ export function CommandPaletteArt() {
           Commands
         </span>
         <span className="oa-grow" />
-        <kbd className="oa-cmd-kbd">⌘K</kbd>
+        <kbd className="oa-cmd-kbd">{shortcut("commandPalette.toggle", platform)}</kbd>
       </div>
       <div className="oa-cmd-search">
         <ArtIcon icon={Search} />
@@ -318,11 +334,15 @@ export function CommandPaletteArt() {
         <i className="oa-caret" />
       </div>
       <div className="oa-cmd-list">
-        {PALETTE_COMMANDS.map(({ title, icon, keys }, index) => (
+        {PALETTE_COMMANDS.map(({ title, icon, command }, index) => (
           <div key={title} className={`oa-cmd-row${index === 0 ? " oa-selected" : ""}`}>
             <ArtIcon icon={icon} />
             <span className="oa-grow">{title}</span>
-            {keys ? <span className="oa-cmd-shortcut">{keys}</span> : <ArtIcon icon={ChevronRight} />}
+            {command ? (
+              <span className="oa-cmd-shortcut">{shortcut(command, platform)}</span>
+            ) : (
+              <ArtIcon icon={ChevronRight} />
+            )}
           </div>
         ))}
       </div>

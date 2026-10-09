@@ -40,14 +40,19 @@ function sourceSection(startMarker: string, endMarker: string): string {
 }
 
 const providerPresentation = sourceSection("const providerChoices", "function OnboardingDialogShell");
-/** The gallery as rendered, and as the reader sees its text. */
-const galleryMarkup = renderToStaticMarkup(<OnboardingFeatureGallery features={onboardingFeatures} />);
-const featurePresentation = galleryMarkup
-  .replace(/<[^>]+>/gu, " ")
-  .replace(/&amp;/gu, "&")
-  .replace(/&quot;/gu, '"')
-  .replace(/&#x27;/gu, "'")
-  .replace(/\s+/gu, " ");
+/** Rendered markup as the reader sees its text. */
+function markupText(markup: string): string {
+  return markup
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/&amp;/gu, "&")
+    .replace(/&quot;/gu, '"')
+    .replace(/&#x27;/gu, "'")
+    .replace(/\s+/gu, " ");
+}
+const galleryMarkup = renderToStaticMarkup(
+  <OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />,
+);
+const featurePresentation = markupText(galleryMarkup);
 const galleryTiles = galleryMarkup.match(/<article\b[\s\S]*?<\/article>/gu) ?? [];
 function tileMarkup(id: string): string {
   const tile = galleryTiles.find((markup) => markup.includes(`data-onboarding-feature="${id}"`));
@@ -310,7 +315,10 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
-  assert.match(source, /<OnboardingFeatureGallery features=\{visibleFeatureBentos\} \/>/u);
+  assert.match(
+    source,
+    /<OnboardingFeatureGallery features=\{visibleFeatureBentos\} platform=\{capabilities\.platform\} \/>/u,
+  );
   assert.match(featurePresentation, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(galleryMarkup, new RegExp(`data-onboarding-feature-count="${onboardingFeatures.length}"`, "u"));
   for (const hero of onboardingFeatures.filter((feature) => feature.size === "hero")) {
@@ -415,6 +423,25 @@ test("every tour tile draws its own themed illustration without raster assets", 
       previousTint = tint;
     }
   }
+});
+
+test("the command palette tile draws the shortcuts of the platform it runs on", () => {
+  const paletteText = (platform: "darwin" | "linux") =>
+    markupText(
+      renderToStaticMarkup(
+        <OnboardingFeatureGallery
+          features={onboardingFeatures.filter(({ id }) => id === "commands")}
+          platform={platform}
+        />,
+      ),
+    );
+  const mac = paletteText("darwin");
+  for (const label of ["⌘K", "⌘N", "⌘⇧F", "⌘J", "⌘,"]) assert.ok(mac.includes(label), `macOS ${label}`);
+  const linux = paletteText("linux");
+  for (const label of ["Ctrl+K", "Ctrl+N", "Ctrl+Shift+F", "Ctrl+J", "Ctrl+,"]) {
+    assert.ok(linux.includes(label), `Linux ${label}`);
+  }
+  assert.doesNotMatch(linux, /[⌘⇧⌥]/u);
 });
 
 test("project guidance keeps the feature bento current as Aiden evolves", () => {

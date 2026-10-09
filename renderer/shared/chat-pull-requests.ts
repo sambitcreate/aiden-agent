@@ -389,6 +389,29 @@ export function isSafeChatPullRequestChatId(value: unknown): value is string {
   return typeof value === "string" && SAFE_CHAT_ID_PATTERN.test(value);
 }
 
+/**
+ * What a sidebar row knows about a chat's pull requests without contacting
+ * GitHub: its best linked PR, and the refs the user unlinked so a PR found on
+ * the chat's worktree branch does not come back.
+ */
+export interface ChatSidebarPullRequests {
+  pullRequest?: ChatPullRequestView;
+  /** `pullRequestRefKey` of each dismissed PR. */
+  dismissed: string[];
+}
+
+/** Upper bound on chats one sidebar pull-request read may ask about. */
+export const MAX_SIDEBAR_PULL_REQUEST_CHATS = 500;
+
+/** The sidebar's listed chats: unsafe ids are dropped, duplicates collapsed. */
+export function parseSidebarChatIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("chatIds must be an array.");
+  if (value.length > MAX_SIDEBAR_PULL_REQUEST_CHATS) {
+    throw new Error(`chatIds must list at most ${MAX_SIDEBAR_PULL_REQUEST_CHATS} chats.`);
+  }
+  return [...new Set(value.filter(isSafeChatPullRequestChatId))];
+}
+
 const OPERATION_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/u;
 
 export function normalizeChatPullRequestCreateIntent(

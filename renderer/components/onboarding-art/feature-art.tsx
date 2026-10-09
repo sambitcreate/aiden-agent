@@ -1,5 +1,7 @@
 import type * as React from "react";
 import type { BotAvatarColor } from "../../shared/bots";
+import type { KeyboardPlatform } from "../../shared/keybindings";
+import type { ArtProps } from "./art-kit";
 import {
   BrowserArt,
   ComputerUseArt,
@@ -39,7 +41,7 @@ export type FeatureArtSize = "hero" | "tall" | "standard" | "wide";
 interface FeatureArtEntry {
   /** The Bot avatar colour mixed into this tile's surfaces. */
   tint: BotAvatarColor;
-  Art: () => React.JSX.Element;
+  Art: (props: ArtProps) => React.JSX.Element;
 }
 
 /**
@@ -83,11 +85,19 @@ export function featureArtTintStyle(id: FeatureArtId): React.CSSProperties {
   return { "--oa-tint": `var(--bot-avatar-${FEATURE_ART[id].tint})` } as React.CSSProperties;
 }
 
-export function FeatureArt({ id, size }: { id: FeatureArtId; size: FeatureArtSize }) {
+export function FeatureArt({
+  id,
+  size,
+  platform,
+}: {
+  id: FeatureArtId;
+  size: FeatureArtSize;
+  platform: KeyboardPlatform;
+}) {
   const { Art } = FEATURE_ART[id];
   return (
     <div aria-hidden="true" className="oa-art" data-onboarding-art={id} data-size={size}>
-      <Art />
+      <Art platform={platform} />
     </div>
   );
 }
