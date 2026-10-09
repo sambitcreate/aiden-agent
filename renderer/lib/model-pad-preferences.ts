@@ -33,31 +33,59 @@ export function modelPadPreferencesFrom(settings: AppSettings | undefined): Mode
   };
 }
 
+interface SaveQueue {
+  /** Settles after the most recently queued write. */
+  tail: Promise<unknown>;
+  /** Ticket of the most recently queued write. */
+  latest: number;
+}
+
+const saveQueues = new WeakMap<QueryClient, SaveQueue>();
+
 /**
- * Persist Pad fields through `settings:set`. The settings cache is updated
- * optimistically so rapid successive saves compose; a failed write refetches
- * the persisted settings and rethrows. Each field in the patch replaces the
- * stored value; omitted fields are untouched.
+ * Persist Pad fields through `settings:set`.
+ *
+ * - The settings cache is updated optimistically, after cancelling any
+ *   in-flight settings refetch so it cannot clobber the optimistic value.
+ * - Writes are sent one at a time per QueryClient, in call order, so main
+ *   applies them in order; each patch was composed on the optimistic cache,
+ *   so the newest write carries every earlier change.
+ * - Only the newest write's reply (or failure refetch) touches the cache, so a
+ *   late reply to an older write never rolls back a newer optimistic state.
+ *
+ * Each field in the patch replaces the stored value; omitted fields are untouched.
  */
 export async function saveModelPadPreferences(
   queryClient: QueryClient,
   update: ModelPadPreferencesUpdate,
 ): Promise<AppSettings> {
+  let queue = saveQueues.get(queryClient);
+  if (!queue) {
+    queue = { tail: Promise.resolve(), latest: 0 };
+    saveQueues.set(queryClient, queue);
+  }
+  await queryClient.cancelQueries({ queryKey: queryKeys.settings });
   // An updater must never compose onto an unloaded (empty) view, or it would
   // overwrite the persisted pins/layout with only the new change.
   if (typeof update === "function") {
     await queryClient.ensureQueryData({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
   }
-  // Re-read after the await so back-to-back saves compose on each other.
+  // From here to queueing the write is synchronous, so the read, the
+  // optimistic write and the ticket cannot interleave with another save.
   const previous = queryClient.getQueryData<AppSettings>(queryKeys.settings);
   const patch = typeof update === "function" ? update(modelPadPreferencesFrom(previous)) : update;
   if (previous) queryClient.setQueryData<AppSettings>(queryKeys.settings, { ...previous, ...patch });
+  const ticket = ++queue.latest;
+  const write = queue.tail.catch(() => undefined).then(() => settingsApi.set(patch));
+  queue.tail = write;
   try {
-    const saved = await settingsApi.set(patch);
-    queryClient.setQueryData(queryKeys.settings, saved);
+    const saved = await write;
+    if (ticket === queue.latest) queryClient.setQueryData(queryKeys.settings, saved);
     return saved;
   } catch (error) {
-    await queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    if (ticket === queue.latest) {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    }
     throw error;
   }
 }

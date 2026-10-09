@@ -15,6 +15,7 @@ import {
   PopoverContent,
   PopoverTrigger,
   Text,
+  toast,
 } from "./ui";
 import { ModelPickerPad } from "./model-picker-pad";
 import { cn } from "../lib/ui-utils";
@@ -425,12 +426,14 @@ export function ModelPicker({
 
   const togglePin = React.useCallback(
     (value: string) => {
-      // A pin is a convenience preference; selection stays usable if saving fails.
+      // Selection stays usable if saving fails; the pin reverts and says why.
       void saveModelPadPreferences(({ pinnedModels }) => ({
         pinnedModels: pinnedModels.includes(value)
           ? pinnedModels.filter((entry) => entry !== value)
           : [...pinnedModels, value],
-      })).catch(() => undefined);
+      })).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "Couldn’t update pinned models.");
+      });
     },
     [saveModelPadPreferences],
   );

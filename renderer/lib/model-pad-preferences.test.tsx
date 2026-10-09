@@ -6,7 +6,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
-import { useModelPadLayout, useModelPadPreferences } from "./model-pad-preferences";
+import {
+  saveModelPadPreferences,
+  useModelPadLayout,
+  useModelPadPreferences,
+} from "./model-pad-preferences";
+import { queryKeys } from "./queries";
 import type { AppSettings } from "./types";
 
 afterEach(cleanup);
@@ -109,4 +114,46 @@ test("a failed Pad save rejects and restores the persisted settings", async () =
   await waitFor(() => assert.match(screen.getByLabelText("error").textContent ?? "", /disk full/u));
   await waitFor(() => assert.equal(screen.getByLabelText("pins").textContent, "openai::gpt"));
   assert.equal(screen.getByLabelText("placements").textContent, "");
+});
+
+test("overlapping pin saves never lose an update when replies arrive late", async () => {
+  let server: AppSettings = { pinnedModels: [], exaEnabled: true };
+  const replies: Array<() => void> = [];
+  installBotTestIpc({
+    "settings:get": () => structuredClone(server),
+    // Applies each patch on arrival, in order, but answers only when released.
+    "settings:set": (patch: unknown) => {
+      server = { ...server, ...(patch as Partial<AppSettings>) };
+      const reply = structuredClone(server);
+      return new Promise<AppSettings>((resolve) => replies.push(() => resolve(reply)));
+    },
+  });
+  const client = createBotTestQueryClient();
+  await client.fetchQuery({ queryKey: queryKeys.settings, queryFn: async () => structuredClone(server) });
+  const toggle = (value: string) =>
+    saveModelPadPreferences(client, ({ pinnedModels }) => ({
+      pinnedModels: pinnedModels.includes(value)
+        ? pinnedModels.filter((entry) => entry !== value)
+        : [...pinnedModels, value],
+    }));
+  const cachedPins = () => client.getQueryData<AppSettings>(queryKeys.settings)?.pinnedModels;
+  const releaseNext = async () => {
+    await waitFor(() => assert.ok(replies.length > 0));
+    replies.shift()!();
+  };
+
+  const saves = [toggle("p::x"), toggle("p::y")];
+  await waitFor(() => assert.deepEqual(cachedPins(), ["p::x", "p::y"]));
+  await releaseNext(); // the reply to x lands while y is still in flight
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(cachedPins(), ["p::x", "p::y"]);
+  saves.push(toggle("p::z"));
+  await waitFor(() => assert.deepEqual(cachedPins(), ["p::x", "p::y", "p::z"]));
+  await releaseNext();
+  await releaseNext();
+  await Promise.all(saves);
+
+  assert.deepEqual(server.pinnedModels, ["p::x", "p::y", "p::z"]);
+  assert.deepEqual(cachedPins(), ["p::x", "p::y", "p::z"]);
+  assert.equal(server.exaEnabled, true);
 });
