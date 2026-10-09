@@ -408,6 +408,7 @@ export function ModelPicker({
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"pad" | "list">("list");
+  const [search, setSearch] = React.useState("");
   const [previewValue, setPreviewValue] = React.useState<string>();
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
@@ -596,6 +597,7 @@ export function ModelPicker({
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
+    setSearch("");
     if (next) {
       setView(hasPadModels ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
@@ -604,8 +606,9 @@ export function ModelPicker({
     }
   };
 
-  const switchView = (next: "pad" | "list", focusPanel = true) => {
+  const switchView = (next: "pad" | "list", focusPanel = true, seed = "") => {
     setView(next);
+    setSearch(seed);
     setPreviewValue(selectedValue || positioned[0]?.value);
     if (!focusPanel) return;
     requestAnimationFrame(() => {
@@ -801,6 +804,7 @@ export function ModelPicker({
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
                 onCommit={commitFromPad}
+                onTypeToSearch={(character) => switchView("list", true, character)}
               />
             ) : (
               <EmptyModelPad
@@ -827,6 +831,8 @@ export function ModelPicker({
             >
               <CommandInput
                 ref={searchRef}
+                value={search}
+                onValueChange={setSearch}
                 aria-label="Filter chat models"
                 placeholder="Filter models…"
               />

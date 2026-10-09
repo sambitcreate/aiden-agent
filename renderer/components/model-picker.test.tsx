@@ -376,3 +376,58 @@ test("a current model removed from the Pad in the List is offered again on the P
   assert.equal(pad.getAttribute("aria-activedescendant"), null);
   assert.match(screen.getByRole("tabpanel").textContent ?? "", /Current Model\sisn’t on your Pad/u);
 });
+
+test("typing on the Pad switches to the List and filters by the typed character", async () => {
+  const server = settingsServer(placedSettings);
+  const pad = await openPicker(server);
+
+  const notPrevented = fireEvent.keyDown(pad, { key: "T" });
+  assert.equal(notPrevented, false);
+
+  const filter = (await screen.findByLabelText("Filter chat models")) as HTMLInputElement;
+  assert.equal(filter.value, "T");
+  assert.ok(!screen.queryByRole("listbox", { name: /Model pad/u }));
+  await waitFor(() => assert.equal(document.activeElement, filter));
+  assert.equal(screen.getByRole("tab", { name: "List" }).getAttribute("aria-selected"), "true");
+  assert.equal(
+    screen.getByRole("tab", { name: "Personal Model Pad" }).getAttribute("aria-selected"),
+    "false",
+  );
+});
+
+test("navigation keys and shortcuts on the Pad keep the Pad", async () => {
+  const server = settingsServer(placedSettings);
+  const pad = await openPicker(server);
+
+  for (const init of [
+    { key: "ArrowUp" },
+    { key: "ArrowRight" },
+    { key: " " },
+    { key: "Tab" },
+    { key: "c", metaKey: true },
+    { key: "c", ctrlKey: true },
+    { key: "c", altKey: true },
+    { key: "c", isComposing: true },
+  ]) {
+    fireEvent.keyDown(pad, init);
+  }
+
+  assert.ok(screen.queryByRole("listbox", { name: /Model pad/u }));
+  assert.ok(!screen.queryByLabelText("Filter chat models"));
+});
+
+test("the filter seeded from the Pad is cleared when the picker reopens", async () => {
+  const server = settingsServer(placedSettings);
+  const pad = await openPicker(server);
+  fireEvent.keyDown(pad, { key: "p" });
+  const filter = (await screen.findByLabelText("Filter chat models")) as HTMLInputElement;
+  assert.equal(filter.value, "p");
+
+  fireEvent.keyDown(filter, { key: "Escape" });
+  await waitFor(() => assert.ok(!screen.queryByLabelText("Filter chat models")));
+  fireEvent.click(screen.getByRole("button", { name: /Choose a model/u }));
+  fireEvent.click(await screen.findByRole("tab", { name: "List" }));
+
+  const reopened = (await screen.findByLabelText("Filter chat models")) as HTMLInputElement;
+  assert.equal(reopened.value, "");
+});

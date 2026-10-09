@@ -129,6 +129,19 @@ function ModelPadKnobTag({ point, label, providerLabel, secondary }: ModelPadKno
   );
 }
 
+// A single printable character typed without Ctrl, Meta or Alt (Shift is fine).
+// Space commits on the Pad, and IME composition belongs to the input method.
+function isSearchCharacter(event: React.KeyboardEvent): boolean {
+  return (
+    event.key.length === 1 &&
+    event.key !== " " &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.nativeEvent.isComposing
+  );
+}
+
 interface ModelPickerPadProps {
   models: PositionedModel[];
   gridSize: number;
@@ -136,6 +149,8 @@ interface ModelPickerPadProps {
   previewValue?: string;
   onPreview: (value: string | undefined) => void;
   onCommit: (model: PositionedModel) => void;
+  /** Called with a printable character typed on the Pad, so the picker can search for it. */
+  onTypeToSearch?: (character: string) => void;
 }
 
 export function ModelPickerPad({
@@ -145,6 +160,7 @@ export function ModelPickerPad({
   previewValue,
   onPreview,
   onCommit,
+  onTypeToSearch,
 }: ModelPickerPadProps) {
   const helpId = React.useId();
   const rectRef = React.useRef<DOMRect | null>(null);
@@ -327,6 +343,14 @@ export function ModelPickerPad({
       event.stopPropagation();
       activeValueRef.current = selectedValue;
       onPreview(selectedValue);
+      return;
+    }
+    if (onTypeToSearch && isSearchCharacter(event)) {
+      // The picker inserts the character itself, so the native keypress must not
+      // add it a second time once focus has moved to the filter.
+      event.preventDefault();
+      event.stopPropagation();
+      onTypeToSearch(event.key);
     }
   };
 
