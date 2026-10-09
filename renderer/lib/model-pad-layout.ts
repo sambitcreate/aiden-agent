@@ -88,10 +88,6 @@ export interface ModelPadCapabilitySuggestion {
 
 export type ModelPadDirection = "left" | "right" | "up" | "down";
 
-export function emptyModelPadLayout(): ModelPadLayout {
-  return { placements: {} };
-}
-
 /** Fail-closed: anything but `{ placements }` with valid entries yields an empty layout. */
 export function parseModelPadLayout(value: unknown): ModelPadLayout {
   const layout = value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -99,10 +95,6 @@ export function parseModelPadLayout(value: unknown): ModelPadLayout {
     placements:
       normalizeModelPadPlacements((layout as { placements?: unknown } | null)?.placements) ?? {},
   };
-}
-
-export function modelPadLayoutsEqual(left: ModelPadLayout, right: ModelPadLayout): boolean {
-  return JSON.stringify(parseModelPadLayout(left)) === JSON.stringify(parseModelPadLayout(right));
 }
 
 function nextOdd(value: number): number {

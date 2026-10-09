@@ -2,7 +2,6 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { flushSync } from "react-dom";
 import {
-  Check,
   CheckCircle2,
   ChevronDown,
   ExternalLink,
@@ -11,10 +10,8 @@ import {
   Loader2,
   Plus,
   RefreshCw,
-  Save,
   Search,
   TriangleAlert,
-  Undo2,
   X,
 } from "lucide-react";
 import { AlertDialog, Badge, Button, Callout, Field, FieldSet, Input, Text, toast } from "../ui";
@@ -31,11 +28,9 @@ import {
 import {
   addModelPadPlacement,
   distributeCapabilityOnlyModelPadSuggestions,
-  emptyModelPadLayout,
   modelPadGridSize,
   modelPadGridSizeForPlacements,
   modelPadLeftPercent,
-  modelPadLayoutsEqual,
   modelPadPointKey,
   modelPadTopPercent,
   moveModelPadPoint,
@@ -50,10 +45,10 @@ import {
   MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
   type ModelPadDirection,
-  type ModelPadLayout,
   type ModelPadPoint,
 } from "../../lib/model-pad-layout";
 import { useModelPadPreferences } from "../../lib/model-pad-preferences";
+import type { ModelPadPlacement, ModelPadPlacements } from "../../shared/model-pad-preferences";
 import {
   beginModelInsightsAction,
   commitModelInsightsState,
@@ -361,34 +356,41 @@ function ModelPadBenchmarkConnection() {
   );
 }
 
+/** A burst of arrow-key nudges with shorter gaps than this is one save and one Undo step. */
+const NUDGE_BURST_MS = 500;
+const SAVE_ERROR_MESSAGE = "Aiden couldn’t save your Model Pad.";
+
+/** A move shown on the Pad ahead of its save: a dropped drag, or an open nudge burst. */
+interface PendingModelPadMove {
+  value: string;
+  label: string;
+  placement: ModelPadPlacement;
+  gridSize: number;
+  visibleValues: readonly string[];
+}
+
+/** One persisted editor action: the layout it produces and its toast. */
+interface ModelPadAction {
+  placements: ModelPadPlacements;
+  message: string;
+}
+
 export function ModelPadSettings() {
   const providersQuery = useProviders();
-  const providers = providersQuery.data ?? [];
+  const providers = React.useMemo(() => providersQuery.data ?? [], [providersQuery.data]);
   const catalog = useProvidersModelInfo(providers);
   const modelInsights = useModelInsightsStatus();
   const settings = useSettings();
+  const hiddenModelsByProvider = settings.data?.hiddenModelsByProvider;
   const padPreferences = useModelPadPreferences();
   const savePadPreferences = padPreferences.save;
-  const saved = React.useMemo<ModelPadLayout>(
-    () => ({ placements: padPreferences.placements }),
-    [padPreferences.placements],
-  );
-  // `null` means "no local edits": the draft mirrors the saved layout, so it
-  // follows the settings query (first load, other windows) until edited.
-  const [localDraft, setLocalDraft] = React.useState<ModelPadLayout | null>(null);
-  const [saving, setSaving] = React.useState(false);
-  const draft = localDraft ?? saved;
-  const savedRef = React.useRef(saved);
-  savedRef.current = saved;
-  const setDraft = React.useCallback(
-    (next: ModelPadLayout | ((current: ModelPadLayout) => ModelPadLayout)) => {
-      setLocalDraft((current) => {
-        const base = current ?? savedRef.current;
-        return typeof next === "function" ? next(base) : next;
-      });
-    },
-    [],
-  );
+  // The settings query is the only copy of the layout: every action saves
+  // straight away, the save updates the query optimistically, and a failed
+  // save rolls it back. Only in-progress gestures live in local state.
+  const placements = padPreferences.placements;
+  const [pendingMove, setPendingMove] = React.useState<PendingModelPadMove>();
+  const pendingMoveRef = React.useRef<PendingModelPadMove | undefined>(undefined);
+  const nudgeTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [filter, setFilter] = React.useState("");
   const [activeValue, setActiveValue] = React.useState<string>();
   const [benchmarkMetric, setBenchmarkMetric] = React.useState<ModelBenchmarkMetric>("coding");
@@ -459,47 +461,55 @@ export function ModelPadSettings() {
   const insightsPanelId = React.useId();
   const managementId = React.useId();
 
-  const infoByValue: Record<string, ModelInfo | undefined> = {};
-  providers.forEach((provider) => {
-    const data = catalog.data[provider.id];
-    for (const modelId of provider.models) {
-      infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
-    }
-  });
-  const entries = visibleModelEntries(
-    createModelEntries(providers, infoByValue),
-    settings.data?.hiddenModelsByProvider,
+  const entries = React.useMemo(() => {
+    const infoByValue: Record<string, ModelInfo | undefined> = {};
+    providers.forEach((provider) => {
+      const data = catalog.data[provider.id];
+      for (const modelId of provider.models) {
+        infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
+      }
+    });
+    return visibleModelEntries(createModelEntries(providers, infoByValue), hiddenModelsByProvider);
+  }, [providers, catalog.data, hiddenModelsByProvider]);
+  const visibleValues = React.useMemo(() => entries.map((entry) => entry.value), [entries]);
+  const entriesByValue = React.useMemo(
+    () => new Map(entries.map((entry) => [entry.value, entry])),
+    [entries],
   );
-  const visibleValues = entries.map((entry) => entry.value);
   // Sized by the placed, visible models (never the catalog), exactly as the
   // composer Pad sizes them, so both surfaces snap saved placements identically.
-  const gridSize = modelPadGridSizeForPlacements(draft.placements, visibleValues);
-  const snappedDraftPlacements = reflowVisibleModelPadPlacements(
-    draft.placements,
-    visibleValues,
-    gridSize,
+  const gridSize = React.useMemo(
+    () => modelPadGridSizeForPlacements(placements, visibleValues),
+    [placements, visibleValues],
   );
-  const snappedSavedPlacements = reflowVisibleModelPadPlacements(
-    saved.placements,
-    visibleValues,
-    modelPadGridSizeForPlacements(saved.placements, visibleValues),
+  const snappedPlacements = React.useMemo(() => {
+    const snapped = reflowVisibleModelPadPlacements(placements, visibleValues, gridSize);
+    // A move waiting for its save is shown at once.
+    return pendingMove && snapped[pendingMove.value]
+      ? { ...snapped, [pendingMove.value]: pendingMove.placement }
+      : snapped;
+  }, [placements, visibleValues, gridSize, pendingMove]);
+  const placed = React.useMemo(
+    () => entries.filter((entry) => snappedPlacements[entry.value]),
+    [entries, snappedPlacements],
   );
-  const normalizedDraft = { ...draft, placements: snappedDraftPlacements };
-  const normalizedSaved = { ...saved, placements: snappedSavedPlacements };
-  const entriesByValue = new Map(entries.map((entry) => [entry.value, entry]));
-  const placed = entries.filter((entry) => snappedDraftPlacements[entry.value]);
-  const draftPlacementCount = placed.length;
+  const placedCount = placed.length;
   const query = filter.trim().toLocaleLowerCase();
   const filteredEntries = query
     ? entries.filter((entry) =>
         `${entry.label} ${entry.providerLabel} ${entry.model}`.toLocaleLowerCase().includes(query),
       )
     : entries;
-  const benchmarkPercentiles = modelBenchmarkPercentiles(entries, benchmarkMetric);
+  const benchmarkPercentiles = React.useMemo(
+    () => modelBenchmarkPercentiles(entries, benchmarkMetric),
+    [entries, benchmarkMetric],
+  );
   const suggestionCount = entries.filter(
-    (entry) => !draft.placements[entry.value] && benchmarkPercentiles.has(entry.value),
+    (entry) => !placements[entry.value] && benchmarkPercentiles.has(entry.value),
   ).length;
-  const dirty = !modelPadLayoutsEqual(normalizedSaved, normalizedDraft);
+  const hasUnavailablePlacements = Object.keys(placements).some(
+    (value) => !entriesByValue.has(value),
+  );
   const loading = providersQuery.isLoading || catalog.isLoading;
 
   const toggleSupportingPanel = (panel: Exclude<typeof activePanel, null>, animate: boolean) => {
@@ -582,8 +592,80 @@ export function ModelPadSettings() {
     });
   };
 
+  const restorePlacements = React.useCallback(
+    (snapshot: ModelPadPlacements) => {
+      // Undo supersedes a nudge burst that has not been saved yet.
+      clearTimeout(nudgeTimerRef.current);
+      pendingMoveRef.current = undefined;
+      setPendingMove(undefined);
+      savePadPreferences({ modelPadPlacements: snapshot }).catch(() => {
+        toast.error(SAVE_ERROR_MESSAGE);
+      });
+    },
+    [savePadPreferences],
+  );
+
+  /**
+   * Save one action, composed on the latest saved layout. On success the toast
+   * offers Undo back to the layout from just before it; on failure the
+   * settings query has already rolled back to the persisted layout.
+   */
+  const persistAction = React.useCallback(
+    (compute: (current: ModelPadPlacements) => ModelPadAction | null) => {
+      let snapshot: ModelPadPlacements | undefined;
+      let message = "";
+      return savePadPreferences((current) => {
+        const action = compute(current.placements);
+        if (!action) return {};
+        snapshot = current.placements;
+        message = action.message;
+        return { modelPadPlacements: action.placements };
+      }).then(
+        () => {
+          const before = snapshot;
+          if (!before) return;
+          toast(message, {
+            action: { label: "Undo", onClick: () => restorePlacements(before) },
+          });
+        },
+        () => {
+          toast.error(SAVE_ERROR_MESSAGE);
+        },
+      );
+    },
+    [savePadPreferences, restorePlacements],
+  );
+
+  /** Save the pending move now (end of a nudge burst, a drop, blur or unmount). */
+  const flushPendingMove = React.useCallback(() => {
+    clearTimeout(nudgeTimerRef.current);
+    nudgeTimerRef.current = undefined;
+    const move = pendingMoveRef.current;
+    if (!move) return;
+    pendingMoveRef.current = undefined;
+    void persistAction((current) => {
+      const reflowed = reflowVisibleModelPadPlacements(current, move.visibleValues, move.gridSize);
+      // The model left the Pad meanwhile (another window, or Undo).
+      if (!reflowed[move.value]) return null;
+      return {
+        placements: { ...reflowed, [move.value]: move.placement },
+        message: `Moved ${move.label}`,
+      };
+    }).finally(() => {
+      // The query now holds the move (or rolled back), so stop overlaying it.
+      setPendingMove((current) => (current === move ? undefined : current));
+    });
+  }, [persistAction]);
+
+  React.useEffect(() => () => flushPendingMove(), [flushPendingMove]);
+
+  const showPendingMove = (move: PendingModelPadMove) => {
+    pendingMoveRef.current = move;
+    setPendingMove(move);
+  };
+
   const pointForValue = (value: string): ModelPadPoint | undefined =>
-    dragState?.value === value ? dragState.point : snappedDraftPlacements[value];
+    dragState?.value === value ? dragState.point : snappedPlacements[value];
 
   const occupiedPoints = (exceptValue?: string): ModelPadPoint[] =>
     placed.flatMap((entry) => {
@@ -606,121 +688,124 @@ export function ModelPadSettings() {
     };
   };
 
-  const updatePlacement = (value: string, point: ModelPadPoint) => {
-    setDraft((current) => ({
-      ...current,
-      placements: {
-        ...reflowVisibleModelPadPlacements(current.placements, visibleValues, gridSize),
-        [value]: { ...point, xSource: "user", ySource: "user" },
-      },
-    }));
+  const dropPlacement = (entry: ModelEntry, point: ModelPadPoint) => {
+    showPendingMove({
+      value: entry.value,
+      label: entry.label,
+      placement: { ...point, xSource: "user", ySource: "user" },
+      gridSize,
+      visibleValues,
+    });
+    flushPendingMove();
   };
 
-  const nudgePlacement = (value: string, direction: ModelPadDirection, steps: number) => {
-    const placement = snappedDraftPlacements[value];
+  const nudgePlacement = (entry: ModelEntry, direction: ModelPadDirection, steps: number) => {
+    const value = entry.value;
+    if (pendingMoveRef.current && pendingMoveRef.current.value !== value) flushPendingMove();
+    const pending = pendingMoveRef.current;
+    const placement = pending?.value === value ? pending.placement : snappedPlacements[value];
     if (!placement) return;
     const occupied = visibleValues.flatMap((candidate) =>
-      candidate !== value && snappedDraftPlacements[candidate]
-        ? [snappedDraftPlacements[candidate]]
-        : [],
+      candidate !== value && snappedPlacements[candidate] ? [snappedPlacements[candidate]] : [],
     );
     const point = moveModelPadPoint(placement, direction, steps, gridSize, occupied);
     if (modelPadPointKey(point, gridSize) === modelPadPointKey(placement, gridSize)) return;
-    setDraft((current) => {
-      const reflowed = reflowVisibleModelPadPlacements(current.placements, visibleValues, gridSize);
-      const currentPlacement = reflowed[value];
-      if (!currentPlacement) return current;
-      return {
-        ...current,
-        placements: {
-          ...reflowed,
-          [value]: {
-            ...currentPlacement,
-            ...point,
-            xSource: direction === "up" || direction === "down" ? currentPlacement.xSource : "user",
-            ySource:
-              direction === "left" || direction === "right" ? currentPlacement.ySource : "user",
-          },
-        },
-      };
+    showPendingMove({
+      value,
+      label: entry.label,
+      placement: {
+        ...placement,
+        ...point,
+        xSource: direction === "up" || direction === "down" ? placement.xSource : "user",
+        ySource: direction === "left" || direction === "right" ? placement.ySource : "user",
+      },
+      gridSize,
+      visibleValues,
     });
-    setAnnouncement(
-      `${entriesByValue.get(value)?.label ?? "Model"} moved to ${gridLocation(point, gridSize)}.`,
+    clearTimeout(nudgeTimerRef.current);
+    nudgeTimerRef.current = setTimeout(flushPendingMove, NUDGE_BURST_MS);
+    setAnnouncement(`${entry.label} moved to ${gridLocation(point, gridSize)}.`);
+  };
+
+  const addModel = (entry: ModelEntry) => {
+    flushPendingMove();
+    setActiveValue(entry.value);
+    void persistAction((current) => {
+      const next = addModelPadPlacement(current, visibleValues, entry.value);
+      return next === current ? null : { placements: next, message: `Added ${entry.label}` };
+    });
+  };
+
+  const removeModel = (entry: ModelEntry) => {
+    flushPendingMove();
+    setActiveValue((current) => (current === entry.value ? undefined : current));
+    void persistAction((current) => {
+      if (!current[entry.value]) return null;
+      const next = { ...current };
+      delete next[entry.value];
+      return { placements: next, message: `Removed ${entry.label}` };
+    });
+  };
+
+  const removeAll = () => {
+    flushPendingMove();
+    setActiveValue(undefined);
+    void persistAction((current) =>
+      Object.keys(current).length > 0 ? { placements: {}, message: "Cleared the Pad" } : null,
     );
-  };
-
-  const addModel = (value: string) => {
-    setDraft((current) => {
-      const placements = addModelPadPlacement(current.placements, visibleValues, value);
-      return placements === current.placements ? current : { ...current, placements };
-    });
-    setActiveValue(value);
-  };
-
-  const removeModel = (value: string) => {
-    setDraft((current) => {
-      const placements = { ...current.placements };
-      delete placements[value];
-      return { ...current, placements };
-    });
-    setActiveValue((current) => (current === value ? undefined : current));
   };
 
   const suggestUnplaced = () => {
-    // OpenRouter's benchmark feed measures capability, not pace. Pack those
-    // models across free columns for legibility while keeping X provenance
-    // neutral so the presentation spread is never mistaken for speed data.
-    const capabilityOnly = entries.flatMap((entry) => {
-      if (draft.placements[entry.value]) return [];
-      const capabilityPercentile = benchmarkPercentiles.get(entry.value);
-      return capabilityPercentile === undefined
-        ? []
-        : [{ value: entry.value, capabilityPercentile }];
-    });
-    // Pack against the grid the Pad will have once the suggestions join it.
-    const suggestionGridSize = modelPadGridSize(draftPlacementCount + capabilityOnly.length);
-    const placements = reflowVisibleModelPadPlacements(
-      draft.placements,
-      visibleValues,
-      suggestionGridSize,
-    );
-    const occupied: ModelPadPoint[] = placedVisibleModelPadValues(placements, visibleValues).map(
-      (value) => placements[value],
-    );
-    const distributed = distributeCapabilityOnlyModelPadSuggestions(
-      capabilityOnly,
-      suggestionGridSize,
-      occupied,
-    );
-    Object.assign(placements, distributed);
-    setDraft({ ...draft, placements });
-  };
-
-  const save = async () => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      await savePadPreferences({ modelPadPlacements: normalizedDraft.placements });
-      setLocalDraft(null);
-      toast.success(
-        draftPlacementCount === 0
-          ? "Model Pad cleared."
-          : `${draftPlacementCount} model${draftPlacementCount === 1 ? "" : "s"} saved to your Pad.`,
+    flushPendingMove();
+    void persistAction((current) => {
+      // OpenRouter's benchmark feed measures capability, not pace. Pack those
+      // models across free columns for legibility while keeping X provenance
+      // neutral so the presentation spread is never mistaken for speed data.
+      const capabilityOnly = entries.flatMap((entry) => {
+        if (current[entry.value]) return [];
+        const capabilityPercentile = benchmarkPercentiles.get(entry.value);
+        return capabilityPercentile === undefined
+          ? []
+          : [{ value: entry.value, capabilityPercentile }];
+      });
+      if (capabilityOnly.length === 0) return null;
+      // Pack against the grid the Pad will have once the suggestions join it.
+      const suggestionGridSize = modelPadGridSize(
+        placedVisibleModelPadValues(current, visibleValues).length + capabilityOnly.length,
       );
-    } catch {
-      toast.error("Aiden couldn’t save your Model Pad.");
-    } finally {
-      setSaving(false);
-    }
+      const next = reflowVisibleModelPadPlacements(current, visibleValues, suggestionGridSize);
+      const occupied: ModelPadPoint[] = placedVisibleModelPadValues(next, visibleValues).map(
+        (value) => next[value],
+      );
+      const distributed = distributeCapabilityOnlyModelPadSuggestions(
+        capabilityOnly,
+        suggestionGridSize,
+        occupied,
+      );
+      const added = Object.keys(distributed).length;
+      if (added === 0) return null;
+      Object.assign(next, distributed);
+      return {
+        placements: next,
+        message: `Added ${added} suggestion${added === 1 ? "" : "s"}`,
+      };
+    });
   };
 
-  const occupiedCells = new Set(
-    placed.flatMap((entry) => {
-      const point = pointForValue(entry.value);
-      return point
-        ? [`${Math.round(point.x * (gridSize - 1))}:${Math.round((1 - point.y) * (gridSize - 1))}`]
-        : [];
-    }),
+  const occupiedCells = React.useMemo(
+    () =>
+      new Set(
+        placed.flatMap((entry) => {
+          const point =
+            dragState?.value === entry.value ? dragState.point : snappedPlacements[entry.value];
+          return point
+            ? [
+                `${Math.round(point.x * (gridSize - 1))}:${Math.round((1 - point.y) * (gridSize - 1))}`,
+              ]
+            : [];
+        }),
+      ),
+    [placed, dragState, snappedPlacements, gridSize],
   );
 
   return (
@@ -731,17 +816,10 @@ export function ModelPadSettings() {
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2" aria-live="polite">
-            <Badge>{placed.length} on Pad</Badge>
+            <Badge>{placedCount} on Pad</Badge>
             <Badge>
               {gridSize}×{gridSize} dots
             </Badge>
-            {dirty ? <Badge color="blue">Unsaved changes</Badge> : null}
-            {!dirty && placed.length > 0 ? (
-              <Badge className="gap-1">
-                <Check aria-hidden="true" className="size-3 text-green" />
-                Saved locally
-              </Badge>
-            ) : null}
           </div>
           <div className="model-pad-toolbar-actions flex flex-wrap justify-end gap-2">
             <Button
@@ -763,24 +841,6 @@ export function ModelPadSettings() {
             >
               <ProviderIcon providerId="openrouter" providerLabel="OpenRouter" className="size-4" />
               Benchmark insights
-            </Button>
-            <Button
-              size="small"
-              variant="transparent"
-              onClick={() => setLocalDraft(null)}
-              disabled={!dirty || saving}
-            >
-              <Undo2 />
-              Reset changes
-            </Button>
-            <Button
-              size="small"
-              variant="accent"
-              onClick={() => void save()}
-              disabled={!dirty || saving || !padPreferences.ready}
-            >
-              <Save />
-              Save Pad
             </Button>
           </div>
         </div>
@@ -843,7 +903,7 @@ export function ModelPadSettings() {
                 );
               })}
 
-              {placed.length === 0 ? (
+              {placedCount === 0 ? (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-10 text-center">
                   <Text as="p" variant="small" color="secondary" className="max-w-52 text-pretty">
                     Add a few models from the list, then drag them into place.
@@ -853,7 +913,7 @@ export function ModelPadSettings() {
 
               {placed.map((entry) => {
                 const placement = pointForValue(entry.value);
-                const sourcePlacement = snappedDraftPlacements[entry.value];
+                const sourcePlacement = snappedPlacements[entry.value];
                 if (!placement || !sourcePlacement) return null;
                 const selected = activeValue === entry.value;
                 const dragging = dragState?.value === entry.value;
@@ -883,9 +943,11 @@ export function ModelPadSettings() {
                       top: `${modelPadTopPercent(placement.y)}%`,
                     }}
                     onFocus={() => setActiveValue(entry.value)}
+                    onBlur={flushPendingMove}
                     onPointerDown={(event) => {
                       if (event.button !== 0) return;
                       event.preventDefault();
+                      flushPendingMove();
                       setActiveValue(entry.value);
                       event.currentTarget.focus();
                       event.currentTarget.setPointerCapture(event.pointerId);
@@ -909,7 +971,7 @@ export function ModelPadSettings() {
                         modelPadPointKey(point, gridSize) !==
                           modelPadPointKey(sourcePlacement, gridSize);
                       if (point && moved) {
-                        updatePlacement(entry.value, point);
+                        dropPlacement(entry, point);
                         setAnnouncement(
                           `${entry.label} moved to ${gridLocation(point, gridSize)}.${
                             displaced
@@ -944,7 +1006,7 @@ export function ModelPadSettings() {
                       if (!direction) return;
                       event.preventDefault();
                       nudgePlacement(
-                        entry.value,
+                        entry,
                         direction as ModelPadDirection,
                         event.shiftKey ? 3 : 1,
                       );
@@ -1043,7 +1105,7 @@ export function ModelPadSettings() {
                   </Text>
                 ) : (
                   filteredEntries.map((entry) => {
-                    const onPad = Boolean(draft.placements[entry.value]);
+                    const onPad = Boolean(placements[entry.value]);
                     return (
                       <div
                         key={entry.value}
@@ -1075,7 +1137,7 @@ export function ModelPadSettings() {
                               : `Add ${placementLabel(entry)} to Pad`
                           }
                           title={onPad ? "Remove from Pad" : "Add to Pad"}
-                          onClick={() => (onPad ? removeModel(entry.value) : addModel(entry.value))}
+                          onClick={() => (onPad ? removeModel(entry) : addModel(entry))}
                         >
                           {onPad ? <X /> : <Plus />}
                         </Button>
@@ -1157,25 +1219,24 @@ export function ModelPadSettings() {
           <ModelPadBenchmarkConnection />
         </section>
 
-        {(draftPlacementCount > 0 ||
-          Object.keys(draft.placements).some((value) => !entriesByValue.has(value))) && (
+        {(placedCount > 0 || hasUnavailablePlacements) && (
           <details id={managementId} className="model-pad-management group rounded-control">
             <summary className="cursor-default list-none rounded-control px-2 py-1.5 text-small text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection">
               Pad management
             </summary>
             <div className="grid gap-2 px-2 pb-2 pt-1">
-              {Object.keys(draft.placements).some((value) => !entriesByValue.has(value)) ? (
+              {hasUnavailablePlacements ? (
                 <Text as="p" variant="small" color="secondary">
                   Saved positions for temporarily unavailable models are retained and return when
                   those models are available again.
                 </Text>
               ) : null}
-              {draftPlacementCount > 0 ? (
+              {placedCount > 0 ? (
                 <Button
                   size="small"
                   variant="transparent"
                   className="w-fit text-secondary"
-                  onClick={() => setDraft(emptyModelPadLayout())}
+                  onClick={removeAll}
                 >
                   Remove all models from Pad
                 </Button>

@@ -33,7 +33,7 @@ Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain 
 
 ## Checks
 
-`npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (window/zoom/panel states, scrolling, keyboard movement, and save). Keep layout assertions tied to rendered geometry rather than only source strings.
+`npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (window/zoom/panel states, scrolling, keyboard movement, and autosave with Undo). Keep layout assertions tied to rendered geometry rather than only source strings.
 
 ## Composer context usage
 

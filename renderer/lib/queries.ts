@@ -363,7 +363,7 @@ export function useModelInfo(
 
 /** Resolve offline display and capability metadata for every picker connection. */
 export function useProvidersModelInfo(providers: Provider[]) {
-  const results = useQueries({
+  return useQueries({
     queries: providers.map((provider) => {
       const key = [...provider.models].sort().join(",");
       return {
@@ -373,15 +373,19 @@ export function useProvidersModelInfo(providers: Provider[]) {
         staleTime: 60 * 60 * 1000,
       };
     }),
+    // Combined results are structurally shared, so `data` keeps its identity
+    // until some provider's model info changes and callers can memoize on it.
+    combine: (results) => {
+      const data: Record<string, Record<string, ModelInfo>> = {};
+      providers.forEach((provider, index) => {
+        data[provider.id] = results[index]?.data ?? {};
+      });
+      return {
+        data,
+        isLoading: results.some((result) => result.isLoading),
+      };
+    },
   });
-  const data: Record<string, Record<string, ModelInfo>> = {};
-  providers.forEach((provider, index) => {
-    data[provider.id] = results[index]?.data ?? {};
-  });
-  return {
-    data,
-    isLoading: results.some((result) => result.isLoading),
-  };
 }
 
 // Git display reads are refreshed by `git:changed`, agent tool results,

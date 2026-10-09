@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   distributeCapabilityOnlyModelPadSuggestions,
-  emptyModelPadLayout,
   measureModelPadAvailableSize,
   MODEL_PAD_MIN_SIZE_PX,
   MODEL_PAD_SETTINGS_CHROME_PX,
@@ -16,7 +15,6 @@ import {
   modelPadLabelPlacement,
   modelPadLeftPercent,
   modelPadTopPercent,
-  modelPadLayoutsEqual,
   modelPadPointKey,
   moveModelPadPoint,
   nearestAvailableModelPadPoint,
@@ -28,9 +26,9 @@ import {
 } from "./model-pad-layout.js";
 
 test("model Pad layouts fail closed and retain only valid axis-aware placements", () => {
-  assert.deepEqual(parseModelPadLayout(null), emptyModelPadLayout());
-  assert.deepEqual(parseModelPadLayout([]), emptyModelPadLayout());
-  assert.deepEqual(parseModelPadLayout({ placements: [] }), emptyModelPadLayout());
+  assert.deepEqual(parseModelPadLayout(null), { placements: {} });
+  assert.deepEqual(parseModelPadLayout([]), { placements: {} });
+  assert.deepEqual(parseModelPadLayout({ placements: [] }), { placements: {} });
   const layout = parseModelPadLayout({
     placements: {
       "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "benchmark" },
@@ -45,8 +43,6 @@ test("model Pad layouts fail closed and retain only valid axis-aware placements"
       "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "benchmark" },
     },
   });
-  assert.equal(modelPadLayoutsEqual(layout, parseModelPadLayout(structuredClone(layout))), true);
-  assert.equal(modelPadLayoutsEqual(layout, emptyModelPadLayout()), false);
 });
 
 test("new models receive deterministic, non-overlapping personal positions", () => {
