@@ -13,9 +13,11 @@ import {
   modelInfoByValue,
   orderModelEntries,
   parseModel,
+  pinnedAndRecentQuickStart,
   positionSavedModels,
   positionModels,
   recentModelsForList,
+  topBenchmarkSuggestions,
   visibleModelEntries,
   resolveExplicitModelSelection,
   type ModelEntry,
@@ -246,6 +248,81 @@ test("recent rows are up to three visible models in recency order, skipping the 
   assert.deepEqual(values(recentModelsForList(entries, [], { selectedValue: "", pinned: [] })), []);
   assert.deepEqual(
     values(recentModelsForList(entries, ["p::a"], { selectedValue: "p::a", pinned: [] })),
+    [],
+  );
+});
+
+test("the pinned & recent quick start takes visible, unplaced pinned models then recent ones, up to the limit", () => {
+  const entries = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"].map((value) =>
+    entry(`p::${value}`),
+  );
+  const values = (rows: ModelEntry[]) => rows.map((row) => row.value);
+  const placed: Record<string, ModelPadPlacement> = {
+    "p::b": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
+  };
+
+  assert.deepEqual(
+    values(
+      pinnedAndRecentQuickStart(entries, {
+        // Stored order is kept; a placed pin and a pin that is no longer visible are skipped.
+        pinned: ["p::c", "p::b", "p::hidden", "p::a"],
+        // A recent model that is also pinned appears once, in the pinned slot.
+        recent: ["p::e", "p::a", "p::d"],
+        placements: placed,
+      }),
+    ),
+    ["p::c", "p::a", "p::e", "p::d"],
+  );
+
+  // Stops at eight models by default.
+  assert.deepEqual(
+    values(
+      pinnedAndRecentQuickStart(entries, {
+        pinned: ["p::a", "p::b", "p::c", "p::d", "p::e", "p::f"],
+        recent: ["p::g", "p::h", "p::i", "p::j", "p::k"],
+        placements: {},
+      }),
+    ),
+    ["p::a", "p::b", "p::c", "p::d", "p::e", "p::f", "p::g", "p::h"],
+  );
+  assert.deepEqual(
+    values(
+      pinnedAndRecentQuickStart(entries, {
+        pinned: ["p::b"],
+        recent: ["p::b", "p::gone"],
+        placements: placed,
+      }),
+    ),
+    [],
+  );
+});
+
+test("benchmark quick-start candidates are the most capable unplaced models first, at most eight", () => {
+  const entries = Array.from({ length: 12 }, (_, index) => entry(`p::m${index}`));
+  // m0 is least capable, m11 most; m3 has no score for the metric.
+  const percentiles = new Map(
+    entries.flatMap((model, index) => (index === 3 ? [] : [[model.value, index / 11] as const])),
+  );
+  const placements: Record<string, ModelPadPlacement> = {
+    "p::m11": { x: 0.5, y: 1, xSource: "user", ySource: "user" },
+  };
+
+  const top = topBenchmarkSuggestions(entries, percentiles, { placements });
+  assert.deepEqual(
+    top.map((suggestion) => suggestion.value),
+    ["p::m10", "p::m9", "p::m8", "p::m7", "p::m6", "p::m5", "p::m4", "p::m2"],
+  );
+  assert.equal(top[0].capabilityPercentile, 10 / 11);
+
+  assert.deepEqual(
+    topBenchmarkSuggestions(entries, percentiles, { placements, limit: 2 }).map(
+      (suggestion) => suggestion.value,
+    ),
+    ["p::m10", "p::m9"],
+  );
+  // Scores for models that are not visible never become candidates.
+  assert.deepEqual(
+    topBenchmarkSuggestions([], percentiles, { placements: {} }),
     [],
   );
 });

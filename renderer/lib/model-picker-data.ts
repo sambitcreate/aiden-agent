@@ -6,6 +6,7 @@ import {
   modelPadGridSizeForPlacements,
   modelPadPlacementKind,
   reflowVisibleModelPadPlacements,
+  type ModelPadCapabilitySuggestion,
   type ModelPadPlacement,
   type ModelPadPlacementKind,
 } from "./model-pad-layout";
@@ -268,6 +269,65 @@ export function recentModelsForList(
     skipped.add(value);
   }
   return rows;
+}
+
+/** How many models one Pad quick start (or batch of suggestions) adds at most. */
+export const MODEL_PAD_QUICK_START_LIMIT = 8;
+
+/**
+ * Models for the empty Pad's "Add pinned & recent" quick start: visible models
+ * not already on the Pad, pinned ones first and then recent ones (each in
+ * stored order), without repeats, up to `limit`.
+ */
+export function pinnedAndRecentQuickStart(
+  entries: readonly ModelEntry[],
+  {
+    pinned,
+    recent,
+    placements,
+    limit = MODEL_PAD_QUICK_START_LIMIT,
+  }: {
+    pinned: readonly string[];
+    recent: readonly string[];
+    placements: Readonly<Record<string, ModelPadPlacement>>;
+    limit?: number;
+  },
+): ModelEntry[] {
+  const byValue = new Map(entries.map((entry) => [entry.value, entry]));
+  const chosen = new Map<string, ModelEntry>();
+  for (const value of [...pinned, ...recent]) {
+    if (chosen.size >= limit) break;
+    const entry = byValue.get(value);
+    if (entry && !placements[value] && !chosen.has(value)) chosen.set(value, entry);
+  }
+  return [...chosen.values()];
+}
+
+/**
+ * The most capable visible models not yet on the Pad that have a percentile
+ * for the current benchmark metric, highest first (ties keep entry order), up
+ * to `limit`.
+ */
+export function topBenchmarkSuggestions(
+  entries: readonly ModelEntry[],
+  percentiles: ReadonlyMap<string, number>,
+  {
+    placements,
+    limit = MODEL_PAD_QUICK_START_LIMIT,
+  }: {
+    placements: Readonly<Record<string, ModelPadPlacement>>;
+    limit?: number;
+  },
+): ModelPadCapabilitySuggestion[] {
+  const candidates = entries.flatMap((entry) => {
+    const capabilityPercentile = percentiles.get(entry.value);
+    return placements[entry.value] || capabilityPercentile === undefined
+      ? []
+      : [{ value: entry.value, capabilityPercentile }];
+  });
+  return candidates
+    .sort((left, right) => right.capabilityPercentile - left.capabilityPercentile)
+    .slice(0, limit);
 }
 
 function clamp(value: number, min = 0.08, max = 0.92): number {

@@ -8,6 +8,7 @@ import {
   KeyRound,
   Layers3,
   Loader2,
+  Pin,
   Plus,
   RefreshCw,
   Search,
@@ -22,6 +23,9 @@ import {
   createModelEntries,
   encodeSelection,
   modelBenchmarkPercentiles,
+  MODEL_PAD_QUICK_START_LIMIT,
+  pinnedAndRecentQuickStart,
+  topBenchmarkSuggestions,
   visibleModelEntries,
   type ModelEntry,
 } from "../../lib/model-picker-data";
@@ -378,6 +382,46 @@ interface ModelPadAction {
   message: string;
 }
 
+/**
+ * One of the empty Pad's quick starts. When it can't run it stays focusable
+ * (aria-disabled) so keyboard and screen reader users hear why.
+ */
+function ModelPadQuickStart({
+  icon,
+  label,
+  disabledReason,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  disabledReason?: string;
+  onClick: () => void;
+}) {
+  const reasonId = React.useId();
+  return (
+    <>
+      <Button
+        size="small"
+        className={cn(disabledReason && "cursor-default opacity-45")}
+        aria-disabled={Boolean(disabledReason)}
+        aria-describedby={disabledReason ? reasonId : undefined}
+        title={disabledReason}
+        onClick={() => {
+          if (!disabledReason) onClick();
+        }}
+      >
+        {icon}
+        {label}
+      </Button>
+      {disabledReason ? (
+        <span id={reasonId} className="sr-only">
+          {disabledReason}.
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 export function ModelPadSettings() {
   const providersQuery = useProviders();
   const providers = React.useMemo(() => providersQuery.data ?? [], [providersQuery.data]);
@@ -500,6 +544,17 @@ export function ModelPadSettings() {
     [entries, snappedPlacements],
   );
   const placedCount = placed.length;
+  // The first visit to an empty Pad starts with the model list open. This is
+  // decided once, after loading, so it never reopens after the user closes the
+  // list or empties the Pad later on.
+  const browseAutoOpenSettledRef = React.useRef(false);
+  const preferencesReady = padPreferences.ready;
+  const loading = providersQuery.isLoading || catalog.isLoading;
+  React.useLayoutEffect(() => {
+    if (browseAutoOpenSettledRef.current || loading || !preferencesReady) return;
+    browseAutoOpenSettledRef.current = true;
+    if (placedCount === 0) setActivePanel((current) => current ?? "models");
+  }, [loading, preferencesReady, placedCount]);
   const query = filter.trim().toLocaleLowerCase();
   const filteredEntries = query
     ? entries.filter((entry) =>
@@ -516,9 +571,18 @@ export function ModelPadSettings() {
   const hasUnavailablePlacements = Object.keys(placements).some(
     (value) => !entriesByValue.has(value),
   );
-  const loading = providersQuery.isLoading || catalog.isLoading;
+  const pinnedModels = padPreferences.pinnedModels;
+  const recentModels = padPreferences.recentModels;
+  const hasPinnedOrRecentToAdd =
+    pinnedAndRecentQuickStart(entries, {
+      pinned: pinnedModels,
+      recent: recentModels,
+      placements,
+      limit: 1,
+    }).length > 0;
 
   const toggleSupportingPanel = (panel: Exclude<typeof activePanel, null>, animate: boolean) => {
+    browseAutoOpenSettledRef.current = true;
     const nextPanel = activePanel === panel ? null : panel;
     panelTransitionRef.current?.skipTransition();
     panelTransitionRef.current = null;
@@ -775,18 +839,40 @@ export function ModelPadSettings() {
     );
   };
 
-  const suggestUnplaced = () => {
+  const addPinnedAndRecent = () => {
+    flushPendingMove();
+    void persistAction((current) => {
+      const chosen = pinnedAndRecentQuickStart(entries, {
+        pinned: pinnedModels,
+        recent: recentModels,
+        placements: current,
+      });
+      if (chosen.length === 0) return null;
+      // One model at a time, so each lands on the grid the Pad has after it.
+      const next = chosen.reduce<ModelPadPlacements>(
+        (layout, entry) => addModelPadPlacement(layout, visibleValues, entry.value),
+        current,
+      );
+      return {
+        placements: next,
+        message: `Added ${chosen.length} model${chosen.length === 1 ? "" : "s"}`,
+      };
+    });
+  };
+
+  /**
+   * Place unplaced models that have a score for the current metric, most
+   * capable first, up to `limit` (Suggest unplaced takes them all).
+   */
+  const placeBenchmarkSuggestions = (limit = Number.POSITIVE_INFINITY) => {
     flushPendingMove();
     void persistAction((current) => {
       // OpenRouter's benchmark feed measures capability, not pace. Pack those
       // models across free columns for legibility while keeping X provenance
       // neutral so the presentation spread is never mistaken for speed data.
-      const capabilityOnly = entries.flatMap((entry) => {
-        if (current[entry.value]) return [];
-        const capabilityPercentile = benchmarkPercentiles.get(entry.value);
-        return capabilityPercentile === undefined
-          ? []
-          : [{ value: entry.value, capabilityPercentile }];
+      const capabilityOnly = topBenchmarkSuggestions(entries, benchmarkPercentiles, {
+        placements: current,
+        limit,
       });
       if (capabilityOnly.length === 0) return null;
       // Pack against the grid the Pad will have once the suggestions join it.
@@ -925,10 +1011,38 @@ export function ModelPadSettings() {
               })}
 
               {placedCount === 0 ? (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-10 text-center">
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 px-10 text-center">
                   <Text as="p" variant="small" color="secondary" className="max-w-52 text-pretty">
                     Add a few models from the list, then drag them into place.
                   </Text>
+                  <div className="pointer-events-auto flex flex-wrap justify-center gap-2">
+                    <ModelPadQuickStart
+                      icon={<Pin />}
+                      label="Add pinned & recent"
+                      disabledReason={
+                        hasPinnedOrRecentToAdd ? undefined : "Pin or choose a few models first"
+                      }
+                      onClick={addPinnedAndRecent}
+                    />
+                    <ModelPadQuickStart
+                      icon={
+                        <ProviderIcon
+                          providerId="openrouter"
+                          providerLabel="OpenRouter"
+                          className="size-4"
+                        />
+                      }
+                      label="Start from benchmarks"
+                      disabledReason={
+                        !modelInsights.data?.ready
+                          ? "Connect benchmark insights first"
+                          : suggestionCount === 0
+                            ? "None of your visible models has a score for this benchmark yet"
+                            : undefined
+                      }
+                      onClick={() => placeBenchmarkSuggestions(MODEL_PAD_QUICK_START_LIMIT)}
+                    />
+                  </div>
                 </div>
               ) : null}
 
@@ -1230,7 +1344,7 @@ export function ModelPadSettings() {
             </div>
             <Button
               size="small"
-              onClick={suggestUnplaced}
+              onClick={() => placeBenchmarkSuggestions()}
               disabled={!modelInsights.data?.ready || suggestionCount === 0}
             >
               <ProviderIcon providerId="openrouter" providerLabel="OpenRouter" className="size-4" />
