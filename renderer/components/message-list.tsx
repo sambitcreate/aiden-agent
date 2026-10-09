@@ -19,6 +19,7 @@ import { turnFooterItems } from "../shared/assistant-turn-stats";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
@@ -41,6 +42,7 @@ import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
 import {
   htmlArtifactSlots,
+  reuseUnchangedArtifactLists,
   htmlArtifactTranscriptPlan,
 } from "../lib/html-artifact-transcript";
 
@@ -127,7 +129,11 @@ function AssistantResponse({
   visualPlacements = EMPTY_PLACEMENTS,
   renderVisual,
 }: AssistantResponseProps) {
-  const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
+  const rows = assistantPresentationRows(
+    content,
+    streaming ? clampLiveTimelineToContent(timeline, content.length) : timeline,
+    reasoning ?? "",
+  );
   const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements);
   const visualNodes = (artifacts: readonly ChatHtmlArtifactV1[] | undefined) =>
     renderVisual && artifacts?.length ? artifacts.map(renderVisual) : null;
@@ -461,6 +467,9 @@ export function MessageList({
   );
   // The plan decides which anchor owns each artifact (live copies win during
   // handoff); the owning response then places it after its tool row.
+  const previousArtifactsByAnchor = React.useRef<Map<string, ChatHtmlArtifactV1[]> | undefined>(
+    undefined,
+  );
   const htmlArtifactsByAnchor = React.useMemo(() => {
     const entries = new Map<string, ChatHtmlArtifactV1[]>();
     for (const entry of htmlArtifactPlan) {
@@ -468,8 +477,11 @@ export function MessageList({
       anchored.push(entry.artifact);
       entries.set(entry.anchor, anchored);
     }
-    return entries;
+    return reuseUnchangedArtifactLists(previousArtifactsByAnchor.current, entries);
   }, [htmlArtifactPlan]);
+  React.useEffect(() => {
+    previousArtifactsByAnchor.current = htmlArtifactsByAnchor;
+  }, [htmlArtifactsByAnchor]);
   const renderVisual = React.useCallback(
     (artifact: ChatHtmlArtifactV1) => (
       <HtmlArtifactFrame key={`html:${artifact.mediaId}`} chatId={chatId} artifact={artifact} />

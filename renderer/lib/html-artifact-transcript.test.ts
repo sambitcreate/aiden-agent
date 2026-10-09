@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import type { AssistantPresentationRow } from "./assistant-message-presentation";
-import { htmlArtifactSlots } from "./html-artifact-transcript";
+import { htmlArtifactSlots, reuseUnchangedArtifactLists } from "./html-artifact-transcript";
 
 const artifact = (n: string): ChatHtmlArtifactV1 => ({
   version: 1, kind: "html", id: n.repeat(64), title: `A${n}`,
@@ -44,4 +44,22 @@ test("legacy messages without presentation rows trail everything", () => {
   const slots = htmlArtifactSlots(null, [a], new Map([[a.mediaId, "call_a"]]));
   assert.equal(slots.byRowKey.size, 0);
   assert.deepEqual(slots.trailing, [a]);
+});
+
+test("unchanged anchor lists keep their identity so memoized rows skip re-rendering", () => {
+  const a = artifact("a"), b = artifact("b");
+  const first = reuseUnchangedArtifactLists(undefined, new Map([["message:1", [a]], ["message:2", [b]]]));
+  const recomputed = reuseUnchangedArtifactLists(first, new Map([["message:1", [{ ...a }]], ["message:2", [b]]]));
+  assert.equal(recomputed.get("message:1"), first.get("message:1"));
+  assert.equal(recomputed.get("message:2"), first.get("message:2"));
+
+  const replaced = { ...a, id: "z".repeat(64) };
+  const changed = reuseUnchangedArtifactLists(recomputed, new Map([["message:1", [replaced]], ["message:2", [b]]]));
+  assert.notEqual(changed.get("message:1"), first.get("message:1"));
+  assert.deepEqual(changed.get("message:1"), [replaced]);
+  assert.equal(changed.get("message:2"), first.get("message:2"));
+
+  const grown = reuseUnchangedArtifactLists(changed, new Map([["message:2", [b, a]]]));
+  assert.equal(grown.has("message:1"), false);
+  assert.deepEqual(grown.get("message:2"), [b, a]);
 });

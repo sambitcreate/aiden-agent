@@ -8,6 +8,27 @@ export interface HtmlArtifactSlots {
   trailing: ChatHtmlArtifactV1[];
 }
 
+function sameArtifacts(a: readonly ChatHtmlArtifactV1[], b: readonly ChatHtmlArtifactV1[]): boolean {
+  return a.length === b.length && a.every((item, index) => item.mediaId === b[index]?.mediaId && item.id === b[index]?.id);
+}
+
+/**
+ * Keep each anchor's array identity while its artifacts are unchanged, so a
+ * plan recomputed on every streaming frame does not defeat SettledMessageRow's
+ * memo for rows that own visuals.
+ */
+export function reuseUnchangedArtifactLists(
+  previous: ReadonlyMap<string, ChatHtmlArtifactV1[]> | undefined,
+  next: ReadonlyMap<string, ChatHtmlArtifactV1[]>,
+): Map<string, ChatHtmlArtifactV1[]> {
+  const result = new Map<string, ChatHtmlArtifactV1[]>();
+  for (const [anchor, artifacts] of next) {
+    const prior = previous?.get(anchor);
+    result.set(anchor, prior && sameArtifacts(prior, artifacts) ? prior : artifacts);
+  }
+  return result;
+}
+
 /** Put each artifact right after the activity row holding its producing tool call. */
 export function htmlArtifactSlots(
   rows: readonly AssistantPresentationRow[] | null,

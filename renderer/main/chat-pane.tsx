@@ -205,6 +205,8 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
  * that bursty providers do not flap the label mid-prose.
  */
 const TEXT_STREAMING_IDLE_MS = 2_000;
+/** Stable so idle frames don't rebuild the transcript artifact plan. */
+const NO_STREAMING_ARTIFACTS: ChatArtifactV1[] = [];
 // AGENTS.md size notices are shown once per chat until the file changes.
 const agentsInstructionNotices = createAgentsInstructionNoticeLog();
 
@@ -795,7 +797,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const displayedStreamingArtifacts =
     streamingArtifacts.length > 0
       ? streamingArtifacts
-      : (visibleDetachedProjection?.artifacts ?? []);
+      : (visibleDetachedProjection?.artifacts ?? NO_STREAMING_ARTIFACTS);
   const displayedGenerationTimeline =
     generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
   const displayedLiveSubagents = React.useMemo(
