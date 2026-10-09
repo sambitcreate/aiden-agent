@@ -53,6 +53,7 @@ import {
 } from "./prompt.js";
 import type { AcpSessionStore } from "./session-store.js";
 import { usageFromPrompt } from "./usage.js";
+import { shouldReportToolUpdate } from "./tool-updates.js";
 
 export interface AcpLaunchedProcess {
   process: AcpProcess;
@@ -124,6 +125,7 @@ interface Binding {
   toolBatchTimer: ReturnType<typeof setTimeout> | undefined;
   bridge: AcpMcpBridge | undefined;
   tracker: AcpToolCallTracker;
+  toolUpdatesSkipped: Map<string, number>;
   startedActivities: Set<string>;
   lastPlan: string | undefined;
   queue: Promise<void>;
@@ -400,6 +402,7 @@ export class AcpHarnessRuntime {
       // Text the previous turn produced after its last stream ended is shown
       // first, instead of being dropped.
       binding.tracker.clear();
+      binding.toolUpdatesSkipped.clear();
       binding.startedActivities.clear();
       binding.lastPlan = undefined;
       this.attachWriter(binding, writer, host, conversation);
@@ -454,6 +457,8 @@ export class AcpHarnessRuntime {
       if (!turn || turn.abortRequested || turn.failed) binding.buffered = [];
       // Calls the agent abandoned must not keep a later stream waiting.
       cancelTools(binding, "The agent's turn ended before the tool finished.");
+      binding.toolUpdatesSkipped.clear();
+      binding.tracker.clear();
       completeTurn?.();
       if (binding.turn === turn) binding.turn = undefined;
       binding.writer = undefined;
@@ -716,6 +721,7 @@ export class AcpHarnessRuntime {
         toolBatchTimer: undefined,
         bridge,
         tracker: new AcpToolCallTracker(),
+        toolUpdatesSkipped: new Map(),
         startedActivities: new Set(),
         lastPlan: undefined,
         queue: Promise.resolve(),
@@ -796,9 +802,19 @@ export class AcpHarnessRuntime {
         return;
       case "tool_call":
       case "tool_call_update": {
-        const activity = binding.tracker.apply(update);
-        if (this.definition.isSubagentCall?.(update)) binding.tracker.mark(activity.id, { subagent: true });
-        this.reportActivity(binding, binding.tracker.get(activity.id) ?? activity);
+        // Late notifications cannot update a finished turn's activity and must
+        // not repopulate its released payload cache while the session is idle.
+        if (!binding.turn || !binding.host) return;
+        const id = String(update.toolCallId);
+        const previous = binding.tracker.getState(id);
+        binding.tracker.merge(update);
+        if (this.definition.isSubagentCall?.(update)) binding.tracker.mark(id, { subagent: true });
+        const next = binding.tracker.getState(id)!;
+        const skipped = binding.toolUpdatesSkipped.get(id) ?? 0;
+        const report = shouldReportToolUpdate(previous, next, update.status, skipped);
+        if (update.status === "completed" || update.status === "failed") binding.toolUpdatesSkipped.delete(id);
+        else binding.toolUpdatesSkipped.set(id, report ? 0 : skipped + 1);
+        if (report) this.reportActivity(binding, binding.tracker.project(id));
         return;
       }
       case "plan": {

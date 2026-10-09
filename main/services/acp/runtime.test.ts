@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import type { ToolCallUpdate } from "@agentclientprotocol/sdk";
 import { Type, type AssistantMessage, type Message, type ToolResultMessage } from "@earendil-works/pi-ai";
 
 import { AcpHostRegistry } from "./host.js";
 import { AcpHarnessRuntime } from "./runtime.js";
 import { AcpSessionStore } from "./session-store.js";
+import { GenerationTimelineProjector } from "../generation-timeline.js";
+import { AidenRemoteStreamService } from "../aiden-remote-streams.js";
 import {
   FAKE_FLASH,
   FAKE_PRO,
@@ -57,6 +60,125 @@ function text(message: AssistantMessage): string {
     .map((block) => (block as { text: string }).text)
     .join("");
 }
+
+test("300 growing diff updates keep timeline and Remote journal publications bounded and finish with the last line counts", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const host = new RecordingHost("chat-1", h.dir);
+  const remote = new AidenRemoteStreamService({ now: Date.now, cancel: () => true, approve: () => true });
+  const owner = remote.create("device-1", "stream-1", "chat-1", "turn-1");
+  let publishes = 0;
+  let running = 0;
+  const timeline = new GenerationTimelineProjector("stream-1", (snapshot) => {
+    publishes += 1;
+    owner.owner.send("chat:timeline", { streamId: "stream-1", timeline: snapshot });
+  });
+  host.activity = {
+    started: (id, name, args) => timeline.toolStarted(id, name, args),
+    running: (id) => { running += 1; timeline.toolRunning(id); },
+    finished: (id, status, details) => timeline.toolFinished(id, status as "completed" | "failed", details),
+  };
+  h.hosts.register(host);
+  const result = await turn(h, [userMessage("stream-diff")]);
+  assert.equal(result.stopReason, "stop");
+  assert.equal(publishes, 3);
+  assert.equal(running, 31, "initial running update plus 30 checkpoints");
+  assert.equal(remote.snapshot().streams[0]?.events.filter((event) => event.type === "timeline").length, 3);
+  const step = timeline.snapshot().steps[0];
+  assert.ok(step?.kind === "tool");
+  assert.equal(step.status, "completed");
+  assert.deepEqual(step.lineChanges, { additions: 300, deletions: 1 });
+});
+
+type ScriptEntry = (ToolCallUpdate & { sessionUpdate: "tool_call" | "tool_call_update" }) | { permission: ToolCallUpdate };
+function toolScript(entries: ScriptEntry[]): Message {
+  return userMessage(`tool-updates:${JSON.stringify(entries)}`);
+}
+
+test("two interleaved tools checkpoint independently and never skip completed or failed after a silent chunk", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const host = new RecordingHost("chat-1", h.dir);
+  h.hosts.register(host);
+  const entries: ScriptEntry[] = [
+    { sessionUpdate: "tool_call", toolCallId: "a", title: "Edit A", kind: "edit", status: "in_progress" },
+    { sessionUpdate: "tool_call", toolCallId: "b", title: "Edit B", kind: "edit", status: "in_progress" },
+  ];
+  for (let chunk = 1; chunk <= 11; chunk += 1) {
+    for (const id of ["a", "b"]) entries.push({ sessionUpdate: "tool_call_update", toolCallId: id, rawInput: { chunk } });
+  }
+  entries.push(
+    { sessionUpdate: "tool_call_update", toolCallId: "a", status: "completed" },
+    { sessionUpdate: "tool_call_update", toolCallId: "b", status: "failed" },
+  );
+  assert.equal((await turn(h, [toolScript(entries)])).stopReason, "stop");
+  assert.deepEqual(host.activities.filter((event) => event.event === "running").map((event) => event.id.split(":").pop()), ["a", "b", "a", "b"]);
+  assert.deepEqual(host.activities.filter((event) => event.event === "finished").map((event) => event.status), ["completed", "failed"]);
+});
+
+test("status, title, text output, and raw output changes report before the next checkpoint", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const host = new RecordingHost("chat-1", h.dir);
+  h.hosts.register(host);
+  const update = (fields: ToolCallUpdate): ScriptEntry => ({ sessionUpdate: "tool_call_update", ...fields });
+  const message = toolScript([
+    { sessionUpdate: "tool_call", toolCallId: "a", title: "Command", kind: "execute", status: "pending" },
+    update({ toolCallId: "a", rawInput: { chunk: 1 } }),
+    update({ toolCallId: "a", status: "in_progress" }),
+    update({ toolCallId: "a", rawInput: { chunk: 2 } }),
+    update({ toolCallId: "a", title: "Command progressing" }),
+    update({ toolCallId: "a", content: [{ type: "content", content: { type: "text", text: "stdout" } }] }),
+    update({ toolCallId: "a", rawOutput: { stdout: "result" } }),
+    update({ toolCallId: "a", status: "completed" }),
+  ]);
+  assert.equal((await turn(h, [message])).stopReason, "stop");
+  assert.deepEqual(host.activities.map((event) => event.event), ["started", "running", "running", "running", "running", "finished"]);
+});
+
+test("a permission after a skipped update still presents its card; subagent and MCP classification are preserved", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const host = new RecordingHost("chat-1", h.dir);
+  h.hosts.register(host);
+  const approval = toolScript([
+    { sessionUpdate: "tool_call", toolCallId: "edit", title: "Edit", kind: "edit", status: "pending" },
+    { sessionUpdate: "tool_call_update", toolCallId: "edit", rawInput: { text: "partial" } },
+    { permission: { toolCallId: "edit", title: "Edit", kind: "edit", locations: [{ path: path.join(h.dir, "notes.txt") }] } },
+    { sessionUpdate: "tool_call_update", toolCallId: "edit", status: "completed" },
+  ]);
+  const reply = await turn(h, [approval]);
+  assert.equal(host.approvals.length, 1);
+  assert.deepEqual(host.approvals[0]?.paths, ["notes.txt"]);
+  assert.equal(host.approvals[0]?.activityId, host.activities[0]?.id);
+  assert.equal(host.activities[host.activities.length - 1]?.status, "completed");
+  // Reuse a tool id on the following turn. Its checkpoint counter starts fresh.
+  const next = toolScript([
+    { sessionUpdate: "tool_call", toolCallId: "edit", title: "Edit", kind: "edit", status: "in_progress" },
+    ...Array.from({ length: 9 }, (_, chunk): ScriptEntry => ({ sessionUpdate: "tool_call_update", toolCallId: "edit", rawInput: { chunk } })),
+    { sessionUpdate: "tool_call_update", toolCallId: "edit", status: "completed" },
+  ]);
+  const start = host.activities.length;
+  await turn(h, [approval, reply, next]);
+  assert.deepEqual(host.activities.slice(start).map((event) => event.event), ["started", "running", "finished"]);
+
+  const definition = { ...fakeDefinition, isSubagentCall: (update: ToolCallUpdate) => update._meta?.subagent === true };
+  const runtime = new AcpHarnessRuntime(definition, h.launcher, h.hosts, h.store);
+  t.after(() => runtime.close());
+  const classified = toolScript([
+    { sessionUpdate: "tool_call", toolCallId: "child", title: "Research", kind: "other", status: "in_progress", _meta: { subagent: true } },
+    { sessionUpdate: "tool_call_update", toolCallId: "child", rawInput: { chunk: 1 } },
+    { sessionUpdate: "tool_call_update", toolCallId: "child", status: "completed" },
+    { sessionUpdate: "tool_call", toolCallId: "mcp", title: "MCP", kind: "other", status: "in_progress", _meta: { is_mcp_tool_call: true } },
+    { sessionUpdate: "tool_call_update", toolCallId: "mcp", status: "failed" },
+  ]);
+  const boundary = host.activities.length;
+  await turn({ ...h, runtime }, [classified]);
+  const events = host.activities.slice(boundary);
+  assert.equal(events[0]?.toolName, "agent_subagents");
+  assert.deepEqual(events.map((event) => event.event), ["started", "running", "finished"]);
+  assert.equal(events[2]?.status, "completed");
+});
 
 test("a turn without a registered host is refused instead of running an unsupervised agent", async () => {
   const h = harness();
