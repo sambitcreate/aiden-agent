@@ -972,19 +972,30 @@ textarea {
 }
 
 .model-pad-marker-visual {
-  border: 0;
+  border: 2px solid transparent;
   box-shadow: var(--elevation-control);
   transition:
     transform 150ms cubic-bezier(0, 0, 0.2, 1),
     box-shadow 120ms ease-out;
 }
 
-.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual {
+/*
+ * One marker language on both Pad surfaces (composer picker, settings editor, legend):
+ * a personal placement is a solid accent dot; any data-assisted placement is a hollow
+ * accent ring. The kinds differ by shape, not only by color.
+ */
+.model-pad-model[data-placement-source="personal"],
+.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual,
+.model-pad-legend-marker[data-placement-source="personal"] {
+  border-color: var(--accent);
   background: var(--accent);
 }
 
-.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual {
-  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
+.model-pad-model[data-placement-source="benchmark"],
+.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual,
+.model-pad-legend-marker[data-placement-source="benchmark"] {
+  border-color: var(--accent);
+  background: transparent;
 }
 
 .model-pad-marker:hover,
@@ -1105,17 +1116,9 @@ textarea {
   display: inline-block;
   width: 0.75rem;
   height: 0.75rem;
-  border: 0;
+  border: 2px solid transparent;
   border-radius: 9999px;
   box-shadow: var(--elevation-control);
-}
-
-.model-pad-legend-marker[data-source="benchmark"] {
-  background: var(--accent);
-}
-
-.model-pad-legend-marker[data-source="personal"] {
-  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
 }
 
 .model-pad-catalog {
@@ -1265,10 +1268,29 @@ textarea {
 }
 
 .model-pad-model {
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1.5px solid transparent;
+  /* Thin popover halo lifts the dot off the grid dots underneath it. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-popover) 55%, transparent);
   transition:
     background-color 120ms ease-out,
     box-shadow 120ms ease-out,
-    opacity 120ms ease-out;
+    scale 120ms ease-out;
+}
+
+/* The current model: the marker grows and gains a detached neutral target ring. */
+.model-pad-model[data-state="selected"] {
+  scale: 1.25;
+  box-shadow:
+    0 0 0 2px var(--surface-popover),
+    0 0 0 3.5px color-mix(in srgb, var(--text-primary) 45%, transparent);
+}
+
+/* The knob's current spot: the marker grows under the knob without the target ring. */
+.model-pad-model[data-state="preview"] {
+  scale: 1.25;
+  box-shadow: 0 0 0 2px var(--surface-popover);
 }
 
 .model-pad-knob {
@@ -2565,6 +2587,7 @@ textarea {
 :root[data-reduce-motion="true"] .model-pad-chip,
 :root[data-reduce-motion="true"] .model-pad-marker-label,
 :root[data-reduce-motion="true"] .model-pad-marker-visual,
+:root[data-reduce-motion="true"] .model-pad-model,
 :root[data-reduce-motion="true"] .model-pad-node {
   transition: none;
 }

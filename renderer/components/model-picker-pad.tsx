@@ -257,22 +257,17 @@ export function ModelPickerPad({
         {models.map((model) => {
           const isSelected = model.value === selectedValue;
           const isPreview = model.value === active?.value;
+          const personal = model.confidence === "personal";
           return (
             <span
               key={model.value}
               id={modelOptionId(model.value)}
               role="option"
               aria-selected={isSelected}
-              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${model.confidence}`}
-              className={cn(
-                "model-pad-model absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/45 ring-1 ring-popover/55",
-                model.confidence === "personal" && "bg-accent",
-                model.confidence === "suggested" && "bg-accent/65",
-                model.confidence === "benchmark" && "bg-accent",
-                model.confidence === "unranked" && "bg-transparent ring-primary/35",
-                isSelected && !isPreview && "size-2 bg-transparent ring-2 ring-primary/45",
-                isPreview && !isSelected && "size-2 bg-accent ring-2 ring-popover",
-              )}
+              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${personal ? "Placed by you" : "Benchmark-assisted"}`}
+              data-placement-source={personal ? "personal" : "benchmark"}
+              data-state={isSelected ? "selected" : isPreview ? "preview" : "resting"}
+              className="model-pad-model absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
               style={{
                 left: `${modelPadLeftPercent(model.x)}%`,
                 top: `${modelPadTopPercent(model.y)}%`,

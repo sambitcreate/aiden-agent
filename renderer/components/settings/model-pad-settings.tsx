@@ -20,6 +20,7 @@ import {
 import { AlertDialog, Badge, Button, Callout, Field, FieldSet, Input, Text, toast } from "../ui";
 import { modelInsightsApi } from "../../lib/ipc";
 import { ProviderIcon } from "../provider-icon";
+import { ModelPadLegend } from "./model-pad-legend";
 import {
   createModelEntries,
   encodeSelection,
@@ -976,25 +977,7 @@ export function ModelPadSettings() {
               <span>Faster</span>
               <span>More deliberate</span>
             </div>
-            <div className="model-pad-legend mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-mini text-tertiary">
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className="model-pad-legend-marker"
-                  data-source="personal"
-                />
-                Placed by you
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className="model-pad-legend-marker"
-                  data-source="benchmark"
-                />
-                Benchmark-assisted
-              </span>
-              <span className="ml-auto">Hover, focus, or select a marker to see its model.</span>
-            </div>
+            <ModelPadLegend />
             <p id={helpId} className="sr-only">
               Move models vertically by personal capability and horizontally by perceived response
               pace. This Pad has {gridSize} rows and {gridSize} columns. Arrow keys move one dot;

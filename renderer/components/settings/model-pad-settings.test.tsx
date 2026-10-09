@@ -40,7 +40,6 @@ test("dense Model Pad markers reveal identity contextually without permanent nam
     source,
     /event\.key === "Escape"[\s\S]*setActiveValue\(undefined\)[\s\S]*event\.currentTarget\.blur\(\)/u,
   );
-  assert.match(source, /Hover, focus, or select a marker to see its model/u);
   assert.match(source, /Pace unmeasured; horizontal spread is for readability/u);
   assert.doesNotMatch(source, /title=\{`\$\{entry\.label\} · \$\{entry\.providerLabel\}`\}/u);
   assert.match(
@@ -48,18 +47,6 @@ test("dense Model Pad markers reveal identity contextually without permanent nam
     /\.model-pad-marker:hover \.model-pad-marker-label,[\s\S]*\.model-pad-marker:focus-visible \.model-pad-marker-label,[\s\S]*\.model-pad-marker\[data-selected="true"\] \.model-pad-marker-label/u,
   );
   assert.match(styles, /:root\[data-reduce-motion="true"\] \.model-pad-marker-label/u);
-  assert.match(
-    styles,
-    /\.model-pad-marker\[data-placement-source="benchmark"\] \.model-pad-marker-visual\s*\{\s*background: var\(--accent\)/u,
-  );
-  assert.match(
-    styles,
-    /\.model-pad-marker\[data-placement-source="personal"\] \.model-pad-marker-visual\s*\{\s*background: color-mix\(in srgb, var\(--accent\) 38%, var\(--surface-popover\)\)/u,
-  );
-  assert.match(
-    styles,
-    /\.model-pad-legend-marker\[data-source="benchmark"\]\s*\{\s*background: var\(--accent\)/u,
-  );
   assert.doesNotMatch(styles, /\.model-pad-legend-marker::after/u);
 });
 
