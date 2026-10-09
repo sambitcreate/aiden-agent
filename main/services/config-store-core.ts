@@ -63,6 +63,12 @@ import {
   withModelVisibility,
   withoutProviderVisibility,
 } from "../../renderer/shared/model-visibility.js";
+import {
+  remapModelPadPlacementsProvider,
+  remapPinnedModelsProvider,
+  withoutProviderModelPadPlacements,
+  withoutProviderPinnedModels,
+} from "../../renderer/shared/model-pad-preferences.js";
 import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import {
@@ -434,6 +440,8 @@ export function createConfigStore(
         const currentSettings = runtimeSettingsFrom((await settingsStore.load()).settings);
         let lastProviderId = currentSettings.lastProviderId;
         let hiddenModelsByProvider = currentSettings.hiddenModelsByProvider;
+        let modelPadPlacements = currentSettings.modelPadPlacements;
+        let pinnedModels = currentSettings.pinnedModels;
         let migrated: StoredProvider[] = [];
         let providersChanged = false;
         let aliasRoutesForMigration: Record<string, string> = {};
@@ -502,6 +510,8 @@ export function createConfigStore(
         if (!preferenceRoutes.has("azure-openai-responses")) preferenceRoutes.set("azure-openai-responses", "azure");
         for (const [legacyId, targetId] of preferenceRoutes) {
           hiddenModelsByProvider = remapHiddenModelProvider(hiddenModelsByProvider, legacyId, targetId);
+          modelPadPlacements = remapModelPadPlacementsProvider(modelPadPlacements, legacyId, targetId);
+          pinnedModels = remapPinnedModelsProvider(pinnedModels, legacyId, targetId);
           if (Object.prototype.hasOwnProperty.call(providerThinkingByModel, legacyId)) {
             providerThinkingByModel[targetId] = { ...providerThinkingByModel[legacyId], ...providerThinkingByModel[targetId] };
             delete providerThinkingByModel[legacyId];
@@ -518,11 +528,15 @@ export function createConfigStore(
           JSON.stringify(compactionModelOverrides) !== JSON.stringify(currentSettings.compactionModelOverrides ?? {}) ||
           lastProviderId !== currentSettings.lastProviderId ||
           JSON.stringify(hiddenModelsByProvider) !==
-            JSON.stringify(currentSettings.hiddenModelsByProvider)
+            JSON.stringify(currentSettings.hiddenModelsByProvider) ||
+          JSON.stringify(modelPadPlacements) !== JSON.stringify(currentSettings.modelPadPlacements) ||
+          JSON.stringify(pinnedModels) !== JSON.stringify(currentSettings.pinnedModels)
         ) {
           await settingsStore.update((config) => {
             config.settings.lastProviderId = lastProviderId;
             config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
+            if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
+            if (pinnedModels) config.settings.pinnedModels = pinnedModels;
             if (Object.keys(providerThinkingByModel).length) config.settings.providerThinkingByModel = providerThinkingByModel;
             if (Object.keys(compactionModelOverrides).length) config.settings.compactionModelOverrides = compactionModelOverrides;
           });
@@ -794,6 +808,13 @@ export function createConfigStore(
           config.settings.hiddenModelsByProvider,
           id,
         );
+        const modelPadPlacements = withoutProviderModelPadPlacements(
+          config.settings.modelPadPlacements,
+          id,
+        );
+        if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
+        const pinnedModels = withoutProviderPinnedModels(config.settings.pinnedModels, id);
+        if (pinnedModels) config.settings.pinnedModels = pinnedModels;
       });
       await secrets.deleteKey(id);
     },

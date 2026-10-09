@@ -1,8 +1,13 @@
-import * as React from "react";
+import {
+  normalizeModelPadPlacements,
+  type ModelPadPlacement,
+  type ModelPadPlacements,
+} from "../shared/model-pad-preferences";
 
-export const MODEL_PAD_LAYOUT_KEY = "aiden-agent.modelPadLayout.v1";
-const MODEL_PAD_LAYOUT_EVENT = "aiden:model-pad-layout-change";
-const MAX_PLACEMENTS = 2_000;
+export type {
+  ModelPadPlacement,
+  ModelPadPlacementSource,
+} from "../shared/model-pad-preferences";
 
 export const BASE_MODEL_PAD_GRID_SIZE = 7;
 export const MODEL_PAD_GRID_DENSITY = 6;
@@ -35,18 +40,9 @@ export function measureModelPadAvailableSize(input: {
   return Math.floor(Math.max(0, size));
 }
 
-export type ModelPadPlacementSource = "user" | "benchmark" | "neutral";
-
-export interface ModelPadPlacement {
-  x: number;
-  y: number;
-  xSource: ModelPadPlacementSource;
-  ySource: ModelPadPlacementSource;
-}
-
+/** The saved Pad layout. Persisted as `AppSettings.modelPadPlacements`. */
 export interface ModelPadLayout {
-  schemaVersion: 2;
-  placements: Record<string, ModelPadPlacement>;
+  placements: ModelPadPlacements;
 }
 
 export interface ModelPadPoint {
@@ -61,101 +57,17 @@ export interface ModelPadCapabilitySuggestion {
 
 export type ModelPadDirection = "left" | "right" | "up" | "down";
 
-interface StorageLike {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
-
 export function emptyModelPadLayout(): ModelPadLayout {
-  return { schemaVersion: 2, placements: {} };
+  return { placements: {} };
 }
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function coordinate(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1
-    ? value
-    : null;
-}
-
+/** Fail-closed: anything but `{ placements }` with valid entries yields an empty layout. */
 export function parseModelPadLayout(value: unknown): ModelPadLayout {
-  const layout = record(value);
-  const rawPlacements = record(layout?.placements);
-  if ((layout?.schemaVersion !== 1 && layout?.schemaVersion !== 2) || !rawPlacements) {
-    return emptyModelPadLayout();
-  }
-
-  const rawEntries = Object.entries(rawPlacements);
-  if (rawEntries.length > MAX_PLACEMENTS) return emptyModelPadLayout();
-
-  const placements: Record<string, ModelPadPlacement> = {};
-  for (const [modelValue, rawPlacement] of rawEntries) {
-    const placement = record(rawPlacement);
-    const x = coordinate(placement?.x);
-    const y = coordinate(placement?.y);
-    const legacySource = placement?.source;
-    const xSource =
-      layout.schemaVersion === 1
-        ? legacySource === "user"
-          ? "user"
-          : legacySource === "artificial-analysis"
-            ? "benchmark"
-            : null
-        : placement?.xSource;
-    const ySource =
-      layout.schemaVersion === 1
-        ? legacySource === "user"
-          ? "user"
-          : legacySource === "artificial-analysis"
-            ? "benchmark"
-            : null
-        : placement?.ySource;
-    if (
-      !modelValue ||
-      modelValue.length > 1_024 ||
-      x === null ||
-      y === null ||
-      (xSource !== "user" && xSource !== "benchmark" && xSource !== "neutral") ||
-      (ySource !== "user" && ySource !== "benchmark" && ySource !== "neutral")
-    ) {
-      continue;
-    }
-    placements[modelValue] = { x, y, xSource, ySource };
-  }
-  return { schemaVersion: 2, placements };
-}
-
-function browserStorage(): StorageLike | null {
-  try {
-    return typeof window === "undefined" ? null : window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-export function readModelPadLayout(storage: StorageLike | null = browserStorage()): ModelPadLayout {
-  if (!storage) return emptyModelPadLayout();
-  try {
-    const raw = storage.getItem(MODEL_PAD_LAYOUT_KEY);
-    return raw ? parseModelPadLayout(JSON.parse(raw) as unknown) : emptyModelPadLayout();
-  } catch {
-    return emptyModelPadLayout();
-  }
-}
-
-export function writeModelPadLayout(
-  layout: ModelPadLayout,
-  storage: StorageLike | null = browserStorage(),
-): ModelPadLayout {
-  const normalized = parseModelPadLayout(layout);
-  if (!storage) throw new Error("Model Pad preferences are unavailable.");
-  storage.setItem(MODEL_PAD_LAYOUT_KEY, JSON.stringify(normalized));
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(MODEL_PAD_LAYOUT_EVENT));
-  return normalized;
+  const layout = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  return {
+    placements:
+      normalizeModelPadPlacements((layout as { placements?: unknown } | null)?.placements) ?? {},
+  };
 }
 
 export function modelPadLayoutsEqual(left: ModelPadLayout, right: ModelPadLayout): boolean {
@@ -426,23 +338,4 @@ export function nextModelPadPlacement(
     Object.values(placements),
   );
   return { x: candidate.x, y: candidate.y, xSource: "user", ySource: "user" };
-}
-
-export function useModelPadLayout(): ModelPadLayout {
-  const [layout, setLayout] = React.useState(readModelPadLayout);
-
-  React.useEffect(() => {
-    const refresh = () => setLayout(readModelPadLayout());
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === MODEL_PAD_LAYOUT_KEY) refresh();
-    };
-    window.addEventListener(MODEL_PAD_LAYOUT_EVENT, refresh);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener(MODEL_PAD_LAYOUT_EVENT, refresh);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
-
-  return layout;
 }

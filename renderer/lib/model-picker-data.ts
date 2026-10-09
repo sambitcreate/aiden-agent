@@ -12,7 +12,6 @@ import { isNonChatModel } from "../shared/model-eligibility";
 
 export type { ModelRanking } from "./types";
 
-export const PINNED_MODELS_KEY = "aiden-agent.pinnedModels";
 export { BASE_MODEL_PAD_GRID_SIZE as BASE_MODEL_GRID_SIZE } from "./model-pad-layout";
 export { modelPadGridSize as modelGridSize } from "./model-pad-layout";
 

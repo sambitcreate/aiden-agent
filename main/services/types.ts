@@ -21,6 +21,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import type { ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -693,6 +694,10 @@ export interface AppSettings {
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
+  modelPadPlacements?: ModelPadPlacements;
+  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
+  pinnedModels?: string[];
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

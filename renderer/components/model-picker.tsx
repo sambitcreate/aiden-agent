@@ -24,7 +24,6 @@ import {
   modelInfoByValue,
   modelGridSize,
   orderModelEntries,
-  PINNED_MODELS_KEY,
   positionSavedModels,
   positionModels,
   visibleModelEntries,
@@ -32,11 +31,8 @@ import {
   type PositionedModel,
 } from "../lib/model-picker-data";
 import { useProvidersModelInfo } from "../lib/queries";
-import {
-  MODEL_PAD_INSET_PERCENT,
-  MODEL_PAD_RANGE_PERCENT,
-  useModelPadLayout,
-} from "../lib/model-pad-layout";
+import { MODEL_PAD_INSET_PERCENT, MODEL_PAD_RANGE_PERCENT } from "../lib/model-pad-layout";
+import { useModelPadPreferences } from "../lib/model-pad-preferences";
 import type { ModelInfo, Provider } from "../lib/types";
 import { Check, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
@@ -124,19 +120,6 @@ function describeModel(entry: ModelEntry): string {
   }
   details.push(`Model ID ${entry.model}`);
   return details.join(". ");
-}
-
-function readPinnedModels(): string[] {
-  try {
-    const raw = localStorage.getItem(PINNED_MODELS_KEY);
-    if (!raw) return [];
-    const value = JSON.parse(raw) as unknown;
-    return Array.isArray(value)
-      ? value.filter((entry): entry is string => typeof entry === "string")
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 function useExternalModelDetails(): boolean {
@@ -368,11 +351,14 @@ export function ModelPicker({
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState<"pad" | "list">("list");
   const [previewValue, setPreviewValue] = React.useState<string>();
-  const [pinned, setPinned] = React.useState<string[]>(readPinnedModels);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
   const showExternalDetails = useExternalModelDetails();
-  const modelPadLayout = useModelPadLayout();
+  const {
+    placements: modelPadPlacements,
+    pinnedModels: pinned,
+    save: saveModelPadPreferences,
+  } = useModelPadPreferences();
   const pickerId = React.useId();
   const listTabId = `${pickerId}-list-tab`;
   const padTabId = `${pickerId}-pad-tab`;
@@ -393,8 +379,8 @@ export function ModelPicker({
     [allEntries, hiddenModelsByProvider],
   );
   const positioned = React.useMemo(
-    () => positionSavedModels(entries, modelPadLayout.placements),
-    [entries, modelPadLayout.placements],
+    () => positionSavedModels(entries, modelPadPlacements),
+    [entries, modelPadPlacements],
   );
   const orderedEntries = React.useMemo(
     () => (open ? orderModelEntries(entries, pinned) : []),
@@ -437,22 +423,16 @@ export function ModelPicker({
   const unavailableMessage =
     "No chat models are available. Open Settings → Providers to discover models for a connection.";
 
-  const setPinnedModels = React.useCallback((next: string[]) => {
-    setPinned(next);
-    try {
-      localStorage.setItem(PINNED_MODELS_KEY, JSON.stringify(next));
-    } catch {
-      // A pin is a convenience preference; selection remains usable if storage is unavailable.
-    }
-  }, []);
-
   const togglePin = React.useCallback(
     (value: string) => {
-      setPinnedModels(
-        pinned.includes(value) ? pinned.filter((entry) => entry !== value) : [...pinned, value],
-      );
+      // A pin is a convenience preference; selection stays usable if saving fails.
+      void saveModelPadPreferences(({ pinnedModels }) => ({
+        pinnedModels: pinnedModels.includes(value)
+          ? pinnedModels.filter((entry) => entry !== value)
+          : [...pinnedModels, value],
+      })).catch(() => undefined);
     },
-    [pinned, setPinnedModels],
+    [saveModelPadPreferences],
   );
 
   const commit = React.useCallback(

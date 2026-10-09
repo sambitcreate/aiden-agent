@@ -48,6 +48,10 @@ import {
   normalizeHiddenModelsByProvider,
   withProviderPolicyHidden,
 } from "../../renderer/shared/model-visibility.js";
+import {
+  normalizeModelPadPlacements,
+  normalizePinnedModels,
+} from "../../renderer/shared/model-pad-preferences.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
@@ -561,6 +565,19 @@ function normalizedSettingsVisibility(settings: {
   );
 }
 
+/** Model Pad placements and pins: invalid entries are dropped, wrong shapes removed. */
+function applyModelPadPreferences(
+  source: { modelPadPlacements?: unknown; pinnedModels?: unknown },
+  target: { modelPadPlacements?: unknown; pinnedModels?: unknown },
+): void {
+  const placements = normalizeModelPadPlacements(source.modelPadPlacements);
+  if (placements) target.modelPadPlacements = placements;
+  else delete target.modelPadPlacements;
+  const pins = normalizePinnedModels(source.pinnedModels);
+  if (pins) target.pinnedModels = pins;
+  else delete target.pinnedModels;
+}
+
 function normalizeSettingsShape(value: unknown): SettingsShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { settings, ...rest } = root;
@@ -665,6 +682,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
+  applyModelPadPreferences(settings, normalized);
   return {
     ...rest,
     settings: normalized as AppSettings,
@@ -696,6 +714,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
+  applyModelPadPreferences(settings, runtime);
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
     const value = settings[key];
     if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) {

@@ -38,16 +38,16 @@ import {
   moveModelPadPoint,
   nearestAvailableModelPadPoint,
   nextModelPadPlacement,
-  readModelPadLayout,
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
-  writeModelPadLayout,
   measureModelPadAvailableSize,
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_RANGE_PERCENT,
   type ModelPadDirection,
+  type ModelPadLayout,
   type ModelPadPoint,
 } from "../../lib/model-pad-layout";
+import { useModelPadPreferences } from "../../lib/model-pad-preferences";
 import {
   beginModelInsightsAction,
   commitModelInsightsState,
@@ -361,8 +361,28 @@ export function ModelPadSettings() {
   const catalog = useProvidersModelInfo(providers);
   const modelInsights = useModelInsightsStatus();
   const settings = useSettings();
-  const [saved, setSaved] = React.useState(readModelPadLayout);
-  const [draft, setDraft] = React.useState(readModelPadLayout);
+  const padPreferences = useModelPadPreferences();
+  const savePadPreferences = padPreferences.save;
+  const saved = React.useMemo<ModelPadLayout>(
+    () => ({ placements: padPreferences.placements }),
+    [padPreferences.placements],
+  );
+  // `null` means "no local edits": the draft mirrors the saved layout, so it
+  // follows the settings query (first load, other windows) until edited.
+  const [localDraft, setLocalDraft] = React.useState<ModelPadLayout | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const draft = localDraft ?? saved;
+  const savedRef = React.useRef(saved);
+  savedRef.current = saved;
+  const setDraft = React.useCallback(
+    (next: ModelPadLayout | ((current: ModelPadLayout) => ModelPadLayout)) => {
+      setLocalDraft((current) => {
+        const base = current ?? savedRef.current;
+        return typeof next === "function" ? next(base) : next;
+      });
+    },
+    [],
+  );
   const [filter, setFilter] = React.useState("");
   const [activeValue, setActiveValue] = React.useState<string>();
   const [benchmarkMetric, setBenchmarkMetric] = React.useState<ModelBenchmarkMetric>("coding");
@@ -675,18 +695,21 @@ export function ModelPadSettings() {
     setDraft({ ...draft, placements });
   };
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
     try {
-      const next = writeModelPadLayout(normalizedDraft);
-      setSaved(next);
-      setDraft(next);
+      await savePadPreferences({ modelPadPlacements: normalizedDraft.placements });
+      setLocalDraft(null);
       toast.success(
         draftPlacementCount === 0
           ? "Model Pad cleared."
           : `${draftPlacementCount} model${draftPlacementCount === 1 ? "" : "s"} saved to your Pad.`,
       );
     } catch {
-      toast.error("Aiden couldn’t save your Model Pad on this device.");
+      toast.error("Aiden couldn’t save your Model Pad.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -738,13 +761,18 @@ export function ModelPadSettings() {
             <Button
               size="small"
               variant="transparent"
-              onClick={() => setDraft(saved)}
-              disabled={!dirty}
+              onClick={() => setLocalDraft(null)}
+              disabled={!dirty || saving}
             >
               <Undo2 />
               Reset changes
             </Button>
-            <Button size="small" variant="accent" onClick={save} disabled={!dirty}>
+            <Button
+              size="small"
+              variant="accent"
+              onClick={() => void save()}
+              disabled={!dirty || saving || !padPreferences.ready}
+            >
               <Save />
               Save Pad
             </Button>

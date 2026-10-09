@@ -2,6 +2,7 @@ import { stopAllPiCacheWarmers } from "../services/pi-cache-warming.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { customModelThinkingLevels, parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
@@ -571,6 +572,7 @@ export function registerProviderHandlers(): void {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
+    Object.assign(next, parseModelPadPreferencesPatch(p));
     const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);

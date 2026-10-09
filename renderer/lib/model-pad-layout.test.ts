@@ -14,65 +14,31 @@ import {
   nearestAvailableModelPadPoint,
   nextModelPadPlacement,
   parseModelPadLayout,
-  readModelPadLayout,
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
-  writeModelPadLayout,
   type ModelPadPlacement,
 } from "./model-pad-layout.js";
 
-function memoryStorage(initial: string | null = null) {
-  let value = initial;
-  return {
-    getItem: () => value,
-    setItem: (_key: string, next: string) => {
-      value = next;
-    },
-  };
-}
-
-test("model Pad layouts fail closed and retain only valid placements", () => {
+test("model Pad layouts fail closed and retain only valid axis-aware placements", () => {
   assert.deepEqual(parseModelPadLayout(null), emptyModelPadLayout());
-  assert.deepEqual(
-    parseModelPadLayout({
-      schemaVersion: 1,
-      placements: {
-        "openai::gpt": { x: 0.2, y: 0.8, source: "user" },
-        "bad::range": { x: 4, y: 0.2, source: "user" },
-        "bad::source": { x: 0.2, y: 0.2, source: "generated" },
-      },
-    }),
-    {
-      schemaVersion: 2,
-      placements: {
-        "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "user" },
-      },
-    },
-  );
-});
-
-test("v1 model Pad layouts migrate and round-trip as axis-aware v2 layouts", () => {
-  const storage = memoryStorage();
+  assert.deepEqual(parseModelPadLayout([]), emptyModelPadLayout());
+  assert.deepEqual(parseModelPadLayout({ placements: [] }), emptyModelPadLayout());
   const layout = parseModelPadLayout({
-    schemaVersion: 1,
     placements: {
+      "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "benchmark" },
+      "bad::range": { x: 4, y: 0.2, xSource: "user", ySource: "user" },
+      "bad::source": { x: 0.2, y: 0.2, xSource: "generated", ySource: "user" },
+      // Retired v1 single-source placements are not migrated.
       "anthropic::claude": { x: 0.42, y: 0.86, source: "artificial-analysis" },
     },
   });
   assert.deepEqual(layout, {
-    schemaVersion: 2,
     placements: {
-      "anthropic::claude": {
-        x: 0.42,
-        y: 0.86,
-        xSource: "benchmark",
-        ySource: "benchmark",
-      },
+      "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "benchmark" },
     },
   });
-  assert.deepEqual(writeModelPadLayout(layout, storage), layout);
-  assert.deepEqual(readModelPadLayout(storage), layout);
-  assert.equal(modelPadLayoutsEqual(layout, readModelPadLayout(storage)), true);
+  assert.equal(modelPadLayoutsEqual(layout, parseModelPadLayout(structuredClone(layout))), true);
+  assert.equal(modelPadLayoutsEqual(layout, emptyModelPadLayout()), false);
 });
 
 test("new models receive deterministic, non-overlapping personal positions", () => {

@@ -49,6 +49,7 @@ export type {
   WebSearchExistingAuthRendererStatus,
 };
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
+import type { ModelPadPlacements } from "../shared/model-pad-preferences";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -894,6 +895,10 @@ export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
+  modelPadPlacements?: ModelPadPlacements;
+  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
+  pinnedModels?: string[];
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
