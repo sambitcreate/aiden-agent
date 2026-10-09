@@ -6,6 +6,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import { VoiceInputSettings } from "./voice-settings";
+import { Toaster } from "../ui";
 import { localModelsTestCatalog } from "./local-models-test-catalog";
 import type { AppSettings } from "../../lib/types";
 import type { VoiceProviderResolution } from "../../shared/voice-provider";
@@ -17,11 +18,13 @@ function mount(
   resolution: VoiceProviderResolution,
   installed: string[],
   providers: unknown[] | (() => unknown[]) = [],
+  options: { failSave?: boolean } = {},
 ) {
   let current: Partial<AppSettings> = { ...settings };
   const calls = installBotTestIpc({
     "settings:get": () => current,
     "settings:set": (patch: unknown) => {
+      if (options.failSave) throw new Error("disk full");
       current = { ...current, ...(patch as Partial<AppSettings>) };
       return current;
     },
@@ -34,6 +37,7 @@ function mount(
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
       <VoiceInputSettings />
+      <Toaster />
     </QueryClientProvider>,
   );
   const patches = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
@@ -117,7 +121,7 @@ test("turning on Translate to English saves the preference", async () => {
   await waitFor(() => assert.deepEqual(patches(), [{ voiceTranslateToEnglish: true }]));
 });
 
-async function choose(comboboxName: string, optionName: string) {
+async function choose(comboboxName: string, optionName: string | RegExp) {
   const trigger = await screen.findByRole("combobox", { name: comboboxName });
   fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
   const option = await screen.findByRole("option", { name: optionName });
@@ -196,4 +200,14 @@ test("Gemini without a key collects one, then saves voice without needing a chat
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setGeminiVoiceSetup")));
   assert.equal(screen.queryByText(/no usable chat model/), null);
   assert.deepEqual(patches(), []);
+});
+
+test("a provider change that fails to save tells the user", async () => {
+  for (const option of [/^On this (Mac|device) · Private$/, "Automatic", "Online · OpenAI"]) {
+    const start = option === "Automatic" ? { voiceProvider: "local" as const } : {};
+    mount(start, localReady("parakeet-v3", option !== "Automatic"), ["parakeet-v3"], [], { failSave: true });
+    await choose("Voice provider", option);
+    await screen.findByText("Aiden couldn’t change where your voice is processed.");
+    cleanup();
+  }
 });

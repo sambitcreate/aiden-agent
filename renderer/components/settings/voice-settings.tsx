@@ -211,8 +211,9 @@ export function VoiceInputSettings() {
   };
 
   const changeProvider = (value: string) => {
+    const failure = "Aiden couldn’t change where your voice is processed.";
     if (value === AUTOMATIC) {
-      void patch({ voiceProvider: null });
+      void savePreference({ voiceProvider: null }, failure);
       return;
     }
     const p = value as VoiceProvider;
@@ -220,13 +221,13 @@ export function VoiceInputSettings() {
       openGeminiSetup();
       return;
     }
-    if (p === "local") void patch({ voiceProvider: p });
+    if (p === "local") void savePreference({ voiceProvider: p }, failure);
     else {
       const cloudProvider = p as CloudVoiceProvider;
-      void patch({
-        voiceProvider: cloudProvider,
-        voiceModel: resolveCloudVoiceModel(cloudProvider, undefined),
-      });
+      void savePreference(
+        { voiceProvider: cloudProvider, voiceModel: resolveCloudVoiceModel(cloudProvider, undefined) },
+        failure,
+      );
     }
   };
 
@@ -327,9 +328,12 @@ export function VoiceInputSettings() {
         ) : null}
         {isCloud ? (
           <Field label="Model" description="Used for microphone input and the dictation shortcut.">
-            <Select value={model} onValueChange={(v) =>
+            <Select
+              value={model}
+              onValueChange={(v) =>
                 void savePreference({ voiceModel: v }, "Aiden couldn’t change the transcription model.")
-              }>
+              }
+            >
               <SelectTrigger size="small">
                 <SelectValue />
               </SelectTrigger>
