@@ -74,6 +74,7 @@ export function AidenUiBlock({
   onAction,
   onStateChange,
   attachments,
+  hideCaption = false,
 }: {
   visual: ChatUiVisualV1;
   /** A visual still being written: shown, but inert. */
@@ -83,6 +84,8 @@ export function AidenUiBlock({
   onStateChange?: (state: Record<string, unknown>) => void;
   /** The message's image attachments, for `<Image attachment="…">`. */
   attachments?: readonly { id: string; mimeType: string; data?: string }[];
+  /** Offscreen snapshots draw the visual alone, without its caption row. */
+  hideCaption?: boolean;
 }) {
   const [state, setLocalState] = React.useState<Record<string, unknown>>(() => initialState(visual));
   const [pendingUrl, setPendingUrl] = React.useState<string | null>(null);
@@ -195,7 +198,7 @@ export function AidenUiBlock({
           </div>
         </AidenUiContext.Provider>
       </TooltipProvider>
-      {draft ? null : (
+      {draft || hideCaption ? null : (
         <div className="aiden-inline-visual-caption">
           <span className="min-w-0 flex-1 truncate text-small text-tertiary">{visual.title}</span>
           <Button

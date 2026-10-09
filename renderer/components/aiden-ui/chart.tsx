@@ -128,7 +128,7 @@ export function AidenUiChart({ kind, data, x = "", y, series, height = 220, stac
         };
       });
       const tick = (value: unknown) => formatCell(value, format);
-      chart = new module.default(canvas, {
+      const created = new module.default(canvas, {
         type: kind === "donut" ? "doughnut" : kind === "area" ? "line" : kind,
         data: { labels, datasets },
         options: {
@@ -149,6 +149,9 @@ export function AidenUiChart({ kind, data, x = "", y, series, height = 220, stac
               },
         },
       });
+      chart = created;
+      // Lets the offscreen snapshot renderer know this chart has drawn.
+      canvas.dataset.chartReady = "true";
     });
     return () => {
       cancelled = true;
