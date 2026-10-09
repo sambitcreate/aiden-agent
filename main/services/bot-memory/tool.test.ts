@@ -9,11 +9,11 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/provid
 import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import { createBotRegistry, type BotExtensionDeps } from "../bot-runtime/bot-extension.js";
 import { botIngressAllowsTool } from "../bot-runtime/bot-tool-policy.js";
-import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { holdNextRead, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { createBotMemoryService } from "./service.js";
 import { createBotMemoryStore } from "./store.js";
-import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "./tool.js";
+import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, createBotMemoryTool, withBotMemoryIngress } from "./tool.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const BOT = "bot-1";
@@ -152,5 +152,26 @@ test("a routine turn is never offered bot_memory and cannot call it", async () =
     assert.throws(() => readFileSync(memoryFile, "utf8"), /ENOENT/u, "nothing reached memory");
   } finally {
     await harness.close(ctx);
+  }
+});
+
+test("a call aborted while its save reads memory is not published", async () => {
+  const { memory, memoryFile } = memoryFor();
+  const hold = holdNextRead(path.dirname(memoryFile));
+  try {
+    const controller = new AbortController();
+    hold.arm();
+    const call = createBotMemoryTool(BOT, memory).execute(
+      "call-1",
+      { target: "memory", operations: [{ action: "add", content: "Prefers short answers." }] },
+      controller.signal,
+    );
+    await hold.reached;
+    controller.abort(new Error("The turn stopped."));
+    hold.resume();
+    await assert.rejects(call, /The turn stopped/u);
+    assert.throws(() => readFileSync(memoryFile, "utf8"), /ENOENT/u, "nothing reached memory");
+  } finally {
+    hold.restore();
   }
 });

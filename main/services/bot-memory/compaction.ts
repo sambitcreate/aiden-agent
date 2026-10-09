@@ -28,9 +28,9 @@ import { BOT_MEMORY_REVIEW_ENTRY_KIND, type BotMemoryReviewEntryData } from "../
 import type { BotCompaction } from "../bot-runtime/bot-extension.js";
 import {
   BotMemoryAuthorityLostError,
+  memoryProvenance,
   personTurns,
   runMemoryReview,
-  unattendedInputs,
   type BotMemoryAdmission,
 } from "./review.js";
 import type { BotMemoryRuntime } from "./service.js";
@@ -166,8 +166,8 @@ export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): Bo
 
       if (offer.memoryOffered && offer.conversation !== undefined) {
         try {
-          const unattended = await unattendedInputs(offer.conversation, { floor: compaction.entries[0]?.id, ...callerSignal });
-          const { transcript } = personTurns(compaction.entries, unattended);
+          const provenance = await memoryProvenance(offer.conversation, { floor: compaction.entries[0]?.id, ...callerSignal });
+          const { transcript } = personTurns(compaction.entries, provenance);
           if (transcript.length > 0) {
             const flushed = await runMemoryReview({
               botId,

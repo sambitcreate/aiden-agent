@@ -10,7 +10,7 @@ import { Harness, MemoryStorage, type Conversation, type EntryRecord } from "@ea
 import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
 import { createBotRegistry } from "../bot-runtime/bot-extension.js";
 import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
-import { fakeMemoryAuthority, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { fakeMemoryAuthority, holdNextRead, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL, FAUX_MODEL_REF, FAUX_PROVIDER, waitFor, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { createBotMemoryReview, type BotMemoryReviewDeps } from "./review.js";
 import { createBotMemoryService } from "./service.js";
@@ -244,6 +244,34 @@ test("access revoked while a review answer is pending stops its save and any fur
     assert.deepEqual(await markers(conversation), [], "nothing was saved, so the next reply tries again");
     assert.equal(authority.counts.releases, 1, "the admission is released");
   } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("access revoked while a save is inside the store never publishes it", async () => {
+  let hold: ReturnType<typeof holdNextRead> | undefined;
+  const script = scripted([
+    () => {
+      // The next memory read is the store's own, inside the queued apply.
+      hold!.arm();
+      return addFact("Has two kids.")();
+    },
+    nothing,
+  ]);
+  const { harness, conversation, review, personTurns, userFile, authority } = await setup(script.steps);
+  hold = holdNextRead(path.dirname(userFile));
+  try {
+    await personTurns(10);
+    const running = review.runNow(BOT);
+    await hold.reached;
+    authority.revoke();
+    hold.resume();
+    assert.deepEqual(await running, { kind: "revoked", added: 0, targets: [] });
+    assert.equal(existsSync(userFile), false, "the save that was mid-read is not published");
+    assert.deepEqual(await markers(conversation), [], "nothing was saved, so the next reply tries again");
+    assert.equal(script.reviewRequests.length, 1, "no request after the revocation");
+  } finally {
+    hold.restore();
     await harness.close(ctx);
   }
 });

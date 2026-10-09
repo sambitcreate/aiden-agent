@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { getCurrentSystemPrompt, type Message } from "@earendil-works/pi-ai";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { getCurrentSystemPrompt, Type, type Message } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { CompactionEntry, Harness, MemoryStorage, type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
 import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
-import { createBotRegistry, type BotCompaction, type BotExtensionDeps } from "../bot-runtime/bot-extension.js";
+import { createBotRegistry, type BotCompaction, type BotExtensionDeps, type BotToolEntry } from "../bot-runtime/bot-extension.js";
 import { createBotSessionService } from "../bot-runtime/bot-session-service.js";
 import { botIngressAllowsTool } from "../bot-runtime/bot-tool-policy.js";
 import { fakeMemoryAuthority, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
@@ -48,9 +48,15 @@ function lastUserText(messages: Message[]): string {
   return typeof user.content === "string" ? user.content : user.content.map((part) => (part.type === "text" ? part.text : "")).join("");
 }
 
-async function harnessFor(memory: BotMemoryRuntime, fauxModels: FauxModels, authority = fakeMemoryAuthority(), settings = SMALL_CONTEXT) {
+async function harnessFor(
+  memory: BotMemoryRuntime,
+  fauxModels: FauxModels,
+  authority = fakeMemoryAuthority(),
+  settings: typeof SMALL_CONTEXT = SMALL_CONTEXT,
+  extra: { tools?: BotToolEntry[]; onCompact?: (compaction: BotCompaction) => void } = {},
+) {
   let conversation: Conversation | undefined;
-  const steering = createBotCompactionSteering({
+  const steer = createBotCompactionSteering({
     memory,
     admit: async () => ({
       ok: true,
@@ -62,9 +68,13 @@ async function harnessFor(memory: BotMemoryRuntime, fauxModels: FauxModels, auth
       await conversation!.submit({ type: "write", entry: { kind, data: { ...data } } }, ctx);
     },
   });
+  const steering: typeof steer = (botId, compaction, offer, context) => {
+    extra.onCompact?.(compaction);
+    return steer(botId, compaction, offer, context);
+  };
   const deps: BotExtensionDeps = {
     ...recordingDeps({ sections: ["<base>B</base>"] }),
-    currentTools: async () => [botMemoryToolEntry(BOT, memory)],
+    currentTools: async () => [botMemoryToolEntry(BOT, memory), ...(extra.tools ?? [])],
     turnAllows: withBotMemoryIngress(botIngressAllowsTool),
     memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
     beforeCompact: steering,
@@ -218,6 +228,80 @@ test("an attended compaction never flushes routine history into memory", async (
     assert.doesNotMatch(flushes[0]!, /Morning brief prompt|ROUTINE BRIEF/u, "routine input and output never reach the flush");
     assert.equal(existsSync(userFile), false, "nothing derived from the routine is saved");
     assert.equal(entries.some((entry) => entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND), false);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("routine commentary kept past one compaction never reaches the next flush", async () => {
+  const { memory, userFile } = memoryProfile();
+  const flushes: string[] = [];
+  const compactions: BotCompaction[] = [];
+  const lookup: BotToolEntry = {
+    tool: {
+      name: "lookup",
+      label: "Lookup",
+      description: "Look something up.",
+      parameters: Type.Object({ q: Type.String() }),
+      execute: async () => ({ content: [{ type: "text", text: `Forecast: ${"light rain and wind. ".repeat(100)}` }], details: {} }),
+    },
+    replay: "safe",
+  };
+  const turnAnswers = [
+    () => fauxAssistantMessage("Noted."),
+    // The routine's intermediate commentary, kept verbatim past the first compaction.
+    () =>
+      fauxAssistantMessage([fauxText("Checking the weather where she lives, in Pune."), fauxToolCall("lookup", { q: "weather" })], {
+        stopReason: "toolUse",
+      }),
+    () => fauxAssistantMessage(`ROUTINE BRIEF: ${"Carry an umbrella today. ".repeat(40)}`),
+    () => fauxAssistantMessage("Hi."),
+  ];
+  const fauxModels = createFauxModels(
+    Array.from({ length: 16 }, () => (context: { messages: Message[] }) => {
+      const system = systemPromptOf(context.messages);
+      if (system.includes("keep a helper Bot's long-term memory")) {
+        const user = lastUserText(context.messages);
+        flushes.push(user);
+        // A model that reads the routine's commentary would save a fact derived from it.
+        return /Pune/u.test(user) && flushes.length === 1
+          ? fauxAssistantMessage(
+              [fauxToolCall("bot_memory", { target: "user", operations: [{ action: "add", content: "Lives in Pune." }] })],
+              { stopReason: "toolUse" },
+            )
+          : fauxAssistantMessage("NOTHING");
+      }
+      if (system.includes("context summarization assistant")) return fauxAssistantMessage("STEERED SUMMARY.");
+      return (turnAnswers.shift() ?? (() => fauxAssistantMessage("ok")))();
+    }),
+  );
+  const { harness, conversation } = await harnessFor(
+    memory,
+    fauxModels,
+    fakeMemoryAuthority(),
+    { compaction: { reserveTokens: 199_600, keepRecentTokens: 100, backgroundTokens: 0 } },
+    { tools: [lookup], onCompact: (compaction) => compactions.push(compaction) },
+  );
+  try {
+    await (await conversation.submit({ type: "input", content: "Mia has piano on Tuesdays." }, ctx)).wait(ctx);
+    const requestId = "routine:task-1:2026-10-09T07:00:00.000Z";
+    await conversation.submit(
+      { type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "routine", label: "Morning brief", requestId } } },
+      ctx,
+    );
+    await (await conversation.submit({ type: "input", content: "Morning brief prompt.", requestId }, ctx)).wait(ctx);
+    await (await conversation.submit({ type: "input", content: "Hello." }, ctx)).wait(ctx);
+
+    // The shape under test: the attended compaction's prefix holds the routine's
+    // commentary, but neither the routine's input nor its final answer.
+    const texts = (compaction: BotCompaction) => JSON.stringify(compaction.entries.map((entry) => entry.model ?? null));
+    const inputCompaction = compactions.findIndex((compaction) => /Morning brief prompt/u.test(texts(compaction)));
+    const attended = compactions.findIndex((compaction) => /Checking the weather/u.test(texts(compaction)));
+    assert.ok(inputCompaction >= 0 && attended > inputCompaction, "the routine's input is compacted away before its commentary");
+    assert.doesNotMatch(texts(compactions[attended]!), /Morning brief prompt|ROUTINE BRIEF/u);
+
+    for (const flush of flushes) assert.doesNotMatch(flush, /Checking the weather|Pune/u, "routine commentary never reaches a flush");
+    assert.equal(existsSync(userFile), false, "nothing derived from the routine is saved");
   } finally {
     await harness.close(ctx);
   }

@@ -13,6 +13,10 @@
 // - The `memory/` directory is created on the first write, but never its
 //   parent: a write for a Bot whose session directory is gone (deleted) fails
 //   instead of resurrecting it. `forgetBot` refuses every later write.
+// - The Bot's own batches carry their writer's fence (`assertCurrent`): it is
+//   checked once the batch holds the write lock and again right before the
+//   atomic rename, so access revoked while a batch waited or read never
+//   publishes. A person's edits carry none.
 
 import * as fs from "node:fs/promises";
 import {
@@ -78,6 +82,12 @@ export type BotMemoryApplyErrorCode =
 export interface BotMemoryApplyOptions {
   /** Background review and compaction flush: only `add` is allowed. */
   addOnly?: boolean;
+  /**
+   * The writer's authority fence. Awaited once the batch holds the Bot's
+   * write lock and again immediately before the file is published; a
+   * rejection aborts the batch without writing and is rethrown as is.
+   */
+  assertCurrent?: () => Promise<void>;
 }
 
 export type BotMemoryApplyResult =
@@ -222,7 +232,12 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
     return { botId, readable, revision: memoryRevision(files), updatedAt, stores };
   }
 
-  async function writeStore(botId: string, target: BotMemoryTarget, texts: readonly string[]): Promise<void> {
+  async function writeStore(
+    botId: string,
+    target: BotMemoryTarget,
+    texts: readonly string[],
+    assertCurrent?: () => Promise<void>,
+  ): Promise<void> {
     if (forgotten.has(botId)) throw new BotMemoryDeletedError(botId);
     const directory = botMemoryDirectory(options.profileDir, botId);
     try {
@@ -233,7 +248,14 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
       if (code === "ENOENT") throw new BotMemoryDeletedError(botId);
       if (code !== "EEXIST") throw error;
     }
-    await writeFileAtomic(botMemoryFile(options.profileDir, botId, target), serializeEntries(texts), { mode: 0o600 });
+    await writeFileAtomic(botMemoryFile(options.profileDir, botId, target), serializeEntries(texts), {
+      mode: 0o600,
+      // The last moment a revoked writer or a deleted Bot can still be refused.
+      beforePublish: async () => {
+        guard(botId);
+        await assertCurrent?.();
+      },
+    });
   }
 
   function guard(botId: string): void {
@@ -246,6 +268,8 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
     apply(botId, target, operations, applyOptions = {}) {
       return serialize(botId, async (): Promise<BotMemoryApplyResult> => {
         guard(botId);
+        // The batch may have waited behind other writes: is its writer still admitted?
+        await applyOptions.assertCurrent?.();
         const loaded = await load(botId);
         const current = loaded.stores[target].texts;
         const fail = (
@@ -324,7 +348,7 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
               "Retry as ONE call that removes or merges stale entries and adds this one.",
           );
         }
-        await writeStore(botId, target, texts);
+        await writeStore(botId, target, texts, applyOptions.assertCurrent);
         return { ok: true, target, changed, texts, loaded: await load(botId) };
       });
     },

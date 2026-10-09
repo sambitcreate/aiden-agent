@@ -1,6 +1,9 @@
 // Shared fixtures for Bot runtime tests: Aiden-shaped tools and extension
 // dependencies whose calls the tests can observe.
 
+import { promises as fsPromises } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { mock } from "node:test";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { BotDefinition } from "../../../../renderer/shared/bots.js";
@@ -98,6 +101,39 @@ export function fakeMemoryAuthority() {
     revoke() {
       revoked = true;
       controller.abort(new Error("This Bot's access changed."));
+    },
+  };
+}
+
+/**
+ * Suspend the first real file read under `directory` after `arm()` until
+ * `resume()`, so a test can act while a store is mid-read. Patches
+ * `fs.promises.readFile` and re-syncs the builtin ESM bindings, so modules
+ * importing `node:fs/promises` see it; `restore()` undoes both.
+ */
+export function holdNextRead(directory: string) {
+  let armed = false;
+  let onReached = () => {};
+  const reached = new Promise<void>((resolve) => (onReached = resolve));
+  let resume = () => {};
+  const resumed = new Promise<void>((resolve) => (resume = resolve));
+  const real = fsPromises.readFile.bind(fsPromises) as (...args: unknown[]) => Promise<unknown>;
+  const patched = mock.method(fsPromises, "readFile", (async (...args: unknown[]) => {
+    if (armed && String(args[0]).startsWith(directory)) {
+      armed = false;
+      onReached();
+      await resumed;
+    }
+    return real(...args);
+  }) as never);
+  syncBuiltinESMExports();
+  return {
+    arm: () => void (armed = true),
+    reached,
+    resume: () => resume(),
+    restore() {
+      patched.mock.restore();
+      syncBuiltinESMExports();
     },
   };
 }

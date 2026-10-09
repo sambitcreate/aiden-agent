@@ -55,6 +55,13 @@ export interface WriteFileAtomicOptions {
   fsync?: boolean;
   /** Create missing parent directories (with this mode) before staging. */
   mkdirMode?: number;
+  /**
+   * Awaited after the staged bytes are durable and immediately before they
+   * are published. A rejection aborts the write: the staged file is removed
+   * and the destination is left untouched. Use it to fence publication on a
+   * condition (such as the writer's authority) that may change mid-write.
+   */
+  beforePublish?: () => Promise<void>;
   /** Test-only filesystem seams. */
   io?: Partial<DurableFsIo>;
 }
@@ -107,6 +114,7 @@ export async function writeFileAtomic(
       await handle.close();
     }
     if (durable) await io.syncFile(staged);
+    await options.beforePublish?.();
     if (options.exclusive) {
       await io.link(staged, target);
       published = true;

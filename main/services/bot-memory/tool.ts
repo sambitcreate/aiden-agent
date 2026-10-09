@@ -127,6 +127,12 @@ export function botMemoryToolResult(result: BotMemoryApplyResult): AgentToolResu
 export interface BotMemoryToolOptions {
   /** Background review and compaction flush: `replace` and `remove` are refused. */
   addOnly?: boolean;
+  /**
+   * The writer's authority fence (review and flush: their lease). The store
+   * re-checks it once the batch holds the Bot's write lock and right before
+   * publication; a rejection aborts the batch unwritten and propagates.
+   */
+  assertCurrent?: () => Promise<void>;
 }
 
 export function createBotMemoryTool(
@@ -139,7 +145,7 @@ export function createBotMemoryTool(
     label: "Memory",
     description: options.addOnly ? DESCRIPTION + ADD_ONLY_NOTE : DESCRIPTION,
     parameters,
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, signal) {
       const { target, operations: raw } = params as { target: BotMemoryTarget; operations: RawOperation[] };
       if (raw.length > BOT_MEMORY_MAX_OPERATIONS) {
         return resultOf(
@@ -152,7 +158,13 @@ export function createBotMemoryTool(
       if (typeof operations === "string") {
         return resultOf({ ok: false, code: "invalid", target, error: operations }, { changed: 0, targets: [] }, true);
       }
-      return botMemoryToolResult(await memory.apply(botId, target, operations, { addOnly: options.addOnly === true }));
+      // A call aborted (its turn stopped, its review revoked) while its batch
+      // waited or read is never published.
+      const assertCurrent = async () => {
+        await options.assertCurrent?.();
+        signal?.throwIfAborted();
+      };
+      return botMemoryToolResult(await memory.apply(botId, target, operations, { addOnly: options.addOnly === true, assertCurrent }));
     },
   };
 }

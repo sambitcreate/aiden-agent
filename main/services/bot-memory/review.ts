@@ -14,11 +14,17 @@
 // input has a notice naming its request id; that id's submission says exactly
 // which `pi.user` entry it became and which entry answered it, so the input
 // and everything the Bot produced for it stay out of every review and flush.
+// Ownership is walked over the conversation's whole history around the
+// entries being read, not those entries alone, so a compaction cut that keeps
+// only the middle of a routine run still leaves it out; an entry whose owner
+// cannot be placed is left out too.
 //
 // Authority: a review or flush holds the Bot's admission (a lease) for its
 // whole run. The lease's revocation aborts the run, and it is revalidated
-// right before every provider request and every memory write, so access that
-// changes mid-run stops the next request and the next save.
+// right before every provider request and every memory write, including
+// inside the store under its write lock and immediately before publication,
+// so access that changes mid-run stops the next request and any unpublished
+// save.
 //
 // The same runner (`runMemoryReview`) does the compaction flush (§9).
 
@@ -161,7 +167,8 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     if (run.authority.signal.aborted) throw lost();
     signal.throwIfAborted();
   };
-  const tool = createBotMemoryTool(run.botId, run.memory, { addOnly: true });
+  // The store re-runs the fence under its write lock and right before it publishes.
+  const tool = createBotMemoryTool(run.botId, run.memory, { addOnly: true, assertCurrent: fence });
   const declaration: Tool = { name: tool.name, description: tool.description, parameters: tool.parameters };
   const view = await run.memory.view(run.botId);
   const messages: Message[] = [
@@ -208,7 +215,14 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
         continue;
       }
       await fence();
-      const result = await tool.execute(call.id, call.arguments as never, signal);
+      let result: Awaited<ReturnType<typeof tool.execute>>;
+      try {
+        result = await tool.execute(call.id, call.arguments as never, signal);
+      } catch (error) {
+        if (error instanceof BotMemoryAuthorityLostError) throw error;
+        if (run.authority.signal.aborted) throw lost();
+        throw error;
+      }
       const details = result.details as BotMemoryToolDetails;
       added += details.changed;
       for (const target of details.targets) targets.add(target);
@@ -235,8 +249,14 @@ export interface UnattendedInput {
   answer?: EntryId;
 }
 
-/** Unattended inputs by request id. */
-export type UnattendedInputs = ReadonlyMap<string, UnattendedInput>;
+/** Who a `pi.user` or `pi.assistant` entry belongs to. */
+export type EntryOwner = "person" | "unattended";
+
+/**
+ * Ownership of every person-facing entry the scan could place. An entry it
+ * has no answer for (missing) belongs to no one the review may read.
+ */
+export type MemoryProvenance = ReadonlyMap<EntryId, EntryOwner>;
 
 interface NoticeData {
   notice?: unknown;
@@ -251,45 +271,112 @@ function unattendedNoticeRequestId(entry: EntryRecord): string | undefined {
   return typeof data.requestId === "string" ? data.requestId : undefined;
 }
 
+/** What the ownership walk needs from one entry. */
+type Step = { id: EntryId; kind: "input" | "output" } | { id: EntryId; kind: "notice"; requestId: string };
+
+function stepOf(entry: EntryRecord): Step | undefined {
+  const requestId = unattendedNoticeRequestId(entry);
+  if (requestId !== undefined) return { id: entry.id, kind: "notice", requestId };
+  const role = entry.model?.[0]?.role;
+  if (entry.kind === "pi.user" && role === "user") return { id: entry.id, kind: "input" };
+  if (entry.kind === "pi.assistant" && role === "assistant") return { id: entry.id, kind: "output" };
+  return undefined;
+}
+
 /**
- * Every routine and self-intro input of `conversation` from the newest entry
- * back past `floor` (the oldest entry the caller will classify), located
- * exactly through the submission its notice names.
+ * Walk `steps` (oldest first) and say who owns each input and output. A
+ * routine or self-intro input owns everything the Bot produced after it until
+ * the run serving it answered (or, without an answer, until the person's next
+ * input), wherever a compaction later cut. A notice whose input `unattended`
+ * does not locate marks the next input instead, the order they are written
+ * in. When `fromStart` is false the walk starts mid-history: outputs before
+ * its first input have an unknown owner and are left unowned (fail closed).
  */
-export async function unattendedInputs(
+function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, UnattendedInput>, fromStart: boolean): Map<EntryId, EntryOwner> {
+  const answers = new Map<EntryId, EntryId | undefined>();
+  for (const input of unattended.values()) answers.set(input.entry, input.answer);
+  const present = new Set(steps.map((step) => step.id));
+  const openAnswers = new Set<EntryId>();
+  // A run whose input is older than the walk but answers inside it owns the outputs until then.
+  for (const [entry, answer] of answers) {
+    if (answer !== undefined && !present.has(entry) && present.has(answer)) openAnswers.add(answer);
+  }
+  const owners = new Map<EntryId, EntryOwner>();
+  let known = fromStart;
+  let unattendedTurn = false;
+  let pendingGuess = false;
+  for (const step of steps) {
+    if (step.kind === "notice") {
+      if (!unattended.has(step.requestId)) pendingGuess = true;
+      continue;
+    }
+    if (step.kind === "input") {
+      known = true;
+      let isUnattended = answers.has(step.id);
+      if (!isUnattended && pendingGuess) {
+        isUnattended = true;
+        pendingGuess = false;
+      }
+      unattendedTurn = isUnattended;
+      owners.set(step.id, isUnattended ? "unattended" : "person");
+      const answer = answers.get(step.id);
+      if (answer !== undefined) openAnswers.add(answer);
+      continue;
+    }
+    const owned = unattendedTurn || openAnswers.size > 0;
+    openAnswers.delete(step.id);
+    if (known) owners.set(step.id, owned ? "unattended" : "person");
+  }
+  return owners;
+}
+
+/**
+ * Who owns each input and Bot output of `conversation` from its newest entry
+ * back past `floor` (the oldest entry the caller will classify). The walk
+ * covers the whole stretch, not only the entries being classified, so a
+ * routine whose input and answer both fall outside them (a compaction cut in
+ * the middle of its run) still owns its commentary. It reaches back past the
+ * person input that owns `floor`, then another page for that run's notice.
+ * Each routine and self-intro input is located exactly through the
+ * submission its notice names.
+ */
+export async function memoryProvenance(
   conversation: Conversation,
   options: { floor?: EntryId | undefined; signal?: AbortSignal } = {},
-): Promise<Map<string, UnattendedInput>> {
-  const requestIds = new Set<string>();
+): Promise<MemoryProvenance> {
+  if (options.floor === undefined) return new Map();
+  const newestFirst: Step[] = [];
   let cursor: Parameters<Conversation["entries"]>[2];
   let scanned = 0;
   let floorAt: number | undefined;
-  const done = () =>
-    scanned >= NOTICE_SCAN_LIMIT ||
-    (options.floor === undefined ? scanned >= ENTRY_SCAN_LIMIT : floorAt !== undefined && scanned - floorAt >= ENTRY_PAGE);
+  let ownerAt: number | undefined;
+  const done = () => scanned >= NOTICE_SCAN_LIMIT || (ownerAt !== undefined && scanned - ownerAt >= ENTRY_PAGE);
   do {
     options.signal?.throwIfAborted();
     const page = await conversation.entries({}, ENTRY_PAGE, cursor, BACKGROUND_CONTEXT);
     for (const entry of page.items) {
       scanned += 1;
-      const requestId = unattendedNoticeRequestId(entry);
-      if (requestId !== undefined) requestIds.add(requestId);
+      const step = stepOf(entry);
+      if (step !== undefined) newestFirst.push(step);
       if (floorAt === undefined && entry.id === options.floor) floorAt = scanned;
+      if (floorAt !== undefined && ownerAt === undefined && step?.kind === "input") ownerAt = scanned;
     }
     cursor = page.next;
   } while (cursor !== undefined && !done());
-  const ids = [...requestIds];
-  if (ids.length === 0) return new Map();
-  const records = await conversation.commit(
-    (tx) => Promise.all(ids.map((requestId) => tx.submissionByRequest(conversation.id, requestId))),
-    BACKGROUND_CONTEXT,
-  );
-  const inputs = new Map<string, UnattendedInput>();
-  records.forEach((record, index) => {
-    if (record?.type !== "input" || record.entry === undefined) return;
-    inputs.set(ids[index]!, { entry: record.entry, ...(record.status === "done" ? { answer: record.answer } : {}) });
-  });
-  return inputs;
+  const steps = newestFirst.reverse();
+  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : [])))];
+  const unattended = new Map<string, UnattendedInput>();
+  if (ids.length > 0) {
+    const records = await conversation.commit(
+      (tx) => Promise.all(ids.map((requestId) => tx.submissionByRequest(conversation.id, requestId))),
+      BACKGROUND_CONTEXT,
+    );
+    records.forEach((record, index) => {
+      if (record?.type !== "input" || record.entry === undefined) return;
+      unattended.set(ids[index]!, { entry: record.entry, ...(record.status === "done" ? { answer: record.answer } : {}) });
+    });
+  }
+  return ownership(steps, unattended, cursor === undefined);
 }
 
 export interface ReviewWindow {
@@ -301,59 +388,22 @@ export interface ReviewWindow {
 
 /**
  * The person's own turns among `entries` (oldest first): their inputs and the
- * Bot's text in reply. A routine or self-intro input is left out together
- * with everything the Bot produced until the run serving it answered (or,
- * without an answer, until the person's next input). A notice whose input
- * `unattended` does not locate marks the next input instead, the order they
- * are written in.
+ * Bot's text in reply. Only entries `provenance` places as the person's are
+ * kept; a routine or self-intro turn, and anything whose owner is unknown,
+ * is left out.
  */
-export function personTurns(entries: readonly EntryRecord[], unattended: UnattendedInputs = new Map()): ReviewWindow {
-  const unattendedEntries = new Map<EntryId, EntryId | undefined>();
-  for (const input of unattended.values()) unattendedEntries.set(input.entry, input.answer);
-  const present = new Set(entries.map((entry) => entry.id));
-  const openAnswers = new Set<EntryId>();
-  // A run that started before `entries` and answers inside them owns their first replies.
-  for (const [entry, answer] of unattendedEntries) {
-    if (answer !== undefined && !present.has(entry) && present.has(answer)) openAnswers.add(answer);
-  }
-  const guessed = new Set<EntryId>();
-  let pendingGuess = false;
-  for (const entry of entries) {
-    const requestId = unattendedNoticeRequestId(entry);
-    if (requestId !== undefined) {
-      if (!unattended.has(requestId)) pendingGuess = true;
-      continue;
-    }
-    if (entry.kind === "pi.user" && pendingGuess && !unattendedEntries.has(entry.id)) {
-      guessed.add(entry.id);
-      pendingGuess = false;
-    }
-  }
-
+export function personTurns(entries: readonly EntryRecord[], provenance: MemoryProvenance): ReviewWindow {
   let personInputs = 0;
-  let unattendedTurn = false;
   const lines: string[] = [];
   for (const entry of entries) {
-    const message = entry.model?.[0];
-    if (entry.kind === "pi.user" && message?.role === "user") {
-      if (unattendedEntries.has(entry.id) || guessed.has(entry.id)) {
-        unattendedTurn = true;
-        const answer = unattendedEntries.get(entry.id);
-        if (answer !== undefined) openAnswers.add(answer);
-        continue;
-      }
-      unattendedTurn = false;
+    const step = stepOf(entry);
+    if (step === undefined || step.kind === "notice" || provenance.get(entry.id) !== "person") continue;
+    const text = textOf(entry.model?.[0]?.content).trim();
+    if (step.kind === "input") {
       personInputs += 1;
-      const text = textOf(message.content).trim();
       if (text) lines.push(`[Person]: ${text}`);
-      continue;
-    }
-    if (entry.kind === "pi.assistant" && message?.role === "assistant") {
-      const owned = unattendedTurn || openAnswers.size > 0;
-      openAnswers.delete(entry.id);
-      if (owned) continue;
-      const text = textOf(message.content).trim();
-      if (text) lines.push(`[Bot]: ${text}`);
+    } else if (text) {
+      lines.push(`[Bot]: ${text}`);
     }
   }
   return { personInputs, transcript: lines.join("\n\n") };
@@ -374,7 +424,7 @@ function isMemoryResult(entry: EntryRecord): boolean {
  * marker and the last successful `bot_memory` result. `entries` are oldest
  * first and must reach back to the watermark (or the start).
  */
-export function reviewWindow(entries: readonly EntryRecord[], unattended: UnattendedInputs = new Map()): ReviewWindow {
+export function reviewWindow(entries: readonly EntryRecord[], provenance: MemoryProvenance): ReviewWindow {
   let start = 0;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
@@ -383,7 +433,7 @@ export function reviewWindow(entries: readonly EntryRecord[], unattended: Unatte
       break;
     }
   }
-  return personTurns(entries.slice(start), unattended);
+  return personTurns(entries.slice(start), provenance);
 }
 
 /** Oldest-first entries back to the newest watermark (or the start of history). */
@@ -459,7 +509,7 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
       const signal = AbortSignal.any([controller.signal, lease.signal]);
       const conversation = await deps.conversation(botId);
       const entries = await entriesSinceWatermark(conversation, signal);
-      const window = reviewWindow(entries, await unattendedInputs(conversation, { floor: entries[0]?.id, signal }));
+      const window = reviewWindow(entries, await memoryProvenance(conversation, { floor: entries[0]?.id, signal }));
       if (window.personInputs < interval) return { kind: "skipped", reason: "too_soon" };
       let result: MemoryReviewResult;
       try {
