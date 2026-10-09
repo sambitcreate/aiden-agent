@@ -2428,13 +2428,14 @@ textarea {
 }
 
 /* ── Aiden dock inset ──────────────────────────────────────────────────── */
-/* Aiden's collapsed mark sits in the bottom-right of the window, right where
+/* Aiden's idle Live pill sits in the bottom-right of the window, right where
    the composer's send controls are. The chat column reserves that width on
    BOTH sides so the composer and the messages above it stay optically centered
-   rather than sliding left to dodge the mark. The gutter clears the 48px mark
-   plus its 16px offset plus a little breathing room. */
+   rather than sliding left to dodge the pill. The gutter clears the ~72px idle
+   "Live" pill plus its 16px offset plus a little breathing room; longer
+   in-session labels may reach the composer edge in narrow windows, like the HUD. */
 :root {
-  --aiden-dock-gutter: 4.5rem;
+  --aiden-dock-gutter: 6rem;
   --chat-content-max-width: 52rem;
 }
 

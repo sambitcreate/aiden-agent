@@ -180,6 +180,15 @@ export function AssistantDockPresentation({
   // stop, the pill stays even if the user hid the idle button.
   const sessionVisible = live.active || live.busy || closing || Boolean(live.error) || approvalPending;
   const glyph = aidenLiveMark(markState);
+  const label = liveTriggerLabel(markState, closing, showStop);
+  const action = live.active
+    ? stopRevealed ? "Stop Aiden Live" : "Show Stop Aiden Live button"
+    : !setupCompleted
+    ? "Set up Aiden Live"
+    : "Start Aiden Live";
+  // The accessible name must contain the visible label (WCAG 2.5.3) so voice
+  // control can target "Listening" or "Disconnected" by what it shows.
+  const accessibleName = action.toLowerCase().includes(label.toLowerCase()) ? action : `${label}, ${action}`;
 
   return (
     <div
@@ -204,13 +213,7 @@ export function AssistantDockPresentation({
           data-state={markState}
           data-stop-revealed={showStop}
           disabled={closing}
-          aria-label={
-            live.active
-              ? stopRevealed ? "Stop Aiden Live" : "Show Stop Aiden Live button"
-              : !setupCompleted
-              ? "Set up Aiden Live"
-              : "Start Aiden Live"
-          }
+          aria-label={accessibleName}
           aria-expanded={live.active ? stopRevealed : live.setupOpen}
           onKeyDown={(event) => { if (event.key === "Escape") setStopRevealed(false); }}
           onClick={openPanel}
@@ -222,7 +225,7 @@ export function AssistantDockPresentation({
               <AidenActivityMark key={glyph.mark} mark={glyph.mark} size={20} active={glyph.active} level={live.microphoneLevel} />
             )}
           </span>
-          <span className="aiden-live-trigger-label">{liveTriggerLabel(markState, closing, showStop)}</span>
+          <span className="aiden-live-trigger-label">{label}</span>
           {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
         </button>
       ) : null}

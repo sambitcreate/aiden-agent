@@ -303,6 +303,9 @@ test("the Live pill names each session state", () => {
   for (const [label, live, approvalPending] of cases) {
     const { markup } = renderDock(live, { approvalPending });
     assert.equal(triggerLabel(markup), label, label);
+    // Label in name: voice control must be able to target what the pill shows.
+    const name = /<button[^>]*class="aiden-live-trigger[^"]*"[^>]*aria-label="([^"]*)"/u.exec(markup)?.[1] ?? "";
+    assert.ok(name.toLowerCase().includes(label.toLowerCase()), `${label} not in accessible name "${name}"`);
   }
   assert.match(renderDock(open, { approvalPending: true }).markup, /aiden-live-trigger-badge/u);
   assert.match(
