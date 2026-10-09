@@ -192,3 +192,24 @@ test("a short silence note declared by granule decodes to its exact length", asy
   // 50 packets are 50 * 960 granule samples; dropping the 312-sample pre-skip at 48 kHz leaves 15,896 at 16 kHz.
   assert.equal(samples.length, Math.round(((50 * 960 - 312) * 16_000) / 48_000));
 });
+
+test("a note with no granule positions is stopped by the running cap while streaming, not by its packet count", async () => {
+  // 400,000 packets (about 2.2 hours) carry no declared length. Decoding them all would
+  // allocate about 512 MB of Float32 samples; the running cap must stop well before that.
+  const bytes = silenceOggOpus({ packetCount: 400_000, declareGranules: false });
+  let peak = 0;
+  const baseline = process.memoryUsage().arrayBuffers;
+  const sampler = setInterval(() => {
+    peak = Math.max(peak, process.memoryUsage().arrayBuffers - baseline);
+  }, 1);
+  const started = performance.now();
+  try {
+    await assert.rejects(decodeOggOpusToPcm16k(bytes), /too long/);
+  } finally {
+    clearInterval(sampler);
+  }
+  const elapsed = performance.now() - started;
+  // The cap itself is about 115 MB of samples; the bound leaves room for decoder batches.
+  assert.ok(peak < 400 * 1024 * 1024, `peak arrayBuffers growth ${peak} bytes`);
+  assert.ok(elapsed < 60_000, `took ${Math.round(elapsed)} ms`);
+});
