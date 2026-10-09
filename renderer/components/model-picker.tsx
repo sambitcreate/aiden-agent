@@ -23,7 +23,6 @@ import {
   createModelEntries,
   encodeSelection,
   modelInfoByValue,
-  modelGridSize,
   orderModelEntries,
   positionSavedModels,
   positionModels,
@@ -32,7 +31,12 @@ import {
   type PositionedModel,
 } from "../lib/model-picker-data";
 import { useProvidersModelInfo } from "../lib/queries";
-import { MODEL_PAD_INSET_PERCENT, MODEL_PAD_RANGE_PERCENT } from "../lib/model-pad-layout";
+import {
+  BASE_MODEL_PAD_GRID_SIZE,
+  MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_RANGE_PERCENT,
+  modelPadGridSizeForPlacements,
+} from "../lib/model-pad-layout";
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
 import type { ModelInfo, Provider } from "../lib/types";
 import { Check, Pin, SlidersHorizontal } from "lucide-react";
@@ -391,8 +395,19 @@ export function ModelPicker({
     () => (open ? positionModels(entries) : []),
     [open, entries],
   );
-  const padGridSize = modelGridSize(entries.length);
   const hasPadModels = positioned.length > 0;
+  // Same sizing as positionSavedModels and the settings editor: placed, visible
+  // models only. The empty Pad shows the base grid.
+  const padGridSize = React.useMemo(
+    () =>
+      hasPadModels
+        ? modelPadGridSizeForPlacements(
+            modelPadPlacements,
+            entries.map((entry) => entry.value),
+          )
+        : BASE_MODEL_PAD_GRID_SIZE,
+    [hasPadModels, modelPadPlacements, entries],
+  );
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);

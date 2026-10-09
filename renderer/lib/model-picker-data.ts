@@ -3,6 +3,7 @@ import { resolveModelDisplay } from "./model-display";
 import {
   modelPadGridPoints,
   modelPadGridSize,
+  modelPadGridSizeForPlacements,
   reflowVisibleModelPadPlacements,
   type ModelPadPlacement,
 } from "./model-pad-layout";
@@ -378,10 +379,11 @@ export function positionSavedModels(
   entries: ModelEntry[],
   placements: Readonly<Record<string, ModelPadPlacement>>,
 ): PositionedModel[] {
+  const visibleValues = entries.map((entry) => entry.value);
   const snappedPlacements = reflowVisibleModelPadPlacements(
     placements,
-    entries.map((entry) => entry.value),
-    modelPadGridSize(entries.length),
+    visibleValues,
+    modelPadGridSizeForPlacements(placements, visibleValues),
   );
   return entries.flatMap((entry) => {
     const placement = snappedPlacements[entry.value];

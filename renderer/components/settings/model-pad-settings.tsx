@@ -31,6 +31,7 @@ import {
   distributeCapabilityOnlyModelPadSuggestions,
   emptyModelPadLayout,
   modelPadGridSize,
+  modelPadGridSizeForPlacements,
   modelPadLeftPercent,
   modelPadLayoutsEqual,
   modelPadPointKey,
@@ -38,6 +39,7 @@ import {
   moveModelPadPoint,
   nearestAvailableModelPadPoint,
   nextModelPadPlacement,
+  placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
   measureModelPadAvailableSize,
@@ -465,7 +467,9 @@ export function ModelPadSettings() {
     settings.data?.hiddenModelsByProvider,
   );
   const visibleValues = entries.map((entry) => entry.value);
-  const gridSize = modelPadGridSize(entries.length);
+  // Sized by the placed, visible models (never the catalog), exactly as the
+  // composer Pad sizes them, so both surfaces snap saved placements identically.
+  const gridSize = modelPadGridSizeForPlacements(draft.placements, visibleValues);
   const snappedDraftPlacements = reflowVisibleModelPadPlacements(
     draft.placements,
     visibleValues,
@@ -474,7 +478,7 @@ export function ModelPadSettings() {
   const snappedSavedPlacements = reflowVisibleModelPadPlacements(
     saved.placements,
     visibleValues,
-    gridSize,
+    modelPadGridSizeForPlacements(saved.placements, visibleValues),
   );
   const normalizedDraft = { ...draft, placements: snappedDraftPlacements };
   const normalizedSaved = { ...saved, placements: snappedSavedPlacements };
@@ -644,17 +648,21 @@ export function ModelPadSettings() {
   const addModel = (value: string) => {
     setDraft((current) => {
       if (current.placements[value]) return current;
-      const reflowed = reflowVisibleModelPadPlacements(current.placements, visibleValues, gridSize);
+      const reflowed = reflowVisibleModelPadPlacements(current.placements, visibleValues);
       const visiblePlacements = Object.fromEntries(
-        visibleValues.flatMap((candidate) =>
-          reflowed[candidate] ? [[candidate, reflowed[candidate]] as const] : [],
+        placedVisibleModelPadValues(reflowed, visibleValues).map(
+          (candidate) => [candidate, reflowed[candidate]] as const,
         ),
       );
       return {
         ...current,
         placements: {
           ...reflowed,
-          [value]: nextModelPadPlacement(visiblePlacements, entries.length),
+          // Place against the grid the Pad will have once this model joins it.
+          [value]: nextModelPadPlacement(
+            visiblePlacements,
+            Object.keys(visiblePlacements).length + 1,
+          ),
         },
       };
     });
@@ -671,11 +679,6 @@ export function ModelPadSettings() {
   };
 
   const suggestUnplaced = () => {
-    const placements = { ...snappedDraftPlacements };
-    const occupied: ModelPadPoint[] = visibleValues.flatMap((value) =>
-      placements[value] ? [placements[value]] : [],
-    );
-
     // OpenRouter's benchmark feed measures capability, not pace. Pack those
     // models across free columns for legibility while keeping X provenance
     // neutral so the presentation spread is never mistaken for speed data.
@@ -686,9 +689,19 @@ export function ModelPadSettings() {
         ? []
         : [{ value: entry.value, capabilityPercentile }];
     });
+    // Pack against the grid the Pad will have once the suggestions join it.
+    const suggestionGridSize = modelPadGridSize(draftPlacementCount + capabilityOnly.length);
+    const placements = reflowVisibleModelPadPlacements(
+      draft.placements,
+      visibleValues,
+      suggestionGridSize,
+    );
+    const occupied: ModelPadPoint[] = placedVisibleModelPadValues(placements, visibleValues).map(
+      (value) => placements[value],
+    );
     const distributed = distributeCapabilityOnlyModelPadSuggestions(
       capabilityOnly,
-      gridSize,
+      suggestionGridSize,
       occupied,
     );
     Object.assign(placements, distributed);

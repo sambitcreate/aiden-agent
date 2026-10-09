@@ -8,6 +8,7 @@ import {
   MODEL_PAD_SETTINGS_CHROME_PX,
   MODEL_PAD_VIEWPORT_GUTTER_PX,
   modelPadGridSize,
+  modelPadGridSizeForPlacements,
   modelPadLayoutsEqual,
   modelPadPointKey,
   moveModelPadPoint,
@@ -64,6 +65,39 @@ test("adaptive grids start at seven and scale by visible model count", () => {
   assert.equal(modelPadGridSize(10), 9);
   assert.equal(modelPadGridSize(40), 17);
   assert.equal(modelPadGridSize(100), 25);
+});
+
+test("the Pad grid counts only placed, visible models", () => {
+  const placements: Record<string, ModelPadPlacement> = Object.fromEntries(
+    Array.from({ length: 10 }, (_, index) => [
+      `placed-${index}`,
+      { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } satisfies ModelPadPlacement,
+    ]),
+  );
+  const placedValues = Object.keys(placements);
+  const catalog = [
+    ...placedValues,
+    ...Array.from({ length: 290 }, (_, index) => `unplaced-${index}`),
+  ];
+
+  assert.equal(modelPadGridSizeForPlacements(placements, catalog), 9);
+  assert.equal(modelPadGridSizeForPlacements(placements, placedValues), 9);
+  // Hidden or unavailable placements do not grow the grid.
+  assert.equal(modelPadGridSizeForPlacements(placements, placedValues.slice(0, 8)), 7);
+  assert.equal(modelPadGridSizeForPlacements({}, catalog), 7);
+});
+
+test("adding a model places it against the grid for one more placed model", () => {
+  const placements: Record<string, ModelPadPlacement> = {};
+  for (let index = 0; index < 9; index += 1) {
+    placements[`model-${index}`] = nextModelPadPlacement(placements);
+  }
+  // Nine placed models fit a 7x7 grid; the tenth is placed on the 9x9 grid it creates.
+  const tenth = nextModelPadPlacement(placements, 10);
+  const nineByNine = modelPadGridSize(10);
+  assert.equal(nineByNine, 9);
+  assert.deepEqual(snapToModelPadGrid(tenth, nineByNine), { x: tenth.x, y: tenth.y });
+  assert.notDeepEqual(snapToModelPadGrid(tenth, 7), { x: tenth.x, y: tenth.y });
 });
 
 test("pointer targets snap to nodes and choose the nearest free node", () => {

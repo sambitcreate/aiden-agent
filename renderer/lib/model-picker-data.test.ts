@@ -18,6 +18,11 @@ import {
   resolveExplicitModelSelection,
   type ModelEntry,
 } from "./model-picker-data";
+import {
+  modelPadGridSizeForPlacements,
+  reflowVisibleModelPadPlacements,
+  type ModelPadPlacement,
+} from "./model-pad-layout";
 import type { Provider } from "./types";
 import {
   firstVisibleModelForProvider,
@@ -302,18 +307,62 @@ test("saved personal placements alone determine membership and snap to Pad geome
   );
 });
 
-test("saved geometry uses all visible chat models for sizing while hidden placements reserve no dot", () => {
+test("saved geometry is sized by placed, visible models while hidden placements reserve no dot", () => {
   const entries = Array.from({ length: 40 }, (_, index) => entry(`model-${index}`));
   const positioned = positionSavedModels(entries, {
     "model-0": { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
     hidden: { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
   });
 
-  assert.equal(modelGridSize(entries.length), 17);
+  // One placed, visible model: the base 7x7 grid, not a 17x17 grid for 40 entries.
   assert.deepEqual(
     positioned.map(({ value, x, y }) => ({ value, x, y })),
-    [{ value: "model-0", x: 3 / 16, y: 0.5 }],
+    [{ value: "model-0", x: 1 / 6, y: 0.5 }],
   );
+});
+
+test("unplaced catalog models never move placed models on the Pad", () => {
+  const placements: Record<string, ModelPadPlacement> = {
+    "model-0": { x: 0.31, y: 0.72, xSource: "user", ySource: "user" },
+    "model-1": { x: 0.9, y: 0.1, xSource: "neutral", ySource: "benchmark" },
+    "model-2": { x: 0.31, y: 0.7, xSource: "user", ySource: "benchmark" },
+  };
+  const geometry = (count: number) =>
+    positionSavedModels(
+      Array.from({ length: count }, (_, index) => entry(`model-${index}`)),
+      placements,
+    ).map(({ value, x, y }) => ({ value, x, y }));
+
+  const small = geometry(5);
+  assert.equal(small.length, 3);
+  assert.deepEqual(geometry(300), small);
+  // Hiding unplaced models (dropping them from the visible entries) changes nothing either.
+  assert.deepEqual(geometry(3), small);
+});
+
+test("the composer Pad and the settings editor reflow agree on placed positions", () => {
+  const entries = Array.from({ length: 120 }, (_, index) => entry(`model-${index}`));
+  const visibleValues = entries.map(({ value }) => value);
+  const placements: Record<string, ModelPadPlacement> = {
+    "model-3": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
+    "model-7": { x: 0.52, y: 0.49, xSource: "neutral", ySource: "benchmark" },
+    "model-9": { x: 0.12, y: 0.95, xSource: "user", ySource: "user" },
+    offline: { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
+  };
+  const gridSize = modelPadGridSizeForPlacements(placements, visibleValues);
+  const editor = reflowVisibleModelPadPlacements(placements, visibleValues, gridSize);
+  const picker = positionSavedModels(entries, placements);
+
+  assert.equal(gridSize, modelGridSize(3));
+  assert.deepEqual(
+    picker.map(({ value, x, y }) => ({ value, x, y })),
+    ["model-3", "model-7", "model-9"].map((value) => ({
+      value,
+      x: editor[value].x,
+      y: editor[value].y,
+    })),
+  );
+  assert.deepEqual(editor.offline, placements.offline);
 });
 
 test("colliding OpenRouter suggestions snap to distinct dots without outranking personal geometry", () => {

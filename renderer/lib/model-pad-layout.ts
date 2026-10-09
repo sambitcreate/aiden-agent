@@ -87,6 +87,26 @@ export function modelPadGridSize(visibleModelCount: number): number {
   return Math.max(BASE_MODEL_PAD_GRID_SIZE, nextOdd(scaled));
 }
 
+/** Visible values that have a saved placement, deduplicated, in visible order. */
+export function placedVisibleModelPadValues(
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+  visibleValues: readonly string[],
+): string[] {
+  return [...new Set(visibleValues)].filter((value) => Boolean(placements[value]));
+}
+
+/**
+ * The Pad grid is sized by the placed, visible models only, so catalog growth,
+ * hidden models and unavailable placements never re-snap what is on the Pad.
+ * The composer picker and the settings editor must both size through here.
+ */
+export function modelPadGridSizeForPlacements(
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+  visibleValues: readonly string[],
+): number {
+  return modelPadGridSize(placedVisibleModelPadValues(placements, visibleValues).length);
+}
+
 export function modelPadGridPoints(gridSize: number): ModelPadPoint[] {
   const size = Math.max(2, Math.ceil(gridSize));
   return Array.from({ length: size * size }, (_, index) => ({
@@ -278,16 +298,14 @@ function placementPriority(placement: ModelPadPlacement): number {
 export function reflowVisibleModelPadPlacements(
   placements: Readonly<Record<string, ModelPadPlacement>>,
   visibleValues: readonly string[],
-  gridSize = modelPadGridSize(visibleValues.length),
+  gridSize = modelPadGridSizeForPlacements(placements, visibleValues),
 ): Record<string, ModelPadPlacement> {
   const next = { ...placements };
   const available = modelPadGridPoints(gridSize);
-  const visible = [...new Set(visibleValues)]
-    .filter((value) => Boolean(placements[value]))
-    .sort((left, right) => {
-      const priority = placementPriority(placements[left]) - placementPriority(placements[right]);
-      return priority || (left < right ? -1 : left > right ? 1 : 0);
-    });
+  const visible = placedVisibleModelPadValues(placements, visibleValues).sort((left, right) => {
+    const priority = placementPriority(placements[left]) - placementPriority(placements[right]);
+    return priority || (left < right ? -1 : left > right ? 1 : 0);
+  });
 
   for (const value of visible) {
     const placement = placements[value];
