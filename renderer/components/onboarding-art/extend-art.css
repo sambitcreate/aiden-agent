@@ -1,0 +1,209 @@
+/* Art for the "Choose and extend" tiles. See onboarding-art.css for the shared rules. */
+
+/* Personal Model Pad */
+.oa-pad-window { display: flex; flex-direction: column; gap: 6px; padding: 6px; }
+.oa-segmented {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  flex: none;
+  height: 18px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--oa-fill);
+  font-size: 8px;
+  font-weight: 500;
+}
+.oa-segmented > span { display: grid; place-items: center; border-radius: var(--radius-pill); }
+.oa-segmented > [data-on] { background: var(--surface-popover); box-shadow: var(--elevation-control); color: var(--text-primary); }
+.oa-pad {
+  position: relative;
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(9, 1fr);
+  place-items: center;
+  overflow: hidden;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--oa-fill);
+}
+.oa-pad-dot { width: 2px; height: 2px; border-radius: 50%; background: var(--oa-bar); }
+.oa-pad-dot[data-model] { width: 5px; height: 5px; background: var(--accent); }
+.oa-pad-glow {
+  position: absolute;
+  left: 58px;
+  top: -6px;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 24%, transparent), transparent);
+}
+.oa-pad-knob {
+  position: absolute;
+  left: 86px;
+  top: 21px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.32), 0 0 0 0.5px rgb(0 0 0 / 0.14);
+}
+.oa-pad-info { display: grid; gap: 4px; padding: 7px; }
+.oa-pad-info .oa-bar { height: 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .oa-art :is(.oa-pad-knob, .oa-pad-glow) {
+    animation: oa-pad-knob 9s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  }
+}
+/* The knob settles on three model dots in turn (grid cells 5·1, 3·3, 4·6). */
+@keyframes oa-pad-knob {
+  0%, 20% { transform: translate(0, 0); }
+  33%, 53% { transform: translate(-32.5px, 32.4px); }
+  66%, 86% { transform: translate(-16.3px, 81px); }
+  100% { transform: translate(0, 0); }
+}
+
+/* Thinking Controls */
+.oa-think-head { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 8.5px; font-weight: 600; }
+.oa-think-head .aiden-mark { color: var(--text-primary); }
+.oa-think-head .oa-icon { width: 8px; height: 8px; }
+.oa-think-lines { display: grid; gap: 4px; margin-top: 8px; padding-left: 7px; box-shadow: inset 1.5px 0 var(--border-separator); }
+.oa-think-lines .oa-bar { height: 4px; }
+.oa-effort { display: grid; padding: 3px; }
+.oa-effort > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 15px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.oa-effort .oa-icon { width: 8px; height: 8px; color: var(--accent); }
+
+/* Model Freedom: the composer's model picker, List view */
+.oa-models-picker { display: grid; gap: 2px; padding: 4px; }
+.oa-models-picker .oa-segmented { margin-bottom: 2px; }
+.oa-models-filter { display: flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px 2px; color: var(--text-tertiary); }
+.oa-models-filter .oa-icon { width: 8px; height: 8px; }
+.oa-models-row { display: flex; align-items: center; gap: 6px; height: 21px; padding: 0 6px; border-radius: 6px; }
+.oa-models-row .oa-bar { height: 4px; }
+.oa-models-mark { width: 11px; height: 11px; color: var(--text-tertiary); }
+.oa-models-row.oa-selected .oa-models-mark { color: var(--text-primary); }
+.oa-models-chip-mark { width: 9px; height: 9px; color: var(--text-secondary); }
+.oa-models-format { color: var(--text-tertiary); font-size: 7px; }
+.oa-models-check { width: 9px; height: 9px; color: var(--accent); }
+.oa-models-pin { width: 8px; height: 8px; color: var(--accent); fill: currentColor; }
+.oa-models-details { display: grid; gap: 6px; padding: 8px; }
+.oa-models-details .oa-bar { height: 4px; }
+.oa-models-caps { color: var(--text-secondary); font-size: 7.5px; }
+.oa-models-facts { gap: 4px; padding-top: 6px; box-shadow: inset 0 1px var(--border-separator); }
+.oa-models-local { position: absolute; }
+.oa-models-via { color: var(--text-tertiary); font-weight: 400; }
+.oa-models-local .oa-icon { color: var(--text-tertiary); }
+.oa-models-composer { height: 40px; }
+.oa-models-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-list-selection);
+  color: var(--text-primary);
+}
+.oa-models-trigger .oa-icon { width: 8px; height: 8px; }
+.oa-models-trigger .oa-bar { height: 4px; }
+
+/* Tool Scripts: a codemode call */
+.oa-script-head { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; }
+.oa-script-code { display: grid; gap: 2px; padding: 6px 8px 8px; font-size: 7px; line-height: 10px; white-space: pre; color: var(--text-secondary); }
+.oa-script-code > div { transform-origin: left center; }
+.oa-script-code [data-token="keyword"] { color: var(--syntax-keyword); }
+.oa-script-code [data-token="variable"] { color: var(--syntax-variable); }
+.oa-script-code [data-token="title"] { color: var(--syntax-title); }
+.oa-script-code [data-token="string"] { color: var(--syntax-string); }
+
+/* Attachments & Vision */
+.oa-vision-attachments { display: flex; gap: 4px; margin: -2px -4px 6px; }
+.oa-vision-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 5px 0 3px;
+  border-radius: 7px;
+  background: var(--oa-fill);
+  color: var(--text-primary);
+  font-size: 7px;
+}
+.oa-vision-chip .oa-icon { width: 7px; height: 7px; color: var(--text-tertiary); }
+.oa-vision-thumb { width: 16px; height: 16px; flex: none; overflow: hidden; border-radius: 3px; }
+.oa-vision-sky { fill: color-mix(in srgb, var(--oa-tint) 30%, var(--surface-popover)); }
+.oa-vision-sun { fill: var(--bot-avatar-sun); }
+.oa-vision-far { fill: color-mix(in srgb, var(--accent) 55%, var(--oa-tint)); }
+.oa-vision-near { fill: var(--accent); }
+.oa-vision-thumb[data-variant="1"] .oa-vision-far { fill: var(--oa-tint); }
+.oa-vision-approve { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 5px 0 8px; }
+
+/* Web Search */
+.oa-web-line { position: absolute; display: flex; align-items: center; gap: 4px; color: var(--text-primary); }
+.oa-web-sources { display: grid; padding: 3px 0; }
+.oa-web-count {
+  display: grid;
+  place-items: center;
+  height: 13px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--oa-fill);
+  font-size: 7px;
+}
+.oa-web-source { display: flex; align-items: center; gap: 5px; height: 19px; padding: 0 8px; }
+.oa-web-source .oa-bar { height: 4px; }
+.oa-web-favicon { width: 10px; height: 10px; flex: none; border-radius: 3px; background: var(--accent); }
+.oa-web-favicon[data-index="1"] { background: var(--oa-ink); }
+.oa-web-favicon[data-index="2"] { background: var(--status-green); }
+.oa-web-domain { color: var(--text-tertiary); font-size: 7px; }
+.oa-web-setting { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; }
+
+/* Reusable Skills: the composer's $ palette */
+.oa-skill-palette { display: grid; gap: 1px; padding: 4px; border-radius: 14px; }
+.oa-skill-row { display: flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border-radius: 7px; }
+.oa-skill-icon { width: 11px; height: 11px; flex: none; color: var(--text-secondary); }
+.oa-skill-row.oa-selected .oa-skill-icon { color: var(--text-primary); }
+.oa-skill-name { color: var(--text-primary); font-size: 8px; font-weight: 600; white-space: nowrap; }
+.oa-skill-source { color: var(--text-tertiary); font-size: 7px; white-space: nowrap; }
+.oa-skill-row .oa-bar { height: 4px; }
+
+/* MCP Connectors: configured server rows */
+.oa-mcp-card { display: grid; padding: 0 9px; }
+.oa-mcp-row { display: flex; align-items: center; gap: 7px; height: 34px; }
+.oa-mcp-divided { box-shadow: inset 0 1px var(--border-separator); }
+.oa-mcp-avatar {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 6px;
+  background: var(--oa-fill);
+  color: var(--text-primary);
+}
+.oa-mcp-logo { width: 11px; height: 11px; fill: currentColor; font-size: 9px; font-weight: 650; }
+.oa-mcp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 12px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--oa-fill);
+  color: var(--text-tertiary);
+  font-size: 7px;
+  font-weight: 600;
+}
+.oa-mcp-status[data-on] { background: var(--status-green-surface); color: var(--status-green); }
+.oa-mcp-status .oa-icon { width: 7px; height: 7px; }
+.oa-mcp-meta { color: var(--text-tertiary); font-size: 7px; }
+.oa-mcp-meta .oa-icon { width: 7px; height: 7px; }

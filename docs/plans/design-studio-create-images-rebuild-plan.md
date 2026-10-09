@@ -455,7 +455,7 @@ Rules:
 ### CI-4 Release readiness
 
 - Default-on decision.
-- Onboarding bento tile with an optimized 1024² PNG (`npm run assets:onboarding`) and the asset test.
+- Onboarding bento tile with its own code-drawn illustration in `renderer/components/onboarding-art/` (see AGENTS.md → Onboarding) and the onboarding art test.
 - Quit-dialog copy driven by the real in-flight provider state.
 - Notarized-build smoke and populated-storage relaunch.
 
