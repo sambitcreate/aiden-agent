@@ -1259,7 +1259,7 @@ private fun UserMessageRow(
         MessageClusterPosition.LAST -> RoundedCornerShape(20.dp, 6.dp, 20.dp, 20.dp)
     }
 
-    val attachments = message.attachments.orEmpty()
+    val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), message.visuals.orEmpty())
     val imageAttachments = aidenEligibleImageAttachments(attachments)
     val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
@@ -1353,13 +1353,23 @@ private fun AssistantMessageRow(
     } else null
 
     val displayText = projection?.finalText ?: message.text
+    val visuals = message.visuals.orEmpty()
     val chronologicalRows = if (isBotChat) null else
-        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline)
+        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, visuals)
     val progressText = projection?.progressText ?: ""
-    val attachments = message.attachments.orEmpty()
-    val imageAttachments = aidenEligibleImageAttachments(attachments)
+    // Visual snapshots render inside their visual rows, never as ordinary attachments.
+    val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
+    val imageAttachments = aidenEligibleImageAttachments(attachments, visuals)
     val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
+    val renderVisual: @Composable (AidenChatVisual) -> Unit = { visual ->
+        AidenVisualRow(
+            visual = visual,
+            attachments = message.attachments.orEmpty(),
+            loadAttachmentImage = loadAttachmentImage,
+            palette = palette
+        )
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         if (chronologicalRows != null) {
@@ -1375,7 +1385,8 @@ private fun AssistantMessageRow(
                     active = false,
                     palette = palette,
                     onCopy = onCopy,
-                    onOpenUrl = onOpenUrl
+                    onOpenUrl = onOpenUrl,
+                    renderVisual = renderVisual
                 )
             }
         } else {
@@ -1448,6 +1459,13 @@ private fun AssistantMessageRow(
                 }
             }
         }
+        // Without a chronological timeline, visuals trail the reply in order.
+        visuals.forEach { visual ->
+            key(visual.id) {
+                Spacer(modifier = Modifier.height(8.dp))
+                renderVisual(visual)
+            }
+        }
         }
         if (imageAttachments.isNotEmpty()) {
             Spacer(modifier = Modifier.height(10.dp))
@@ -1483,7 +1501,8 @@ private fun AssistantMessageRow(
                 }
             }
         }
-        message.htmlArtifacts.orEmpty().forEach { artifact ->
+        // An html artifact whose visual has a snapshot is already shown; the rest stay "view on Mac".
+        aidenUnsupportedHtmlArtifacts(message).forEach { artifact ->
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
@@ -1514,6 +1533,107 @@ private fun AssistantMessageRow(
             )
         }
 
+    }
+}
+
+/** What a visual row shows: the Mac's snapshot when the message carries it, and [text] beneath or alone. */
+@Immutable
+internal data class AidenVisualDisplay(val snapshot: AidenMessageAttachment?, val text: String?)
+
+/**
+ * The snapshot when the visual names a usable image on its message; then the
+ * fallback text (beneath the snapshot, or alone); the title alone when neither.
+ */
+internal fun aidenVisualDisplay(visual: AidenChatVisual, attachments: List<AidenMessageAttachment>): AidenVisualDisplay {
+    val snapshot = visual.snapshotAttachmentId?.let { id ->
+        attachments.singleOrNull { it.id == id }?.takeIf(::aidenIsEligibleImage)
+    }
+    val fallback = visual.fallbackText?.takeIf { it.isNotBlank() }
+    return AidenVisualDisplay(snapshot, fallback ?: if (snapshot == null) visual.title else null)
+}
+
+/**
+ * The html artifacts that still need the "view in Aiden Agent" notice: those
+ * without an html visual whose snapshot the message carries.
+ */
+internal fun aidenUnsupportedHtmlArtifacts(message: AidenChatMessage): List<AidenHtmlArtifact> {
+    val attachments = message.attachments.orEmpty()
+    val shown = message.visuals.orEmpty()
+        .filter { it.kind == AidenChatVisual.KIND_HTML && aidenVisualDisplay(it, attachments).snapshot != null }
+        .mapTo(HashSet()) { it.id }
+    return message.htmlArtifacts.orEmpty().filterNot { it.id in shown }
+}
+
+private const val VISUAL_FALLBACK_COLLAPSED_LINES = 6
+
+/**
+ * One inline visual of a committed reply. Phones show the Mac's snapshot,
+ * described by the visual's title, with any fallback text beneath; without a
+ * snapshot, the fallback text alone; with neither, the title.
+ */
+@Composable
+internal fun AidenVisualRow(
+    visual: AidenChatVisual,
+    attachments: List<AidenMessageAttachment>,
+    loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    modifier: Modifier = Modifier
+) {
+    val display = remember(visual, attachments) { aidenVisualDisplay(visual, attachments) }
+    val snapshot = display.snapshot
+    if (snapshot != null) {
+        Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            AidenVisualSnapshotImage(
+                attachment = snapshot,
+                title = visual.title,
+                wide = visual.layout == AidenChatVisual.LAYOUT_WIDE,
+                loadData = loadAttachmentImage
+            )
+            display.text?.let { AidenVisualFallbackText(text = it, visualId = visual.id, palette = palette) }
+        }
+        return
+    }
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium, modifier = modifier) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            val fallback = display.text.takeUnless { visual.fallbackText.isNullOrBlank() }
+            if (fallback != null) {
+                AidenVisualFallbackText(text = fallback, visualId = visual.id, palette = palette)
+            } else {
+                Text(text = visual.title, style = MaterialTheme.typography.labelLarge, color = palette.foreground)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AidenVisualFallbackText(
+    text: String,
+    visualId: String,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+) {
+    var expanded by rememberSaveable(visualId) { mutableStateOf(false) }
+    var overflows by remember(text) { mutableStateOf(false) }
+    val reduceMotion = aidenReduceMotion()
+    Column(modifier = Modifier.animateContentSize(AidenMotion.spatial(reduceMotion))) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.secondary,
+            maxLines = if (expanded) Int.MAX_VALUE else VISUAL_FALLBACK_COLLAPSED_LINES,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { layout -> if (!expanded) overflows = layout.hasVisualOverflow }
+        )
+        if (overflows || expanded) {
+            Text(
+                text = stringResource(if (expanded) R.string.chat_visual_show_less else R.string.chat_visual_show_more),
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.accent,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .clickable(role = Role.Button) { expanded = !expanded }
+                    .padding(vertical = 4.dp)
+            )
+        }
     }
 }
 
@@ -1717,7 +1837,8 @@ private fun AidenChronologicalTranscript(
     active: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     onCopy: (String) -> Unit,
-    onOpenUrl: (String) -> Unit
+    onOpenUrl: (String) -> Unit,
+    renderVisual: @Composable (AidenChatVisual) -> Unit = {}
 ) {
     val lastTextId = rows.lastOrNull { it.kind == AidenChronologicalRow.Kind.TEXT }?.id
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1761,6 +1882,7 @@ private fun AidenChronologicalTranscript(
                             }
                         }
                     }
+                    AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
                 }
             }
         }

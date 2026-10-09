@@ -46,6 +46,10 @@ import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkEligibility
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkSource
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
@@ -475,6 +479,159 @@ class AidenChatTest {
                 AidenChronologicalRow.Kind.TEXT),
             AidenChronologicalProjection.rows(message.text, "", hiddenTimeline)?.map { it.kind }
         )
+    }
+
+    private fun fixtureVisualMessage(): AidenChatMessage {
+        val data = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
+        val chat = wireJson.decodeFromJsonElement(AidenChat.serializer(), Json.parseToJsonElement(data).jsonObject.getValue("chat"))
+        return chat.messages.single { it.id == "message_fixture_assistant_01" }
+    }
+
+    private fun visualWireMessage(visuals: String): AidenChatMessage = wireJson.decodeFromString(
+        """
+            {"id":"message-visuals","role":"assistant","text":"Here it is.","createdAt":"2026-08-25T18:00:00.000Z",
+             "attachments":[{"id":"visual-snapshot_aa","name":"Chart.png","mimeType":"image/png","kind":"image","size":10}],
+             "visuals":$visuals}
+        """.trimIndent()
+    )
+
+    @Test
+    fun fixtureChatDecodesItsInlineVisualsInReplyOrder() {
+        val message = fixtureVisualMessage()
+        val visuals = message.visuals.orEmpty()
+        assertEquals(listOf("artifact_fixture_01", "ui_fixture_01"), visuals.map { it.id })
+        assertEquals(listOf("html", "ui"), visuals.map { it.kind })
+        assertEquals(listOf("call-1", "call-2"), visuals.map { it.toolCallId })
+        assertEquals("wide", visuals[0].layout)
+        assertNull(visuals[1].layout)
+        assertEquals("Plan options\nSolo: \$12.00\nTeam: \$60.00", visuals[1].fallbackText)
+        assertTrue(message.isWireSafe)
+    }
+
+    @Test
+    fun eachVisualFollowsTheToolStepThatDrewItAndUnmatchedVisualsTrail() {
+        val message = fixtureVisualMessage()
+        val rows = AidenChronologicalProjection.rows(
+            message.text, message.reasoning.orEmpty(), message.timeline, message.visuals.orEmpty()
+        )!!
+        // Both tool steps share content offset 0, yet each visual sits right after its own step.
+        assertEquals(
+            listOf("TOOL:call-1", "VISUAL:artifact_fixture_01", "TOOL:call-2", "VISUAL:ui_fixture_01", "TEXT:"),
+            rows.map { row ->
+                when (row.kind) {
+                    AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                    AidenChronologicalRow.Kind.VISUAL -> "VISUAL:" + row.visual?.id
+                    else -> "${row.kind}:"
+                }
+            }
+        )
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+
+        val orphan = AidenChatVisual(id = "ui_orphan", kind = "ui", title = "Orphan", toolCallId = "call-9")
+        val trailing = AidenChronologicalProjection.rows(
+            message.text, "", message.timeline, message.visuals.orEmpty() + orphan
+        )!!
+        assertEquals(AidenChronologicalRow.Kind.VISUAL, trailing.last().kind)
+        assertEquals("ui_orphan", trailing.last().visual?.id)
+        // Without visuals, the steps group as before.
+        assertEquals(
+            listOf(AidenChronologicalRow.Kind.TOOL, AidenChronologicalRow.Kind.TEXT),
+            AidenChronologicalProjection.rows(message.text, "", message.timeline)?.map { it.kind }
+        )
+    }
+
+    @Test
+    fun malformedVisualIsDroppedWithoutLosingItsMessage() {
+        val message = visualWireMessage(
+            """
+            [
+              {"id":"ui_untitled","kind":"ui"},
+              {"id":"ui_kind","kind":"chart","title":"Bad kind"},
+              {"id":"ui_call","kind":"ui","title":"Bad call","toolCallId":"tool-1"},
+              {"id":"ui_layout","kind":"ui","title":"Bad layout","layout":"narrow"},
+              {"id":"ui_long","kind":"ui","title":"Long","fallbackText":"${"x".repeat(4_001)}"},
+              "not an object",
+              {"id":"html_ok","kind":"html","title":"Chart","snapshotAttachmentId":"visual-snapshot_aa","futureKey":1},
+              {"id":"html_ok","kind":"html","title":"Duplicate"}
+            ]
+            """.trimIndent()
+        )
+        assertEquals("Here it is.", message.text)
+        assertEquals(listOf("html_ok"), message.visuals?.map { it.id })
+        assertEquals("Chart", message.visuals?.single()?.title)
+        assertTrue(message.isWireSafe)
+
+        val chat = AidenChat(
+            id = "chat-visuals", workspaceId = "workspace-1", title = "Visuals", messages = listOf(message),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "rev_1"
+        )
+        assertEquals(1, chat.messages.size)
+    }
+
+    @Test
+    fun moreThanFortyVisualsFailTheMessage() {
+        val forty = (1..40).map { AidenChatVisual(id = "ui_$it", kind = "ui", title = "Visual $it") }
+        val base = AidenChatMessage("message-1", AidenChatRole.ASSISTANT, "Text", createdAt = Instant.EPOCH)
+        assertTrue(base.copy(visuals = forty).isWireSafe)
+        assertFalse(base.copy(visuals = forty + AidenChatVisual(id = "ui_41", kind = "ui", title = "Visual 41")).isWireSafe)
+    }
+
+    @Test
+    fun snapshotAttachmentsNeverReachTheOrdinaryAttachmentList() {
+        val message = fixtureVisualMessage()
+        val photo = AidenMessageAttachment("photo-1", "Photo.png", "image/png", AidenAttachmentKind.IMAGE, 1_024)
+        val namedSnapshot = AidenMessageAttachment("named-snapshot", "Named.png", "image/png", AidenAttachmentKind.IMAGE, 1_024)
+        val strayPrefixed = AidenMessageAttachment(
+            "visual-snapshot_${"3".repeat(64)}", "Stray.png", "image/png", AidenAttachmentKind.IMAGE, 1_024
+        )
+        val notes = AidenMessageAttachment("notes", "notes.txt", "text/plain", AidenAttachmentKind.TEXT, 12)
+        val visuals = message.visuals.orEmpty() +
+            AidenChatVisual(id = "ui_named", kind = "ui", title = "Named", snapshotAttachmentId = "named-snapshot")
+        val attachments = message.attachments.orEmpty() + photo + namedSnapshot + strayPrefixed + notes
+
+        assertEquals(listOf(photo), aidenEligibleImageAttachments(attachments, visuals))
+        assertEquals(listOf(photo, notes), aidenVisibleMessageAttachments(attachments, visuals))
+        // A message without visuals keeps every ordinary image.
+        assertEquals(listOf(photo, namedSnapshot), aidenEligibleImageAttachments(listOf(photo, namedSnapshot)))
+    }
+
+    @Test
+    fun visualRowShowsSnapshotThenFallbackTextThenTitle() {
+        val message = fixtureVisualMessage()
+        val attachments = message.attachments.orEmpty()
+        val (html, ui) = message.visuals.orEmpty()
+
+        val htmlDisplay = aidenVisualDisplay(html, attachments)
+        assertEquals(html.snapshotAttachmentId, htmlDisplay.snapshot?.id)
+        assertNull(htmlDisplay.text)
+
+        val uiDisplay = aidenVisualDisplay(ui, attachments)
+        assertEquals(ui.snapshotAttachmentId, uiDisplay.snapshot?.id)
+        assertEquals(ui.fallbackText, uiDisplay.text)
+
+        // A snapshot the message does not carry is no snapshot at all.
+        val fallbackOnly = aidenVisualDisplay(ui, emptyList())
+        assertNull(fallbackOnly.snapshot)
+        assertEquals(ui.fallbackText, fallbackOnly.text)
+
+        val titleOnly = aidenVisualDisplay(html, emptyList())
+        assertNull(titleOnly.snapshot)
+        assertEquals("Weekly total", titleOnly.text)
+    }
+
+    @Test
+    fun htmlArtifactNoticeIsSuppressedOnlyWhenItsVisualHasASnapshot() {
+        val message = fixtureVisualMessage()
+        assertEquals(emptyList<AidenHtmlArtifact>(), aidenUnsupportedHtmlArtifacts(message))
+
+        val withoutSnapshot = message.copy(visuals = message.visuals?.map { it.copy(snapshotAttachmentId = null) })
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(withoutSnapshot).map { it.id })
+
+        val snapshotMissing = message.copy(attachments = emptyList())
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(snapshotMissing).map { it.id })
+
+        val noVisuals = message.copy(visuals = null)
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(noVisuals).map { it.id })
     }
 
     @Test
