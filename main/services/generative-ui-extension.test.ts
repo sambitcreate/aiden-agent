@@ -120,9 +120,6 @@ test("render_artifact takes a column or wide layout and hands it to the host", a
   await tool.execute("call-3", { title: "Card", html: "<p>c</p>", layout: "column" });
   await assert.rejects(tool.execute("call-4", { title: "X", html: "<p>d</p>", layout: "huge" }), /layout/iu);
   assert.deepEqual(seen, ["wide", "column", "column"]);
-  // The model is told where visuals appear and when to ask for the wide frame.
-  assert.match(extension.systemPrompt ?? "", /layout/u);
-  assert.match(extension.systemPrompt ?? "", /wide/u);
 });
 
 test("generative UI enablement matches the display_image chat gate", () => {

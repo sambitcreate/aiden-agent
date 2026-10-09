@@ -1314,8 +1314,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 else next.delete(artifact.mediaId);
                 return next;
               });
-            }
-            if (artifact.kind === "html") {
               const index = streamingArtifactsRef.current.findIndex(
                 (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
               );

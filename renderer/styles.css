@@ -848,7 +848,7 @@ textarea {
   margin-inline: calc((100% - var(--inline-visual-wide-width)) / 2);
 }
 
-/* Beside a docked Quick View card the column is already off-centre; stay in it. */
+/* While Quick View is open, docked or floating, the card owns that space; stay in the column. */
 [data-chat-card-inset] .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
   width: 100%;
   margin-inline: 0;
@@ -862,7 +862,8 @@ textarea {
 
 /* The iframe never matches :focus-visible itself; the host marks the box
    while keyboard focus is inside the guest. Drawn inside the clipped box. */
-.aiden-inline-visual-frame[data-guest-focused] {
+.aiden-inline-visual-frame[data-guest-focused],
+[data-html-artifact-expanded] [data-inline-visual-frame][data-guest-focused] {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }

@@ -172,6 +172,12 @@ export function createGenerativeUiExtensionRuntime(
           minLength: 1,
           maxLength: MAX_HTML_ARTIFACT_TITLE_CHARS,
         }),
+        layout: Type.Optional(
+          Type.Union([Type.Literal("column"), Type.Literal("wide")], {
+            description:
+              "Set before html. column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, for dashboards, UI mockups, multi-panel layouts, and wide tables.",
+          }),
+        ),
         html: Type.Optional(
           Type.String({
             description: "Complete HTML document or fragment. Mutually exclusive with path.",
@@ -185,12 +191,6 @@ export function createGenerativeUiExtensionRuntime(
               "Workspace-relative .html file to copy into Aiden-owned storage. Needs workspace access; otherwise pass html.",
             minLength: 1,
             maxLength: 4096,
-          }),
-        ),
-        layout: Type.Optional(
-          Type.Union([Type.Literal("column"), Type.Literal("wide")], {
-            description:
-              "column (default): the reading column, about 690px wide, for charts, cards, diagrams, and small tools. wide: spans the whole chat pane (up to about 1280px) and follows the window size, for dashboards, UI mockups, multi-panel layouts, and wide tables.",
           }),
         ),
       }),
@@ -338,7 +338,7 @@ export function createGenerativeUiExtensionRuntime(
     extension: {
       id: GENERATIVE_UI_EXTENSION_ID,
       systemPrompt:
-        "Aiden can draw inline visuals in this chat with render_artifact. Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden desktop chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" when it needs room, such as a dashboard, UI mockup, multi-panel layout, or wide table, and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (design, html, charts, interactive). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
+        "Aiden can draw inline visuals in this chat with render_artifact. Use one when a comparison, trend, structure, process, or interactive what-if is clearer as a visual than as prose — not for plain answers or raster images (use display_image), and usually at most one per reply. Each visual appears inside your reply in the Aiden desktop chat, at the point you call the tool, on the chat's own background (no frame or border), with its height following its content. It defaults to the reading column (about 690px wide); pass layout \"wide\" (before html) when it needs room, such as a dashboard, UI mockup, multi-panel layout, or wide table, and it will span the chat pane and follow the window size. Either way its width changes with the window, so build it fluid. Before your first visual in a conversation, call visualize_guide with the modules you need (design, html, charts, interactive). Keep the reply complete without the visual: state the key takeaway in a sentence. Never load remote scripts or call network APIs from a visual, and do not claim inline visuals are unavailable while these tools are present." +
         (options.preferArtifactThisTurn
           ? " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
           : ""),

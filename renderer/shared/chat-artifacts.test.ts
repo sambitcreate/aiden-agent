@@ -136,12 +136,12 @@ test("present and draft events may mark a visual wide", () => {
     version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src, layout: "wide",
   });
   assert.equal(draft?.operation === "draft" && draft.layout, "wide");
-  for (const bad of [
-    { version: 1, operation: "present", artifact: HTML, layout: "huge" },
-    { version: 1, operation: "draft", toolCallId: "call_1", src, layout: "column" },
-  ]) {
-    assert.equal(parseChatArtifactEventV1(bad), undefined, JSON.stringify(bad));
-  }
+  // Any other layout reads as the reading column; it never hides the visual.
+  const narrowPresent = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, layout: "huge" });
+  assert.equal(narrowPresent?.operation, "present");
+  assert.equal(narrowPresent && "layout" in narrowPresent, false);
+  const narrowDraft = parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", src, layout: "column" });
+  assert.deepEqual(narrowDraft, { version: 1, operation: "draft", toolCallId: "call_1", src });
 });
 
 test("draft events carry a preview URL for one tool call and nothing else", () => {

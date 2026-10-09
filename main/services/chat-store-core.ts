@@ -1423,8 +1423,9 @@ export function createChatStore(
             htmlArtifactPlacements:
               message.role === "assistant" && message.htmlArtifactPlacements?.length
                 ? message.htmlArtifactPlacements.map((placement) => ({
-                    ...placement,
                     mediaId: remappedHtmlArtifactMediaId(newChatId, placement.mediaId),
+                    toolCallId: placement.toolCallId,
+                    ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
                   }))
                 : undefined,
             skill:

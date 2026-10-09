@@ -263,7 +263,6 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
     if (!generativeUiPreviewTokenFromUrl(event.src)) return undefined;
     const titled = "title" in event;
     if (titled && !isHtmlArtifactTitle(event.title)) return undefined;
-    if ("layout" in event && event.layout !== "wide") return undefined;
     return {
       version: CHAT_ARTIFACT_EVENT_VERSION,
       operation: "draft",
@@ -277,7 +276,6 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
   if (!Object.keys(event).every((key) => PRESENT_EVENT_ALLOWED_KEYS.has(key))) return undefined;
   if (![...PRESENT_EVENT_KEYS].every((key) => key in event)) return undefined;
   if (event.toolCallId !== undefined && !isToolCallId(event.toolCallId)) return undefined;
-  if ("layout" in event && event.layout !== "wide") return undefined;
   if (
     event.src !== undefined &&
     (typeof event.src !== "string" || !generativeUiPreviewTokenFromUrl(event.src))

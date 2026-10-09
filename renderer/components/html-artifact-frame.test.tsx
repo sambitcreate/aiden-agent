@@ -141,6 +141,22 @@ test("clicking into the guest never draws the focus ring", async () => {
   assert.equal(box().hasAttribute("data-guest-focused"), false);
 });
 
+test("a Tab long before a click into the guest does not draw the ring", async (t) => {
+  let now = 1_000;
+  t.mock.method(performance, "now", () => now);
+  const { view, iframe } = await mountedFrame();
+  const box = () => view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!;
+  act(() => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  });
+  now += 2_000;
+  act(() => {
+    iframe.focus();
+    window.dispatchEvent(new Event("blur"));
+  });
+  assert.equal(box().hasAttribute("data-guest-focused"), false);
+});
+
 test("a wide visual is marked so it can span the chat pane", () => {
   const view = render(<HtmlArtifactFrame chatId="c1" artifact={artifact("Board")} layout="wide" />);
   assert.equal(screen.getByRole("figure", { name: "Board" }).getAttribute("data-layout"), "wide");
