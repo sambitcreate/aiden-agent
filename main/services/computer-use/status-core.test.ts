@@ -7,27 +7,15 @@ import {
   CuaDriverError,
 } from "./contract.js";
 import { ComputerUseStatusService } from "./status-core.js";
+import { FakeCuaDriver } from "./fixtures/cua-driver-catalog.mjs";
 
-function toolResult(structuredContent: Record<string, unknown>) {
-  return {
-    content: [{ type: "text", text: "status" }],
-    structuredContent,
-  };
-}
-
+// The 0.34.1 health_report/check_permissions wire shapes, as the embedded
+// driver returns them (no prompt, no ScreenCaptureKit probe).
 function health(overrides: Record<string, unknown> = {}) {
-  return toolResult({
-    overall: "ok",
-    platform: "darwin",
-    schema_version: "1",
-    driver_version: "0.8.3",
-    checks: [
-      { name: "binary_version", status: "pass" },
-      { name: "platform_supported", status: "pass" },
-      { name: "session_active", status: "pass" },
-    ],
-    ...overrides,
-  });
+  const result = new FakeCuaDriver().call("health_report", {
+    include: ["binary_version", "platform_supported", "session_active"],
+  }) as { structuredContent: Record<string, unknown> };
+  return { ...result, structuredContent: { ...result.structuredContent, ...overrides } };
 }
 
 function permissions(
@@ -35,18 +23,11 @@ function permissions(
   screenRecording: boolean,
   overrides: Record<string, unknown> = {},
 ) {
-  return toolResult({
-    accessibility,
-    screen_recording: screenRecording,
-    screen_recording_capturable: screenRecording,
-    source: {
-      attribution: "host",
-      embedded: true,
-      host_bundle_id: CUA_DRIVER_TCC_HOST_BUNDLE_ID,
-      disclaim_env: false,
-    },
-    ...overrides,
-  });
+  const result = new FakeCuaDriver({
+    hostBundleId: CUA_DRIVER_TCC_HOST_BUNDLE_ID,
+    permissions: { accessibility, screen_recording: screenRecording },
+  }).call("check_permissions", { prompt: false }) as { structuredContent: Record<string, unknown> };
+  return { ...result, structuredContent: { ...result.structuredContent, ...overrides } };
 }
 
 function fakeHost(
@@ -116,7 +97,7 @@ test("accepts only the pinned healthy driver with both macOS permissions", async
   const cached = await service.status();
   assert.equal(first.state, "ready");
   assert.equal(first.ready, true);
-  assert.equal(first.driverVersion, "0.8.3");
+  assert.equal(first.driverVersion, "0.34.1");
   assert.equal(cached, first);
   assert.equal(concurrent, first);
   assert.equal(hosts, 1);
@@ -196,7 +177,38 @@ test("reports exact missing permissions and prompts only on an explicit request"
   );
 });
 
-test("requires the live ScreenCaptureKit capability rather than a stale preflight grant", async () => {
+test("a not-checked ScreenCaptureKit probe defers to the TCC preflight", async () => {
+  for (const [screenRecording, state] of [
+    [true, "ready"],
+    [false, "permission_required"],
+  ] as const) {
+    const service = new ComputerUseStatusService({
+      isEnabled: async () => true,
+      createHost: async () =>
+        fakeHost([], (name) =>
+          name === "health_report" ? health() : permissions(true, screenRecording),
+        ),
+    });
+    const status = await service.status();
+    assert.equal(status.state, state);
+    assert.equal(status.permissions.screenRecording, screenRecording);
+  }
+});
+
+test("a malformed ScreenCaptureKit probe result fails closed", async () => {
+  const service = new ComputerUseStatusService({
+    isEnabled: async () => true,
+    createHost: async () =>
+      fakeHost([], (name) =>
+        name === "health_report"
+          ? health()
+          : permissions(true, true, { screen_recording_capturable: "ready" }),
+      ),
+  });
+  assert.equal((await service.status()).state, "incompatible");
+});
+
+test("a live ScreenCaptureKit probe that failed vetoes a stale preflight grant", async () => {
   const service = new ComputerUseStatusService({
     isEnabled: async () => true,
     createHost: async () =>
@@ -377,7 +389,7 @@ test("fails closed when health or permission payloads drift", async () => {
     isEnabled: async () => true,
     createHost: async () =>
       fakeHost([], (name) =>
-        name === "health_report" ? health({ driver_version: "0.8.4" }) : permissions(true, true),
+        name === "health_report" ? health({ driver_version: "0.8.3" }) : permissions(true, true),
       ),
   });
 

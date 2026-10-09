@@ -28,13 +28,9 @@
   - Excluded: node_modules `.ts`, test/example/docs directories, and README/CHANGELOG-style
     `.md` files.
   - Not excluded: `doc`, because `yaml/dist/doc` is runtime code; `benchmark`; licence files.
-- **Onboarding art:** `npm run assets:onboarding` quantizes the PNGs to 256 colors and keeps
-  them as 8-bit RGBA, because the onboarding test requires color type 6.
-  - The script is idempotent.
-  - 21.8 MB became 10.5 MB, at ≥38 dB premultiplied PSNR.
-  - Run it after adding new art.
-  - `features/aiden-assistant.png` and `features/form-fill.png` are not referenced by the
-    bento, which is kept for planned tiles.
+- **Onboarding art:** the 10.5 MB of quantized PNGs (and `npm run assets:onboarding`) are gone
+  (2026-10-09). The feature tour now draws its art in code, a few tens of KB of TSX and CSS; see
+  `.memory/onboarding-art.md`.
 - **Native C helpers:**
   - Builds go through `compileNativeC`, which writes a `<output>.stamp` fingerprint
     covering the source, quoted local headers (transitively), compiler, args, env,

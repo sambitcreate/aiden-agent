@@ -1,7 +1,12 @@
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { CuaDriverError, type CuaDriverToolInfo } from "./contract.js";
+import {
+  CUA_DRIVER_ELEMENT_TOKEN_PATTERN,
+  CUA_DRIVER_TYPED_TARGET_TOOLS,
+  CuaDriverError,
+  type CuaDriverToolInfo,
+} from "./contract.js";
 import type { CuaDriverCallOptions } from "./session.js";
 import type { ComputerUseArgs, ComputerUseMode } from "./schema.js";
 import {
@@ -23,6 +28,18 @@ const CAPTURE_TIMEOUT_MS = 60_000;
 const MAX_DRIVER_TEXT_CHARS = 96_000;
 const MAX_IMAGE_BASE64_CHARS = 60 * 1024 * 1024;
 const DESKTOP_NAMES = new Set(["screen", "desktop"]);
+/** get_window_state's own default AX walk cap (`get_window_state.rs`). */
+const AX_WALK_CEILING = 2_000;
+const AX_WALK_FLOOR = 500;
+
+/**
+ * The driver's max_elements caps AX nodes walked, including the structural
+ * rows it never returns, so the model's element budget alone would truncate
+ * the tree early. Walk generously; the returned list is capped locally.
+ */
+function axWalkBudget(maximumElements: number): number {
+  return Math.min(AX_WALK_CEILING, Math.max(AX_WALK_FLOOR, maximumElements * 5));
+}
 
 export interface CuaDriverSessionLike {
   readonly ready: boolean;
@@ -59,14 +76,26 @@ export interface ComputerUseResultDetails {
   height?: number;
   elementCount?: number;
   degradedToAccessibility?: boolean;
-  driverEffect?: string;
-  verified?: boolean;
-  path?: string;
-  code?: string;
-  degraded?: boolean;
-  escalation?: { recommended?: string; reason?: string };
+  /** cua-driver's account of the action (`ActionResult.effect`), never `refused`. */
+  driverEffect?: ComputerUseDriverEffect;
+  /** Route the driver used (`ActionResult.route`). */
+  driverRoute?: string;
+  /** Delivery the driver reports (`ActionResult.delivery.mode`). */
+  deliveryMode?: string;
+  /** Delivered unit count, present for a `partial` effect. */
+  deliveredCount?: number;
+  /** Evidence kinds behind a `confirmed` effect. */
+  evidence?: string[];
+  /** Driver advice for the next rung; the harness decides whether to follow it. */
+  escalation?: { target: string; reason: string };
   capturedAfter?: boolean;
+  /** verify only: the aggregate verify_state status. */
+  verifyStatus?: ComputerUseVerifyStatus;
 }
+
+export type ComputerUseVerifyStatus = "satisfied" | "unsatisfied" | "unknown";
+
+export type ComputerUseDriverEffect = "confirmed" | "partial" | "unverifiable" | "suspected_noop";
 
 export interface ComputerUseApprovalDescriptor {
   toolName: "computer_use";
@@ -108,9 +137,15 @@ interface ElementRecord {
   value?: string;
   /** Known toggle state for checkbox-like controls (absent = unknown). */
   checked?: boolean;
+  /** AXSelected (or a checkbox/radio value) when the driver reports it. */
+  selected?: boolean;
+  enabled?: boolean;
   /** Actions the control advertises (e.g. AXPress). */
   actions?: string[];
+  /** Screen-point rectangle. */
   frame?: Bounds;
+  /** The same rectangle in pixels of this capture's screenshot. */
+  screenshotFrame?: Bounds;
   parentIndex?: number;
   depth?: number;
 }
@@ -134,19 +169,55 @@ interface ParsedDriverResult {
   structured: Record<string, unknown> | null;
 }
 
-interface DriverVerdict {
-  verified?: boolean;
-  effect?: string;
-  path?: string;
-  code?: string;
-  degraded?: boolean;
-  escalation?: { recommended?: string; reason?: string };
+/** The closed 0.34 `ActionResult` (`cua-driver-contract/src/outputs.rs`). */
+interface DriverActionOutcome {
+  effect: ComputerUseDriverEffect;
+  route: string;
+  delivery?: { mode: string; delivered_count?: number };
+  evidence?: Array<{ kind: string; detail?: string }>;
+  escalation?: { target: string; reason: string };
 }
+
+interface DriverCall {
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+const ACTION_EFFECTS = new Set(["confirmed", "partial", "unverifiable", "suspected_noop", "refused"]);
+const ACTION_ROUTES = new Set([
+  "accessibility",
+  "synthetic_events",
+  "global_input",
+  "system_api",
+  "dom",
+  "trusted_input",
+]);
+const DELIVERY_MODES = new Set(["background", "foreground", "not_applicable", "unknown"]);
+const EVIDENCE_KINDS = new Set(["value_readback", "window_change"]);
+const ESCALATION_TARGETS = new Set(["pixel", "foreground", "page", "session"]);
+const ESCALATION_REASONS = new Set([
+  "route_unavailable",
+  "delivery_failed",
+  "effect_unconfirmed",
+  "suspected_noop",
+  "permission_required",
+]);
+/** Refusal codes meaning the exact (pid, window_id) target no longer resolves. */
+const WINDOW_TARGET_REFUSALS = new Set([
+  "ambiguous_window_target",
+  "window_target_not_found",
+  "window_id_not_found",
+  "window_owner_pid_mismatch",
+]);
 
 class ComputerUseDriverActionError extends Error {
   constructor(
     message: string,
     readonly poisonsSession = false,
+    /** Machine-readable refusal code from the driver's error envelope. */
+    readonly code?: string,
+    /** The driver could not account for input it may already have delivered. */
+    readonly executionUnknown = false,
   ) {
     super(message);
     this.name = "ComputerUseDriverActionError";
@@ -306,28 +377,96 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
       text.trim()
         ? `cua-driver rejected the action: ${text.trim().slice(0, 2_000)}`
         : "cua-driver rejected the action.",
+      false,
+      refusalCode(asRecord(parsed.structuredContent)),
+      // tool.rs / mcp_result.rs: output-contract failures after dispatch.
+      asRecord(parsed.structuredContent)?.execution_state === "unknown",
     );
   }
   return { text, image, structured: asRecord(parsed.structuredContent) };
 }
 
-function parseDriverVerdict(structured: Record<string, unknown> | null): DriverVerdict {
-  if (!structured) return {};
+/**
+ * The refusal code from either 0.34 error envelope:
+ * `{status:"refused", refusal:{code}}` (element-token and dispatch paths) or
+ * `{code, effect:"refused"}` (window-target and delivery paths).
+ */
+function refusalCode(structured: Record<string, unknown> | null): string | undefined {
+  if (!structured) return undefined;
+  const code = structured.code ?? asRecord(structured.refusal)?.code ?? asRecord(structured.error)?.code;
+  return typeof code === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(code) ? code : undefined;
+}
+
+function enumString(value: unknown, allowed: ReadonlySet<string>): string | undefined {
+  return typeof value === "string" && allowed.has(value) ? value : undefined;
+}
+
+/**
+ * Parse the closed 0.34 action result. A successful action tool always
+ * answers with it, so anything else is contract drift and poisons the session.
+ * A `refused` effect carries `error.code` and is raised as that refusal.
+ */
+function parseActionResult(structured: Record<string, unknown> | null): DriverActionOutcome {
+  const effect = enumString(structured?.effect, ACTION_EFFECTS);
+  const route = enumString(structured?.route, ACTION_ROUTES);
+  if (!structured || !effect || !route) {
+    throw new ComputerUseDriverActionError(
+      "Computer Use returned an action result outside the pinned contract.",
+      true,
+    );
+  }
+  if (effect === "refused") {
+    const error = asRecord(structured.error);
+    const hint = safeString(error?.hint, 1_000);
+    throw new ComputerUseDriverActionError(
+      hint ? `cua-driver refused the action: ${hint}` : "cua-driver refused the action.",
+      false,
+      refusalCode(structured),
+    );
+  }
+  const delivery = asRecord(structured.delivery);
+  const deliveryMode = enumString(delivery?.mode, DELIVERY_MODES);
+  const deliveredCount = safeInteger(delivery?.delivered_count, 0);
+  const evidence = Array.isArray(structured.evidence)
+    ? structured.evidence.slice(0, 16).flatMap((value) => {
+        const item = asRecord(value);
+        const kind = enumString(item?.kind, EVIDENCE_KINDS);
+        if (!kind) return [];
+        const detail = safeString(item?.detail, 1_000);
+        return [{ kind, ...(detail ? { detail } : {}) }];
+      })
+    : undefined;
   const escalationRecord = asRecord(structured.escalation);
-  const recommended = safeString(escalationRecord?.recommended, 64);
-  const reason = safeString(escalationRecord?.reason, 1_000);
-  const escalation =
-    recommended || reason
-      ? { ...(recommended ? { recommended } : {}), ...(reason ? { reason } : {}) }
-      : undefined;
-  const code = safeString(structured.code ?? structured.reason_code, 256);
+  const escalationTarget = enumString(escalationRecord?.target, ESCALATION_TARGETS);
+  const escalationReason = enumString(escalationRecord?.reason, ESCALATION_REASONS);
   return {
-    ...(typeof structured.verified === "boolean" ? { verified: structured.verified } : {}),
-    ...(safeString(structured.effect, 256) ? { effect: safeString(structured.effect, 256) } : {}),
-    ...(safeString(structured.path, 256) ? { path: safeString(structured.path, 256) } : {}),
-    ...(code ? { code } : {}),
-    ...(typeof structured.degraded === "boolean" ? { degraded: structured.degraded } : {}),
-    ...(escalation ? { escalation } : {}),
+    effect: effect as ComputerUseDriverEffect,
+    route,
+    ...(deliveryMode
+      ? {
+          delivery: {
+            mode: deliveryMode,
+            ...(deliveredCount !== undefined ? { delivered_count: deliveredCount } : {}),
+          },
+        }
+      : {}),
+    ...(evidence?.length ? { evidence } : {}),
+    ...(escalationTarget && escalationReason
+      ? { escalation: { target: escalationTarget, reason: escalationReason } }
+      : {}),
+  };
+}
+
+function outcomeDetails(outcome: DriverActionOutcome): Partial<ComputerUseResultDetails> {
+  return {
+    driverEffect: outcome.effect,
+    driverRoute: outcome.route,
+    ...(outcome.delivery ? { deliveryMode: outcome.delivery.mode } : {}),
+    ...(outcome.delivery?.delivered_count !== undefined
+      ? { deliveredCount: outcome.delivery.delivered_count }
+      : {}),
+    ...(outcome.evidence ? { evidence: outcome.evidence.map((item) => item.kind) } : {}),
+    ...(outcome.escalation ? { escalation: outcome.escalation } : {}),
   };
 }
 
@@ -392,18 +531,25 @@ function normalizeElements(result: ParsedDriverResult, maximum: number): Element
     const index = safeInteger(element.element_index ?? element.index, 0);
     if (index === undefined) continue;
     const rawActions = Array.isArray(element.actions) ? element.actions : undefined;
+    const role = safeString(element.role, 256);
+    const selected = typeof element.selected === "boolean" ? element.selected : undefined;
+    const toggle = role !== undefined && /checkbox|radiobutton/iu.test(role);
+    const token = safeString(element.element_token, 512);
     const normalized: ElementRecord = {
       index,
-      token: safeString(element.element_token, 512),
-      role: safeString(element.role, 256),
+      token: token && CUA_DRIVER_ELEMENT_TOKEN_PATTERN.test(token) ? token : undefined,
+      role,
       label: safeString(element.label, 1_000),
       value: safeString(element.value, 1_000),
-      checked: typeof element.checked === "boolean" ? element.checked : undefined,
+      checked: toggle ? selected : undefined,
+      selected,
+      enabled: typeof element.enabled === "boolean" ? element.enabled : undefined,
       actions: rawActions
         ?.map((action) => safeString(action, 128))
         .filter((action): action is string => action !== undefined)
         .slice(0, 32),
       frame: parseBounds(element.frame),
+      screenshotFrame: parseBounds(element.screenshot_frame),
       parentIndex: safeInteger(element.parent_index, 0),
       depth: safeInteger(element.depth, 0),
     };
@@ -440,7 +586,8 @@ function publicElement(element: ElementRecord): Record<string, unknown> {
     ...(element.role ? { role: element.role } : {}),
     ...(element.label ? { label: element.label } : {}),
     ...(element.value ? { value: element.value } : {}),
-    ...(typeof element.checked === "boolean" ? { checked: element.checked } : {}),
+    ...(typeof element.selected === "boolean" ? { selected: element.selected } : {}),
+    ...(element.enabled === false ? { enabled: false } : {}),
     ...(element.actions?.length ? { actions: element.actions } : {}),
     ...(element.frame ? { frame: element.frame } : {}),
     ...(element.parentIndex !== undefined ? { parent_index: element.parentIndex } : {}),
@@ -480,10 +627,104 @@ function waitFor(milliseconds: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function schemaDeclaresProperty(tool: CuaDriverToolInfo | undefined, property: string): boolean {
-  const schema = asRecord(tool?.inputSchema);
-  const properties = asRecord(schema?.properties);
-  return properties ? Object.prototype.hasOwnProperty.call(properties, property) : false;
+const VERIFY_STATUSES = new Set(["satisfied", "unsatisfied", "unknown"]);
+const UNKNOWN_REASONS = new Set([
+  "invalid_predicate",
+  "unsupported_predicate",
+  "untrusted_source",
+  "multi_match",
+  "target_missing",
+  "observation_unavailable",
+  "stability_unproven",
+]);
+
+/** Aiden's flat element predicate becomes verify_state's `{selector, ...}` shape. */
+function driverPredicate(
+  predicate: NonNullable<ComputerUseArgs["expect"]>[number],
+): Record<string, unknown> {
+  if (predicate.window) return { window: { ...predicate.window } };
+  const element = predicate.element ?? {};
+  const { role, label_contains: labelContains, ...state } = element;
+  return {
+    element: {
+      selector: {
+        ...(role !== undefined ? { role } : {}),
+        ...(labelContains !== undefined ? { label_contains: labelContains } : {}),
+      },
+      exists: true,
+      ...state,
+    },
+  };
+}
+
+/** `VerifyStateOutput` (`cua-driver-contract/src/verification.rs`). */
+function parseVerification(structured: Record<string, unknown> | null): {
+  status: ComputerUseVerifyStatus;
+  stable: boolean;
+  samples?: number;
+  elapsed_ms?: number;
+  predicates: Array<{
+    index: number;
+    status: ComputerUseVerifyStatus;
+    unknown_reason?: string;
+    observed?: string;
+  }>;
+} {
+  const status = enumString(structured?.status, VERIFY_STATUSES);
+  if (!structured || !status || !Array.isArray(structured.predicates)) {
+    throw new ComputerUseDriverActionError(
+      "Computer Use returned a verification result outside the pinned contract.",
+      true,
+    );
+  }
+  return {
+    status: status as ComputerUseVerifyStatus,
+    stable: structured.stable === true,
+    ...(safeInteger(structured.samples, 0) !== undefined
+      ? { samples: safeInteger(structured.samples, 0) }
+      : {}),
+    ...(safeInteger(structured.elapsed_ms, 0) !== undefined
+      ? { elapsed_ms: safeInteger(structured.elapsed_ms, 0) }
+      : {}),
+    predicates: structured.predicates.slice(0, 8).flatMap((value) => {
+      const predicate = asRecord(value);
+      const index = safeInteger(predicate?.index, 0);
+      const predicateStatus = enumString(predicate?.status, VERIFY_STATUSES);
+      if (index === undefined || !predicateStatus) return [];
+      const reason = enumString(predicate?.unknown_reason, UNKNOWN_REASONS);
+      // Matched application state is untrusted content; keep it bounded.
+      const observed = safeString(predicate?.observed_json, 1_000);
+      return [
+        {
+          index,
+          status: predicateStatus as ComputerUseVerifyStatus,
+          ...(reason ? { unknown_reason: reason } : {}),
+          ...(observed ? { observed } : {}),
+        },
+      ];
+    }),
+  };
+}
+
+/**
+ * The pinned schemas are closed: the driver refuses any undeclared argument
+ * as invalid_arguments. Refuse locally first, before approval or dispatch.
+ */
+function assertSchemaAccepts(
+  tool: CuaDriverToolInfo | undefined,
+  name: string,
+  args: Record<string, unknown>,
+): void {
+  const properties = asRecord(asRecord(tool?.inputSchema)?.properties);
+  const undeclared = Object.keys(args).find(
+    (key) => !properties || !Object.prototype.hasOwnProperty.call(properties, key),
+  );
+  if (undeclared !== undefined) {
+    throw new ComputerUseSafetyError(
+      "unsupported_arguments",
+      `The pinned cua-driver ${name} schema does not accept ${undeclared}.`,
+    );
+  }
 }
 
 export class ComputerUseController {
@@ -581,6 +822,8 @@ export class ComputerUseController {
           return await this.listWindowsResult(signal);
         case "focus_app":
           return await this.focusApp(args, signal, focusBinding);
+        case "verify":
+          return await this.verify(args, signal);
         default:
           return await this.mutate(args, signal);
       }
@@ -659,12 +902,57 @@ export class ComputerUseController {
     } catch (error) {
       if (error instanceof ComputerUseDriverActionError) {
         if (error.poisonsSession) this.poison();
-        throw error;
+        throw this.refusalError(error);
       }
       if (error instanceof CuaDriverError && error.code === "request_too_large") throw error;
       this.poison();
       throw error;
     }
+  }
+
+  /**
+   * Translate the driver's machine-readable refusals into Aiden's recovery
+   * instructions, and drop local state the refusal proves stale. Nothing was
+   * delivered for any of these, so the session stays usable.
+   */
+  private refusalError(error: ComputerUseDriverActionError): Error {
+    const detail = error.message.slice(0, 1_000);
+    if (error.executionUnknown) {
+      // The UI may already have changed; nothing captured before can be trusted.
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      return new ComputerUseSafetyError(
+        "execution_unknown",
+        `cua-driver could not report whether this action ran${error.code ? ` (${error.code})` : ""}; it may already have taken effect. Capture the window again and check before any retry, and never repeat it blindly. (${detail})`,
+      );
+    }
+    if (error.code === "stale_element_token") {
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      return new ComputerUseSafetyError(
+        "stale_element",
+        `The element token from the latest capture is no longer valid. Capture the window again before acting. (${detail})`,
+      );
+    }
+    if (error.code === "screenshot_context_missing") {
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      return new ComputerUseSafetyError(
+        "snapshot_required",
+        `cua-driver holds no screenshot of this window from this session. Capture it again with a screenshot before using pixel coordinates. (${detail})`,
+      );
+    }
+    if (error.code && WINDOW_TARGET_REFUSALS.has(error.code)) {
+      this.clearTarget();
+      return new ComputerUseSafetyError(
+        "target_unavailable",
+        `The captured window no longer resolves to one exact target (${error.code}). Call list_windows, then capture the intended pid and window_id again. (${detail})`,
+      );
+    }
+    if (error.code === "background_unavailable") {
+      return new ComputerUseSafetyError(
+        "foreground_required",
+        `cua-driver cannot deliver this action in the background. Retry it with delivery_mode "foreground", which visibly fronts the window and needs its own approval. (${detail})`,
+      );
+    }
+    return error;
   }
 
   private poison(): void {
@@ -822,7 +1110,13 @@ export class ComputerUseController {
         args.app && DESKTOP_NAMES.has(args.app.trim().toLowerCase())
           ? await this.resolveDesktopWindow(signal)
           : await this.resolveTarget(args, signal);
-      return await this.captureWindow(target, requestedMode, args.max_elements ?? 100, signal);
+      return await this.captureWindow(
+        target,
+        requestedMode,
+        args.max_elements ?? 100,
+        signal,
+        args.max_image_dimension,
+      );
     } catch (error) {
       this.clearTarget();
       throw error;
@@ -834,6 +1128,7 @@ export class ComputerUseController {
     requestedMode: ComputerUseMode,
     maximumElements: number,
     signal: AbortSignal,
+    maxImageDimension?: number,
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     // A new snapshot invalidates every prior index/token even if the driver
     // subsequently reports an error.
@@ -841,16 +1136,26 @@ export class ComputerUseController {
     const degraded = requestedMode === "vision" && !this.supportsImages;
     const effectiveMode: ComputerUseMode = degraded ? "ax" : requestedMode;
     const includeScreenshot = this.supportsImages && effectiveMode !== "ax";
-    const driverArgs: Record<string, unknown> = {
-      pid: window.pid,
-      window_id: window.windowId,
-      include_screenshot: includeScreenshot,
-      max_elements: effectiveMode === "vision" ? 1 : maximumElements,
-    };
-    // `som` is Aiden's response-shaping mode, not a value in the pinned
-    // driver's advertised enum. The current driver always returns the AX tree;
-    // include_screenshot controls whether pixels are included.
-    if (effectiveMode !== "som") driverArgs.capture_mode = effectiveMode;
+    // 0.34 ignores the deprecated capture_mode; the two include_* switches
+    // select the work. Vision skips the AX walk entirely (its snapshot still
+    // anchors pixel actions); ax and text-only models skip the screenshot.
+    const driverArgs: Record<string, unknown> =
+      effectiveMode === "vision"
+        ? {
+            pid: window.pid,
+            window_id: window.windowId,
+            include_accessibility_tree: false,
+            include_screenshot: true,
+          }
+        : {
+            pid: window.pid,
+            window_id: window.windowId,
+            include_screenshot: includeScreenshot,
+            max_elements: axWalkBudget(maximumElements),
+          };
+    if (maxImageDimension !== undefined && driverArgs.include_screenshot === true) {
+      driverArgs.max_image_dimension = maxImageDimension;
+    }
     const result = await this.callDriver(
       "get_window_state",
       driverArgs,
@@ -862,8 +1167,8 @@ export class ComputerUseController {
     }
     const elements = effectiveMode === "vision" ? [] : normalizeElements(result, maximumElements);
     const target = this.setTarget(window, elements);
-    const width = result.image?.width ?? safeInteger(result.structured?.width, 1);
-    const height = result.image?.height ?? safeInteger(result.structured?.height, 1);
+    const width = result.image?.width ?? safeInteger(result.structured?.screenshot_width, 1);
+    const height = result.image?.height ?? safeInteger(result.structured?.screenshot_height, 1);
     // Only exact dimensions parsed from this capture's image can translate AX
     // point frames into the driver's screenshot-pixel coordinate space.
     target.screenshotWidth = result.image?.width;
@@ -877,9 +1182,16 @@ export class ComputerUseController {
       ...(width !== undefined ? { width } : {}),
       ...(height !== undefined ? { height } : {}),
       elements: elements.map(publicElement),
-      total_elements: safeInteger(result.structured?.element_count, 0) ?? elements.length,
+      total_elements:
+        safeInteger(result.structured?.total_element_count, 0) ??
+        safeInteger(result.structured?.element_count, 0) ??
+        elements.length,
       ...(degraded
         ? { note: "Vision capture degraded to accessibility text for this model." }
+        : {}),
+      // e.g. ax_tree_empty: a non-AX surface the model should act on by pixels.
+      ...(result.structured?.degraded === true && safeString(result.structured.degraded_reason)
+        ? { capture_note: safeString(result.structured.degraded_reason, 1_000) }
         : {}),
     };
     return textResult(
@@ -942,7 +1254,9 @@ export class ComputerUseController {
     }
     const target = this.setTarget(resolved);
     let effect = "targeted_background_window";
-    let verdict: DriverVerdict = {};
+    // bring_to_front keeps its own typed result (not an ActionResult): its
+    // success already means the exact window was verified frontmost.
+    let activated: boolean | undefined;
     try {
       if (args.raise_window === true) {
         const result = await this.callDriver(
@@ -950,7 +1264,9 @@ export class ComputerUseController {
           { pid: target.pid, window_id: target.windowId },
           signal,
         );
-        verdict = parseDriverVerdict(result.structured);
+        if (typeof result.structured?.activated === "boolean") {
+          activated = result.structured.activated;
+        }
         effect = "brought_to_front";
       }
     } catch (error) {
@@ -963,14 +1279,12 @@ export class ComputerUseController {
       action: "focus_app",
       effect,
       target: this.targetDetails(target),
-      ...verdict,
+      ...(activated !== undefined ? { activated } : {}),
     };
     if (args.capture_after === true) {
       try {
         const capture = await this.captureWindow(target, "som", 100, signal);
         capture.details.action = "focus_app";
-        capture.details.driverEffect = verdict.effect ?? effect;
-        Object.assign(capture.details, verdict);
         capture.details.capturedAfter = true;
         capture.content[0] = {
           type: "text",
@@ -988,21 +1302,51 @@ export class ComputerUseController {
             capture_warning:
               "The focus action completed, but the follow-up capture failed. Do not repeat the action blindly.",
           },
-          {
-            action: "focus_app",
-            target: this.targetDetails(target),
-            driverEffect: verdict.effect ?? effect,
-            ...verdict,
-          },
+          { action: "focus_app", target: this.targetDetails(target) },
         );
       }
     }
-    return textResult(actionPayload, {
-      action: "focus_app",
-      target: this.targetDetails(target),
-      driverEffect: verdict.effect ?? effect,
-      ...verdict,
-    });
+    return textResult(actionPayload, { action: "focus_app", target: this.targetDetails(target) });
+  }
+
+  /** Read-only verify_state on the active exact window; it never replaces the capture. */
+  private async verify(
+    args: ComputerUseArgs,
+    signal: AbortSignal,
+  ): Promise<AgentToolResult<ComputerUseResultDetails>> {
+    const target = this.requireTarget();
+    const session = await this.getSession(signal);
+    const includeScreenshot = args.include_screenshot === true && this.supportsImages;
+    const driverArgs: Record<string, unknown> = {
+      pid: target.pid,
+      window_id: target.windowId,
+      expect: (args.expect ?? []).map(driverPredicate),
+      ...(args.stable_samples !== undefined ? { stable_samples: args.stable_samples } : {}),
+      ...(args.timeout_ms !== undefined ? { timeout_ms: args.timeout_ms } : {}),
+      ...(includeScreenshot ? { include_screenshot: true } : {}),
+    };
+    assertSchemaAccepts(session.toolCatalog.get("verify_state"), "verify_state", driverArgs);
+    const result = await this.callDriver("verify_state", driverArgs, signal);
+    let verification: ReturnType<typeof parseVerification>;
+    try {
+      verification = parseVerification(result.structured);
+    } catch (error) {
+      if (error instanceof ComputerUseDriverActionError && error.poisonsSession) this.poison();
+      throw error;
+    }
+    return textResult(
+      {
+        ok: true,
+        action: "verify",
+        target: this.targetDetails(target),
+        ...verification,
+        ...(args.include_screenshot === true && !this.supportsImages
+          ? { note: "This model cannot read images, so no screenshot was requested." }
+          : {}),
+      },
+      { action: "verify", target: this.targetDetails(target), verifyStatus: verification.status },
+      includeScreenshot ? result.image : undefined,
+    );
   }
 
   private requireTarget(): ActiveTarget {
@@ -1026,93 +1370,156 @@ export class ComputerUseController {
     return element;
   }
 
+  /** Approval rehearses the exact driver call so a doomed action is never prompted. */
   private validateApprovalTarget(args: ComputerUseArgs, target: ActiveTarget): void {
-    const dragTool = this.session?.toolCatalog.get("drag");
-    const dragCommonProperties = [
-      "pid",
-      "window_id",
-      "button",
-      ...(args.modifiers?.length ? ["modifier"] : []),
-      ...(args.delivery_mode === "foreground" ? ["delivery_mode"] : []),
-    ];
-    const elementOk = [...dragCommonProperties, "from_element", "to_element"].every((property) =>
-      schemaDeclaresProperty(dragTool, property),
-    );
-    const pixelOk = [...dragCommonProperties, "from_x", "from_y", "to_x", "to_y"].every(
-      (property) => schemaDeclaresProperty(dragTool, property),
-    );
+    this.buildDriverCall(args, target, this.session?.toolCatalog);
+  }
+
+  /**
+   * Resolve one approved action into the single 0.34 driver call it makes.
+   * Pure apart from validation: element indices resolve to the latest
+   * capture's tokens, pixels are checked against its screenshot, and every
+   * argument must be one the pinned closed schema declares.
+   */
+  private buildDriverCall(
+    args: ComputerUseArgs,
+    target: ActiveTarget,
+    catalog: ReadonlyMap<string, CuaDriverToolInfo> | undefined,
+  ): DriverCall {
+    let tool: string;
+    let driverArgs: Record<string, unknown>;
+    const windowArgs = (name: string): Record<string, unknown> =>
+      CUA_DRIVER_TYPED_TARGET_TOOLS.has(name)
+        ? { target: { kind: "window", pid: target.pid, window_id: target.windowId } }
+        : { pid: target.pid, window_id: target.windowId };
+
     switch (args.action) {
       case "click":
       case "double_click":
       case "right_click":
-      case "middle_click":
-        if (args.element !== undefined) this.requireCapturedElement(target, args.element);
-        else if (args.coordinate) this.pointArgs(target, args.coordinate);
-        break;
-      case "drag": {
-        const usesElements = args.from_element !== undefined && args.to_element !== undefined;
-        const usesCoordinates =
-          args.from_coordinate !== undefined && args.to_coordinate !== undefined;
-        if (usesElements && elementOk) {
-          const fromElement = args.from_element!;
-          const toElement = args.to_element!;
-          this.requireCapturedElement(target, fromElement);
-          this.requireCapturedElement(target, toElement);
-        } else if (
-          (usesElements ||
-            usesCoordinates ||
-            args.from_element !== undefined ||
-            args.to_element !== undefined ||
-            args.from_coordinate !== undefined ||
-            args.to_coordinate !== undefined) &&
-          pixelOk
-        ) {
-          const from =
-            args.from_element !== undefined
-              ? this.elementCenter(target, args.from_element)
-              : args.from_coordinate!;
-          const to =
-            args.to_element !== undefined
-              ? this.elementCenter(target, args.to_element)
-              : args.to_coordinate!;
-          this.pointArgs(target, from);
-          this.pointArgs(target, to);
-        } else {
-          throw new ComputerUseSafetyError(
-            "unsupported_drag",
-            "The pinned cua-driver drag schema does not support this drag target combination.",
-          );
+      case "middle_click": {
+        tool =
+          args.action === "double_click"
+            ? "double_click"
+            : args.action === "right_click"
+              ? "right_click"
+              : "click";
+        driverArgs = windowArgs(tool);
+        if (args.element !== undefined) {
+          Object.assign(driverArgs, this.elementArgs(catalog, tool, target, args.element));
+        } else if (args.coordinate) {
+          Object.assign(driverArgs, this.pointArgs(target, args.coordinate));
         }
+        if (tool === "click") driverArgs.button = args.button ?? "left";
+        if (args.modifiers?.length) driverArgs.modifier = args.modifiers;
+        break;
+      }
+      case "drag": {
+        // macOS 0.34 drag has no element endpoints and is foreground-only.
+        tool = "drag";
+        const from =
+          args.from_element !== undefined
+            ? this.elementScreenshotCenter(target, args.from_element)
+            : args.from_coordinate;
+        const to =
+          args.to_element !== undefined
+            ? this.elementScreenshotCenter(target, args.to_element)
+            : args.to_coordinate;
+        if (!from || !to) {
+          throw new ComputerUseSafetyError("invalid_drag", "drag requires a source and a target.");
+        }
+        const start = this.pointArgs(target, from);
+        const end = this.pointArgs(target, to);
+        driverArgs = {
+          ...windowArgs(tool),
+          from_x: start.x,
+          from_y: start.y,
+          to_x: end.x,
+          to_y: end.y,
+          button: args.button ?? "left",
+          ...(args.modifiers?.length ? { modifier: args.modifiers } : {}),
+        };
         break;
       }
       case "scroll":
-        if (args.element !== undefined) this.requireCapturedElement(target, args.element);
-        else if (args.coordinate) this.pointArgs(target, args.coordinate);
+        tool = "scroll";
+        driverArgs = { ...windowArgs(tool), direction: args.direction, amount: args.amount ?? 3 };
+        if (args.element !== undefined) {
+          Object.assign(driverArgs, this.elementArgs(catalog, tool, target, args.element));
+        } else if (args.coordinate) {
+          Object.assign(driverArgs, this.pointArgs(target, args.coordinate));
+        }
         break;
+      case "type":
+        tool = "type_text";
+        driverArgs = { ...windowArgs(tool), text: args.text };
+        break;
+      case "key": {
+        const chord = parseComputerUseKeyChord(args.keys);
+        tool = chord.modifiers.length ? "hotkey" : "press_key";
+        driverArgs = windowArgs(tool);
+        if (tool === "hotkey") driverArgs.keys = [...chord.modifiers, chord.key];
+        else driverArgs.key = chord.key;
+        break;
+      }
       case "set_value":
-        this.requireCapturedElement(target, args.element!);
+        tool = "set_value";
+        driverArgs = {
+          ...windowArgs(tool),
+          ...this.elementArgs(catalog, tool, target, args.element!),
+          value: args.value,
+        };
+        break;
+      case "menu":
+        // invoke_menu fronts the app itself; it takes no delivery_mode.
+        tool = "invoke_menu";
+        driverArgs = { ...windowArgs(tool), path: [...(args.menu_path ?? [])] };
+        break;
+      case "set_window_frame":
+        tool = "set_window_frame";
+        driverArgs = {
+          ...windowArgs(tool),
+          x: args.x,
+          y: args.y,
+          width: args.width,
+          height: args.height,
+        };
         break;
       default:
-        break;
+        throw new ComputerUseSafetyError("invalid_action", `Unsupported mutation ${args.action}.`);
     }
+    if (args.delivery_mode === "foreground" && tool !== "invoke_menu") {
+      driverArgs.delivery_mode = "foreground";
+    }
+    if (catalog) assertSchemaAccepts(catalog.get(tool), tool, driverArgs);
+    return { tool, args: driverArgs };
   }
 
   private elementArgs(
-    session: CuaDriverSessionLike,
+    catalog: ReadonlyMap<string, CuaDriverToolInfo> | undefined,
     tool: string,
     target: ActiveTarget,
     index: number,
   ): Record<string, unknown> {
     const element = this.requireCapturedElement(target, index);
-    return {
-      element_index: index,
-      ...(element.token && session.supports(tool, "accessibility.element_tokens")
-        ? { element_token: element.token }
-        : {}),
-    };
+    if (catalog && !catalog.get(tool)?.capabilities.has("accessibility.element_tokens")) {
+      throw new ComputerUseSafetyError(
+        "element_unsupported",
+        `The pinned cua-driver ${tool} tool does not accept element tokens. Use pixel coordinates instead.`,
+      );
+    }
+    // 0.34 addresses elements only by the snapshot-bound token; Aiden's index
+    // is a local handle into the latest capture.
+    if (!element.token) {
+      throw new ComputerUseSafetyError(
+        "stale_element",
+        `Element ${index} has no element token in the latest capture. Capture the window again before acting on it.`,
+      );
+    }
+    return { element_token: element.token };
   }
 
-  private pointArgs(target: ActiveTarget, coordinate: readonly number[]): Record<string, unknown> {
+  private pointArgs(target: ActiveTarget, coordinate: readonly number[]): { x: number; y: number } {
     const [x, y] = coordinate;
     if (target.screenshotWidth === undefined || target.screenshotHeight === undefined) {
       throw new ComputerUseSafetyError(
@@ -1129,74 +1536,29 @@ export class ComputerUseController {
     return { x, y };
   }
 
-  private elementCenter(target: ActiveTarget, index: number): [number, number] {
-    const element = target.elements.get(index);
-    if (!element?.frame || !target.bounds) {
-      throw new ComputerUseSafetyError(
-        "drag_frame_unavailable",
-        `Element ${index} has no safe frame for a drag. Use pixel coordinates instead.`,
-      );
-    }
-    const centerX = element.frame.x + element.frame.width / 2;
-    const centerY = element.frame.y + element.frame.height / 2;
-    const localX =
-      centerX >= target.bounds.x && centerX <= target.bounds.x + target.bounds.width
-        ? centerX - target.bounds.x
-        : centerX >= 0 && centerX <= target.bounds.width
-          ? centerX
-          : Number.NaN;
-    const localY =
-      centerY >= target.bounds.y && centerY <= target.bounds.y + target.bounds.height
-        ? centerY - target.bounds.y
-        : centerY >= 0 && centerY <= target.bounds.height
-          ? centerY
-          : Number.NaN;
+  /** Centre of an element in the latest capture's screenshot pixels. */
+  private elementScreenshotCenter(target: ActiveTarget, index: number): [number, number] {
+    const element = this.requireCapturedElement(target, index);
+    const frame = element.screenshotFrame;
     const width = target.screenshotWidth;
     const height = target.screenshotHeight;
-    if (
-      width === undefined ||
-      height === undefined ||
-      !Number.isFinite(localX) ||
-      !Number.isFinite(localY) ||
-      !Number.isFinite(width) ||
-      !Number.isFinite(height) ||
-      width <= 0 ||
-      height <= 0
-    ) {
+    if (!frame || width === undefined || height === undefined) {
       throw new ComputerUseSafetyError(
         "drag_frame_unavailable",
-        `Element ${index} could not be mapped into screenshot coordinates.`,
+        `Element ${index} has no screenshot frame in the latest capture. Capture with a screenshot, or drag by pixel coordinates.`,
       );
     }
-    return [
-      Math.max(0, Math.min(width - 1, (localX * width) / target.bounds.width)),
-      Math.max(0, Math.min(height - 1, (localY * height) / target.bounds.height)),
-    ];
-  }
-
-  private async applyDelivery(
-    tool: string,
-    args: ComputerUseArgs,
-    driverArgs: Record<string, unknown>,
-    target: ActiveTarget,
-    session: CuaDriverSessionLike,
-    signal: AbortSignal,
-  ): Promise<void> {
-    if (args.delivery_mode !== "foreground") return;
-    if (!schemaDeclaresProperty(session.toolCatalog.get(tool), "delivery_mode")) {
+    // screenshot_frame is unclipped (element_frame.rs): an element scrolled
+    // out of view or overflowing the window has no pixel in this screenshot,
+    // and pinning it to an edge would drag something unrelated.
+    const center: [number, number] = [frame.x + frame.width / 2, frame.y + frame.height / 2];
+    if (center[0] < 0 || center[1] < 0 || center[0] >= width || center[1] >= height) {
       throw new ComputerUseSafetyError(
-        "foreground_unsupported",
-        `The pinned cua-driver does not support foreground delivery for ${tool}.`,
+        "drag_frame_unavailable",
+        `Element ${index} lies outside the captured window. Scroll it into view and capture again, or drag by pixel coordinates.`,
       );
     }
-    if (args.bring_to_front === true) {
-      await this.callDriver(
-        "bring_to_front",
-        { pid: target.pid, window_id: target.windowId },
-        signal,
-      );
-    }
-    driverArgs.delivery_mode = "foreground";
+    return center;
   }
 
   private async mutate(
@@ -1205,146 +1567,47 @@ export class ComputerUseController {
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     const target = this.requireTarget();
     const session = await this.getSession(signal);
-    let tool: string;
-    let driverArgs: Record<string, unknown> = {
-      pid: target.pid,
-      window_id: target.windowId,
-    };
-
-    switch (args.action) {
-      case "click":
-      case "double_click":
-      case "right_click":
-      case "middle_click": {
-        tool =
-          args.action === "double_click"
-            ? "double_click"
-            : args.action === "right_click"
-              ? "right_click"
-              : "click";
-        if (args.element !== undefined) {
-          driverArgs = { ...driverArgs, ...this.elementArgs(session, tool, target, args.element) };
-        } else if (args.coordinate) {
-          driverArgs = { ...driverArgs, ...this.pointArgs(target, args.coordinate) };
-        }
-        if (tool === "click") driverArgs.button = args.button ?? "left";
-        if (args.modifiers?.length) driverArgs.modifier = args.modifiers;
-        break;
-      }
-      case "drag": {
-        tool = "drag";
-        const dragTool = session.toolCatalog.get("drag");
-        const dragCommonProperties = [
-          "pid",
-          "window_id",
-          "button",
-          ...(args.modifiers?.length ? ["modifier"] : []),
-          ...(args.delivery_mode === "foreground" ? ["delivery_mode"] : []),
-        ];
-        const elementOk = [...dragCommonProperties, "from_element", "to_element"].every(
-          (property) => schemaDeclaresProperty(dragTool, property),
-        );
-        const pixelOk = [...dragCommonProperties, "from_x", "from_y", "to_x", "to_y"].every(
-          (property) => schemaDeclaresProperty(dragTool, property),
-        );
-        const usesElements = args.from_element !== undefined && args.to_element !== undefined;
-        const usesCoordinates =
-          args.from_coordinate !== undefined && args.to_coordinate !== undefined;
-        if (usesElements && elementOk) {
-          const fromElement = args.from_element!;
-          const toElement = args.to_element!;
-          this.requireCapturedElement(target, fromElement);
-          this.requireCapturedElement(target, toElement);
-          driverArgs = {
-            ...driverArgs,
-            from_element: fromElement,
-            to_element: toElement,
-            button: args.button ?? "left",
-            ...(args.modifiers?.length ? { modifier: args.modifiers } : {}),
-          };
-        } else if (
-          (usesElements ||
-            usesCoordinates ||
-            args.from_element !== undefined ||
-            args.to_element !== undefined ||
-            args.from_coordinate !== undefined ||
-            args.to_coordinate !== undefined) &&
-          pixelOk
-        ) {
-          const from =
-            args.from_element !== undefined
-              ? this.elementCenter(target, args.from_element)
-              : args.from_coordinate!;
-          const to =
-            args.to_element !== undefined
-              ? this.elementCenter(target, args.to_element)
-              : args.to_coordinate!;
-          this.pointArgs(target, from);
-          this.pointArgs(target, to);
-          driverArgs = {
-            ...driverArgs,
-            from_x: from[0],
-            from_y: from[1],
-            to_x: to[0],
-            to_y: to[1],
-            button: args.button ?? "left",
-            ...(args.modifiers?.length ? { modifier: args.modifiers } : {}),
-          };
-        } else {
-          throw new ComputerUseSafetyError(
-            "unsupported_drag",
-            "The pinned cua-driver drag schema does not support this drag target combination.",
-          );
-        }
-        break;
-      }
-      case "scroll":
-        tool = "scroll";
-        driverArgs.direction = args.direction;
-        driverArgs.amount = args.amount ?? 3;
-        if (args.element !== undefined) {
-          driverArgs = { ...driverArgs, ...this.elementArgs(session, tool, target, args.element) };
-        } else if (args.coordinate) {
-          driverArgs = { ...driverArgs, ...this.pointArgs(target, args.coordinate) };
-        }
-        break;
-      case "type":
-        tool = "type_text";
-        driverArgs.text = args.text;
-        break;
-      case "key": {
-        const chord = parseComputerUseKeyChord(args.keys);
-        tool = chord.modifiers.length ? "hotkey" : "press_key";
-        if (tool === "hotkey") driverArgs.keys = [...chord.modifiers, chord.key];
-        else driverArgs.key = chord.key;
-        break;
-      }
-      case "set_value":
-        tool = "set_value";
-        driverArgs = {
-          ...driverArgs,
-          ...this.elementArgs(session, tool, target, args.element!),
-          value: args.value,
-        };
-        break;
-      default:
-        throw new ComputerUseSafetyError("invalid_action", `Unsupported mutation ${args.action}.`);
+    const call = this.buildDriverCall(args, target, session.toolCatalog);
+    if (args.delivery_mode === "foreground" && args.bring_to_front === true) {
+      await this.callDriver(
+        "bring_to_front",
+        { pid: target.pid, window_id: target.windowId },
+        signal,
+      );
     }
-
-    await this.applyDelivery(tool, args, driverArgs, target, session, signal);
-    const result = await this.callDriver(tool, driverArgs, signal);
-    const verdict = parseDriverVerdict(result.structured);
-    const effect = verdict.effect ?? verdict.path;
-    // Driver indices/tokens and screenshot coordinates describe the UI before
-    // this mutation. Keep the immutable window identity, but make every later
+    // invoke_menu focuses the app and presses earlier segments before it can
+    // refuse a later one, and may leave a menu open, so a menu failure still
+    // changes the UI the current snapshot describes.
+    const invalidateAfterMenuFailure = () => {
+      if (call.tool === "invoke_menu") this.invalidateTargetSnapshot(target);
+    };
+    let result: Awaited<ReturnType<typeof this.callDriver>>;
+    try {
+      result = await this.callDriver(call.tool, call.args, signal);
+    } catch (error) {
+      invalidateAfterMenuFailure();
+      throw error;
+    }
+    let outcome: DriverActionOutcome;
+    try {
+      outcome = parseActionResult(result.structured);
+    } catch (error) {
+      invalidateAfterMenuFailure();
+      if (!(error instanceof ComputerUseDriverActionError)) throw error;
+      if (error.poisonsSession) this.poison();
+      throw this.refusalError(error);
+    }
+    // Driver tokens and screenshot coordinates describe the UI before this
+    // mutation. Keep the immutable window identity, but make every later
     // element/pixel action acquire a fresh snapshot and a fresh approval.
     this.invalidateTargetSnapshot(target);
+    const details = outcomeDetails(outcome);
     const actionPayload: Record<string, unknown> = {
       ok: true,
       action: args.action,
       target: this.targetDetails(target),
       ...(result.text ? { message: result.text.slice(0, 8_000) } : {}),
-      ...verdict,
+      ...outcome,
       ...(args.delivery_mode ? { delivery_mode: args.delivery_mode } : {}),
     };
 
@@ -1363,8 +1626,7 @@ export class ComputerUseController {
           details: {
             ...capture.details,
             action: args.action,
-            driverEffect: effect,
-            ...verdict,
+            ...details,
             capturedAfter: true,
           },
         };
@@ -1376,20 +1638,14 @@ export class ComputerUseController {
             capture_warning:
               "The action completed, but the follow-up capture failed. Do not repeat the action blindly.",
           },
-          {
-            action: args.action,
-            target: this.targetDetails(target),
-            driverEffect: effect,
-            ...verdict,
-          },
+          { action: args.action, target: this.targetDetails(target), ...details },
         );
       }
     }
     return textResult(actionPayload, {
       action: args.action,
       target: this.targetDetails(target),
-      driverEffect: effect,
-      ...verdict,
+      ...details,
     });
   }
 
