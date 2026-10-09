@@ -1,6 +1,6 @@
 # Generative UI Artifacts Plan
 
-Status: Active  
+Status: Active — succeeded by [Inline Generative UI](../superpowers/specs/2026-10-08-inline-generative-ui-design.md) (2026-10-08), which rebuilds the frame, placement, theming, streaming and availability described here.  
 Date: 2026-08-26  
 Sources: Google Antigravity blog [Visualizing with the help of Antigravity](https://antigravity.google/blog/visualizing-with-the-help-of-antigravity) (2026-08-26), [Antigravity changelog 2.11.0](https://antigravity.google/changelog), [Artifacts overview](https://antigravity.google/docs/artifacts), Aiden `docs/pi-gui-artifacts.md`, `display_image` extension, Designer Mode plan, ChatGPT work-surface notes.
 
