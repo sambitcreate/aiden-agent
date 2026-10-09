@@ -27,6 +27,9 @@ export type AumNode = AumElement | { kind: "text"; text: string } | { kind: "exp
 const NAME_START = /[A-Za-z]/u;
 const NAME_CHAR = /[A-Za-z0-9_.-]/u;
 const RAW_TEXT_ELEMENTS = new Set(["Data", "Code", "Math", "Markdown"]);
+/** Deeper nesting than any visual can use; past it, open tags stop nesting. */
+const MAX_OPEN_ELEMENTS = 64;
+const MAX_DIAGNOSTICS = 200;
 
 interface Frame {
   element: AumElement | null;
@@ -46,7 +49,7 @@ export function parseAum(markup: string): { nodes: AumNode[]; diagnostics: Aiden
     text = "";
   };
   const recovered = (message: string, at?: string) => {
-    diagnostics.push({ code: "recovered", message, ...(at ? { at } : {}) });
+    if (diagnostics.length < MAX_DIAGNOSTICS) diagnostics.push({ code: "recovered", message, ...(at ? { at } : {}) });
   };
 
   /** Reads `{…}` starting at `start` (the `{`); returns the inner source and end, or null at EOF. */
@@ -183,6 +186,12 @@ export function parseAum(markup: string): { nodes: AumNode[]; diagnostics: Aiden
           continue;
         }
         if (index >= markup.length) continue;
+        if (stack.length > MAX_OPEN_ELEMENTS) {
+          // Too deep to be a real visual: keep the tag, stop nesting into it.
+          tag.element.closed = true;
+          recovered(`Elements nest more than ${MAX_OPEN_ELEMENTS} deep`, tag.element.name);
+          continue;
+        }
         if (RAW_TEXT_ELEMENTS.has(tag.element.name)) {
           const closer = `</${tag.element.name}>`;
           const end = markup.indexOf(closer, index);

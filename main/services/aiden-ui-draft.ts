@@ -43,7 +43,14 @@ export function createUiDraftSession(options: UiDraftSessionOptions) {
     if (!call.publicId) return;
     const args = call.latestArgs as { title?: unknown; markup?: unknown; layout?: unknown } | undefined;
     if (!args || typeof args.markup !== "string" || !args.markup.trim()) return;
-    const compiled = compileAum(args.markup, { draft: true });
+    // compileAum never throws, but a draft runs on a main-process timer:
+    // nothing here may escape as an uncaught exception.
+    let compiled: ReturnType<typeof compileAum>;
+    try {
+      compiled = compileAum(args.markup, { draft: true });
+    } catch {
+      return;
+    }
     if (!compiled.tree) return;
     const title = typeof args.title === "string" && isHtmlArtifactTitle(args.title) ? args.title : compiled.title ?? "Visualizing";
     const visual = parseChatUiVisualV1({

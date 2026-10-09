@@ -29,6 +29,7 @@ export interface CompiledAum {
 /** Elements that may sit inside text-only components (`<Text>Press <Kbd>⌘</Kbd></Text>`). */
 const INLINE_ELEMENTS = new Set(["Kbd", "Badge", "Icon", "Math"]);
 const EVENT_OR_STYLE_PROP = /^(on[A-Z]|className$|style$|class$)/u;
+const RESERVED_DATA_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const MAX_TEXT_CHARS = 8000;
 
 interface Context {
@@ -38,6 +39,8 @@ interface Context {
   limitReported: boolean;
   data: Record<string, unknown>;
   stateKeys: Set<string>;
+  /** Unknown tag names already reported, so one repeated tag is one diagnostic. */
+  unknownReported: Set<string>;
 }
 
 function report(context: Context, diagnostic: AidenUiDiagnostic): void {
@@ -47,7 +50,8 @@ function report(context: Context, diagnostic: AidenUiDiagnostic): void {
 function reportLimit(context: Context, message: string): void {
   if (context.limitReported) return;
   context.limitReported = true;
-  report(context, { code: "limit", message });
+  // Always recorded, even past the diagnostic cap: it explains a cut visual.
+  context.diagnostics.push({ code: "limit", message });
 }
 
 function keysAreWireSafe(value: unknown): boolean {
@@ -189,7 +193,7 @@ function textOf(nodes: readonly AumNode[]): string {
 function collectData(element: AumElement, context: Context): void {
   const nameAttr = element.attrs.find((attr) => attr.name === "name");
   const name = nameAttr?.value.kind === "string" ? nameAttr.value.text : undefined;
-  if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+  if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || RESERVED_DATA_NAMES.has(name)) {
     report(context, { code: "data_invalid", message: 'Data needs a name like <Data name="data">', at: "Data" });
     return;
   }
@@ -271,17 +275,21 @@ function compileChildren(
     const entry = AIDEN_UI_CATALOG[node.name];
     if (!entry || node.name === "Visual") {
       // Unknown element: drop it but keep what it contained.
-      report(context, {
-        code: "unknown_element",
-        message: `<${node.name}> is not a catalog component; its content was kept`,
-        at: node.name,
-      });
-      children.push(...compileChildren(node.children, policy, parent, depth, context));
+      if (!context.unknownReported.has(node.name)) {
+        context.unknownReported.add(node.name);
+        report(context, {
+          code: "unknown_element",
+          message: `<${node.name}> is not a catalog component; its content was kept`,
+          at: node.name,
+        });
+      }
+      // Flattened content still counts toward the depth cap.
+      children.push(...compileChildren(node.children, policy, parent, depth + 1, context));
       continue;
     }
     if (policy === "none" || (policy === "text" && !INLINE_ELEMENTS.has(node.name))) {
       report(context, { code: "bad_child", message: `<${node.name}> cannot go inside ${parent}`, at: node.name });
-      if (policy === "text") children.push(...compileChildren(node.children, policy, parent, depth, context));
+      if (policy === "text") children.push(...compileChildren(node.children, policy, parent, depth + 1, context));
       continue;
     }
     const props = compileProps(node, entry, context);
@@ -300,7 +308,19 @@ function assignKeys(node: AidenUiNodeV1, key: string): void {
   node.c?.forEach((child, index) => assignKeys(child, `${key}.${index}`));
 }
 
+/** Never throws: anything unexpected becomes a limit diagnostic and no tree. */
 export function compileAum(markup: string, options: { draft?: boolean } = {}): CompiledAum {
+  try {
+    return compileUnchecked(markup, options);
+  } catch {
+    return {
+      diagnostics: [{ code: "limit", message: "This markup is too deeply nested or too large to compile; simplify it" }],
+      fallbackText: "",
+    };
+  }
+}
+
+function compileUnchecked(markup: string, options: { draft?: boolean }): CompiledAum {
   const parsed = parseAum(markup);
   const context: Context = {
     diagnostics: options.draft ? [] : [...parsed.diagnostics],
@@ -309,6 +329,7 @@ export function compileAum(markup: string, options: { draft?: boolean } = {}): C
     limitReported: false,
     data: {},
     stateKeys: new Set(),
+    unknownReported: new Set(),
   };
   const meaningful = parsed.nodes.filter((node) => node.kind !== "text" || node.text.trim());
   const rootElement =

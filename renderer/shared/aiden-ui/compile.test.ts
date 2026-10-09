@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { AIDEN_UI_CATALOG, AIDEN_UI_ICONS } from "./catalog.js";
 import { compileAum } from "./compile.js";
+import { parseAum } from "./parse.js";
 import { AIDEN_UI_LIMITS, type AidenUiNodeV1 } from "./types.js";
 import { isWireSafeKey, parseChatUiVisualV1 } from "./visual.js";
 
@@ -142,4 +143,32 @@ test("the catalog speaks only wire-safe prop names and offers no brain icons", (
     for (const prop of Object.keys(entry.props)) assert.ok(isWireSafeKey(prop), `${component}.${prop}`);
   }
   assert.equal(AIDEN_UI_ICONS.some((icon) => icon.startsWith("brain")), false);
+});
+
+test("hostile nesting never throws: deep unknown tags, deep catalog tags in text, deep data", () => {
+  const cases = [
+    `<Visual>${"<div>".repeat(5000)}hi</Visual>`,
+    `<Visual><Text>${"<Stack>".repeat(5000)}x</Text></Visual>`,
+    `<Visual><Data name="d">${"[".repeat(100_000)}${"]".repeat(100_000)}</Data><Text>{$d}</Text></Visual>`,
+    `<Visual>${"<Stack>".repeat(20_000)}</Visual>`,
+  ];
+  for (const markup of cases) {
+    for (const draft of [false, true]) {
+      const compiled = compileAum(markup, { draft });
+      if (compiled.tree) assert.ok(asVisual(compiled), markup.slice(0, 40));
+    }
+  }
+  const deep = compileAum(cases[0]!);
+  assert.ok(deep.diagnostics.some((diagnostic) => diagnostic.code === "limit"));
+});
+
+test("reserved data names are refused with a diagnostic", () => {
+  const compiled = compileAum(`<Visual><Data name="__proto__">{"a":1}</Data><Text>x</Text></Visual>`);
+  assert.ok(compiled.diagnostics.some((diagnostic) => diagnostic.code === "data_invalid"));
+  assert.equal(compiled.dataJson, undefined);
+});
+
+test("parser recovery diagnostics are bounded", () => {
+  const { diagnostics } = parseAum(`<Visual ${"!".repeat(50_000)}></Visual>`);
+  assert.ok(diagnostics.length <= 200);
 });
