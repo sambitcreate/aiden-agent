@@ -23,7 +23,7 @@ import {
 } from "../lib/assistant-message-presentation";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
-import type { ChatArtifactV1, ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
@@ -60,6 +60,8 @@ interface MessageListProps {
   streamingArtifacts?: readonly ChatArtifactV1[];
   /** mediaId → producing render_artifact toolCallId for the live response. */
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
+  /** mediaIds of live visuals the model asked to span the chat pane. */
+  streamingWideVisuals?: ReadonlySet<string>;
   /** Live render_artifact drafts by toolCallId for the streaming response. */
   streamingVisualDrafts?: VisualDrafts;
   /** A visual asked to send a follow-up; the chat applies the admission policy. */
@@ -114,13 +116,22 @@ interface AssistantResponseProps {
   visuals?: readonly ChatHtmlArtifactV1[];
   /** mediaId → render_artifact toolCallId. */
   visualPlacements?: ReadonlyMap<string, string>;
-  renderVisual?: (artifact: ChatHtmlArtifactV1, placementCallId?: string) => React.ReactNode;
+  /** mediaIds of visuals that span the chat pane instead of the reading column. */
+  wideVisuals?: ReadonlySet<string>;
+  renderVisual?: RenderVisual;
   /** Live drafts by toolCallId; only the streaming response passes these. */
   visualDrafts?: VisualDrafts;
 }
 
 const EMPTY_VISUALS: readonly ChatHtmlArtifactV1[] = [];
 const EMPTY_PLACEMENTS: ReadonlyMap<string, string> = new Map();
+const EMPTY_WIDE_VISUALS: ReadonlySet<string> = new Set();
+
+type RenderVisual = (
+  artifact: ChatHtmlArtifactV1,
+  placementCallId?: string,
+  layout?: HtmlArtifactLayout,
+) => React.ReactNode;
 
 function AssistantResponse({
   content,
@@ -137,6 +148,7 @@ function AssistantResponse({
   fork,
   visuals = EMPTY_VISUALS,
   visualPlacements = EMPTY_PLACEMENTS,
+  wideVisuals = EMPTY_WIDE_VISUALS,
   renderVisual,
   visualDrafts,
 }: AssistantResponseProps) {
@@ -148,7 +160,13 @@ function AssistantResponse({
   const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements, visualDrafts);
   const visualNodes = (artifacts: readonly ChatHtmlArtifactV1[] | undefined) =>
     renderVisual && artifacts?.length
-      ? artifacts.map((artifact) => renderVisual(artifact, visualPlacements.get(artifact.mediaId)))
+      ? artifacts.map((artifact) =>
+          renderVisual(
+            artifact,
+            visualPlacements.get(artifact.mediaId),
+            wideVisuals.has(artifact.mediaId) ? "wide" : "column",
+          ),
+        )
       : null;
   const draftNodes = (drafts: readonly PlacedVisualDraft[] | undefined) =>
     drafts?.map((draft) => (
@@ -157,6 +175,7 @@ function AssistantResponse({
         src={draft.src}
         title={draft.title}
         toolCallId={draft.toolCallId}
+        layout={draft.layout}
       />
     )) ?? null;
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
@@ -299,7 +318,7 @@ interface SettledMessageRowProps {
   /** HTML visuals this row currently owns (live copies win during handoff). */
   visuals?: readonly ChatHtmlArtifactV1[];
   /** Stable across renders so settled rows stay memoized. */
-  renderVisual?: (artifact: ChatHtmlArtifactV1, placementCallId?: string) => React.ReactNode;
+  renderVisual?: RenderVisual;
 }
 
 /**
@@ -320,6 +339,13 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
 }: SettledMessageRowProps) {
   const visualPlacements = React.useMemo(
     () => new Map((message.htmlArtifactPlacements ?? []).map((p) => [p.mediaId, p.toolCallId])),
+    [message.htmlArtifactPlacements],
+  );
+  const wideVisuals = React.useMemo(
+    () =>
+      new Set(
+        (message.htmlArtifactPlacements ?? []).flatMap((p) => (p.layout === "wide" ? [p.mediaId] : [])),
+      ),
     [message.htmlArtifactPlacements],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
@@ -353,6 +379,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             }
             visuals={visuals}
             visualPlacements={visualPlacements}
+            wideVisuals={wideVisuals}
             renderVisual={renderVisual}
           />
           {message.providerFailure ? (
@@ -410,6 +437,7 @@ export function MessageList({
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
+  streamingWideVisuals = EMPTY_WIDE_VISUALS,
   streamingVisualDrafts,
   onVisualPrompt,
   visualFollowUpBusy = false,
@@ -517,7 +545,7 @@ export function MessageList({
     [],
   );
   const renderVisual = React.useCallback(
-    (artifact: ChatHtmlArtifactV1, placementCallId?: string) => (
+    (artifact: ChatHtmlArtifactV1, placementCallId?: string, layout?: HtmlArtifactLayout) => (
       <HtmlArtifactFrame
         key={`html:${artifact.mediaId}`}
         chatId={chatId}
@@ -525,6 +553,7 @@ export function MessageList({
         onGuestPrompt={stableVisualPrompt}
         followUpBusy={visualFollowUpBusy}
         placementCallId={placementCallId}
+        layout={layout}
       />
     ),
     [chatId, stableVisualPrompt, visualFollowUpBusy],
@@ -632,6 +661,7 @@ export function MessageList({
           onStreamHandoffComplete={onStreamHandoffComplete}
           visuals={htmlArtifactsByAnchor.get("streaming")}
           visualPlacements={streamingArtifactPlacements}
+          wideVisuals={streamingWideVisuals}
           visualDrafts={streamingVisualDrafts}
           renderVisual={renderVisual}
         />

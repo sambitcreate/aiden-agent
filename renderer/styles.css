@@ -834,6 +834,26 @@ textarea {
   overflow: visible;
 }
 
+/* A wide visual leaves the reading column for the chat pane: it grows to
+   the pane's width (inside a slim gutter, up to a cap), stays centred on the
+   column, and follows the window. Never narrower than the column. The dock
+   gutter only guards the composer row, which content already scrolls under. */
+.aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  --inline-visual-wide-width: max(
+    100%,
+    min(calc(100cqi - 2 * var(--inline-visual-wide-gutter)), var(--inline-visual-wide-max))
+  );
+  width: var(--inline-visual-wide-width);
+  max-width: none;
+  margin-inline: calc((100% - var(--inline-visual-wide-width)) / 2);
+}
+
+/* Beside a docked Quick View card the column is already off-centre; stay in it. */
+[data-chat-card-inset] .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  width: 100%;
+  margin-inline: 0;
+}
+
 .aiden-inline-visual-frame {
   border-radius: var(--radius-card);
   overflow: hidden;
@@ -2553,6 +2573,8 @@ textarea {
 :root {
   --aiden-dock-gutter: 4.5rem;
   --chat-content-max-width: 52rem;
+  --inline-visual-wide-max: 80rem;
+  --inline-visual-wide-gutter: 1.5rem;
 }
 
 .aiden-dock-inset {
@@ -2566,6 +2588,12 @@ textarea {
   width: 100%;
   max-width: var(--chat-content-max-width);
   margin-inline: auto;
+}
+
+/* The pane around the transcript column is the size container wide inline
+   visuals measure against (`cqi`), so they can grow past the column. */
+[data-scroll-content]:has(> .chat-content-column) {
+  container-type: inline-size;
 }
 
 /* Quick View docks beside the chat on narrower windows: the centered column

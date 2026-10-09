@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Download, Maximize2, X } from "lucide-react";
-import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
 import { GENERATIVE_UI_IFRAME_SANDBOX } from "../shared/generative-ui";
 import {
   GENERATIVE_UI_THEME_MESSAGE,
@@ -19,6 +19,8 @@ import { cn } from "../lib/ui-utils";
 
 /** Height before the guest first reports its content size. */
 const INITIAL_VISUAL_HEIGHT = 160;
+/** A Tab this recent explains focus arriving in a guest; anything else was a click. */
+const TAB_FOCUS_WINDOW_MS = 500;
 /** Preview tokens live 30 minutes in main; refetch a little before that. */
 const PREVIEW_REUSE_MS = 25 * 60 * 1000;
 
@@ -162,16 +164,22 @@ function HtmlArtifactIframe({
 
   React.useEffect(() => {
     // Focus entering a cross-origin frame blurs this window. The iframe never
-    // matches :focus-visible, so focus is reported for the host to draw a
-    // ring. Focus authorizes nothing: guests can focus themselves.
+    // matches :focus-visible, so the host reports focus that arrived by Tab
+    // for its own ring; a click into the visual draws none. Focus authorizes
+    // nothing: guests can focus themselves.
     let guestFocused = false;
+    let lastTabAt = Number.NEGATIVE_INFINITY;
     const setGuestFocused = (next: boolean) => {
       if (guestFocused === next) return;
       guestFocused = next;
       handlers.current.onGuestFocus?.(next);
     };
+    const noteTab = (event: KeyboardEvent) => {
+      if (event.key === "Tab") lastTabAt = performance.now();
+    };
     const noteFocusEntry = () => {
-      if (document.activeElement === frameRef.current) setGuestFocused(true);
+      if (document.activeElement !== frameRef.current) return;
+      if (performance.now() - lastTabAt <= TAB_FOCUS_WINDOW_MS) setGuestFocused(true);
     };
     const noteFocusReturn = () => setGuestFocused(false);
     const noteParentFocus = (event: FocusEvent) => {
@@ -191,11 +199,13 @@ function HtmlArtifactIframe({
       else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
       else handlers.current.onPrompt?.(message.text);
     };
+    document.addEventListener("keydown", noteTab, true);
     window.addEventListener("blur", noteFocusEntry);
     window.addEventListener("focus", noteFocusReturn);
     document.addEventListener("focusin", noteParentFocus);
     window.addEventListener("message", receiveMessage);
     return () => {
+      document.removeEventListener("keydown", noteTab, true);
       window.removeEventListener("blur", noteFocusEntry);
       window.removeEventListener("focus", noteFocusReturn);
       document.removeEventListener("focusin", noteParentFocus);
@@ -235,6 +245,7 @@ function HtmlArtifactFrameImpl({
   onGuestPrompt,
   followUpBusy = false,
   placementCallId,
+  layout,
 }: {
   chatId: string;
   artifact: ChatHtmlArtifactV1;
@@ -244,6 +255,8 @@ function HtmlArtifactFrameImpl({
   placementCallId?: string;
   /** A reply is running: confirming adds the follow-up to the draft instead of sending. */
   followUpBusy?: boolean;
+  /** `wide` spans the chat pane instead of the reading column. */
+  layout?: HtmlArtifactLayout;
 }) {
   const [src, setSrc] = React.useState<string | null>(
     () => cachedPreview(chatId, artifact)?.src ?? null,
@@ -419,6 +432,7 @@ function HtmlArtifactFrameImpl({
       data-html-artifact={artifact.mediaId}
       data-inline-visual={artifact.mediaId}
       data-html-artifact-expanded={expanded || undefined}
+      data-layout={layout === "wide" ? "wide" : undefined}
     >
       {expanded ? (
         <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-separator px-5 py-3">
@@ -544,11 +558,13 @@ function HtmlArtifactDraftFrameImpl({
   src,
   title,
   toolCallId,
+  layout,
 }: {
   src: string;
   title?: string;
   /** Remembers the draft's height so the presented frame starts at it. */
   toolCallId?: string;
+  layout?: HtmlArtifactLayout;
 }) {
   const [height, setHeight] = React.useState(INITIAL_VISUAL_HEIGHT);
   const recordHeight = React.useCallback(
@@ -574,6 +590,7 @@ function HtmlArtifactDraftFrameImpl({
       aria-busy="true"
       className="aiden-inline-visual relative min-w-0 p-0 text-primary"
       data-inline-visual-draft=""
+      data-layout={layout === "wide" ? "wide" : undefined}
     >
       <div className="aiden-inline-visual-status" aria-hidden="true">
         <AidenActivityMark mark="scan-grid" size={14} />

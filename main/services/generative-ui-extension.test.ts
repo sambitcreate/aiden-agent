@@ -104,6 +104,27 @@ test("the system prompt points the model at the guide and keeps replies complete
   assert.match(preferred.systemPrompt ?? "", /\/visualize/u);
 });
 
+test("render_artifact takes a column or wide layout and hands it to the host", async () => {
+  const seen: Array<string | undefined> = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-layout",
+    onArtifact: (_artifact, _html, context) => {
+      seen.push(context.layout);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  await tool.execute("call-1", { title: "Board", html: "<p>a</p>", layout: "wide" });
+  await tool.execute("call-2", { title: "Card", html: "<p>b</p>" });
+  await tool.execute("call-3", { title: "Card", html: "<p>c</p>", layout: "column" });
+  await assert.rejects(tool.execute("call-4", { title: "X", html: "<p>d</p>", layout: "huge" }), /layout/iu);
+  assert.deepEqual(seen, ["wide", "column", "column"]);
+  // The model is told where visuals appear and when to ask for the wide frame.
+  assert.match(extension.systemPrompt ?? "", /layout/u);
+  assert.match(extension.systemPrompt ?? "", /wide/u);
+});
+
 test("generative UI enablement matches the display_image chat gate", () => {
   assert.equal(
     shouldEnableGenerativeUiExtension({

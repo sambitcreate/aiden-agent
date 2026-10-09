@@ -535,6 +535,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamingArtifactPlacements, setStreamingArtifactPlacements] = React.useState<
     ReadonlyMap<string, string>
   >(() => new Map());
+  const [streamingWideVisuals, setStreamingWideVisuals] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [visualDrafts, setVisualDrafts] = React.useState<VisualDrafts>(NO_VISUAL_DRAFTS);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
@@ -1300,6 +1303,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ? current
                   : new Map(current).set(artifact.mediaId, toolCallId),
               );
+            }
+            if (artifact.kind === "html") {
+              // The latest presentation wins, so a revision can widen or narrow.
+              const wide = event.layout === "wide";
+              setStreamingWideVisuals((current) => {
+                if (current.has(artifact.mediaId) === wide) return current;
+                const next = new Set(current);
+                if (wide) next.add(artifact.mediaId);
+                else next.delete(artifact.mediaId);
+                return next;
+              });
             }
             if (artifact.kind === "html") {
               const index = streamingArtifactsRef.current.findIndex(
@@ -3032,6 +3046,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingReasoning={displayedStreamingReasoning}
             streamingArtifacts={displayedStreamingArtifacts}
             streamingArtifactPlacements={streamingArtifactPlacements}
+            streamingWideVisuals={streamingWideVisuals}
             onVisualPrompt={handleVisualPrompt}
             visualFollowUpBusy={visualPromptBusy}
             streamingVisualDrafts={visualDrafts}

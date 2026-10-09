@@ -73,6 +73,9 @@ interface DraftCall {
   timer?: unknown;
   stream?: DraftStreamHandle;
   publicId?: string;
+  /** The draft event last announced for the open stream, re-sent when layout changes. */
+  label?: string;
+  wide: boolean;
   /** Accumulated HTML already admitted, for prefix admission checks. */
   admitted: string;
   stopped: boolean;
@@ -84,6 +87,10 @@ interface DraftCall {
  * and leaves the draft showing until the presented artifact replaces it;
  * `cancel`/`dispose` retract drafts that will never be presented.
  */
+function requestsWide(args: unknown): boolean {
+  return Boolean(args && typeof args === "object" && (args as { layout?: unknown }).layout === "wide");
+}
+
 export function createGenerativeUiDraftSession(options: GenerativeUiDraftSessionOptions) {
   const open = options.open ?? ((title: string) => openGenerativeUiDraftStream(title, undefined));
   const schedule = options.schedule ?? ((run, delayMs) => setTimeout(run, delayMs));
@@ -104,18 +111,33 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
     }
   };
 
-  const openStream = (call: DraftCall, title: string | undefined) => {
-    call.stream?.close();
-    call.admitted = "";
-    const label = title && isHtmlArtifactTitle(title) ? title : undefined;
-    call.stream = open(label ?? "Visualizing");
+  const announce = (call: DraftCall) => {
+    if (!call.stream) return;
     options.send({
       version: 1,
       operation: "draft",
       toolCallId: call.publicId!,
-      ...(label ? { title: label } : {}),
+      ...(call.label ? { title: call.label } : {}),
       src: call.stream.src,
+      ...(call.wide ? { layout: "wide" as const } : {}),
     });
+  };
+
+  const openStream = (call: DraftCall, title: string | undefined) => {
+    call.stream?.close();
+    call.admitted = "";
+    call.label = title && isHtmlArtifactTitle(title) ? title : undefined;
+    call.stream = open(call.label ?? "Visualizing");
+    call.wide = requestsWide(call.latestArgs);
+    announce(call);
+  };
+
+  /** The layout can stream in after the HTML has started; the open draft follows it. */
+  const followLayout = (call: DraftCall) => {
+    const wide = requestsWide(call.latestArgs);
+    if (!call.stream || wide === call.wide) return;
+    call.wide = wide;
+    announce(call);
   };
 
   const apply = (rawToolCallId: string) => {
@@ -127,7 +149,10 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
     // Opening (or restarting) yields no chunk; ask again for the first append.
     for (let step = 0; step < 2; step += 1) {
       const action = tracker.update(rawToolCallId, call.latestArgs);
-      if (!action) return;
+      if (!action) {
+        followLayout(call);
+        return;
+      }
       if (action.kind === "open" || action.kind === "restart") {
         openStream(call, action.title);
         continue;
@@ -139,6 +164,7 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
       }
       call.admitted = next;
       call.stream?.append(action.chunk);
+      followLayout(call);
       return;
     }
   };
@@ -148,7 +174,7 @@ export function createGenerativeUiDraftSession(options: GenerativeUiDraftSession
       if (options.enabled === false || toolName !== RENDER_ARTIFACT_TOOL_NAME) return;
       let call = calls.get(rawToolCallId);
       if (!call) {
-        call = { admitted: "", stopped: false };
+        call = { admitted: "", stopped: false, wide: false };
         calls.set(rawToolCallId, call);
       }
       if (call.stopped) return;

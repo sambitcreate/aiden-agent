@@ -99,7 +99,6 @@ test("placements keep valid entries and drop malformed ones individually", () =>
       { mediaId: PLACED_MEDIA, toolCallId: "call_dup" },
       { mediaId: "bad id with spaces", toolCallId: "call_2" },
       { mediaId: "b".repeat(64), toolCallId: "" },
-      { mediaId: "c".repeat(64), toolCallId: "call_3", extra: 1 },
       { mediaId: "d".repeat(64), toolCallId: "call_4" },
     ]),
     [
@@ -108,6 +107,41 @@ test("placements keep valid entries and drop malformed ones individually", () =>
     ],
   );
   assert.equal(parseHtmlArtifactPlacements([{ mediaId: "x", toolCallId: 1 }]), undefined);
+});
+
+test("placements carry a wide layout and tolerate fields from newer builds", () => {
+  assert.deepEqual(
+    parseHtmlArtifactPlacements([
+      { mediaId: "a".repeat(64), toolCallId: "call_1", layout: "wide" },
+      { mediaId: "b".repeat(64), toolCallId: "call_2", layout: "column" },
+      { mediaId: "c".repeat(64), toolCallId: "call_3", layout: "fullscreen" },
+      { mediaId: "d".repeat(64), toolCallId: "call_4", futureField: { any: true } },
+    ]),
+    [
+      { mediaId: "a".repeat(64), toolCallId: "call_1", layout: "wide" },
+      { mediaId: "b".repeat(64), toolCallId: "call_2" },
+      { mediaId: "c".repeat(64), toolCallId: "call_3" },
+      { mediaId: "d".repeat(64), toolCallId: "call_4" },
+    ],
+  );
+});
+
+test("present and draft events may mark a visual wide", () => {
+  const src = `aiden-genui://preview/${"e".repeat(64)}`;
+  const present = parseChatArtifactEventV1({
+    version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src, layout: "wide",
+  });
+  assert.equal(present?.operation === "present" && present.layout, "wide");
+  const draft = parseChatArtifactEventV1({
+    version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src, layout: "wide",
+  });
+  assert.equal(draft?.operation === "draft" && draft.layout, "wide");
+  for (const bad of [
+    { version: 1, operation: "present", artifact: HTML, layout: "huge" },
+    { version: 1, operation: "draft", toolCallId: "call_1", src, layout: "column" },
+  ]) {
+    assert.equal(parseChatArtifactEventV1(bad), undefined, JSON.stringify(bad));
+  }
 });
 
 test("draft events carry a preview URL for one tool call and nothing else", () => {

@@ -6,6 +6,7 @@ import type { AssistantPresentationRow } from "./assistant-message-presentation"
 export interface VisualDraft {
   src: string;
   title?: string;
+  layout?: "wide";
 }
 
 /** Live draft previews by producing render_artifact toolCallId. */
@@ -21,6 +22,7 @@ export function reduceVisualDrafts(drafts: VisualDrafts, event: ChatArtifactEven
       return new Map(drafts).set(event.toolCallId, {
         src: event.src,
         ...(event.title ? { title: event.title } : {}),
+        ...(event.layout === "wide" ? { layout: "wide" as const } : {}),
       });
     case "draft_end":
     case "present": {
@@ -37,6 +39,7 @@ export interface PlacedVisualDraft {
   toolCallId: string;
   src: string;
   title?: string;
+  layout?: "wide";
 }
 
 export interface HtmlArtifactSlots {

@@ -1798,7 +1798,7 @@ async function prepareGeneration(
           displayedHtmlIds.add(artifact.mediaId);
           displayedHtmlArtifacts.push(artifact);
         }
-        htmlArtifactPlacements.record(artifact.mediaId, context.toolCallId);
+        htmlArtifactPlacements.record(artifact.mediaId, context.toolCallId, context.layout);
         const placedToolCallId = htmlArtifactPlacements.publicIdFor(artifact.mediaId);
         sendGeneration(streamId, "chat:artifact", {
           streamId,
@@ -1808,6 +1808,7 @@ async function prepareGeneration(
             artifact,
             ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
             ...(readyPreviewSrc(artifact.title, html)),
+            ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
           },
         });
         return true;

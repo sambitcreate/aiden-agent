@@ -91,6 +91,29 @@ test("a draft session throttles deltas, then opens one stream and appends suffix
   assert.equal(events.length, 1);
 });
 
+test("a draft follows the wide layout whenever the streamed arguments name it", () => {
+  const { session, events, streams, flush } = fakeSession();
+  session.delta("raw1", "render_artifact", { title: "Board", html: "<div>" });
+  flush();
+  session.delta("raw1", "render_artifact", { title: "Board", html: "<div><p>", layout: "wide" });
+  flush();
+  // The same stream is re-announced as wide; no second document is opened.
+  assert.equal(streams.length, 1);
+  assert.deepEqual(events, [
+    { version: 1, operation: "draft", toolCallId: "call-1", title: "Board", src: streams[0]!.src },
+    { version: 1, operation: "draft", toolCallId: "call-1", title: "Board", src: streams[0]!.src, layout: "wide" },
+  ]);
+  session.delta("raw1", "render_artifact", { title: "Board", html: "<div><p>1", layout: "wide" });
+  flush();
+  assert.equal(events.length, 2);
+  // Layout named before any HTML is announced with the first draft.
+  session.delta("raw2", "render_artifact", { layout: "wide", title: "Grid", html: "<p>" });
+  flush();
+  assert.deepEqual(events[2], {
+    version: 1, operation: "draft", toolCallId: "call-2", title: "Grid", src: streams[1]!.src, layout: "wide",
+  });
+});
+
 test("other tools, unknown calls, and bad titles never leak into draft events", () => {
   const { session, events, flush } = fakeSession();
   session.delta("raw1", "read_file", { html: "<p>" });

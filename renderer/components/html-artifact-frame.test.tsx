@@ -113,11 +113,12 @@ test("the inline visual is a named figure whose actions sit below the content, n
   view.unmount();
 });
 
-test("keyboard focus inside the guest is reflected on the visual so a ring can show", async () => {
+test("tabbing into the guest is reflected on the visual so a ring can show", async () => {
   const { view, iframe } = await mountedFrame();
   const box = () => view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!;
   assert.equal(box().hasAttribute("data-guest-focused"), false);
   act(() => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     iframe.focus();
     window.dispatchEvent(new Event("blur"));
   });
@@ -126,6 +127,29 @@ test("keyboard focus inside the guest is reflected on the visual so a ring can s
     window.dispatchEvent(new Event("focus"));
   });
   assert.equal(box().hasAttribute("data-guest-focused"), false);
+});
+
+test("clicking into the guest never draws the focus ring", async () => {
+  const { view, iframe } = await mountedFrame();
+  const box = () => view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!;
+  // Typing in the composer earlier is not a Tab into the visual.
+  act(() => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    iframe.focus();
+    window.dispatchEvent(new Event("blur"));
+  });
+  assert.equal(box().hasAttribute("data-guest-focused"), false);
+});
+
+test("a wide visual is marked so it can span the chat pane", () => {
+  const view = render(<HtmlArtifactFrame chatId="c1" artifact={artifact("Board")} layout="wide" />);
+  assert.equal(screen.getByRole("figure", { name: "Board" }).getAttribute("data-layout"), "wide");
+  view.rerender(<HtmlArtifactFrame chatId="c1" artifact={artifact("Card")} />);
+  assert.equal(screen.getByRole("figure", { name: "Card" }).hasAttribute("data-layout"), false);
+  const draft = render(
+    <HtmlArtifactDraftFrame src={`aiden-genui://preview/${"d".repeat(64)}`} title="Board" layout="wide" />,
+  );
+  assert.equal(draft.container.querySelector("[data-inline-visual-draft]")?.getAttribute("data-layout"), "wide");
 });
 
 test("the preview loads in a unique-origin frame and asks main for the full token kit", async () => {

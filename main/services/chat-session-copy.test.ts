@@ -165,19 +165,21 @@ test("copies remap placement mediaIds together with their artifacts", async (t) 
       version: 1, kind: "html", id: "artifact-1", title: "Chart",
       mimeType: "text/html", size: 1, mediaId: sourceMediaId,
     }],
-    htmlArtifactPlacements: [{ mediaId: sourceMediaId, toolCallId: "call_1" }],
+    htmlArtifactPlacements: [{ mediaId: sourceMediaId, toolCallId: "call_1", layout: "wide" }],
   });
   const restarted = createChatStore(async () => directory);
   const source = await restarted.get(chat.id);
   assert.deepEqual(source?.messages[1]?.htmlArtifactPlacements, [
-    { mediaId: sourceMediaId, toolCallId: "call_1" },
+    { mediaId: sourceMediaId, toolCallId: "call_1", layout: "wide" },
   ]);
   const clone = await store.copyVisibleHistory({ sourceChatId: chat.id });
   const copied = clone.messages[1];
   const copiedMediaId = copied?.htmlArtifacts?.[0]?.mediaId;
   assert.ok(copiedMediaId);
   assert.notEqual(copiedMediaId, sourceMediaId);
-  assert.deepEqual(copied?.htmlArtifactPlacements, [{ mediaId: copiedMediaId, toolCallId: "call_1" }]);
+  assert.deepEqual(copied?.htmlArtifactPlacements, [
+    { mediaId: copiedMediaId, toolCallId: "call_1", layout: "wide" },
+  ]);
 });
 
 test("forks record lineage, number titles, and can cut before a prompt", async (t) => {

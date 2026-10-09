@@ -25,20 +25,21 @@ Design and roadmap: [Inline Generative UI](superpowers/specs/2026-10-08-inline-g
 
    The mode travels as `GenerationParams.inlineVisuals`. Telegram, Assistant, Bots, scheduled runs, and child agents do not inherit the extension. Reading a workspace `.html` file (`path`) still requires a workspace with file access.
 2. **Tools.**
-   - `render_artifact({ title, html } | { title, path })` validates UTF-8 HTML (512 KiB), rejects remote scripts, frames and `javascript:` URLs, stages the bytes in `generative-ui-artifacts.json` (`0600`), and emits a `kind: "html"` `ChatArtifactEventV1` with an opaque `mediaId`. Its tool result is text only.
+   - `render_artifact({ title, html } | { title, path }, layout?)` validates UTF-8 HTML (512 KiB), rejects remote scripts, frames and `javascript:` URLs, stages the bytes in `generative-ui-artifacts.json` (`0600`), and emits a `kind: "html"` `ChatArtifactEventV1` with an opaque `mediaId`. Its tool result is text only.
    - `visualize_guide({ modules })` returns design, HTML, chart, and interactivity guidance on demand (`main/services/generative-ui-guide.ts`), which keeps the system prompt short.
 
    Replay is `"never"` for both tools.
 3. **Placement.** Each visual renders right after the activity row of the `render_artifact` call that produced it.
-   - The message stores `htmlArtifactPlacements: [{ mediaId, toolCallId }]` beside `htmlArtifacts`, never inside it, because older builds drop the whole artifact list on an unknown key.
+   - The message stores `htmlArtifactPlacements: [{ mediaId, toolCallId, layout? }]` beside `htmlArtifacts`, never inside it, because older builds drop the whole artifact list on an unknown key. The placement parser ignores unknown keys, so later fields never drop a placement.
    - Placement ids are the timeline's public `call-N` ids. `generative-ui-placements.ts` translates Pi's raw ids.
    - Artifacts with no placement or no matching step trail the response.
    - The live `present` event carries `toolCallId`.
+   - **Width.** `layout` is `column` (default: the reading column, about 690px) or `wide`. A wide visual spans the chat pane inside a 1.5rem gutter, up to 80rem, and follows the window. It measures the pane through a size container on the transcript's scroll content, and stays in the column beside a docked Quick View card. Only `layout: "wide"` is stored. A same-title revision keeps its first position but takes the latest layout. Drafts follow the layout as soon as the streamed arguments name it.
 4. **Preview.**
    - The renderer loads a **main-built** preview over `chats:htmlArtifactSrcdoc`. Main wraps the HTML and serves it from `aiden-genui://preview/<64-hex-token>` (`generative-ui-preview-store.ts`), with the guest CSP as a **response header**.
    - The iframe uses `src` (not `srcDoc`) and `sandbox="allow-scripts"` only. Parent `script-src` is not widened, and parent `frame-src` is `'self' aiden-genui:`.
    - Guest CSP sets `connect-src 'none'` and allowlists only the exact host-library URLs.
-   - The frame is borderless and as tall as its content (64–1600px). The title, Expand and Export sit in a caption row below it. A focus ring shows while keyboard focus is inside the guest.
+   - The frame is borderless and as tall as its content (64–1600px). The title, Expand and Export sit in a caption row below it. A neutral focus ring shows when focus arrives in the guest by Tab; a click into a visual draws none (the host cannot see focus moves inside a cross-origin guest).
 5. **Guest bridge.** A host script injected before any model code:
    - reports content height;
    - relays Escape;

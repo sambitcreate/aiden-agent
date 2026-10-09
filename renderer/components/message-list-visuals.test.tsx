@@ -85,6 +85,59 @@ test("a streaming draft renders in its tool row and yields to the presented visu
   assert.ok(view.container.querySelector('[data-html-artifact="media-live"]'));
 });
 
+test("visuals the model asked to make wide render wide, live and once saved", () => {
+  installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
+  const renderStep = toolStep("tool-1", "call-render", "render_artifact", 0);
+  const timeline: GenerationTimeline = {
+    version: 3, generationId: "generation-1", status: "running", startedAt: 1, steps: [renderStep],
+  };
+  const live = render(
+    <MessageList
+      chatId="chat-live"
+      messages={[]}
+      streamingText="Board."
+      streamingReasoning={null}
+      streamingArtifacts={[visual]}
+      streamingArtifactPlacements={new Map([[visual.mediaId, "call-render"]])}
+      streamingWideVisuals={new Set([visual.mediaId])}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(live.container.querySelector('[data-html-artifact="media-live"]')?.getAttribute("data-layout"), "wide");
+  live.unmount();
+
+  const saved = render(
+    <MessageList
+      chatId="chat-saved"
+      messages={[
+        {
+          id: "m-1",
+          role: "assistant",
+          content: "Board.",
+          createdAt: 1,
+          htmlArtifacts: [visual, { ...visual, id: "html-2", mediaId: "media-column", title: "Card" }],
+          htmlArtifactPlacements: [{ mediaId: visual.mediaId, toolCallId: "call-render", layout: "wide" }],
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.equal(saved.container.querySelector('[data-html-artifact="media-live"]')?.getAttribute("data-layout"), "wide");
+  assert.equal(saved.container.querySelector('[data-html-artifact="media-column"]')?.hasAttribute("data-layout"), false);
+});
+
 test("a live visual keeps its node when a later tool step outruns the buffered text", () => {
   installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
   const intro = "Before chart.";
