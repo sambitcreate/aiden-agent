@@ -800,6 +800,7 @@
         "main/handlers/bot-live.test.ts",
         "main/handlers/bot-questions.test.ts",
         "main/handlers/bot-files.test.ts",
+        "main/handlers/bot-renderer-errors.test.ts",
         "renderer/main/chat-transition.test.tsx",
         "renderer/main/remote-chat-view.test.tsx",
         "renderer/main/remote-new-chat-view.test.tsx",

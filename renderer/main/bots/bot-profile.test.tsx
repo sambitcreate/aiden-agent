@@ -104,6 +104,25 @@ test("editing the name inline saves it when the field loses focus", async () => 
   assert.equal(store.updates[0]!.instructions, "Plan trips.");
 });
 
+test("Escape abandons an inline name edit instead of saving it", async () => {
+  const store = botStoreIpc(botFixture());
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+  const name = (await screen.findByRole("textbox", { name: "Name" })) as HTMLInputElement;
+  name.focus();
+  fireEvent.change(name, { target: { value: "Trip Planner" } });
+  fireEvent.keyDown(name, { key: "Escape" });
+  await waitFor(() => assert.equal(name.value, "Planner"));
+  assert.equal(document.activeElement === name, false);
+  assert.equal(store.updates.length, 0);
+
+  // The next edit still saves on Enter.
+  name.focus();
+  fireEvent.change(name, { target: { value: "Trip Planner" } });
+  fireEvent.keyDown(name, { key: "Enter" });
+  await waitFor(() => assert.equal(store.updates.length, 1));
+  assert.equal(store.updates[0]!.name, "Trip Planner");
+});
+
 test("the Profile ••• menu holds Advanced and Delete Bot", async () => {
   botStoreIpc(botFixture());
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });

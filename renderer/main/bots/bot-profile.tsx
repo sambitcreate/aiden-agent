@@ -56,8 +56,15 @@ function InlineField({
 }) {
   const [draft, setDraft] = React.useState(value);
   const [saving, setSaving] = React.useState(false);
+  // Escape blurs to leave the field; the blur must not save the abandoned edit.
+  const discarding = React.useRef(false);
   React.useEffect(() => setDraft(value), [value]);
   const commit = async () => {
+    if (discarding.current) {
+      discarding.current = false;
+      setDraft(value);
+      return;
+    }
     const next = draft.trim();
     if (next === value.trim() || (required && !next)) {
       setDraft(value);
@@ -84,7 +91,7 @@ function InlineField({
       onKeyDown={(event) => {
         if (event.key === "Enter") event.currentTarget.blur();
         if (event.key === "Escape") {
-          setDraft(value);
+          discarding.current = true;
           event.currentTarget.blur();
         }
       }}
