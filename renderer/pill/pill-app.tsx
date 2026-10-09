@@ -8,7 +8,8 @@ import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import { PillCopiedNotice, type PillCopiedNoticeProps } from "./pill-copied-notice";
 import { onNotification } from "../lib/ipc-bridge";
-import { dictationApi, settingsApi } from "../lib/ipc-voice";
+import { dictationApi, settingsApi, voiceApi } from "../lib/ipc-voice";
+import { voiceSetupMessage, type VoiceProviderResolution } from "../shared/voice-provider";
 import type { DictationStatePayload } from "../shared/dictation";
 import {
   ensureMicrophoneAccess,
@@ -165,6 +166,15 @@ export function PillApp() {
       let pendingStream: MediaStream | null = null;
       let pendingAudioContext: AudioContext | null = null;
       try {
+        // Resolve the provider (on-device first) before opening the microphone.
+        const resolution = await voiceApi.resolveProvider();
+        if (!operationGateRef.current.isCurrent(token)) return;
+        if (resolution.kind === "needs-setup") {
+          operationGateRef.current.finishStart(token);
+          await dictationApi.reportError(operationId, voiceSetupMessage(resolution.reason));
+          return;
+        }
+        const voice: Extract<VoiceProviderResolution, { kind: "ready" }> = resolution;
         const allowed = await ensureMicrophoneAccess();
         if (!operationGateRef.current.isCurrent(token)) return;
         if (!allowed) {
@@ -212,7 +222,7 @@ export function PillApp() {
         liveTranscriptRef.current = { committed: "", tentative: "" };
         setLiveTranscript(liveTranscriptRef.current);
         if (
-          shouldUseGeminiLiveTranscription(settings.voiceProvider ?? "openai", settings.voiceModel)
+          shouldUseGeminiLiveTranscription(voice.provider, settings.voiceModel)
         ) {
           active.liveStart = GeminiLiveCapture.start(stream, publishLiveTranscript).catch(
             () => undefined,
@@ -229,7 +239,7 @@ export function PillApp() {
           setPhase("finalizing");
           void (async () => {
             const deadline = new DictationDeadline(
-              transcriptionBudgetMs(settings.voiceProvider ?? "openai"),
+              transcriptionBudgetMs(voice.provider),
             );
             try {
               let text = "";
@@ -274,10 +284,10 @@ export function PillApp() {
                 setPhase("fallback");
                 await dictationApi.reportProgress(operationId, "fallback");
                 active.batchOperationId = `${operationId}-batch`;
-                active.batchProvider = settings.voiceProvider ?? "openai";
+                active.batchProvider = voice.provider;
                 text = await transcribeBlob(blob, {
                   provider: active.batchProvider,
-                  localModel: settings.localVoiceModel,
+                  localModel: voice.provider === "local" ? voice.modelId : undefined,
                   model: settings.voiceModel,
                   operationId: active.batchOperationId,
                   signal: active.transcriptionController.signal,

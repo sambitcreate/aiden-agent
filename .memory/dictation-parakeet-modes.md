@@ -47,3 +47,23 @@ Status (2026-10-01): merged in PR #279 (on main after 0.51.0); plan moved to `do
   then rename. Progress phases: download (0-90) → verify (90) → extract (90-100).
 - Startup (`prepareLocalSpeechStorage`) deletes the legacy `parakeet-models/`
   folder and stale staging; catalog-model partials are kept so a relaunch resumes.
+
+## Local-first voice provider resolution (STT engine foundation, Task 7, 2026-10-09)
+
+- `renderer/shared/voice-provider.ts` `resolveVoiceProvider` is the single rule: an explicit
+  `voiceProvider` wins; unset ("Automatic") prefers an installed on-device model when the
+  engine is ready, then OpenAI (key), then Gemini (Google key + a chosen `geminiUsageScope`),
+  else `needs-setup`. `main/services/voice-provider-resolution.ts` gathers inputs in main;
+  renderers call `voice:resolveProvider` (allowed in the pill) at mic press.
+- Settings → Voice: "Automatic" (Select value `automatic`, since Radix rejects `""`) clears the
+  key via `settings:set { voiceProvider: null }` (`parseVoiceProviderPatch`). Model downloads no
+  longer auto-activate a model.
+- `voice:transcribe` now takes the resolved cloud provider as a 5th arg and calls
+  `transcribeCloud`; only Telegram goes through `transcribe` (`createTranscribeRouter` in
+  `transcription-core.ts`), which routes `audio/ogg|opus` to `transcribeLocalOggOpus` with
+  `local-voice` usage and refuses other types on-device.
+- Telegram transcription failures become `"<file> was not transcribed: <reason>"` notices.
+- Cloud language hints use the base code of `voiceLanguage`: OpenAI `language`, Gemini Live
+  `languageCodes`, Gemini batch `transcription_config.language_codes`.
+- Worker entries go through `replyToWorkerFrame`: an invalid frame with a requestId gets an
+  immediate `decode-failed` failure instead of two hang deadlines.

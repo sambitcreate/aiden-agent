@@ -3,6 +3,8 @@ import test from "node:test";
 import { speechModel, type SpeechModelSpec } from "./local-speech-catalog.js";
 import { ModelMissingError, type EngineTranscribeRequest } from "./local-speech-engine.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechParentMessage } from "./local-speech-protocol.js";
+import { readFile } from "node:fs/promises";
+import { decodeOggOpusToPcm16k } from "./local-speech-opus.js";
 import {
   createLocalSpeechMessageHandler,
   replyToWorkerFrame,
@@ -115,7 +117,7 @@ test("an engine that cannot load replies engine-unavailable", async () => {
   assert.equal(reply.kind === "failure" && reply.code, "engine-unavailable");
 });
 
-test("ogg-opus audio is reported as unsupported until a decoder is wired", async () => {
+test("without a decoder, ogg-opus audio is reported as unsupported", async () => {
   const fake = fakeEngine();
   const reply = await createLocalSpeechMessageHandler(fake.engine)(
     transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([79, 103, 103, 83]) } }),
@@ -155,6 +157,25 @@ test("status, load and release answer with engine results", async () => {
     requestId: "r1",
   });
   assert.equal(fake.releases(), 1);
+});
+
+test("a Telegram-style Ogg/Opus note reaches the engine as 16 kHz samples", async () => {
+  const fake = fakeEngine();
+  const bytes = new Uint8Array(await readFile(new URL("./fixtures/voice-note-440hz-left.ogg", import.meta.url)));
+  const reply = await createLocalSpeechMessageHandler(fake.engine, { decodeOggOpus: decodeOggOpusToPcm16k })(
+    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes } }),
+  );
+  assert.equal(reply.kind, "result");
+  assert.equal(fake.requests[0]!.samples.length, 16_000);
+});
+
+test("corrupt Ogg/Opus fails the request as decode-failed", async () => {
+  const fake = fakeEngine();
+  const reply = await createLocalSpeechMessageHandler(fake.engine, { decodeOggOpus: decodeOggOpusToPcm16k })(
+    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array(512).fill(3) } }),
+  );
+  assert.equal(reply.kind === "failure" && reply.code, "decode-failed");
+  assert.equal(fake.requests.length, 0);
 });
 
 test("an invalid frame that names a request fails at once instead of timing out", async () => {

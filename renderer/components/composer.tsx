@@ -639,11 +639,7 @@ export function Composer({
       );
       if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
     },
-    {
-      provider: settings.data?.voiceProvider ?? "openai",
-      localModel: settings.data?.localVoiceModel,
-      model: settings.data?.voiceModel,
-    },
+    { model: settings.data?.voiceModel },
   );
 
   React.useLayoutEffect(() => {

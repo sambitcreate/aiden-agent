@@ -12,6 +12,7 @@ test("pill preload exposes only capture, transcription, settings read, and dicta
     "dictation:stop",
     "settings:get",
     "settings:getAppearance",
+    "voice:resolveProvider",
     "voice:streamCancel",
     "voice:streamFinish",
     "voice:streamPush",

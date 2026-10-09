@@ -15,21 +15,20 @@ import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-credential-migration.js";
 import {
   buildGeminiTranscriptionRequest,
+  buildOpenAITranscriptionForm,
+  createTranscribeRouter,
   GEMINI_INTERACTIONS_ENDPOINT,
   parseGeminiTranscriptionResponse,
   startTranscriptionDeadline,
+  type TranscribeInput,
 } from "./transcription-core.js";
+import { transcribeLocalOggOpus } from "./local-speech.js";
+import { resolveVoiceProviderNow } from "./voice-provider-resolution.js";
+import { cloudLanguageHint } from "../../renderer/shared/voice-language.js";
 import {
   GEMINI_TRANSCRIPTION_MODEL,
   resolveCloudVoiceModel,
 } from "../../renderer/shared/voice-models.js";
-
-interface TranscribeInput {
-  audioBase64: string;
-  mimeType: string;
-  model?: string;
-  signal?: AbortSignal;
-}
 
 export async function recordTranscription(input: {
   provider: StoredProvider;
@@ -79,9 +78,12 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
   const model = resolveCloudVoiceModel("openai", input.model ?? settings.voiceModel);
 
   const bytes = Buffer.from(input.audioBase64, "base64");
-  const form = new FormData();
-  form.append("file", new Blob([bytes], { type: input.mimeType || "audio/webm" }), "audio.webm");
-  form.append("model", model);
+  const form = buildOpenAITranscriptionForm({
+    bytes,
+    mimeType: input.mimeType,
+    model,
+    language: cloudLanguageHint(settings.voiceLanguage),
+  });
 
   const deadline = startTranscriptionDeadline(bytes.byteLength, input.signal);
   try {
@@ -138,6 +140,7 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
   const model = GEMINI_TRANSCRIPTION_MODEL;
   const provider = await providerRegistry.selectionProvider(GOOGLE_PROVIDER_ID);
   if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
+  const language = cloudLanguageHint((await configStore.getSettings()).voiceLanguage);
 
   const deadline = startTranscriptionDeadline(
     Math.floor((input.audioBase64.length * 3) / 4),
@@ -157,6 +160,7 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
             audioBase64: input.audioBase64,
             mimeType: input.mimeType,
             model,
+            language,
           }),
         ),
         signal: deadline.signal,
@@ -192,8 +196,44 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
   }
 }
 
-export async function transcribe(input: TranscribeInput): Promise<string> {
-  const settings = await configStore.getSettings();
-  const provider = settings.voiceProvider ?? "openai";
+/** Cloud transcription for a provider the caller already resolved. */
+export function transcribeCloud(input: TranscribeInput, provider: "openai" | "gemini"): Promise<string> {
   return provider === "gemini" ? transcribeGemini(input) : transcribeOpenAI(input);
 }
+
+async function transcribeLocalVoiceNote(
+  bytes: Uint8Array,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const record = (status: "completed" | "failed") =>
+    usageStore.record(
+      unreportedUsageRecord({
+        source: "voice-transcription",
+        providerId: "local-voice",
+        providerLabel: "On-device voice",
+        modelId,
+        local: true,
+        status,
+      }),
+    );
+  try {
+    const text = await transcribeLocalOggOpus(bytes, modelId, signal);
+    await record("completed");
+    return text;
+  } catch (error) {
+    await record("failed");
+    throw error;
+  }
+}
+
+/**
+ * Transcribes encoded audio (Telegram voice notes) with the resolved voice
+ * provider, on-device first.
+ */
+export const transcribe = createTranscribeRouter({
+  resolve: resolveVoiceProviderNow,
+  local: { oggOpus: transcribeLocalVoiceNote },
+  openai: transcribeOpenAI,
+  gemini: transcribeGemini,
+});

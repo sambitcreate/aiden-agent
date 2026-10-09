@@ -165,12 +165,12 @@ async function convertAndTranscribeBlob(
     const wav = bytesToBase64(encodeMonoPcm16Wav(samples, 16_000));
     beforeDispatch();
     return (
-      await voiceApi.transcribe(wav, "audio/wav", GEMINI_TRANSCRIPTION_MODEL, operationId)
+      await voiceApi.transcribe(wav, "audio/wav", "gemini", GEMINI_TRANSCRIPTION_MODEL, operationId)
     ).trim();
   }
   const base64 = await blobToBase64(blob);
   beforeDispatch();
-  return (await voiceApi.transcribe(base64, blob.type, options.model, operationId)).trim();
+  return (await voiceApi.transcribe(base64, blob.type, "openai", options.model, operationId)).trim();
 }
 
 export function cancelTranscription(provider: VoiceProvider, operationId: string): Promise<void> {

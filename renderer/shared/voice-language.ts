@@ -41,3 +41,10 @@ export function effectiveTask(
     ? "translate"
     : "transcribe";
 }
+
+/** Base-code hint for cloud transcription; `undefined` lets the provider detect. */
+export function cloudLanguageHint(intent: unknown): string | undefined {
+  const normalized = normalizeLanguageIntent(intent);
+  if (!normalized || normalized === "auto") return undefined;
+  return normalized.split("-")[0];
+}

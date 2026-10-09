@@ -32,6 +32,7 @@ import {
   telegramApi,
   titleProvidersApi,
   usageApi,
+  voiceApi,
   webSearchApi,
   workspacesApi,
 } from "./ipc";
@@ -85,6 +86,7 @@ export const queryKeys = {
   aidenRemotePairingRequests: ["aidenRemotePairingRequests"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
+  voiceResolution: ["voiceResolution"] as const,
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitPullRequestStatus: (workspaceId: string | undefined) =>
@@ -709,6 +711,17 @@ export function useEngineStatus(enabled = true) {
     queryFn: localVoiceApi.status,
     enabled,
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Local-first voice provider resolution. `inputs` should list what the answer
+ * depends on (settings, installed models, keys) so it refetches when they change.
+ */
+export function useVoiceResolution(inputs: readonly unknown[]) {
+  return useQuery({
+    queryKey: [...queryKeys.voiceResolution, ...inputs],
+    queryFn: voiceApi.resolveProvider,
   });
 }
 

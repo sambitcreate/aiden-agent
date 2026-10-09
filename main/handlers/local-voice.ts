@@ -16,6 +16,7 @@ import {
   deleteModel,
 } from "../services/local-speech-models.js";
 import { configStore } from "../services/config-store.js";
+import { resolveVoiceProviderNow } from "../services/voice-provider-resolution.js";
 import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";
 import { asString, pcm16FromIpc } from "./voice-codec.js";
@@ -50,6 +51,9 @@ export function registerLocalVoiceHandlers(): void {
       // Ignored: transcription surfaces the actionable error.
     }
   });
+
+  // Local-first provider resolution for the composer, pill and Settings.
+  ipcMain.handle("voice:resolveProvider", async () => resolveVoiceProviderNow());
 
   // ── Model management ─────────────────────────────────────────────────
   ipcMain.handle("localModels:list", async () => listModels());

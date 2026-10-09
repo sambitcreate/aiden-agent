@@ -1,6 +1,8 @@
 // Voice settings — transcription provider for the composer's mic button and the
 // dictation hotkey. Cloud providers (OpenAI / Gemini) reuse the keys configured
-// under Providers; "On-device" runs Parakeet locally (managed below).
+// under Providers; "On-device" runs a downloaded model locally (managed below).
+// "Automatic" (no explicit choice) prefers an installed on-device model, then a
+// configured cloud provider.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -18,7 +20,13 @@ import {
 } from "../ui";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { settingsApi } from "../../lib/ipc";
-import { queryKeys, useProviders, useSettings } from "../../lib/queries";
+import {
+  queryKeys,
+  useLocalModels,
+  useProviders,
+  useSettings,
+  useVoiceResolution,
+} from "../../lib/queries";
 import type { GeminiUsageScope, VoiceProvider } from "../../lib/types";
 import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
 import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
@@ -32,6 +40,9 @@ import { DictationDictionarySettings } from "./dictation-dictionary-settings";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { LocalVoiceSettings } from "./local-voice-settings";
+import { automaticVoiceCaption } from "../../shared/voice-provider";
+
+const AUTOMATIC = "automatic";
 
 export function VoiceSettings() {
   const { platform } = useAppCapabilities();
@@ -39,8 +50,28 @@ export function VoiceSettings() {
   const settings = useSettings();
   const providers = useProviders();
   const googleProvider = providers.data?.find((candidate) => candidate.id === GOOGLE_PROVIDER_ID);
-  const provider: VoiceProvider = settings.data?.voiceProvider ?? "openai";
+  const localModels = useLocalModels();
+  const explicit = settings.data?.voiceProvider;
+  const installedModels = (localModels.data ?? []).filter((candidate) => candidate.installed);
+  const resolution = useVoiceResolution([
+    explicit ?? AUTOMATIC,
+    settings.data?.localVoiceModel ?? "",
+    settings.data?.geminiUsageScope ?? "",
+    installedModels.map((candidate) => candidate.id).join(","),
+    providers.data?.find((candidate) => candidate.id === "openai")?.hasKey === true,
+    googleProvider?.hasKey === true,
+  ]);
+  const resolved = resolution.data?.kind === "ready" ? resolution.data.provider : undefined;
+  // What dictation uses now: the explicit choice, else the automatic answer.
+  const provider: VoiceProvider | undefined = explicit ?? resolved;
   const isCloud = provider === "openai" || provider === "gemini";
+  const automaticCaption =
+    explicit === undefined && resolution.data
+      ? automaticVoiceCaption(
+          resolution.data,
+          (id) => localModels.data?.find((candidate) => candidate.id === id)?.name,
+        )
+      : null;
   const model = isCloud ? resolveCloudVoiceModel(provider, settings.data?.voiceModel) : "";
   const [geminiDialogOpen, setGeminiDialogOpen] = React.useState(false);
   const [geminiAuthOpen, setGeminiAuthOpen] = React.useState(false);
@@ -48,9 +79,10 @@ export function VoiceSettings() {
   const [geminiBusy, setGeminiBusy] = React.useState(false);
   const [geminiError, setGeminiError] = React.useState<string | null>(null);
 
-  const patch = async (next: { voiceProvider?: VoiceProvider; voiceModel?: string }) => {
+  const patch = async (next: { voiceProvider?: VoiceProvider | null; voiceModel?: string }) => {
     await settingsApi.set(next);
     await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
   };
 
   const openGeminiSetup = () => {
@@ -68,6 +100,7 @@ export function VoiceSettings() {
     );
     qc.setQueryData(queryKeys.settings, saved);
     await qc.invalidateQueries({ queryKey: queryKeys.providers });
+    await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
   };
 
   const confirmGeminiSetup = async () => {
@@ -100,6 +133,10 @@ export function VoiceSettings() {
   };
 
   const changeProvider = (value: string) => {
+    if (value === AUTOMATIC) {
+      void patch({ voiceProvider: null });
+      return;
+    }
     const p = value as VoiceProvider;
     if (p === "gemini") {
       openGeminiSetup();
@@ -121,21 +158,29 @@ export function VoiceSettings() {
         <Field
           label="Where should your voice be processed?"
           description={
-            provider === "local"
-              ? "Transcribes on this device after an on-device model is downloaded."
-              : `Sends recordings to ${provider === "openai" ? "OpenAI" : "Google"} for transcription.`
+            explicit === undefined
+              ? "Uses a downloaded on-device model when there is one, otherwise a cloud provider you have set up."
+              : explicit === "local"
+                ? "Transcribes on this device after an on-device model is downloaded."
+                : `Sends recordings to ${explicit === "openai" ? "OpenAI" : "Google"} for transcription.`
           }
         >
-          <Select value={provider} onValueChange={changeProvider}>
+          <Select value={explicit ?? AUTOMATIC} onValueChange={changeProvider}>
             <SelectTrigger size="small">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value={AUTOMATIC}>Automatic</SelectItem>
               <SelectItem value="openai">Online · OpenAI</SelectItem>
               <SelectItem value="gemini">Online · Google Gemini</SelectItem>
               <SelectItem value="local">{platform === "darwin" ? "On this Mac · Private" : "On this device · Private"}</SelectItem>
             </SelectContent>
           </Select>
+          {automaticCaption ? (
+            <Text as="p" variant="small" color="tertiary" className="mt-2">
+              {automaticCaption}
+            </Text>
+          ) : null}
           {provider === "gemini" ? (
             <div className="mt-2 flex items-center gap-2">
               <Button variant="transparent" size="small" onClick={openGeminiSetup}>
@@ -167,7 +212,7 @@ export function VoiceSettings() {
         ) : null}
       </FieldSet>
 
-      {provider === "local" ? <LocalVoiceSettings /> : null}
+      {explicit === "local" || explicit === undefined ? <LocalVoiceSettings /> : null}
       <DictationShortcutSettings />
       <DictationDictionarySettings />
 

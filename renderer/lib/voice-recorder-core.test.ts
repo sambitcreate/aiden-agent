@@ -181,6 +181,8 @@ for (const provider of ["openai", "gemini", "local"] as const) {
     assert.equal(transcribe.mock.callCount(), 1);
     const args = transcribe.mock.calls[0].arguments;
     assert.equal(args[args.length - 1], "successful");
+    // Cloud audio names its provider so main never re-resolves it to on-device.
+    if (provider !== "local") assert.equal(args[2], provider);
     t.mock.timers.tick(transcriptionBudgetMs(provider));
     assert.equal(cancel.mock.callCount(), 0);
   });

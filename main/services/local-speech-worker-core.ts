@@ -4,6 +4,7 @@
 import { effectiveTask } from "../../renderer/shared/voice-language.js";
 import { speechEngine, type EngineTranscribeRequest, type EngineTranscribeResult } from "./local-speech-engine.js";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
+import { decodeOggOpusToPcm16k } from "./local-speech-opus.js";
 import {
   isLocalSpeechParentMessage,
   LOCAL_SPEECH_PROTOCOL_VERSION,
@@ -21,7 +22,7 @@ export interface LocalSpeechWorkerEngine {
 }
 
 export interface LocalSpeechWorkerOptions {
-  /** Ogg/Opus → 16 kHz mono float samples. Absent until a decoder ships. */
+  /** Ogg/Opus → 16 kHz mono float samples. Without one, Ogg/Opus is unsupported audio. */
   decodeOggOpus?: (bytes: Uint8Array) => Promise<Float32Array>;
 }
 
@@ -93,7 +94,9 @@ export function createLocalSpeechMessageHandler(
   };
 }
 
-export const handleLocalSpeechMessage = createLocalSpeechMessageHandler(speechEngine);
+export const handleLocalSpeechMessage = createLocalSpeechMessageHandler(speechEngine, {
+  decodeOggOpus: decodeOggOpusToPcm16k,
+});
 
 const INVALID_REQUEST_MESSAGE = "Invalid on-device transcription request.";
 

@@ -630,6 +630,20 @@ test("saved voice language and decode preferences survive a restart", async (t) 
   assert.equal(runtime.voiceTrimSilence, false);
 });
 
+test("clearing the voice provider returns to Automatic after a restart", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ voiceProvider: "openai" });
+  await h.store.setSettings({ voiceProvider: undefined });
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.equal((await restarted.getSettings()).voiceProvider, undefined);
+});
+
 test("every install ends up with at least one workspace", async (t) => {
   const h = await harness(t);
   const workspaces = await h.store.listWorkspaces();

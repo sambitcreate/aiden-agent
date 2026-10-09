@@ -20,3 +20,16 @@ export function parseVoicePreferencePatch(patch: Record<string, unknown>): Voice
 export function voiceTrimSilenceEnabled(value: boolean | undefined): boolean {
   return value !== false;
 }
+
+export type VoiceProviderChoice = "openai" | "gemini" | "local";
+
+/**
+ * Settings patch for the explicit voice provider. `null` means Automatic and
+ * yields an own `voiceProvider: undefined` so the stored choice is removed.
+ */
+export function parseVoiceProviderPatch(patch: Record<string, unknown>): { voiceProvider?: VoiceProviderChoice } {
+  const value = patch.voiceProvider;
+  if (value === null) return { voiceProvider: undefined };
+  if (value === "openai" || value === "gemini" || value === "local") return { voiceProvider: value };
+  return {};
+}

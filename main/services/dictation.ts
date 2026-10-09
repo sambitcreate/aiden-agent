@@ -82,10 +82,11 @@ const coordinator = new DictationCoordinator({
     );
   },
   warmUp: async () => {
-    const settings = await configStore.getSettings();
-    if (settings.voiceProvider !== "local" || !settings.localVoiceModel) return;
+    const { resolveVoiceProviderNow } = await import("./voice-provider-resolution.js");
+    const resolution = await resolveVoiceProviderNow();
+    if (resolution.kind !== "ready" || resolution.provider !== "local") return;
     const { warmLocalVoice } = await import("./local-speech.js");
-    await warmLocalVoice(settings.localVoiceModel);
+    await warmLocalVoice(resolution.modelId);
   },
   applyDictionary: async (text) =>
     applyDictationDictionary(text, parseDictationDictionary((await configStore.getSettings()).dictationDictionary)),

@@ -2,12 +2,17 @@
 // dictation pill. Type-only imports keep this module parser-free so the pill
 // chunk does not pull in the rest of `ipc.ts`.
 
-import type { AppSettings } from "./types";
+import type { AppSettings, VoiceProvider } from "./types";
+import type { VoiceProviderResolution } from "../shared/voice-provider";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { invoke, onNotification } from "./ipc-bridge";
+
+export type SettingsPatch = Partial<Omit<AppSettings, "voiceProvider">> & {
+  voiceProvider?: VoiceProvider | null;
+};
 
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
@@ -15,7 +20,8 @@ export const settingsApi = {
   getAppearanceState: () => invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
   previewAppearance: (appearance: AppearanceConfig) =>
     invoke<AppearanceConfig>("settings:previewAppearance", appearance),
-  set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
+  /** `voiceProvider: null` clears the explicit choice (Automatic). */
+  set: (patch: SettingsPatch) => invoke<AppSettings>("settings:set", patch),
   setGeminiVoiceSetup: (scope: NonNullable<AppSettings["geminiUsageScope"]>, model: string) =>
     invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
   setGeminiUsageScope: (scope: NonNullable<AppSettings["geminiUsageScope"]>) =>
@@ -42,8 +48,16 @@ export const settingsApi = {
 };
 
 export const voiceApi = {
-  transcribe: (audioBase64: string, mimeType: string, model?: string, operationId?: string) =>
-    invoke<string>("voice:transcribe", audioBase64, mimeType, model, operationId),
+  /** Cloud transcription of recorded audio with the provider resolved at mic press. */
+  transcribe: (
+    audioBase64: string,
+    mimeType: string,
+    provider: "openai" | "gemini",
+    model?: string,
+    operationId?: string,
+  ) => invoke<string>("voice:transcribe", audioBase64, mimeType, model, operationId, provider),
+  /** Local-first provider resolution; main checks key presence and installed models. */
+  resolveProvider: () => invoke<VoiceProviderResolution>("voice:resolveProvider"),
   cancelTranscription: (operationId: string) => invoke<void>("voice:transcribeCancel", operationId),
   /** On-device transcription: raw 16 kHz mono PCM16 samples + downloaded model id. */
   transcribeLocal: (pcm: ArrayBuffer, modelId: string, operationId: string) =>

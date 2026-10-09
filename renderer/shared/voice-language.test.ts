@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { effectiveLanguage, effectiveTask, normalizeLanguageIntent } from "./voice-language.js";
+import { cloudLanguageHint, effectiveLanguage, effectiveTask, normalizeLanguageIntent } from "./voice-language.js";
 
 const parakeetV3 = { languages: ["en", "de", "fr", "uk"], capabilities: { autoDetect: true, translateToEnglish: false } };
 const parakeetV2 = { languages: ["en"], capabilities: { autoDetect: false, translateToEnglish: false } };
@@ -45,4 +45,12 @@ test("intent normalization keeps auto and base codes only", () => {
   assert.equal(normalizeLanguageIntent("haw"), "haw");
   assert.equal(normalizeLanguageIntent("english"), undefined);
   assert.equal(normalizeLanguageIntent(3), undefined);
+});
+
+test("cloud providers get a base-code hint only for an explicit language", () => {
+  assert.equal(cloudLanguageHint("de"), "de");
+  assert.equal(cloudLanguageHint("zh-TW"), "zh");
+  assert.equal(cloudLanguageHint("auto"), undefined);
+  assert.equal(cloudLanguageHint(undefined), undefined);
+  assert.equal(cloudLanguageHint("english"), undefined);
 });

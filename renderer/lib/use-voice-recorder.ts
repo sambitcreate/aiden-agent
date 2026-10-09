@@ -22,11 +22,17 @@ import { scheduleRecorderStopWithTail, startChunkedMediaRecorder } from "./media
 import { GeminiLiveCapture, type LiveTranscriptSnapshot } from "./live-pcm-capture";
 import { shouldUseGeminiLiveTranscription } from "../shared/voice-models";
 import { GeminiRecordedRetryConsent, needsGeminiRecordedRetry } from "./gemini-recorded-retry";
-import { localVoiceApi } from "./ipc";
+import { localVoiceApi, voiceApi } from "./ipc";
+import { voiceSetupMessage } from "../shared/voice-provider";
 
 type RecorderOptions = TranscribeOptions;
 
-export function useVoiceRecorder(onTranscript: (text: string) => void, options: RecorderOptions) {
+/** The provider is resolved at mic press; callers choose only the cloud model. */
+export interface VoiceRecorderOptions {
+  model?: string;
+}
+
+export function useVoiceRecorder(onTranscript: (text: string) => void, options: VoiceRecorderOptions) {
   const [lastError, setLastError] = React.useState<string | null>(null);
   const reportError = React.useCallback((message: string) => {
     setLastError(message);
@@ -81,10 +87,32 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     if (token === null) return;
     pendingStopRef.current = false;
     setLastError(null);
+    // Resolve the provider (on-device first) before opening the microphone.
+    let selected: RecorderOptions;
+    try {
+      const resolution = await voiceApi.resolveProvider();
+      if (!operationGate.isCurrent(token)) return;
+      if (resolution.kind === "needs-setup") {
+        operationGate.finishStart(token);
+        reportError(voiceSetupMessage(resolution.reason));
+        return;
+      }
+      selected = {
+        provider: resolution.provider,
+        localModel: resolution.provider === "local" ? resolution.modelId : undefined,
+        model: optionsRef.current.model,
+      };
+    } catch (error) {
+      if (!operationGate.isCurrent(token)) return;
+      operationGate.finishStart(token);
+      reportError(voiceErrorMessage(error));
+      return;
+    }
     // Load the on-device model while the microphone opens so the first
     // transcription does not pay the cold-start cost. Best effort.
-    const warmModel = optionsRef.current.provider === "local" ? optionsRef.current.localModel : undefined;
-    if (warmModel) void localVoiceApi.warm(warmModel).catch(() => {});
+    if (selected.provider === "local" && selected.localModel) {
+      void localVoiceApi.warm(selected.localModel).catch(() => {});
+    }
     try {
       // Native permission gate before capture.
       const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
@@ -110,7 +138,6 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       setLiveTranscript({ committed: "", tentative: "" });
       const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
       const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      const selected: RecorderOptions = { ...optionsRef.current };
       const liveEnabled = shouldUseGeminiLiveTranscription(selected.provider, selected.model);
       const operationId = crypto.randomUUID();
       batchOperationIdRef.current = operationId;

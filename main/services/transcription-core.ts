@@ -1,4 +1,8 @@
 import { GEMINI_TRANSCRIPTION_MODEL } from "../../renderer/shared/voice-models.js";
+import {
+  voiceSetupMessage,
+  type VoiceProviderResolution,
+} from "../../renderer/shared/voice-provider.js";
 
 export const GEMINI_INTERACTIONS_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -13,6 +17,8 @@ export interface GeminiTranscriptionRequest {
   generation_config: {
     transcription_config: {
       mode: { type: "verbatim" };
+      /** BCP-47 hints; omitted for automatic detection. */
+      language_codes?: string[];
     };
   };
   store: false;
@@ -22,6 +28,7 @@ export function buildGeminiTranscriptionRequest(input: {
   audioBase64: string;
   mimeType: string;
   model?: string;
+  language?: string;
 }): GeminiTranscriptionRequest {
   return {
     model: input.model ?? GEMINI_TRANSCRIPTION_MODEL,
@@ -35,11 +42,64 @@ export function buildGeminiTranscriptionRequest(input: {
     generation_config: {
       transcription_config: {
         mode: { type: "verbatim" },
+        ...(input.language ? { language_codes: [input.language] } : {}),
       },
     },
     // Match the old one-shot request's privacy boundary: Aiden does not need
     // server-side interaction history for a single dictation recording.
     store: false,
+  };
+}
+
+/** Multipart body for OpenAI `/audio/transcriptions`. */
+export function buildOpenAITranscriptionForm(input: {
+  bytes: Uint8Array;
+  mimeType: string;
+  model: string;
+  language?: string;
+}): FormData {
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([new Uint8Array(input.bytes)], { type: input.mimeType || "audio/webm" }),
+    "audio.webm",
+  );
+  form.append("model", input.model);
+  if (input.language) form.append("language", input.language);
+  return form;
+}
+
+export interface TranscribeInput {
+  audioBase64: string;
+  mimeType: string;
+  model?: string;
+  signal?: AbortSignal;
+}
+
+export interface TranscribeRouterDeps {
+  resolve(): Promise<VoiceProviderResolution>;
+  local: { oggOpus(bytes: Uint8Array, modelId: string, signal?: AbortSignal): Promise<string> };
+  openai(input: TranscribeInput): Promise<string>;
+  gemini(input: TranscribeInput): Promise<string>;
+}
+
+/** Ogg/Opus is the only container the on-device path decodes (Telegram voice notes). */
+const LOCAL_AUDIO_MIME = /^audio\/(ogg|opus)\b/i;
+
+/**
+ * Routes encoded audio (Telegram voice notes) through the resolved provider.
+ * The renderer's recorded-audio path never comes here: it sends PCM to the
+ * on-device lane or calls the cloud provider directly.
+ */
+export function createTranscribeRouter(deps: TranscribeRouterDeps): (input: TranscribeInput) => Promise<string> {
+  return async (input) => {
+    const resolution = await deps.resolve();
+    if (resolution.kind === "needs-setup") throw new Error(voiceSetupMessage(resolution.reason));
+    if (resolution.provider === "local") {
+      if (!LOCAL_AUDIO_MIME.test(input.mimeType)) throw new Error("This audio format needs a cloud voice provider.");
+      return deps.local.oggOpus(Buffer.from(input.audioBase64, "base64"), resolution.modelId, input.signal);
+    }
+    return resolution.provider === "gemini" ? deps.gemini(input) : deps.openai(input);
   };
 }
 

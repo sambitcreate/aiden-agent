@@ -72,7 +72,7 @@ import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js"
 import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
-import { parseVoicePreferencePatch } from "../../renderer/shared/voice-preferences.js";
+import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -532,8 +532,7 @@ export function registerProviderHandlers(): void {
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
     if (typeof p.exaEnabled === "boolean") next.exaEnabled = p.exaEnabled;
-    if (p.voiceProvider === "openai" || p.voiceProvider === "gemini" || p.voiceProvider === "local")
-      next.voiceProvider = p.voiceProvider;
+    Object.assign(next, parseVoiceProviderPatch(p));
     if (typeof p.voiceModel === "string") next.voiceModel = p.voiceModel;
     if (typeof p.localVoiceModel === "string") next.localVoiceModel = p.localVoiceModel;
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;

@@ -163,6 +163,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
   const activate = async (id: string) => {
     await settingsApi.set({ localVoiceModel: id, voiceProvider: "local" });
     await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
   };
 
   const download = async (id: string) => {
@@ -171,8 +172,8 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
     try {
       await localVoiceApi.downloadModel(id);
       await qc.invalidateQueries({ queryKey: queryKeys.localModels });
-      // Auto-select the first model the user installs.
-      if (!activeModel) await activate(id);
+      // Automatic voice resolution picks the download up; settings stay as chosen.
+      await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
       toast.success("Model downloaded.");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -194,6 +195,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.localModels }),
         qc.invalidateQueries({ queryKey: queryKeys.settings }),
+        qc.invalidateQueries({ queryKey: queryKeys.voiceResolution }),
       ]);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
