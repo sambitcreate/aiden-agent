@@ -539,6 +539,63 @@ test("settled reasoning uses one duration-labelled disclosure without an activit
   assert.doesNotMatch(markup, /agent-thinking-shimmer/u);
 });
 
+test("a placed HTML artifact renders between the prose around its tool call", () => {
+  const renderStep: AgentToolStep = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "render_artifact",
+    label: "Render artifact",
+    status: "completed",
+    startedAt: 1,
+    updatedAt: 2,
+    finishedAt: 2,
+    contentOffset: "Before chart.".length,
+  };
+  const content = "Before chart. After chart.";
+  const message = {
+    id: "assistant-placed",
+    role: "assistant" as const,
+    content,
+    createdAt: 1,
+    timeline: {
+      version: 3 as const,
+      generationId: "generation-1",
+      status: "completed" as const,
+      startedAt: 1,
+      finishedAt: 2,
+      steps: [renderStep],
+    },
+    htmlArtifacts: [htmlArtifact("media-placed", "html-placed")],
+    htmlArtifactPlacements: [{ mediaId: "media-placed", toolCallId: "call-1" }],
+  };
+  const render = (placed: boolean) =>
+    renderToStaticMarkup(
+      <MessageList
+        chatId="chat-html"
+        messages={[placed ? message : { ...message, htmlArtifactPlacements: undefined }]}
+        streamingText={null}
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+      />,
+    );
+  const placedMarkup = render(true);
+  const frameAt = placedMarkup.indexOf('data-html-artifact="media-placed"');
+  assert.ok(frameAt > placedMarkup.indexOf("Before chart."));
+  assert.ok(frameAt < placedMarkup.indexOf("After chart."));
+  assert.equal(placedMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
+
+  const legacyMarkup = render(false);
+  assert.ok(legacyMarkup.indexOf('data-html-artifact="media-placed"') > legacyMarkup.indexOf("After chart."));
+  assert.equal(legacyMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
+});
+
 test("an in-flight render_artifact call stays at its tool row", () => {
   const renderStep: AgentToolStep = {
     id: "tool-1",

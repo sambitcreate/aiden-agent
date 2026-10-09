@@ -1211,6 +1211,8 @@ export const chatsApi = {
       foreground?: string;
       secondary?: string;
       accent?: string;
+      /** Allowlisted semantic tokens; main sanitizes them again. */
+      vars?: Record<string, string>;
     },
   ) =>
     invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {

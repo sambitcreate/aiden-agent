@@ -369,6 +369,16 @@
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Categorical chart series for inline visuals: the bot-avatar hues, deepened
+     for >=3:1 non-text contrast on light surfaces. Never status colors. */
+  --chart-1: #1e88c7;
+  --chart-2: #1f9d63;
+  --chart-3: #b98200;
+  --chart-4: #e0544e;
+  --chart-5: #8a5cf0;
+  --chart-6: #138f88;
+  --chart-7: #d64d86;
+  --chart-8: #6f9a17;
   --window-gradient-start: rgb(246 247 249 / 0.98);
   --window-gradient-end: rgb(242 243 246 / 0.94);
   --glass-fill: rgb(238 240 243 / 0.68);
@@ -447,6 +457,15 @@
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Dark surfaces take the bot-avatar hues as-is. */
+  --chart-1: var(--bot-avatar-sky);
+  --chart-2: var(--bot-avatar-mint);
+  --chart-3: var(--bot-avatar-sun);
+  --chart-4: var(--bot-avatar-coral);
+  --chart-5: var(--bot-avatar-lilac);
+  --chart-6: var(--bot-avatar-aqua);
+  --chart-7: var(--bot-avatar-rose);
+  --chart-8: var(--bot-avatar-lime);
   --window-gradient-start: rgb(24 27 33 / 0.98);
   --window-gradient-end: rgb(28 32 39 / 0.94);
   --glass-fill: rgb(32 36 44 / 0.68);
@@ -772,6 +791,94 @@ textarea {
 
 .aiden-html-artifact-popover::backdrop {
   background: transparent;
+}
+
+/* Inline visual: no card chrome. Undo the UA [popover] border, padding,
+   Canvas fill, and scroll box while it sits in the transcript. */
+.aiden-inline-visual:not(:popover-open) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+}
+
+/* A wide visual leaves the reading column for the chat pane: it grows to
+   the pane's width (inside a slim gutter, up to a cap), stays centred on the
+   column, and follows the window. Never narrower than the column. The dock
+   gutter only guards the composer row, which content already scrolls under. */
+.aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  --inline-visual-wide-width: max(
+    100%,
+    min(calc(100cqi - 2 * var(--inline-visual-wide-gutter)), var(--inline-visual-wide-max))
+  );
+  width: var(--inline-visual-wide-width);
+  max-width: none;
+  margin-inline: calc((100% - var(--inline-visual-wide-width)) / 2);
+}
+
+/* While Quick View is open, docked or floating, the card owns that space; stay in the column. */
+[data-chat-card-inset] .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  width: 100%;
+  margin-inline: 0;
+}
+
+.aiden-inline-visual-frame {
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  transition: height var(--motion-duration) var(--motion-easing);
+}
+
+/* The iframe never matches :focus-visible itself; the host marks the box
+   while keyboard focus is inside the guest. Drawn inside the clipped box. */
+.aiden-inline-visual-frame[data-guest-focused],
+[data-html-artifact-expanded] [data-inline-visual-frame][data-guest-focused] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Title and actions sit below the visual like a figure caption, so no
+   control ever covers guest content. Quiet at rest, clearer on hover. */
+.aiden-inline-visual-caption {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  margin-top: 2px;
+  opacity: 0.7;
+  transition: opacity 150ms var(--motion-easing);
+}
+
+.aiden-inline-visual:hover > .aiden-inline-visual-caption,
+.aiden-inline-visual:focus-within > .aiden-inline-visual-caption {
+  opacity: 1;
+}
+
+/* A visual's suggested follow-up waits here, in Aiden's own UI, for the
+   user's click; a soft well fill, no border. */
+.aiden-inline-visual-followup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-card);
+  background: var(--surface-well);
+}
+
+/* A drafting visual names itself above the frame; it never overlays content. */
+.aiden-inline-visual-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiden-inline-visual-frame,
+  .aiden-inline-visual-caption {
+    transition: none;
+  }
 }
 
 .reasoning-surface {
@@ -2436,6 +2543,8 @@ textarea {
 :root {
   --aiden-dock-gutter: 4.5rem;
   --chat-content-max-width: 52rem;
+  --inline-visual-wide-max: 80rem;
+  --inline-visual-wide-gutter: 1.5rem;
 }
 
 .aiden-dock-inset {
@@ -2449,6 +2558,12 @@ textarea {
   width: 100%;
   max-width: var(--chat-content-max-width);
   margin-inline: auto;
+}
+
+/* The pane around the transcript column is the size container wide inline
+   visuals measure against (`cqi`), so they can grow past the column. */
+[data-scroll-content]:has(> .chat-content-column) {
+  container-type: inline-size;
 }
 
 /* Quick View docks beside the chat on narrower windows: the centered column

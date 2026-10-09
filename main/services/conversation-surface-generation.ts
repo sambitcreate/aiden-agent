@@ -73,6 +73,9 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
       providerId: input.providerId,
       model: input.model,
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+      // Phones cannot render inline visuals until snapshots and native
+      // renderers ship (inline generative UI Phases 3–4).
+      inlineVisuals: "off" as const,
       messages: [],
     } satisfies ChatStartParams,
     options: {

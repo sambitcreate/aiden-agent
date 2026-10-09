@@ -394,6 +394,11 @@ import {
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
+import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
+import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
+import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
+import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
+import { createArtifactPlacementLedger } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
@@ -786,6 +791,23 @@ function savedGenerationThinkingLevel(
           : undefined;
 }
 
+/**
+ * A ready inline preview for a just-presented visual, so the renderer swaps
+ * the draft for a loaded document. The guest asks for the live theme on
+ * load. Best effort: without it the renderer fetches a preview as usual.
+ */
+function readyPreviewSrc(title: string, html: string): { src?: string } {
+  try {
+    return {
+      src: registerGenerativeUiPreviewDocument(
+        wrapGenerativeUiHtml(html, title, undefined, { inline: true }),
+      ),
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -804,6 +826,8 @@ async function prepareGeneration(
   const displayedImageIds = new Set<string>();
   const displayedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
   const displayedHtmlIds = new Set<string>();
+  /** mediaId → the render_artifact call it renders after. */
+  const htmlArtifactPlacements = createArtifactPlacementLedger();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
@@ -862,6 +886,7 @@ async function prepareGeneration(
       mcpServerInstructions: createMcpInstructionCollector().snapshot(),
       displayedImages,
       displayedHtmlArtifacts,
+      htmlArtifactPlacements,
       supportsImages: runtimeSupportsImages(designModel),
       thinkingLevel: resolveGenerationThinkingLevel(
         params.providerId,
@@ -1722,6 +1747,8 @@ async function prepareGeneration(
       workspaceRoot: folderPath,
       permission,
       excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
+      inlineVisuals: params.inlineVisuals,
+      visualize: params.visualize === true,
     })
   ) {
     const htmlStoreAvailability = generativeUiArtifactStore.availability();
@@ -1746,12 +1773,14 @@ async function prepareGeneration(
     }
     const visualize = params.visualize === true;
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
-      workspaceRoot: folderPath!,
+      // Inline HTML works in every chat; reading a workspace .html file
+      // additionally needs a workspace with file access.
+      workspaceRoot: folderPath && permission !== "none" ? folderPath : undefined,
       artifactNamespace: `${streamId}:html`,
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
-      onArtifact: async (artifact, html) => {
+      onArtifact: async (artifact, html, context) => {
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
           generationId: streamId,
@@ -1769,12 +1798,17 @@ async function prepareGeneration(
           displayedHtmlIds.add(artifact.mediaId);
           displayedHtmlArtifacts.push(artifact);
         }
+        htmlArtifactPlacements.record(artifact.mediaId, context.toolCallId, context.layout);
+        const placedToolCallId = htmlArtifactPlacements.publicIdFor(artifact.mediaId);
         sendGeneration(streamId, "chat:artifact", {
           streamId,
           event: {
             version: CHAT_ARTIFACT_EVENT_VERSION,
             operation: "present",
             artifact,
+            ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
+            ...(readyPreviewSrc(artifact.title, html)),
+            ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
           },
         });
         return true;
@@ -1825,6 +1859,7 @@ async function prepareGeneration(
     mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
+    htmlArtifactPlacements,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -2187,6 +2222,7 @@ export const llmClient = {
       mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
+      htmlArtifactPlacements,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -2258,6 +2294,18 @@ export const llmClient = {
       formFill.progressSink = (toolCallId, completed, total) =>
         timeline.toolDetail(toolCallId, `${completed} of ${total} fields`);
     }
+    // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
+    htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    // Drafts only stream when render_artifact is really registered this turn
+    // (not when visuals are Off, or for surfaces that never get the tool).
+    const visualsRegistered = generationExtensions.some(
+      (extension) => extension.id === GENERATIVE_UI_EXTENSION_ID,
+    );
+    const visualDrafts = createGenerativeUiDraftSession({
+      enabled: visualsRegistered,
+      publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
+      send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
+    });
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
@@ -2314,6 +2362,7 @@ export const llmClient = {
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
+            htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
           },
           {
             providerId: params.providerId,
@@ -3499,6 +3548,7 @@ export const llmClient = {
         switch (event.type) {
           case "agent_end":
             cacheWarmer?.dispose();
+            visualDrafts.dispose();
             break;
           case "message_start":
             if (event.message.role === "assistant") {
@@ -3537,6 +3587,17 @@ export const llmClient = {
                 typeof block.name === "string"
               ) {
                 timeline.toolStarted(block.id, block.name, {});
+              }
+            }
+            if (e.type === "toolcall_delta" || e.type === "toolcall_end") {
+              // Stream a render_artifact call's partial HTML to a draft preview.
+              const block = e.partial.content[e.contentIndex];
+              if (block?.type === "toolCall" && typeof block.id === "string" && block.id) {
+                if (e.type === "toolcall_delta") {
+                  visualDrafts.delta(block.id, block.name, block.arguments);
+                } else {
+                  visualDrafts.end(block.id);
+                }
               }
             }
             if (e.type === "text_delta") {
@@ -3669,6 +3730,10 @@ export const llmClient = {
                 : event.isError
                   ? "failed"
                   : "completed";
+            // Retract the call's draft whatever the outcome: a successful call
+            // has already presented (and a same-title replace presents under
+            // the first call's id, so its own draft would otherwise linger).
+            visualDrafts.cancel(event.toolCallId);
             if (
               attendedAssistant &&
               event.isError &&
@@ -3704,6 +3769,7 @@ export const llmClient = {
       });
     } catch (error) {
       cacheWarmer?.dispose();
+      visualDrafts.dispose();
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       formFill?.revoke();
@@ -3940,6 +4006,7 @@ export const llmClient = {
         );
       });
       cacheWarmer?.dispose();
+      visualDrafts.dispose();
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       formFill?.revoke();
@@ -4218,6 +4285,7 @@ export const llmClient = {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
           cacheWarmer?.dispose();
+          visualDrafts.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
           await computerUse?.close().catch(() => {});

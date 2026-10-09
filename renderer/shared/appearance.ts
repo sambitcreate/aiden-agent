@@ -18,6 +18,8 @@ export type ReduceMotionPreference = "system" | "on" | "off";
 export type DiffMarkerPreference = "color" | "symbols";
 export type DockIconPreference = "aiden" | "monochrome";
 export type ChatWidthPreference = "narrow" | "default" | "wide" | "full";
+/** Whether the agent may draw inline visuals: on its own, only on /visualize, or never. */
+export type InlineVisualsMode = "automatic" | "on_request" | "off";
 
 export interface ThemeVariantConfig {
   preset: ThemeSelection;
@@ -48,6 +50,8 @@ export interface AppearanceConfig {
   fontSmoothing: boolean;
   /** Maximum width of the shared transcript/composer column. */
   chatWidth: ChatWidthPreference;
+  /** When the agent may draw inline visuals in desktop chats. */
+  inlineVisuals: InlineVisualsMode;
 }
 
 export interface AppearancePreviewSnapshot {
@@ -105,6 +109,10 @@ export const CHAT_WIDTH_OPTIONS: ReadonlyArray<{
   { id: "wide", label: "Wide", maxWidth: "64rem" },
   { id: "full", label: "Full", maxWidth: "none" },
 ];
+
+export function isInlineVisualsMode(value: unknown): value is InlineVisualsMode {
+  return value === "automatic" || value === "on_request" || value === "off";
+}
 
 function isChatWidthPreference(value: unknown): value is ChatWidthPreference {
   return value === "narrow" || value === "default" || value === "wide" || value === "full";
@@ -420,6 +428,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   diffMarkers: "symbols",
   fontSmoothing: true,
   chatWidth: "default",
+  inlineVisuals: "automatic",
 };
 
 export function createDefaultAppearanceConfig(): AppearanceConfig {
@@ -526,6 +535,7 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
       ? value.fontSmoothing
       : fallback.fontSmoothing,
     chatWidth: isChatWidthPreference(value.chatWidth) ? value.chatWidth : fallback.chatWidth,
+    inlineVisuals: isInlineVisualsMode(value.inlineVisuals) ? value.inlineVisuals : fallback.inlineVisuals,
   };
 }
 
@@ -567,6 +577,10 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   // Older V1 settings and exports predate the chat width preference.
   if (value.chatWidth !== undefined && !isChatWidthPreference(value.chatWidth)) {
     throw new Error("Chat width is unsupported.");
+  }
+  // Older settings and exports predate the inline visuals preference.
+  if (value.inlineVisuals !== undefined && !isInlineVisualsMode(value.inlineVisuals)) {
+    throw new Error("Inline visuals mode is unsupported.");
   }
   const verifyVariant = (variant: unknown, label: string) => {
     if (!isRecord(variant)) throw new Error(`${label} theme must be an object.`);

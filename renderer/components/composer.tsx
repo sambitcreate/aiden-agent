@@ -1,3 +1,4 @@
+import { readCachedAppearance } from "../lib/appearance-runtime";
 import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
@@ -100,6 +101,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  subscribeStagedComposerText,
   takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
@@ -443,6 +445,14 @@ export function Composer({
   }, [chatId]);
   React.useEffect(
     () =>
+      subscribeStagedComposerText(chatId, (staged) => {
+        setText((current) => mergeRestoredGuidance(current, [staged]));
+        toast.info("A visual added a follow-up to your draft.");
+      }),
+    [chatId, setText],
+  );
+  React.useEffect(
+    () =>
       subscribeGuidanceRestore(chatId, (guidance) => {
         setText((current) => mergeRestoredGuidance(current, guidance));
         toast.info("The response ended before Aiden read your guidance. It's back in your draft.");
@@ -721,7 +731,7 @@ export function Composer({
       hasLatestAssistantResponse: Boolean(latestAssistantResponse),
       hasAuthenticatedProvider: authenticatedProviders.length > 0,
       hasWorkspace: Boolean(workspace),
-      hasWorkspaceArtifactAccess: workspace?.permission !== "none",
+      inlineVisualsOff: readCachedAppearance()?.inlineVisuals === "off",
       hasManagedWorktreeFlow: Boolean(
         workspace?.folderPath && gitBranch && onCreateGitWorktree && !gitUnborn,
       ),

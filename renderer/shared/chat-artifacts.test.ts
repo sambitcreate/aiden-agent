@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseChatArtifactEventV1, parseChatArtifactV1 } from "./chat-artifacts.js";
+import { parseChatArtifactEventV1, parseChatArtifactV1, parseHtmlArtifactPlacements } from "./chat-artifacts.js";
 import { MAX_HTML_ARTIFACT_BYTES } from "./generative-ui.js";
 
 const IMAGE = {
@@ -86,4 +86,111 @@ test("unknown kinds and mixed image/html shapes drop", () => {
     parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML }),
     { version: 1, operation: "present", artifact: HTML },
   );
+});
+
+const PLACED_MEDIA = "a".repeat(64);
+
+test("placements keep valid entries and drop malformed ones individually", () => {
+  assert.equal(parseHtmlArtifactPlacements(undefined), undefined);
+  assert.equal(parseHtmlArtifactPlacements("nope"), undefined);
+  assert.deepEqual(
+    parseHtmlArtifactPlacements([
+      { mediaId: PLACED_MEDIA, toolCallId: "call_1" },
+      { mediaId: PLACED_MEDIA, toolCallId: "call_dup" },
+      { mediaId: "bad id with spaces", toolCallId: "call_2" },
+      { mediaId: "b".repeat(64), toolCallId: "" },
+      { mediaId: "d".repeat(64), toolCallId: "call_4" },
+    ]),
+    [
+      { mediaId: PLACED_MEDIA, toolCallId: "call_1" },
+      { mediaId: "d".repeat(64), toolCallId: "call_4" },
+    ],
+  );
+  assert.equal(parseHtmlArtifactPlacements([{ mediaId: "x", toolCallId: 1 }]), undefined);
+});
+
+test("placements carry a wide layout and tolerate fields from newer builds", () => {
+  assert.deepEqual(
+    parseHtmlArtifactPlacements([
+      { mediaId: "a".repeat(64), toolCallId: "call_1", layout: "wide" },
+      { mediaId: "b".repeat(64), toolCallId: "call_2", layout: "column" },
+      { mediaId: "c".repeat(64), toolCallId: "call_3", layout: "fullscreen" },
+      { mediaId: "d".repeat(64), toolCallId: "call_4", futureField: { any: true } },
+    ]),
+    [
+      { mediaId: "a".repeat(64), toolCallId: "call_1", layout: "wide" },
+      { mediaId: "b".repeat(64), toolCallId: "call_2" },
+      { mediaId: "c".repeat(64), toolCallId: "call_3" },
+      { mediaId: "d".repeat(64), toolCallId: "call_4" },
+    ],
+  );
+});
+
+test("present and draft events may mark a visual wide", () => {
+  const src = `aiden-genui://preview/${"e".repeat(64)}`;
+  const present = parseChatArtifactEventV1({
+    version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src, layout: "wide",
+  });
+  assert.equal(present?.operation === "present" && present.layout, "wide");
+  const draft = parseChatArtifactEventV1({
+    version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src, layout: "wide",
+  });
+  assert.equal(draft?.operation === "draft" && draft.layout, "wide");
+  // Any other layout reads as the reading column; it never hides the visual.
+  const narrowPresent = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, layout: "huge" });
+  assert.equal(narrowPresent?.operation, "present");
+  assert.equal(narrowPresent && "layout" in narrowPresent, false);
+  const narrowDraft = parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", src, layout: "column" });
+  assert.deepEqual(narrowDraft, { version: 1, operation: "draft", toolCallId: "call_1", src });
+});
+
+test("draft events carry a preview URL for one tool call and nothing else", () => {
+  const src = `aiden-genui://preview/${"a".repeat(64)}`;
+  assert.deepEqual(
+    parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src }),
+    { version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src },
+  );
+  assert.deepEqual(
+    parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", src }),
+    { version: 1, operation: "draft", toolCallId: "call_1", src },
+  );
+  assert.deepEqual(
+    parseChatArtifactEventV1({ version: 1, operation: "draft_end", toolCallId: "call_1" }),
+    { version: 1, operation: "draft_end", toolCallId: "call_1" },
+  );
+  for (const bad of [
+    { version: 1, operation: "draft", toolCallId: "call_1", src: "https://example.com/x" },
+    { version: 1, operation: "draft", toolCallId: "call_1", src: `${src}?x=1` },
+    { version: 1, operation: "draft", toolCallId: "", src },
+    { version: 1, operation: "draft", toolCallId: "call_1", src, html: "<p>" },
+    { version: 1, operation: "draft", toolCallId: "call_1", title: " padded", src },
+    { version: 1, operation: "draft_end", toolCallId: "call_1", src },
+  ]) {
+    assert.equal(parseChatArtifactEventV1(bad), undefined, JSON.stringify(bad));
+  }
+});
+
+test("present events may carry a ready preview URL and nothing else", () => {
+  const src = `aiden-genui://preview/${"b".repeat(64)}`;
+  const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src });
+  assert.equal(parsed?.operation === "present" && parsed.src, src);
+  assert.equal(
+    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_1", src: "https://x.test/a" }),
+    undefined,
+  );
+  assert.equal(
+    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, src: "<p>html</p>" }),
+    undefined,
+  );
+});
+
+test("present events may carry the producing toolCallId", () => {
+  const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_9" });
+  assert.equal(parsed?.operation === "present" && parsed.toolCallId, "call_9");
+  assert.equal(
+    parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "" }),
+    undefined,
+  );
+  const legacy = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML });
+  assert.equal(legacy?.operation === "present" && legacy.toolCallId, undefined);
 });

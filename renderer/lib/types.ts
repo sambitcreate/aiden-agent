@@ -623,6 +623,7 @@ export interface ChatMessage {
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
+  htmlArtifactPlacements?: import("../shared/chat-artifacts").HtmlArtifactPlacementV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
@@ -1109,6 +1110,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals for this turn. */
+  inlineVisuals?: import("../shared/appearance").InlineVisualsMode;
 }
 
 export interface ApprovalRequest {

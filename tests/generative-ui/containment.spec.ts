@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 import {
@@ -7,8 +9,13 @@ import {
   GENERATIVE_UI_ESCAPE_MESSAGE,
   GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_PARENT_FRAME_SRC,
+  generativeUiDraftCsp,
 } from "../../renderer/shared/generative-ui";
-import { generativeUiExportDocument } from "../../main/services/generative-ui-html";
+import {
+  generativeUiDraftDocumentHead,
+  generativeUiExportDocument,
+  wrapGenerativeUiHtml,
+} from "../../main/services/generative-ui-html";
 
 // Playwright's config loader resolves this ESM repo through the CommonJS
 // condition. Named exports are unavailable; the default object carries them.
@@ -300,3 +307,272 @@ test("a top-layer artifact escapes transcript stacking and preserves its browsin
   await expect(page.locator("#host")).toHaveCSS("position", "static");
   await expect(page.locator("#opener")).toBeFocused();
 });
+
+type BridgeMessage = { type?: string; height?: number; text?: string } | string | null;
+
+/**
+ * Serve a parent page embedding the main-wrapped guest exactly as the app does
+ * (unique-origin sandbox, guest CSP) and record every message it posts.
+ */
+async function loadWrappedGuest(
+  page: PlaywrightTestModule.Page,
+  html: string,
+  options: { theme?: Parameters<typeof wrapGenerativeUiHtml>[2]; inline?: boolean } = {},
+): Promise<{ messages: () => Promise<BridgeMessage[]>; close: () => Promise<void> }> {
+  const guest = wrapGenerativeUiHtml(html, "Bridge probe", options.theme, { inline: options.inline ?? true });
+  const site = await listen((request, response) => {
+    if (request.url === "/guest") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": GENERATIVE_UI_GUEST_CSP,
+      });
+      response.end(guest);
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!DOCTYPE html><html><body>
+      <script>window.__msgs = []; window.addEventListener("message", (e) => window.__msgs.push(e.data));</script>
+      <iframe id="artifact" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="/guest" style="width:600px;height:300px"></iframe>
+    </body></html>`);
+  });
+  await page.goto(site.origin);
+  return {
+    messages: () => page.evaluate(() => (window as unknown as { __msgs: BridgeMessage[] }).__msgs),
+    close: site.close,
+  };
+}
+
+const ofType = (messages: BridgeMessage[], type: string) =>
+  messages.filter((m): m is { type: string; height?: number; text?: string } =>
+    typeof m === "object" && m !== null && m.type === type);
+
+test("draft preview renders partial markup without running model scripts", async ({ page }) => {
+  const nonce = "Zm9vYmFyYmF6cXV4MTIzNA==";
+  const draft = `${generativeUiDraftDocumentHead("Draft", undefined, nonce)}<p id="x">ok</p><script>parent.postMessage("ran", "*")</script><div style="height:400px">`;
+  let openDraft: { end: () => void } | undefined;
+  const site = await listen((request, response) => {
+    if (request.url === "/draft") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": generativeUiDraftCsp(nonce),
+      });
+      // Leave the document open, as a streaming draft is.
+      response.write(draft);
+      openDraft = response;
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!DOCTYPE html><html><body>
+      <script>window.__msgs = []; window.addEventListener("message", (e) => window.__msgs.push(e.data));</script>
+      <iframe id="artifact" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="/draft" style="width:600px;height:300px"></iframe>
+    </body></html>`);
+  });
+  try {
+    await page.goto(site.origin, { waitUntil: "commit" });
+    await expect(page.frameLocator("#artifact").locator("#x")).toHaveText("ok");
+    const messages = () => page.evaluate(() => (window as unknown as { __msgs: BridgeMessage[] }).__msgs);
+    await expect.poll(async () => ofType(await messages(), "aiden:generative-ui:ready").length).toBe(1);
+    await expect.poll(async () => ofType(await messages(), "aiden:generative-ui:resize").length).toBeGreaterThan(0);
+    expect((await messages()).includes("ran")).toBe(false);
+  } finally {
+    openDraft?.end();
+    await site.close().catch(() => undefined);
+  }
+});
+
+test("bridge reports content height to the parent", async ({ page }) => {
+  const guest = await loadWrappedGuest(page, '<div style="height:640px">tall</div>');
+  try {
+    await expect
+      .poll(async () => {
+        const resizes = ofType(await guest.messages(), "aiden:generative-ui:resize");
+        return resizes[resizes.length - 1]?.height ?? 0;
+      })
+      .toBeGreaterThanOrEqual(640);
+  } finally {
+    await guest.close();
+  }
+});
+
+test("bridge height follows content down as well as up, independent of the frame viewport", async ({ page }) => {
+  const guest = await loadWrappedGuest(
+    page,
+    '<h1>Title</h1><div id="box" style="height:600px"></div><script>setTimeout(() => { document.getElementById("box").style.height = "40px"; }, 300)</script>',
+  );
+  const lastHeight = async () => {
+    const resizes = ofType(await guest.messages(), "aiden:generative-ui:resize");
+    return resizes[resizes.length - 1]?.height ?? 0;
+  };
+  try {
+    await expect.poll(lastHeight).toBeGreaterThanOrEqual(600);
+    // The frame in this harness is 300px tall; the content is now ~40px + heading.
+    await expect.poll(lastHeight).toBeLessThan(160);
+    await expect.poll(lastHeight).toBeGreaterThan(40);
+  } finally {
+    await guest.close();
+  }
+});
+
+for (const [label, html, minimum] of [
+  ["an absolutely positioned diagram", '<div style="position:absolute;top:0;left:0;width:200px;height:500px"></div>', 500],
+  ["an absolute child inside a relative box", '<div style="position:relative;height:45px"><div style="position:absolute;top:30px;height:500px;width:10px"></div></div>', 530],
+  ["a fixed-height box that overflows", '<div style="height:50px"><div style="height:500px"></div></div>', 500],
+] as const) {
+  test(`bridge height includes ${label}`, async ({ page }) => {
+    const guest = await loadWrappedGuest(page, html);
+    try {
+      await expect
+        .poll(async () => {
+          const resizes = ofType(await guest.messages(), "aiden:generative-ui:resize");
+          return resizes[resizes.length - 1]?.height ?? 0;
+        })
+        .toBeGreaterThanOrEqual(minimum);
+    } finally {
+      await guest.close();
+    }
+  });
+}
+
+test("wrapped documents keep the browser's 16px rem in inline and standalone modes", async ({ page }) => {
+  for (const inline of [true, false]) {
+    const doc = wrapGenerativeUiHtml('<p id="p" style="width:10rem">x</p>', "Rem", undefined, { inline });
+    const site = await listen((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(doc);
+    });
+    try {
+      await page.goto(site.origin);
+      expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe("16px");
+      expect(await page.locator("#p").evaluate((el) => el.getBoundingClientRect().width)).toBe(160);
+    } finally {
+      await site.close();
+    }
+  }
+});
+
+test("a legacy four-color dark theme paints body text in its foreground in inline and standalone modes", async ({ page }) => {
+  const darkLegacyTheme = {
+    colorScheme: "dark" as const, canvas: "#101010", foreground: "#fafafa", secondary: "#a0a0a0", accent: "#3399ff",
+  };
+  for (const inline of [true, false]) {
+    const guest = await loadWrappedGuest(page, "<p>Pricing</p>", { theme: darkLegacyTheme, inline });
+    try {
+      const color = await page.frameLocator("#artifact").locator("p").evaluate((el) => getComputedStyle(el).color);
+      expect(color, inline ? "inline" : "standalone").toBe("rgb(250, 250, 250)");
+    } finally {
+      await guest.close();
+    }
+  }
+});
+
+test("sendPrompt posts a typed prompt message and nothing else", async ({ page }) => {
+  const guest = await loadWrappedGuest(
+    page,
+    '<button id="b" onclick="aiden.sendPrompt(\'Drill in\')">go</button>',
+  );
+  try {
+    await page.frameLocator("#artifact").locator("#b").click();
+    await expect
+      .poll(async () => ofType(await guest.messages(), "aiden:generative-ui:prompt"))
+      .toEqual([{ type: "aiden:generative-ui:prompt", text: "Drill in" }]);
+  } finally {
+    await guest.close();
+  }
+});
+
+test("theme messages from the parent update guest variables without reloading", async ({ page }) => {
+  const guest = await loadWrappedGuest(
+    page,
+    "<p id=p>x</p><script>window.__loaded = (window.__loaded || 0) + 1</script>",
+  );
+  try {
+    const paragraph = page.frameLocator("#artifact").locator("#p");
+    await expect(paragraph).toHaveText("x");
+    await page.evaluate(() => {
+      const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+      iframe.contentWindow!.postMessage(
+        { type: "aiden:generative-ui:theme", colorScheme: "dark", vars: { "--accent": "#ff0000", "--bad": "x;}" } },
+        "*",
+      );
+    });
+    await expect
+      .poll(() => paragraph.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()))
+      .toBe("#ff0000");
+    expect(await paragraph.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--bad").trim())).toBe("");
+    expect(await paragraph.evaluate(() => document.documentElement.dataset.colorScheme)).toBe("dark");
+    expect(await paragraph.evaluate(() => (window as unknown as { __loaded: number }).__loaded)).toBe(1);
+  } finally {
+    await guest.close();
+  }
+});
+
+test("theme messages recolor chart datasets that were colored from aiden.series()", async ({ page }) => {
+  // The real vendored Chart.js, inlined by the standalone export the app uses for libraries.
+  const chartSource = await fs.readFile(path.join(process.cwd(), "resources", "generative-ui", "chart.umd.min.js"), "utf8");
+  const exported = generativeUiExportDocument(
+    `<div style="height:240px"><canvas id="c"></canvas></div><script>
+      window.__chart = new Chart(document.getElementById("c"), {
+        type: "bar",
+        data: {
+          labels: ["Q1"],
+          datasets: [
+            { label: "palette", data: [3], backgroundColor: aiden.series()[0] },
+            { label: "custom", data: [5], backgroundColor: "#123456" },
+          ],
+        },
+        options: { animation: false, responsive: true, maintainAspectRatio: false },
+      });
+    </script>`,
+    "Chart recolor",
+    {
+      "chart.js": chartSource,
+      "plotly.js": "window.Plotly = {};",
+      "katex.js": "window.katex = {};",
+      "katex.css": "body { min-height: 100%; }",
+    },
+  );
+  const site = await listen((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(exported);
+  });
+  try {
+    await page.goto(site.origin, { waitUntil: "domcontentloaded" });
+    const canvas = page.frameLocator("iframe").locator("#c");
+    const seriesOne = () => canvas.evaluate(() => (window as unknown as { aiden: { series(): string[] } }).aiden.series()[0]);
+    const datasetColors = () => canvas.evaluate(() =>
+      (window as unknown as { __chart: { data: { datasets: { backgroundColor: string }[] } } }).__chart
+        .data.datasets.map((dataset) => dataset.backgroundColor));
+    const initial = await seriesOne();
+    expect(initial).not.toBe("#83d8ff");
+    expect(await datasetColors()).toEqual([initial, "#123456"]);
+    await page.evaluate(() => {
+      const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+      iframe.contentWindow!.postMessage(
+        { type: "aiden:generative-ui:theme", colorScheme: "light", vars: { "--chart-1": "#83d8ff" } },
+        "*",
+      );
+    });
+    await expect.poll(seriesOne).toBe("#83d8ff");
+    await expect.poll(datasetColors).toEqual(["#83d8ff", "#123456"]);
+  } finally {
+    await site.close();
+  }
+});
+
+for (const declaration of ["const aiden = 1;", "let aiden = 1;", "function aiden() {}"]) {
+  test(`a guest that declares its own top-level aiden (${declaration}) still runs`, async ({ page }) => {
+    // Design Studio pages and older artifacts never saw the bridge; their own
+    // names must not break the whole script.
+    const guest = await loadWrappedGuest(
+      page,
+      `<p id="out">pending</p><script>${declaration} document.getElementById("out").textContent = "ran";</script>`,
+    );
+    try {
+      await expect(page.frameLocator("#artifact").locator("#out")).toHaveText("ran");
+    } finally {
+      await guest.close();
+    }
+  });
+}

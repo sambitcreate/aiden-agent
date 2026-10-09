@@ -10,6 +10,7 @@ import {
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
+import { remoteGenerationSurface } from "./conversation-surface-generation.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
 
 const temporaryDirectories: string[] = [];
@@ -25,6 +26,101 @@ async function workspace(): Promise<string> {
   temporaryDirectories.push(directory);
   return directory;
 }
+
+test("visuals are available without a workspace and follow the inline-visuals mode", () => {
+  const base = { usageSource: "chat", assistantMode: false, permission: "none", excluded: false };
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base }), true);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "automatic" }), true);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "off", visualize: true }), false);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request" }), false);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, inlineVisuals: "on_request", visualize: true }), true);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, usageSource: "scheduled" }), false);
+  assert.equal(shouldEnableGenerativeUiExtension({ ...base, excluded: true }), false);
+});
+
+test("turns sent from a paired phone do not get inline visuals until phones can show them", () => {
+  const surface = remoteGenerationSurface({
+    chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
+    workspaceId: "workspace", providerId: "provider", model: "model",
+    onTurnAccepted: () => undefined,
+  });
+  assert.equal(
+    shouldEnableGenerativeUiExtension({
+      usageSource: surface.options.usageSource,
+      assistantMode: false,
+      workspaceRoot: "/tmp/ws",
+      permission: "ask",
+      excluded: false,
+      inlineVisuals: surface.params.inlineVisuals,
+    }),
+    false,
+  );
+});
+
+test("path rendering is refused without a workspace while inline html works", async () => {
+  const artifacts: ChatHtmlArtifactV1[] = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: (artifact) => {
+      artifacts.push(artifact);
+    },
+  });
+  const tool = extension.tools?.find((candidate) => candidate.name === GENERATIVE_UI_TOOL_NAME);
+  assert.ok(tool);
+  await assert.rejects(tool.execute("c1", { title: "T", path: "a.html" }), /workspace/iu);
+  await tool.execute("c2", { title: "T", html: "<p>x</p>" });
+  assert.equal(artifacts.length, 1);
+});
+
+test("visualize_guide returns only the requested design modules", async () => {
+  const root = await workspace();
+  const extension = createGenerativeUiExtension({ workspaceRoot: root, onArtifact: () => undefined });
+  const guide = extension.tools?.find((candidate) => candidate.name === "visualize_guide");
+  assert.ok(guide);
+  assert.equal(piRuntimeReplayPolicy(guide), "never");
+  const text = async (modules: unknown) => {
+    const result = await guide.execute("g1", { modules });
+    return result.content[0]?.type === "text" ? result.content[0].text : "";
+  };
+  const charts = await text(["charts"]);
+  assert.match(charts, /aiden\.series\(\)/u);
+  assert.doesNotMatch(charts, /## HTML structure/u);
+  const html = await text(["html", "design"]);
+  assert.match(html, /## HTML structure/u);
+  assert.match(html, /aiden-card/u);
+  assert.match(html, /do not (re)?declare `aiden`/iu);
+  await assert.rejects(guide.execute("g2", { modules: ["nope"] }), /module/iu);
+});
+
+test("the system prompt points the model at the guide and keeps replies complete without visuals", () => {
+  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
+  assert.match(extension.systemPrompt ?? "", /visualize_guide/u);
+  assert.match(extension.systemPrompt ?? "", /takeaway/iu);
+  const preferred = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    preferArtifactThisTurn: true,
+    onArtifact: () => undefined,
+  });
+  assert.match(preferred.systemPrompt ?? "", /\/visualize/u);
+});
+
+test("render_artifact takes a column or wide layout and hands it to the host", async () => {
+  const seen: Array<string | undefined> = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-layout",
+    onArtifact: (_artifact, _html, context) => {
+      seen.push(context.layout);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  await tool.execute("call-1", { title: "Board", html: "<p>a</p>", layout: "wide" });
+  await tool.execute("call-2", { title: "Card", html: "<p>b</p>" });
+  await tool.execute("call-3", { title: "Card", html: "<p>c</p>", layout: "column" });
+  await assert.rejects(tool.execute("call-4", { title: "X", html: "<p>d</p>", layout: "huge" }), /layout/iu);
+  assert.deepEqual(seen, ["wide", "column", "column"]);
+});
 
 test("generative UI enablement matches the display_image chat gate", () => {
   assert.equal(
@@ -131,6 +227,24 @@ test("same-generation title replaces the previous staged artifact", async () => 
   assert.equal(artifacts[0]?.mediaId, artifacts[1]?.mediaId);
   assert.equal(artifacts[0]?.size, artifacts[1]?.size);
   assert.notEqual(artifacts[0]?.id, artifacts[1]?.id);
+});
+
+test("onArtifact receives the producing toolCallId and replaces keep the first call", async () => {
+  const root = await workspace();
+  const seen: string[] = [];
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    artifactNamespace: "gen-call",
+    onArtifact: (_artifact, _html, context) => {
+      seen.push(context.toolCallId);
+    },
+  });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+  await tool.execute("call-first", { title: "Chart", html: "<p>a</p>" });
+  await tool.execute("call-second", { title: "Chart", html: "<p>b</p>" });
+  await tool.execute("call-other", { title: "Other", html: "<p>c</p>" });
+  assert.deepEqual(seen, ["call-first", "call-first", "call-other"]);
 });
 
 test("render_artifact refuses intermediate directory symlinks", async () => {

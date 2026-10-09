@@ -182,7 +182,7 @@ export function subscribeGenerationStream(
         if (!event) return;
         if (event.operation === "reset") {
           projectedArtifacts = [];
-        } else {
+        } else if (event.operation === "present") {
           const identity = chatArtifactIdentity(event.artifact);
           const index = projectedArtifacts.findIndex(
             (candidate) => chatArtifactIdentity(candidate) === identity,
