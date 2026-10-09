@@ -21,6 +21,8 @@ import {
   writeDiagnosticEventSync,
   writeLegacyDiagnostic,
 } from "./diagnostic-journal.js";
+import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
+import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 
 async function withJournal(
   profile: "development" | "production",
@@ -55,6 +57,35 @@ test("production legacy adapter omits arbitrary messages and secrets", async () 
       "errorType",
       "fingerprint",
     ]);
+  });
+});
+
+test("production Bot failures keep their class and a distinct fingerprint without message text", async () => {
+  await withJournal("production", async (target) => {
+    writeLegacyDiagnostic("warn", "bots", [
+      "Bot creation failed.",
+      new BotRuntimeInventoryLeaseInvalidError(),
+    ]);
+    writeLegacyDiagnostic("warn", "bots", [
+      "Bot turn admission failed.",
+      new BotCapabilityUnavailableError("Notion workspace acme-private is unavailable"),
+    ]);
+    await flushDiagnosticJournal();
+    const contents = await fs.readFile(target, "utf8");
+    assert.doesNotMatch(contents, /creation failed|admission failed|acme-private|capabilities changed/u);
+    const records = contents
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as {
+        area: string;
+        fields?: { errorType?: string; fingerprint?: string };
+      })
+      .filter((candidate) => candidate.area === "bots");
+    assert.deepEqual(records.map(({ fields }) => fields?.errorType), [
+      "BotRuntimeInventoryLeaseInvalidError",
+      "BotCapabilityUnavailableError",
+    ]);
+    assert.notEqual(records[0]?.fields?.fingerprint, records[1]?.fields?.fingerprint);
   });
 });
 

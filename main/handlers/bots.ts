@@ -1,24 +1,12 @@
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { configStore } from "../services/config-store.js";
 import { BOT_DESKTOP_AUDIENCE_ID } from "../services/bot-runtime-authority-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
-import {
-  BotCapabilityValidationError,
-  parseBotNoticeAcknowledgement,
-} from "../../renderer/shared/bot-capabilities.js";
-import {
-  BotApplicationUnavailableError,
-} from "../services/bot-application-service.js";
-import { BotRuntimeInventoryLeaseInvalidError } from "../services/bot-runtime-inventory-lease.js";
-import {
-  BotCapabilityCatalogConflictError,
-  BotCapabilityRevisionConflictError,
-  BotCapabilitySubsetError,
-  BotCapabilityUnavailableError,
-} from "../services/bot-capability-store-core.js";
+import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabilities.js";
+import { botAccessUpdateRendererError, botCreateRendererError } from "./bot-renderer-errors.js";
 import { botMutationGate } from "../services/bot-mutation-gate.js";
 import { createMainBotAvatarApplicationAdapter } from "../services/bot-avatar-store-main.js";
 import { projectBotAvatarForRenderer } from "../services/bot-avatar-renderer-projection.js";
@@ -193,7 +181,8 @@ export function registerBotHandlers(): void {
         access: parsed.access,
       });
     } catch (error) {
-      throw botAccessUpdateRendererError(error);
+      logger.warn("bots", "Bot creation failed.", error);
+      throw botCreateRendererError(error);
     }
   });
   ipcMain.handle("bots:sessionState", async (_event, id: unknown) =>
@@ -480,33 +469,4 @@ export function registerBotHandlers(): void {
       telegramBotBindingAuthority.disableBot(botId),
     );
   });
-}
-
-/**
- * Surface the same recovery guidance the remote protocol gives iOS so the Mac
- * editor can reconcile instead of showing a raw service error.
- */
-function botAccessUpdateRendererError(error: unknown): unknown {
-  if (error instanceof BotRuntimeInventoryLeaseInvalidError) {
-    return new Error("Bot capabilities kept changing. Review the latest choices and try again.");
-  }
-  if (error instanceof BotApplicationUnavailableError) {
-    return new Error("This Bot no longer exists.");
-  }
-  if (
-    error instanceof BotCapabilityRevisionConflictError ||
-    error instanceof BotCapabilityCatalogConflictError
-  ) {
-    return new Error("This Bot changed. Refresh it before trying again.");
-  }
-  if (error instanceof BotCapabilitySubsetError) {
-    return new Error("This Bot cannot use more access than its policy allows.");
-  }
-  if (error instanceof BotCapabilityUnavailableError) {
-    return new Error("Some selected Bot access is unavailable. Refresh and review it.");
-  }
-  if (error instanceof BotCapabilityValidationError) {
-    return new Error(error.message);
-  }
-  return error;
 }

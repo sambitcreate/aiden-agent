@@ -1,4 +1,5 @@
 import { installBotTestIpc } from "./test-dom";
+import { MCP_PRESETS } from "../../../main/services/mcp-presets";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -48,7 +49,7 @@ test("name and what it helps with create a Bot, offer connections, and open its 
   const dialog = await fillNameStep("Meal Planner", "Plan my meals and email the grocery list");
 
   // Step two offers chips ranked from the answer; Gmail is one of them.
-  const chips = within(dialog).getByRole("group", { name: "Suggested connections" });
+  const chips = within(dialog).getByRole("list", { name: "Suggested connections" });
   assert.ok(within(chips).getByRole("button", { name: "Connect Gmail" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
 
@@ -84,11 +85,60 @@ test("with no AI model the Bot is still created and its chat asks for one, with 
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   const dialog = await fillNameStep("Researcher", "");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Skip" }));
+  // Connections are optional: Create goes ahead without any.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
 
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
   assert.equal(calls.some((call) => call.channel === "bots:introduce"), false);
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
   const access = calls.find((call) => call.channel === "bots:create")?.args[0] as { access: BotAccessUpdate };
   assert.equal("providerId" in access.access, false);
+});
+
+test("Back on the connections step returns to the first step with the draft kept, without closing", async () => {
+  const calls = installBotTestIpc({ "bots:list": () => [] });
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  const dialog = await fillNameStep("Meal Planner", "Plan my meals");
+  assert.ok(within(dialog).getByRole("list", { name: "Suggested connections" }));
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+
+  const firstStep = await screen.findByRole("dialog", { name: "New Bot" });
+  assert.equal((within(firstStep).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value, "Meal Planner");
+  assert.equal(
+    (within(firstStep).getByRole("textbox", { name: "What should it help with?" }) as HTMLTextAreaElement).value,
+    "Plan my meals",
+  );
+  assert.equal(calls.some((call) => call.channel === "bots:create"), false);
+  // Next goes forward again from the kept draft.
+  fireEvent.click(within(firstStep).getByRole("button", { name: "Next" }));
+  assert.ok(await screen.findByRole("dialog", { name: "Connections" }));
+});
+
+test("connection chips start an app's setup, and an app already connected on this Mac shows as connected", async () => {
+  const presets = MCP_PRESETS.map((preset) => ({
+    preset,
+    serverId: `preset-${preset.id}`,
+    // Notion is already set up, switched on, and signed in.
+    configured: preset.id === "notion",
+    enabled: preset.id === "notion",
+    ready: preset.id === "notion",
+  }));
+  installBotTestIpc({
+    "bots:list": () => [],
+    "mcp:list": () => [],
+    "mcp:presets": () => presets,
+  });
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  const dialog = await fillNameStep("Notes Helper", "Keep my notes and email tidy");
+  const chips = within(dialog).getByRole("list", { name: "Suggested connections" });
+  await waitFor(() => assert.ok(within(chips).getByText("connected")));
+  assert.equal(within(chips).queryByRole("button", { name: "Connect Notion" }), null);
+
+  fireEvent.click(within(chips).getByRole("button", { name: "Connect Gmail" }));
+  // The app's own setup opens on top; the create dialog keeps its place underneath.
+  await waitFor(() => assert.equal(document.querySelectorAll('[role="dialog"]').length, 2));
+  const [create, setup] = Array.from(document.querySelectorAll('[role="dialog"]'));
+  assert.match(create!.textContent ?? "", /Connections/u);
+  assert.match(setup!.textContent ?? "", /Gmail|Composio/u);
 });

@@ -78,17 +78,17 @@ function mountOnboarding({
 
 const tourHeading = "Everything Aiden brings together";
 
-test("a first run with no Bots stops on Meet Your First Bot before the tour", async () => {
+test("a first run with no Bots stops on Meet your first Bot before the tour", async () => {
   mountOnboarding({ bots: [] });
-  assert.ok(await screen.findByRole("heading", { name: "Meet Your First Bot" }));
+  assert.ok(await screen.findByRole("heading", { name: "Meet your first Bot" }));
   const stepper = screen.getByRole("list", { name: "Setup progress" });
   assert.ok(within(stepper).getByText("Your first Bot"));
 });
 
-test("Start Chat creates exactly one starter Bot and moves on to the tour", async () => {
+test("Start chat creates exactly one starter Bot and moves on to the tour", async () => {
   const calls = mountOnboarding({ bots: [] });
   const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  fireEvent.click(within(starters).getAllByRole("button", { name: "Start Chat" })[0]!);
+  fireEvent.click(within(starters).getAllByRole("button", { name: "Start chat" })[0]!);
 
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
   const creates = calls.filter((call) => call.channel === "bots:createFromPreset");
@@ -101,11 +101,11 @@ test("Start Chat creates exactly one starter Bot and moves on to the tour", asyn
   );
 });
 
-test("finishing onboarding after Start Chat opens the new Bot's chat", async () => {
+test("finishing onboarding after Start chat opens the new Bot's chat", async () => {
   const opened: string[] = [];
   mountOnboarding({ bots: [], onOpenBotChat: (botId) => opened.push(botId) });
   const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  fireEvent.click(within(starters).getAllByRole("button", { name: "Start Chat" })[0]!);
+  fireEvent.click(within(starters).getAllByRole("button", { name: "Start chat" })[0]!);
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
   assert.deepEqual(opened, [], "the chat waits until onboarding is done");
   fireEvent.click(screen.getByRole("button", { name: /Start using Aiden/u }));
@@ -136,13 +136,13 @@ test("Skip leaves onboarding on the tour without creating a Bot", async () => {
 test("the step is skipped when Bots already exist", async () => {
   mountOnboarding({ bots: [botFixture()] });
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.equal(screen.queryByRole("heading", { name: "Meet Your First Bot" }), null);
+  assert.equal(screen.queryByRole("heading", { name: "Meet your first Bot" }), null);
 });
 
 test("the step is not offered without the Bots capability, and the Bot store is not read", async () => {
   const calls = mountOnboarding({ bots: [], botsCapability: false });
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.equal(screen.queryByRole("heading", { name: "Meet Your First Bot" }), null);
+  assert.equal(screen.queryByRole("heading", { name: "Meet your first Bot" }), null);
   assert.equal(calls.some((call) => call.channel === "bots:list"), false);
   const stepper = screen.getByRole("list", { name: "Setup progress" });
   assert.equal(within(stepper).queryByText("Your first Bot"), null);
@@ -154,30 +154,30 @@ test("the step is not offered when the Bot store can't be read", async () => {
     overrides: { "bots:list": () => Promise.reject(new Error("Bots are open in another Aiden window.")) },
   });
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
-  assert.equal(screen.queryByRole("heading", { name: "Meet Your First Bot" }), null);
+  assert.equal(screen.queryByRole("heading", { name: "Meet your first Bot" }), null);
 });
 
-test("Start Chat clicked twice while the Bot is being made sends one create", async () => {
+test("Start chat clicked twice while the Bot is being made sends one create", async () => {
   const calls = mountOnboarding({ bots: [] });
   const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  const start = within(starters).getAllByRole("button", { name: "Start Chat" })[0]!;
+  const start = within(starters).getAllByRole("button", { name: "Start chat" })[0]!;
   fireEvent.click(start);
   fireEvent.click(start);
   assert.ok(await screen.findByRole("heading", { name: tourHeading }));
   assert.equal(calls.filter((call) => call.channel === "bots:createFromPreset").length, 1);
 });
 
-test("a Start Chat that fails stays on the step so the person can try again or skip", async () => {
+test("a Start chat that fails stays on the step so the person can try again or skip", async () => {
   const calls = mountOnboarding({
     bots: [],
     overrides: { "bots:createFromPreset": () => Promise.reject(new Error("Bots are open in another Aiden window.")) },
   });
   const starters = await screen.findByRole("list", { name: "Starter Bots" });
-  fireEvent.click(within(starters).getAllByRole("button", { name: "Start Chat" })[0]!);
+  fireEvent.click(within(starters).getAllByRole("button", { name: "Start chat" })[0]!);
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:createFromPreset").length, 1));
   await waitFor(() =>
-    assert.equal(within(starters).getAllByRole("button", { name: "Start Chat" })[0]!.hasAttribute("disabled"), false),
+    assert.equal(within(starters).getAllByRole("button", { name: "Start chat" })[0]!.hasAttribute("disabled"), false),
   );
-  assert.ok(screen.getByRole("heading", { name: "Meet Your First Bot" }));
+  assert.ok(screen.getByRole("heading", { name: "Meet your first Bot" }));
   assert.equal(calls.some((call) => call.channel === "app:setOnboardingProgress" && call.args[0] === "bots"), false);
 });

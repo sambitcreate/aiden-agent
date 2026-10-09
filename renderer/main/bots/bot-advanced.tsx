@@ -1,13 +1,16 @@
 import * as React from "react";
-import { ChevronLeft, Link2, RotateCcw, Unlink } from "lucide-react";
+import { Link2, RotateCcw, Unlink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import {
   Button,
+  Callout,
   Dialog,
   EmptyState,
   Field,
   FieldSet,
   InlineMetadata,
+  Label,
   RadioGroup,
   RadioGroupItem,
   Select,
@@ -47,6 +50,7 @@ import {
   type BotAccessDraft,
 } from "./bot-access-draft";
 import { updateBotIdentity } from "./bot-identity";
+import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
 
 type ToggleKey = "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds";
 
@@ -74,11 +78,13 @@ function ModelSection({
   draft,
   disabled,
   onChange,
+  onSetUpModel,
 }: {
   catalog: BotCapabilityCatalog;
   draft: BotAccessDraft;
   disabled: boolean;
   onChange(next: BotAccessDraft): void;
+  onSetUpModel(): void;
 }) {
   const provider = catalog.providers.find(({ id }) => id === draft.providerId);
   const model = provider?.models.find(({ id }) => id === draft.modelId);
@@ -86,104 +92,100 @@ function ModelSection({
     (candidate) => candidate.available && candidate.models.some((item) => item.available && item.supportsImages),
   );
   const visionProvider = catalog.providers.find(({ id }) => id === draft.visionProviderId);
-  const noModels = !firstAvailableModel(catalog);
+  const recommended = withRecommendedModel(draft, catalog);
+  const usingRecommended =
+    recommended.providerId === draft.providerId &&
+    recommended.modelId === draft.modelId &&
+    recommended.visionProviderId === draft.visionProviderId &&
+    recommended.visionModelId === draft.visionModelId;
+  if (!firstAvailableModel(catalog)) {
+    return (
+      <FieldSet title="AI model">
+        <Field label="No AI model yet" description="Add one in Settings → Providers so this Bot can reply.">
+          <Button size="small" variant="filled" onClick={onSetUpModel}>
+            Set up
+          </Button>
+        </Field>
+      </FieldSet>
+    );
+  }
   return (
     <FieldSet title="AI model">
-      <Field
-        orientation="vertical"
-        label="Model"
-        description="Recommended picks the first model you have set up."
-      >
-        {noModels ? (
-          <Text as="p" variant="small" color="secondary">
-            No AI model is set up yet. Add one in Settings → Providers.
-          </Text>
-        ) : (
-          <div className="grid grid-cols-1 gap-3">
-            <Select
-              value={draft.providerId ?? ""}
-              disabled={disabled}
-              onValueChange={(providerId) => {
-                const nextProvider = catalog.providers.find(({ id }) => id === providerId);
-                const nextModel = nextProvider?.models.find((candidate) => candidate.available);
-                const vision = nextModel?.supportsImages
-                  ? undefined
-                  : firstAvailableVisionModel(catalog, providerId);
-                onChange({
-                  ...draft,
-                  providerId,
-                  modelId: nextModel?.id,
-                  visionProviderId: vision?.providerId,
-                  visionModelId: vision?.modelId,
-                });
-              }}
-            >
-              <SelectTrigger aria-label="AI service">
-                <SelectValue placeholder="Service" />
-              </SelectTrigger>
-              <SelectContent>
-                {catalog.providers.map((candidate) => (
-                  <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
-                    {candidate.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select
-              value={draft.modelId ?? ""}
-              disabled={disabled}
-              onValueChange={(modelId) => {
-                const nextModel = provider?.models.find(({ id }) => id === modelId);
-                const vision = nextModel?.supportsImages
-                  ? undefined
-                  : draft.visionProviderId && draft.visionModelId
-                    ? { providerId: draft.visionProviderId, modelId: draft.visionModelId }
-                    : firstAvailableVisionModel(catalog, provider?.id);
-                onChange({
-                  ...draft,
-                  modelId,
-                  visionProviderId: vision?.providerId,
-                  visionModelId: vision?.modelId,
-                });
-              }}
-            >
-              <SelectTrigger aria-label="AI model">
-                <SelectValue placeholder="Model" />
-              </SelectTrigger>
-              <SelectContent>
-                {(provider?.models ?? []).map((candidate) => (
-                  <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
-                    {candidate.label}{" "}
-                    <InlineMetadata>· {candidate.supportsImages ? "Reads images" : "Text only"}</InlineMetadata>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div>
-              <Button
-                size="small"
-                variant="transparent"
-                disabled={disabled}
-                onClick={() => onChange(withRecommendedModel(draft, catalog))}
-              >
-                <RotateCcw /> Use recommended
-              </Button>
-            </div>
-          </div>
-        )}
+      <Field label="Service">
+        <Select
+          value={draft.providerId ?? ""}
+          disabled={disabled}
+          onValueChange={(providerId) => {
+            const nextProvider = catalog.providers.find(({ id }) => id === providerId);
+            const nextModel = nextProvider?.models.find((candidate) => candidate.available);
+            const vision = nextModel?.supportsImages
+              ? undefined
+              : firstAvailableVisionModel(catalog, providerId);
+            onChange({
+              ...draft,
+              providerId,
+              modelId: nextModel?.id,
+              visionProviderId: vision?.providerId,
+              visionModelId: vision?.modelId,
+            });
+          }}
+        >
+          <SelectTrigger aria-label="AI service">
+            <SelectValue placeholder="Choose a service" />
+          </SelectTrigger>
+          <SelectContent>
+            {catalog.providers.map((candidate) => (
+              <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
+                {candidate.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="Model">
+        <Select
+          value={draft.modelId ?? ""}
+          disabled={disabled}
+          onValueChange={(modelId) => {
+            const nextModel = provider?.models.find(({ id }) => id === modelId);
+            const vision = nextModel?.supportsImages
+              ? undefined
+              : draft.visionProviderId && draft.visionModelId
+                ? { providerId: draft.visionProviderId, modelId: draft.visionModelId }
+                : firstAvailableVisionModel(catalog, provider?.id);
+            onChange({
+              ...draft,
+              modelId,
+              visionProviderId: vision?.providerId,
+              visionModelId: vision?.modelId,
+            });
+          }}
+        >
+          <SelectTrigger aria-label="AI model">
+            <SelectValue placeholder="Choose a model" />
+          </SelectTrigger>
+          <SelectContent>
+            {(provider?.models ?? []).map((candidate) => (
+              <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
+                {candidate.label}{" "}
+                <InlineMetadata>· {candidate.supportsImages ? "Reads images" : "Text only"}</InlineMetadata>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
       {model && !model.supportsImages ? (
-        <Field
-          orientation="vertical"
-          label="Image model"
-          description={`${model.label} reads text only. Photos and screenshots go to this model.`}
-        >
-          {visionProviders.length === 0 ? (
-            <Text as="p" variant="small" color="secondary">
-              No model that reads images is set up. Add one in Settings → Providers.
-            </Text>
-          ) : (
-            <div className="grid grid-cols-1 gap-3">
+        visionProviders.length === 0 ? (
+          <Field
+            label="Image model"
+            description={`${model.label} reads text only, and no model that reads images is set up. Add one in Settings → Providers.`}
+          />
+        ) : (
+          <>
+            <Field
+              label="Image service"
+              description={`${model.label} reads text only. Photos and screenshots go to this model.`}
+            >
               <Select
                 value={draft.visionProviderId ?? ""}
                 disabled={disabled}
@@ -196,7 +198,7 @@ function ModelSection({
                 }}
               >
                 <SelectTrigger aria-label="Image service">
-                  <SelectValue placeholder="Service" />
+                  <SelectValue placeholder="Choose a service" />
                 </SelectTrigger>
                 <SelectContent>
                   {visionProviders.map((candidate) => (
@@ -206,13 +208,15 @@ function ModelSection({
                   ))}
                 </SelectContent>
               </Select>
+            </Field>
+            <Field label="Image model">
               <Select
                 value={draft.visionModelId ?? ""}
                 disabled={disabled}
                 onValueChange={(visionModelId) => onChange({ ...draft, visionModelId })}
               >
                 <SelectTrigger aria-label="Image model">
-                  <SelectValue placeholder="Model" />
+                  <SelectValue placeholder="Choose a model" />
                 </SelectTrigger>
                 <SelectContent>
                   {(visionProvider?.models ?? [])
@@ -224,62 +228,70 @@ function ModelSection({
                     ))}
                 </SelectContent>
               </Select>
-            </div>
-          )}
-        </Field>
+            </Field>
+          </>
+        )
       ) : null}
+      <Field label="Recommended" description="The first model you set up, plus an image model when it reads text only.">
+        <Button
+          size="small"
+          variant="filled"
+          disabled={disabled || usingRecommended}
+          onClick={() => onChange(recommended)}
+        >
+          <RotateCcw /> Use recommended
+        </Button>
+      </Field>
     </FieldSet>
   );
 }
 
-function ToggleRows({
+/** One horizontal row per option, each with its own switch. */
+function ToggleFields({
   options,
   selected,
-  allowAll,
   disabled,
   onToggle,
 }: {
   options: readonly BotCapabilityOption[];
   selected: readonly string[];
-  allowAll: boolean;
   disabled: boolean;
   onToggle(id: string, checked: boolean): void;
 }) {
   // Hide unusable, unselected entries instead of rows that can never be enabled.
   const visible = options.filter((option) => option.available || selected.includes(option.id));
-  if (visible.length === 0) {
-    return (
-      <Text as="p" variant="small" color="tertiary">
-        None available yet.
-      </Text>
-    );
-  }
+  if (visible.length === 0) return <Field description="None available yet." />;
   return (
-    <ul className="space-y-1">
+    <>
       {visible.map((option) => {
         const checked = selected.includes(option.id);
         return (
-          <li key={option.id} className="flex items-center justify-between gap-4 py-1.5">
-            <span className="min-w-0">
-              <Text variant="small-strong">{option.label}</Text>
-              {option.description ? (
-                <Text as="p" variant="small" color="tertiary">
-                  {option.description}
-                </Text>
-              ) : null}
-            </span>
+          <Field key={option.id} label={option.label} description={option.description}>
             <Switch
-              checked={allowAll || checked}
-              disabled={disabled || allowAll || (!option.available && !checked)}
+              checked={checked}
+              disabled={disabled || (!option.available && !checked)}
               onCheckedChange={(next) => onToggle(option.id, next)}
               aria-label={`Allow ${option.label}`}
             />
-          </li>
+          </Field>
         );
       })}
-    </ul>
+    </>
   );
 }
+
+const ACCESS_CHOICES = [
+  {
+    value: "full",
+    label: "Everything",
+    description: "Anything Aiden can use on this Mac, including every app you connect. Approvals and safety rules still apply.",
+  },
+  {
+    value: "custom",
+    label: "Only what I choose",
+    description: "Pick the files, commands, connections, and skills below.",
+  },
+] as const;
 
 function AccessSection({
   catalog,
@@ -304,103 +316,96 @@ function AccessSection({
   };
   const full = draft.usesFullAccess;
   return (
-    <FieldSet title="What it can use">
-      <Field orientation="vertical">
-        <RadioGroup
-          orientation="vertical"
-          aria-label="What it can use"
-          value={full ? "full" : "custom"}
-          disabled={disabled}
-          onValueChange={(value) => onChange({ ...draft, usesFullAccess: value === "full" })}
-        >
-          <label className="flex items-start gap-3">
-            <RadioGroupItem value="full" aria-label="Everything" className="mt-0.5" />
-            <span>
-              <Text variant="small-strong">Everything</Text>
-              <Text as="p" variant="small" color="secondary">
-                Anything Aiden can use on this Mac. Approvals and safety rules still apply.
-              </Text>
-            </span>
-          </label>
-          <label className="flex items-start gap-3">
-            <RadioGroupItem value="custom" aria-label="Only what I choose" className="mt-0.5" />
-            <span>
-              <Text variant="small-strong">Only what I choose</Text>
-              <Text as="p" variant="small" color="secondary">
-                Pick the files, commands, and connections below.
-              </Text>
-            </span>
-          </label>
-        </RadioGroup>
-      </Field>
+    <>
+      <FieldSet title="What it can use">
+        <Field orientation="vertical">
+          <RadioGroup
+            orientation="vertical"
+            aria-label="What it can use"
+            value={full ? "full" : "custom"}
+            disabled={disabled}
+            onValueChange={(value) => onChange({ ...draft, usesFullAccess: value === "full" })}
+          >
+            {ACCESS_CHOICES.map((choice) => (
+              <Label
+                key={choice.value}
+                className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection"
+              >
+                <RadioGroupItem value={choice.value} aria-label={choice.label} className="mt-0.5 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block text-regular text-primary">{choice.label}</span>
+                  <span className="mt-0.5 block text-small text-secondary">{choice.description}</span>
+                </span>
+              </Label>
+            ))}
+          </RadioGroup>
+        </Field>
+      </FieldSet>
       {full ? null : (
         <>
-          <Field orientation="vertical" label="Files and commands">
-            <ToggleRows
+          <FieldSet title="Files and commands">
+            <ToggleFields
               options={catalog.fileScopes}
               selected={draft.fileScopeIds}
-              allowAll={false}
               disabled={disabled}
               onToggle={(id, checked) => toggle("fileScopeIds", id, checked)}
             />
-            <div className="flex items-center justify-between gap-4 py-1.5">
-              <Text variant="small-strong">Run commands</Text>
+            <Field label="Run commands" description="Let it run commands in Terminal on this Mac.">
               <Switch
                 checked={draft.shellEnabled}
                 disabled={disabled || (!catalog.shellAvailable && !draft.shellEnabled)}
                 onCheckedChange={(shellEnabled) => onChange({ ...draft, shellEnabled })}
                 aria-label="Allow running commands"
               />
-            </div>
-          </Field>
-          <Field orientation="vertical" label="Connections">
-            <ToggleRows
+            </Field>
+          </FieldSet>
+          <FieldSet title="Connections">
+            <ToggleFields
               options={catalog.connections}
               selected={draft.connectionIds}
-              allowAll={false}
               disabled={disabled}
               onToggle={(id, checked) => toggle("connectionIds", id, checked)}
             />
-          </Field>
-          <Field
-            orientation="vertical"
-            label="Skills"
-            description={catalog.skillsEnabled === false ? "Skills are off in Settings. Choices are kept for when they’re back on." : undefined}
-          >
-            <ToggleRows
+          </FieldSet>
+          <FieldSet title="Skills">
+            {catalog.skillsEnabled === false ? (
+              <Field description="Skills are off in Settings. Choices are kept for when they’re back on." />
+            ) : null}
+            <ToggleFields
               options={catalog.skills.map((option) => ({
                 ...option,
                 available: option.available || catalog.skillsEnabled === false,
               }))}
               selected={draft.skillIds}
-              allowAll={false}
               disabled={disabled}
               onToggle={(id, checked) => toggle("skillIds", id, checked)}
             />
-          </Field>
+          </FieldSet>
           {catalog.otherCapabilities.length ? (
-            <Field orientation="vertical" label="More">
-              <ToggleRows
+            <FieldSet title="More">
+              <ToggleFields
                 options={catalog.otherCapabilities}
                 selected={draft.otherCapabilityIds}
-                allowAll={false}
                 disabled={disabled}
                 onToggle={(id, checked) => toggle("otherCapabilityIds", id, checked)}
               />
-            </Field>
+            </FieldSet>
           ) : null}
         </>
       )}
-    </FieldSet>
+    </>
   );
 }
 
-function GreetingSection({ bot }: { bot: Pick<BotDefinition, "id" | "openingGreeting"> }) {
-  const qc = useQueryClient();
-  const [text, setText] = React.useState(bot.openingGreeting ?? "");
-  const [saving, setSaving] = React.useState(false);
-  React.useEffect(() => setText(bot.openingGreeting ?? ""), [bot.openingGreeting]);
-  const changed = text.trim() !== (bot.openingGreeting ?? "").trim();
+function GreetingSection({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange(next: string): void;
+}) {
   return (
     <FieldSet title="Opening greeting">
       <Field
@@ -409,37 +414,22 @@ function GreetingSection({ bot }: { bot: Pick<BotDefinition, "id" | "openingGree
       >
         <Textarea
           aria-label="Opening greeting"
-          className="min-h-20 resize-y"
-          value={text}
+          className="min-h-20"
+          value={value}
           maxLength={BOT_LIMITS.openingGreetingChars}
-          disabled={saving}
+          disabled={disabled}
           placeholder="Hi! What should we start with?"
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => onChange(event.target.value)}
         />
-        <div>
-          <Button
-            size="small"
-            variant="filled"
-            disabled={saving || !changed}
-            onClick={async () => {
-              setSaving(true);
-              try {
-                await updateBotIdentity(qc, bot.id, { openingGreeting: text });
-              } catch (error) {
-                toast.error(userFacingErrorMessage(error, "Aiden couldn’t save the greeting."));
-              } finally {
-                setSaving(false);
-              }
-            }}
-          >
-            Save greeting
-          </Button>
-        </div>
       </Field>
     </FieldSet>
   );
 }
 
+/**
+ * Telegram is an account link, not a setting: Connect opens a chooser and
+ * Disconnect acts at once, as the provider and connection rows in Settings do.
+ */
 function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
   const qc = useQueryClient();
   const binding = useBotTelegramBinding(bot.id);
@@ -459,6 +449,7 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
       });
       qc.setQueryData(queryKeys.botTelegramBinding(bot.id), next);
       setOpen(false);
+      toast.success("Telegram connected");
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t connect this Telegram chat."));
     } finally {
@@ -470,6 +461,7 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
     try {
       await botsApi.unbindTelegram(bot.id);
       qc.setQueryData(queryKeys.botTelegramBinding(bot.id), null);
+      toast.success("Telegram disconnected");
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t disconnect this Telegram chat."));
     } finally {
@@ -490,29 +482,27 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
                 : "Talk to this Bot from one of your paired Telegram chats."
         }
       >
-        <div className="flex justify-end">
-          {binding.isError ? (
-            <Button size="small" variant="filled" onClick={() => void binding.refetch()}>
-              <RotateCcw /> Try again
-            </Button>
-          ) : binding.data ? (
-            <Button size="small" variant="filled" disabled={saving} onClick={() => void unbind()}>
-              <Unlink /> Disconnect
-            </Button>
-          ) : (
-            <Button
-              size="small"
-              variant="filled"
-              disabled={binding.isLoading}
-              onClick={() => {
-                setTarget("");
-                setOpen(true);
-              }}
-            >
-              <Link2 /> Connect Telegram
-            </Button>
-          )}
-        </div>
+        {binding.isError ? (
+          <Button size="small" variant="filled" onClick={() => void binding.refetch()}>
+            <RotateCcw /> Try again
+          </Button>
+        ) : binding.data ? (
+          <Button size="small" variant="filled" disabled={saving} onClick={() => void unbind()}>
+            <Unlink /> Disconnect
+          </Button>
+        ) : (
+          <Button
+            size="small"
+            variant="filled"
+            disabled={binding.isLoading}
+            onClick={() => {
+              setTarget("");
+              setOpen(true);
+            }}
+          >
+            <Link2 /> Connect Telegram
+          </Button>
+        )}
       </Field>
       <Dialog
         open={open}
@@ -525,11 +515,16 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
         onConfirm={bind}
       >
         {targets.isLoading ? (
-          <Text color="secondary">Loading Telegram chats…</Text>
+          <div role="status" aria-label="Loading Telegram chats" className="h-8 w-full rounded-control bg-control motion-safe:animate-pulse" />
         ) : targets.isError ? (
-          <Button size="small" variant="filled" onClick={() => void targets.refetch()}>
-            <RotateCcw /> Try again
-          </Button>
+          <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
+            <Text variant="small" color="red">
+              Aiden couldn’t load your Telegram chats.
+            </Text>
+            <Button size="small" variant="filled" onClick={() => void targets.refetch()}>
+              <RotateCcw /> Try again
+            </Button>
+          </Callout>
         ) : (targets.data?.length ?? 0) === 0 ? (
           <EmptyState
             placement="inline"
@@ -560,16 +555,21 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
 }
 
 /**
- * Power settings for one Bot: model, what it can use, the opening greeting,
- * and Telegram. Model and access save together.
+ * Power settings for one Bot: model, what it can use, and the opening
+ * greeting are edited as one draft and saved together by the toolbar's Save;
+ * Back with unsaved edits asks before discarding them. Telegram is a
+ * connection with its own Connect and Disconnect actions.
  */
 export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): void }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const catalogQuery = useBotCapabilityCatalog(true, bot.id);
   const accessQuery = useBotAccess(bot.id);
   const catalog = catalogQuery.data;
   const [draft, setDraft] = React.useState<BotAccessDraft | null>(null);
   const [baseline, setBaseline] = React.useState<BotAccessDraft | null>(null);
+  const [greeting, setGreeting] = React.useState(bot.openingGreeting ?? "");
+  const [greetingBaseline, setGreetingBaseline] = React.useState(bot.openingGreeting ?? "");
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
@@ -579,38 +579,57 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
     setBaseline(initial);
   }, [accessQuery.data, accessQuery.isSuccess, catalog, draft]);
 
+  const accessChanged = draft !== null && !sameDraft(draft, baseline);
+  const greetingChanged = greeting.trim() !== greetingBaseline.trim();
+  const dirty = accessChanged || greetingChanged;
+  const guard = useDiscardChangesGuard({
+    dirty,
+    onLeave: onClose,
+    description: `Your changes to ${bot.name}’s Advanced settings won’t be saved.`,
+  });
+
+  const saveAccess = async (current: BotAccessDraft, start: BotAccessDraft) => {
+    const [state, readCatalog] = await Promise.all([
+      botsApi.getBotAccess(bot.id),
+      botsApi.getCapabilityCatalog(bot.id),
+    ]);
+    if (!state) throw new Error("This Bot’s settings couldn’t be read.");
+    let latestCatalog = readCatalog;
+    const authoritative = accessDraftFromState(state, latestCatalog);
+    const rebased = rebaseBotEditorAccessDraft(current, start, authoritative);
+    if (rebased.usesFullAccess && !botFullAccessAccepted(latestCatalog)) {
+      await botsApi.acknowledgeAccessNotice({
+        version: BOT_FULL_ACCESS_NOTICE_VERSION,
+        decision: "continue_full",
+        confirmedForeground: true,
+      });
+      latestCatalog = await botsApi.getCapabilityCatalog(bot.id);
+    }
+    const update = buildBotAccessUpdate(rebased, latestCatalog);
+    if (botAccessDiffers(update, state)) {
+      await botsApi.updateBotAccess({
+        botId: bot.id,
+        expectedRevision: state.access.revision,
+        access: update,
+      });
+    }
+    await qc.invalidateQueries({ queryKey: queryKeys.botAccess(bot.id) });
+    await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+    setDraft(rebased);
+    setBaseline(rebased);
+  };
+
   const save = async () => {
-    if (!draft || !baseline || saving) return;
+    if (!dirty || saving) return;
     setSaving(true);
     try {
-      const [state, readCatalog] = await Promise.all([
-        botsApi.getBotAccess(bot.id),
-        botsApi.getCapabilityCatalog(bot.id),
-      ]);
-      if (!state) throw new Error("This Bot’s settings couldn’t be read.");
-      let latestCatalog = readCatalog;
-      const authoritative = accessDraftFromState(state, latestCatalog);
-      const rebased = rebaseBotEditorAccessDraft(draft, baseline, authoritative);
-      if (rebased.usesFullAccess && !botFullAccessAccepted(latestCatalog)) {
-        await botsApi.acknowledgeAccessNotice({
-          version: BOT_FULL_ACCESS_NOTICE_VERSION,
-          decision: "continue_full",
-          confirmedForeground: true,
-        });
-        latestCatalog = await botsApi.getCapabilityCatalog(bot.id);
+      if (accessChanged && draft && baseline) await saveAccess(draft, baseline);
+      if (greetingChanged) {
+        const saved = await updateBotIdentity(qc, bot.id, { openingGreeting: greeting });
+        const next = saved.openingGreeting ?? "";
+        setGreeting(next);
+        setGreetingBaseline(next);
       }
-      const update = buildBotAccessUpdate(rebased, latestCatalog);
-      if (botAccessDiffers(update, state)) {
-        await botsApi.updateBotAccess({
-          botId: bot.id,
-          expectedRevision: state.access.revision,
-          access: update,
-        });
-      }
-      await qc.invalidateQueries({ queryKey: queryKeys.botAccess(bot.id) });
-      await qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
-      setDraft(rebased);
-      setBaseline(rebased);
       toast.success("Saved");
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t save these settings."));
@@ -619,59 +638,63 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
     }
   };
 
+  const failed = catalogQuery.isError || accessQuery.isError;
   return (
-    <div className="settings-responsive flex flex-col gap-6">
-      <header className="settings-page-heading flex items-center gap-3">
-        <Button iconOnly variant="filled" size="large" aria-label="Back" onClick={onClose}>
-          <ChevronLeft />
+    <BotPageShell
+      scrollId={`bot-advanced:${bot.id}`}
+      title={bot.name}
+      backLabel="Back"
+      onBack={() => {
+        if (!saving) guard.requestLeave();
+      }}
+      heading="Advanced"
+      description={`Settings for ${bot.name}. Most people never need these.`}
+      actions={
+        <Button variant="accent" disabled={saving || !dirty} onClick={() => void save()}>
+          {saving ? "Saving…" : "Save"}
         </Button>
-        <div className="min-w-0 flex-1">
-          <Text as="h1" variant="heading1" className="truncate">
-            Advanced
-          </Text>
-          <Text as="p" variant="small" color="secondary">
-            Settings for {bot.name}. Most people never need these.
-          </Text>
-        </div>
-      </header>
-      {catalogQuery.isError || accessQuery.isError ? (
-        <EmptyState
-          role="alert"
-          title="These settings couldn’t be loaded"
-          action={
-            <Button
-              size="small"
-              variant="filled"
-              onClick={() => {
-                void catalogQuery.refetch();
-                void accessQuery.refetch();
-              }}
-            >
-              <RotateCcw /> Try again
-            </Button>
-          }
-        />
-      ) : !catalog || !draft ? (
-        <Text color="secondary" role="status">
-          Loading…
-        </Text>
-      ) : (
-        <div>
-          <ModelSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
-          <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
-          <div className="-mt-3 mb-7 flex justify-end">
-            <Button
-              variant="accent"
-              disabled={saving || sameDraft(draft, baseline)}
-              onClick={() => void save()}
-            >
-              Save changes
-            </Button>
+      }
+    >
+      {failed ? (
+        <Callout color="red" role="alert" className="mb-7 flex-row items-center justify-between gap-4">
+          <div>
+            <Text variant="small-strong" color="red">
+              These settings couldn’t be loaded
+            </Text>
+            <Text as="p" variant="small" color="secondary" className="mt-0.5">
+              Try again before making changes.
+            </Text>
           </div>
+          <Button
+            size="small"
+            variant="filled"
+            onClick={() => {
+              void catalogQuery.refetch();
+              void accessQuery.refetch();
+            }}
+          >
+            <RotateCcw /> Try again
+          </Button>
+        </Callout>
+      ) : !catalog || !draft ? (
+        <div className="mb-7">
+          <BotPageSkeleton label="Loading settings" groups={[3, 1]} />
         </div>
+      ) : (
+        <>
+          <ModelSection
+            catalog={catalog}
+            draft={draft}
+            disabled={saving}
+            onChange={setDraft}
+            onSetUpModel={() => void navigate({ to: "/settings", search: { section: "providers" } })}
+          />
+          <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
+        </>
       )}
-      <GreetingSection bot={bot} />
+      <GreetingSection value={greeting} disabled={saving} onChange={setGreeting} />
       <TelegramSection bot={bot} />
-    </div>
+      {guard.dialog}
+    </BotPageShell>
   );
 }

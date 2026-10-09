@@ -19,6 +19,13 @@ export const piCredentialStore = new EncryptedPiCredentialStore({
       error: error.message,
     });
   },
-  beforeWritePublish: () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
-  afterWritePublish: () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
+  // A Pi OAuth refresh runs inside a model request, possibly a Bot's own turn.
+  // Fence Bot authority only when the grant itself changes (login, logout,
+  // account or API-key change), never for an in-place token refresh.
+  beforeWritePublish: ({ grantChanged }) => {
+    if (grantChanged) invalidateBotRuntimeInventoryAuthority("provider_credential");
+  },
+  afterWritePublish: ({ grantChanged }) => {
+    if (grantChanged) invalidateBotRuntimeInventoryAuthority("provider_credential");
+  },
 });

@@ -588,3 +588,81 @@ test("Stop stays available while a question card replaces the composer", async (
   fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
 });
+
+test("a model the Bot can't reach says why, and Choose a model opens Advanced for that Bot", async () => {
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ state: { kind: "model_error", message: "Sign in to Text Service again." } }),
+  });
+  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  const card = await screen.findByRole("alert", { name: "Planner can’t reach its AI model" });
+  assert.ok(within(card).getByText("Sign in to Text Service again."));
+  fireEvent.click(within(card).getByRole("button", { name: "Choose a model" }));
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
+  assert.equal((router.state.location.search as { page?: string }).page, "advanced");
+});
+
+test("an interrupted Bot whose access changed opens Advanced, not just the Profile", async () => {
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1", blocked: "access_changed" } }),
+  });
+  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  const card = await screen.findByRole("group", { name: "Planner was interrupted" });
+  fireEvent.click(within(card).getByRole("button", { name: "Open Advanced" }));
+  await waitFor(() => assert.equal((router.state.location.search as { page?: string }).page, "advanced"));
+});
+
+/** Gives the chat's scrollport a real height so follow-the-reply can be observed. */
+function measurableScrollport(scrollHeight: number, clientHeight: number) {
+  const viewport = document.querySelector<HTMLElement>("[data-scroll-top]");
+  assert.ok(viewport, "the chat scrolls in its own scrollport");
+  let top = 0;
+  Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => scrollHeight });
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, get: () => clientHeight });
+  Object.defineProperty(viewport, "scrollTop", {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      top = value;
+    },
+  });
+  viewport.scrollTo = ((options: ScrollToOptions) => {
+    top = Math.min(options.top ?? top, scrollHeight - clientHeight);
+  }) as typeof viewport.scrollTo;
+  return {
+    viewport,
+    scrollTop: () => top,
+    scrollUserTo: (value: number) => {
+      top = value;
+      fireEvent.scroll(viewport);
+    },
+  };
+}
+
+test("a streaming reply doesn't pull the chat down while the person reads earlier messages", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ entries: [userEntry("u1", "Tell me a story")], state: { kind: "running", submissionId: "s1" } }),
+  });
+  await screen.findByText("Tell me a story");
+  const port = measurableScrollport(2_000, 400);
+  port.scrollUserTo(300);
+
+  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "partial", text: "Once upon" });
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 2,
+    type: "partial",
+    text: "Once upon a time there was a fox.",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(port.scrollTop(), 300, "the reader keeps their place");
+
+  // The way back down is one click away.
+  fireEvent.click(await screen.findByRole("button", { name: "Scroll to bottom" }));
+  assert.equal(port.scrollTop(), 1_600);
+});

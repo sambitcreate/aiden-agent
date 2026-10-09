@@ -577,11 +577,11 @@ async function assertRuntimeIsolation(
 }
 
 /**
- * Hosts with Bots offer "Meet Your First Bot" after provider setup. Flows that
+ * Hosts with Bots offer "Meet your first Bot" after provider setup. Flows that
  * only need the feature tour skip it; the Bots starter test drives it directly.
  */
 export async function skipBotsOnboardingStep(onboarding: Locator): Promise<void> {
-  const botsHeading = onboarding.getByRole("heading", { name: "Meet Your First Bot" });
+  const botsHeading = onboarding.getByRole("heading", { name: "Meet your first Bot" });
   const tourHeading = onboarding.getByRole("heading", { name: "Everything Aiden brings together" });
   await expect(botsHeading.or(tourHeading)).toBeVisible();
   if (await botsHeading.isVisible()) {

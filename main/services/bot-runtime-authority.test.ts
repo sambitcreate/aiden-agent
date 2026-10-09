@@ -367,6 +367,7 @@ function fixture(input: {
   let homeRevalidations = 0;
   let policyReadHook: (() => Promise<void>) | undefined;
   let admissionError: Error | undefined;
+  let snapshotHook: (() => void) | undefined;
   const lease: BotCapabilityAuthorityLease = {
     audienceId: "device-a",
     botId: "bot-a",
@@ -433,6 +434,7 @@ function fixture(input: {
     catalog: {
       async snapshotForRuntime(input) {
         catalogInputs.push(input ?? {});
+        snapshotHook?.();
         return currentSnapshot;
       },
     },
@@ -462,6 +464,7 @@ function fixture(input: {
     setPolicyReadHook(value: () => Promise<void>) { policyReadHook = value; },
     requireNotice() { admissionError = new BotCapabilityNoticeRequiredError(); },
     invalidateInventory() { inventoryLeases.invalidate("settings"); },
+    setSnapshotHook(value: () => void) { snapshotHook = value; },
     get activeInventoryLeases() { return inventoryLeases.activeCount(); },
     get homeRevalidations() { return homeRevalidations; },
     get catalogInputs() { return catalogInputs; },
@@ -709,6 +712,35 @@ test("a global capability mutation aborts an active admission and cleans up its 
   assert.equal(app.activeInventoryLeases, 0);
   await expectFailure(admitted.revalidateBeforeEffect(), "capability_changed");
   admitted.release();
+  assert.equal(app.activeInventoryLeases, 0);
+});
+
+test("a credential write that fences inventory during the admission snapshot is retried", async () => {
+  const app = fixture();
+  let fences = 0;
+  // E.g. a provider login landing while the Bot's fresh catalog is taken.
+  app.setSnapshotHook(() => {
+    if (fences < 2) {
+      fences += 1;
+      app.invalidateInventory();
+    }
+  });
+  const admitted = await app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" });
+  assert.equal(admitted.signal.aborted, false);
+  assert.equal(app.activeInventoryLeases, 1);
+  await admitted.revalidateBeforeEffect();
+  admitted.release();
+  assert.equal(app.activeInventoryLeases, 0);
+});
+
+test("inventory that keeps changing through every admission attempt fails closed without leaking leases", async () => {
+  const app = fixture();
+  app.setSnapshotHook(() => app.invalidateInventory());
+  await expectFailure(
+    app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
+    "access_unavailable",
+  );
+  assert.equal(app.catalogInputs.length, 3);
   assert.equal(app.activeInventoryLeases, 0);
 });
 

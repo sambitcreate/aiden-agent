@@ -1,5 +1,19 @@
 import * as React from "react";
-import { Button, Dialog, Input, Text, Textarea } from "../../components/ui";
+import { Trash2 } from "lucide-react";
+import {
+  Button,
+  Callout,
+  Dialog,
+  FieldLabel,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Text,
+  Textarea,
+} from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { BotRoutine } from "../../../main/services/scheduled-bot-routines";
@@ -10,7 +24,6 @@ import {
   type BotRoutineScheduleKind,
 } from "../../shared/bot-routine-schedule";
 import type { BotDefinition } from "../../shared/bots";
-import { cn } from "../../lib/ui-utils";
 
 export const ROUTINE_NAME_MAX = 120;
 export const ROUTINE_PROMPT_MAX = 4_000;
@@ -110,6 +123,7 @@ export function BotRoutineEditor({
   const [day, setDay] = React.useState(initial.day);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const formId = React.useId();
   const scheduled = routineScheduleFromForm({ kind, time, date, days, day });
   const preview = "schedule" in scheduled ? formatBotRoutineLabel(scheduled.schedule) : null;
 
@@ -167,6 +181,7 @@ export function BotRoutineEditor({
       open={open}
       onOpenChange={onOpenChange}
       title={routine ? "Edit routine" : "Add routine"}
+      description={`${bot.name} sends you a message on this schedule.`}
       confirmLabel="Save"
       confirmDisabled={busy}
       busy={busy}
@@ -175,26 +190,30 @@ export function BotRoutineEditor({
     >
       <div className="space-y-4">
         {error ? (
-          <Text as="p" variant="small" color="secondary" role="alert">
-            {error}
-          </Text>
+          <Callout color="red" role="alert">
+            <Text variant="small-strong" color="red">
+              {error}
+            </Text>
+          </Callout>
         ) : null}
-        <label className="block">
-          <Text variant="small-strong">Name</Text>
+        <div className="flex flex-col gap-1.5">
+          <FieldLabel htmlFor={`${formId}-name`} className="text-small-strong">
+            Name
+          </FieldLabel>
           <Input
-            className="mt-1.5"
+            id={`${formId}-name`}
             value={name}
             maxLength={ROUTINE_NAME_MAX}
             placeholder="Weekly meal prep"
             disabled={busy}
             onChange={(event) => setName(event.target.value)}
           />
-        </label>
-        <fieldset className="space-y-2">
-          <legend>
-            <Text variant="small-strong">How often</Text>
-          </legend>
-          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="How often">
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Text id={`${formId}-often`} variant="small-strong">
+            How often
+          </Text>
+          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby={`${formId}-often`}>
             {FREQUENCIES.map((option) => {
               const selected = kind === option.kind;
               return (
@@ -203,8 +222,9 @@ export function BotRoutineEditor({
                   role="radio"
                   aria-checked={selected}
                   size="small"
-                  variant={selected ? "muted" : "transparent"}
-                  className={cn(selected ? "bg-list-selection text-primary" : "text-secondary")}
+                  variant="transparent"
+                  disabled={busy}
+                  className={selected ? "bg-list-selection text-primary" : "text-secondary"}
                   onClick={() => setKind(option.kind)}
                 >
                   {option.label}
@@ -212,93 +232,112 @@ export function BotRoutineEditor({
               );
             })}
           </div>
-        </fieldset>
-        {kind === "once" ? (
-          <label className="block">
-            <Text variant="small-strong">Date</Text>
-            <input
-              type="date"
-              className="mt-1.5 block h-9 rounded-control bg-control px-2 text-regular text-primary"
-              value={date}
-              disabled={busy}
-              onChange={(event) => setDate(event.target.value)}
-            />
-          </label>
-        ) : null}
+        </div>
         {kind === "weekly" ? (
-          <div className="flex gap-1.5" role="group" aria-label="Days">
-            {WEEKDAYS.map((entry) => {
-              const pressed = days.includes(entry.day);
-              return (
-                <Button
-                  key={entry.day}
-                  iconOnly
-                  size="small"
-                  variant={pressed ? "muted" : "transparent"}
-                  aria-label={entry.name}
-                  aria-pressed={pressed}
-                  className={pressed ? "bg-list-selection text-primary" : "text-secondary"}
-                  onClick={() =>
-                    setDays((current) =>
-                      current.includes(entry.day)
-                        ? current.filter((value) => value !== entry.day)
-                        : [...current, entry.day],
-                    )
-                  }
-                >
-                  {entry.label}
-                </Button>
-              );
-            })}
+          <div className="flex flex-col gap-1.5">
+            <Text id={`${formId}-days`} variant="small-strong">
+              On
+            </Text>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby={`${formId}-days`}>
+              {WEEKDAYS.map((entry) => {
+                const pressed = days.includes(entry.day);
+                return (
+                  <Button
+                    key={entry.day}
+                    iconOnly
+                    size="small"
+                    variant="transparent"
+                    aria-label={entry.name}
+                    aria-pressed={pressed}
+                    disabled={busy}
+                    className={pressed ? "bg-list-selection text-primary" : "text-secondary"}
+                    onClick={() =>
+                      setDays((current) =>
+                        current.includes(entry.day)
+                          ? current.filter((value) => value !== entry.day)
+                          : [...current, entry.day],
+                      )
+                    }
+                  >
+                    {entry.label}
+                  </Button>
+                );
+              })}
+            </div>
           </div>
         ) : null}
-        {kind === "monthly" ? (
-          <label className="block">
-            <Text variant="small-strong">Day of the month</Text>
-            <select
-              className="mt-1.5 block h-9 rounded-control bg-control px-2 text-regular text-primary"
-              value={day}
+        <div className="grid grid-cols-2 gap-3 max-[420px]:grid-cols-1">
+          {kind === "once" ? (
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <FieldLabel htmlFor={`${formId}-date`} className="text-small-strong">
+                Date
+              </FieldLabel>
+              <Input
+                id={`${formId}-date`}
+                type="date"
+                value={date}
+                disabled={busy}
+                onChange={(event) => setDate(event.target.value)}
+              />
+            </div>
+          ) : null}
+          {kind === "monthly" ? (
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <Text id={`${formId}-day`} variant="small-strong">
+                Day of the month
+              </Text>
+              <Select value={String(day)} disabled={busy} onValueChange={(value) => setDay(Number(value))}>
+                <SelectTrigger aria-labelledby={`${formId}-day`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: BOT_ROUTINE_MAX_MONTH_DAY }, (_, index) => index + 1).map((value) => (
+                    <SelectItem key={value} value={String(value)}>
+                      {value}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <FieldLabel htmlFor={`${formId}-time`} className="text-small-strong">
+              Time
+            </FieldLabel>
+            <Input
+              id={`${formId}-time`}
+              type="time"
+              value={time}
               disabled={busy}
-              onChange={(event) => setDay(Number(event.target.value))}
-            >
-              {Array.from({ length: BOT_ROUTINE_MAX_MONTH_DAY }, (_, index) => index + 1).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <label className="block">
-          <Text variant="small-strong">Time</Text>
-          <input
-            type="time"
-            className="mt-1.5 block h-9 rounded-control bg-control px-2 text-regular text-primary"
-            value={time}
-            disabled={busy}
-            onChange={(event) => setTime(event.target.value)}
-          />
-        </label>
+              onChange={(event) => setTime(event.target.value)}
+            />
+          </div>
+        </div>
         {preview ? (
           <Text as="p" variant="small" color="secondary">
             {preview}
           </Text>
         ) : null}
-        <label className="block">
-          <Text variant="small-strong">What should it do?</Text>
+        <div className="flex flex-col gap-1.5">
+          <FieldLabel htmlFor={`${formId}-prompt`} className="text-small-strong">
+            What should it do?
+          </FieldLabel>
           <Textarea
-            className="mt-1.5 min-h-20 resize-none"
+            id={`${formId}-prompt`}
+            className="min-h-20"
             value={prompt}
             maxLength={ROUTINE_PROMPT_MAX}
             placeholder="Give me a short brief of today's meetings and deadlines."
             disabled={busy}
             onChange={(event) => setPrompt(event.target.value)}
           />
-        </label>
+        </div>
         {routine ? (
-          <Button variant="destructive" size="medium" disabled={busy} onClick={() => void remove()}>
-            Delete routine
-          </Button>
+          <div className="pt-1">
+            <Button variant="transparent" size="small" className="text-status-red" disabled={busy} onClick={() => void remove()}>
+              <Trash2 /> Delete routine
+            </Button>
+          </div>
         ) : null}
       </div>
     </Dialog>

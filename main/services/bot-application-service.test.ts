@@ -1373,6 +1373,23 @@ test("Bot creation commits home then policy then visible identity", async () => 
   assert.equal(app.pending.size, 0);
 });
 
+test("Bot creation retries its policy after a runtime inventory invalidation", async () => {
+  // An MCP OAuth token refresh or provider credential write during the create
+  // snapshot fences the first lease; the Bot must still be created once.
+  const app = fixture({ inventoryLeaseInvalidationPlan: [true, false] });
+  await app.service.initialize();
+
+  const created = await app.service.createBot({
+    audienceId: "device:a",
+    bot: { name: "Chief", instructions: "Keep my week on track.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+  });
+
+  assert.equal(created.id, "bot:new");
+  assert.equal(app.bots.filter(({ id }) => id === created.id).length, 1);
+  assert.equal(app.homes.size, 1);
+  assert.equal(app.pending.size, 0);
+});
+
 test("a post-identity journal failure is recovered live without duplicating the Bot", async () => {
   const app = fixture({
     failJournalOnceAfter: { method: "complete", stage: "identity_committed" },

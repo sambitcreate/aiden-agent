@@ -1,14 +1,17 @@
 import * as React from "react";
-import { ChevronLeft } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, Text, Textarea, toast } from "../../components/ui";
+import { Button, FieldSet, Text, Textarea, toast } from "../../components/ui";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
 import { updateBotIdentity } from "./bot-identity";
+import { BotPageShell, useDiscardChangesGuard } from "./bot-page-shell";
+
+const countFormatter = new Intl.NumberFormat();
 
 /**
- * A full-page editor for a Bot's instructions. Save keeps the text; Back
- * leaves without saving.
+ * The editor for a Bot's instructions. Save in the toolbar keeps the text;
+ * Back with unsaved edits asks before discarding them. A Bot always has
+ * instructions, so an empty draft can't be saved.
  */
 export function BotInstructionsEditor({
   bot,
@@ -18,14 +21,22 @@ export function BotInstructionsEditor({
   onClose(): void;
 }) {
   const qc = useQueryClient();
+  const counterId = React.useId();
   const [text, setText] = React.useState(bot.instructions);
   const [saving, setSaving] = React.useState(false);
+  const empty = !text.trim();
   const changed = text.trim() !== bot.instructions.trim();
+  const guard = useDiscardChangesGuard({
+    dirty: changed,
+    onLeave: onClose,
+    description: `Your edits to ${bot.name}’s instructions won’t be saved.`,
+  });
   const save = async () => {
-    if (!text.trim() || saving) return;
+    if (empty || !changed || saving) return;
     setSaving(true);
     try {
       await updateBotIdentity(qc, bot.id, { instructions: text.trim() });
+      toast.success("Instructions saved");
       onClose();
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t save these instructions."));
@@ -34,28 +45,52 @@ export function BotInstructionsEditor({
     }
   };
   return (
-    <div className="flex min-h-full flex-col gap-4">
-      <header className="flex items-center gap-3">
-        <Button iconOnly variant="filled" size="large" aria-label="Back" disabled={saving} onClick={onClose}>
-          <ChevronLeft />
+    <BotPageShell
+      scrollId={`bot-instructions:${bot.id}`}
+      title={bot.name}
+      backLabel="Back"
+      onBack={() => {
+        if (!saving) guard.requestLeave();
+      }}
+      heading="Instructions"
+      description={`What ${bot.name} should do, and how it should talk to you. Changes apply from the next message.`}
+      actions={
+        <Button variant="accent" disabled={saving || !changed || empty} onClick={() => void save()}>
+          {saving ? "Saving…" : "Save"}
         </Button>
-        <Text as="h1" variant="heading1" className="min-w-0 flex-1 truncate">
-          Instructions
-        </Text>
-        <Button variant="accent" disabled={saving || !changed || !text.trim()} onClick={() => void save()}>
-          Save
-        </Button>
-      </header>
-      <Textarea
-        autoFocus
-        aria-label={`Instructions for ${bot.name}`}
-        className="min-h-80 flex-1 resize-none"
-        value={text}
-        maxLength={BOT_LIMITS.instructionsChars}
-        disabled={saving}
-        placeholder="What should this Bot do, and how should it talk to you?"
-        onChange={(event) => setText(event.target.value)}
-      />
-    </div>
+      }
+    >
+      <FieldSet>
+        <div className="flex flex-col gap-2 p-4">
+          <Textarea
+            autoFocus
+            aria-label={`Instructions for ${bot.name}`}
+            aria-describedby={counterId}
+            aria-invalid={empty || undefined}
+            className="min-h-[min(60vh,32rem)]"
+            value={text}
+            maxLength={BOT_LIMITS.instructionsChars}
+            disabled={saving}
+            placeholder="What should this Bot do, and how should it talk to you?"
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "s" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                void save();
+              }
+            }}
+          />
+          <div id={counterId} className="flex items-center justify-between gap-3">
+            <Text as="p" variant="small" color={empty ? "status-red" : "secondary"}>
+              {empty ? "Instructions can’t be empty." : changed ? "Unsaved changes" : null}
+            </Text>
+            <Text as="p" variant="small" color="tertiary" className="tabular-nums">
+              {`${countFormatter.format(text.length)} / ${countFormatter.format(BOT_LIMITS.instructionsChars)}`}
+            </Text>
+          </div>
+        </div>
+      </FieldSet>
+      {guard.dialog}
+    </BotPageShell>
   );
 }

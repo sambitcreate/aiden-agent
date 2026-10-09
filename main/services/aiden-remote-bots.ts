@@ -647,6 +647,15 @@ export class AidenRemoteBotService {
         },
       );
     } catch (error) {
+      if (error instanceof BotRuntimeInventoryLeaseInvalidError) {
+        // Same copy as the Mac: a new Bot has no earlier choices to review.
+        throw new AidenRemoteServiceError(
+          "operation_stale",
+          "Aiden couldn't create this Bot. Try again.",
+          409,
+          true,
+        );
+      }
       return mapBotMutationError(error);
     }
   }

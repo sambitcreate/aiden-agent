@@ -63,10 +63,10 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   }, bot);
 
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Meet Your First Bot" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
   const starters = page.getByRole("list", { name: "Starter Bots" });
   const chiefOfStaff = starters.getByRole("listitem").filter({ hasText: "Chief of Staff" });
-  await chiefOfStaff.getByRole("button", { name: "Start Chat", exact: true }).click();
+  await chiefOfStaff.getByRole("button", { name: "Start chat", exact: true }).click();
 
   const composer = page.getByPlaceholder("Ask Chief of Staff");
   await expect(composer).toBeVisible();
@@ -136,7 +136,7 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   ]);
 });
 
-// Onboarding decides whether to offer "Meet Your First Bot" when it loads, so
+// Onboarding decides whether to offer "Meet your first Bot" when it loads, so
 // the Bot IPC is substituted first and the window reloaded.
 test("onboarding Start Chat creates the starter Bot and opens its chat when setup finishes", async ({ aiden }) => {
   const { page } = aiden;
@@ -176,12 +176,12 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
   await lmStudio.click();
   await next.click();
 
-  await expect(onboarding.getByRole("heading", { name: "Meet Your First Bot" })).toBeVisible();
+  await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
   const starters = onboarding.getByRole("list", { name: "Starter Bots" });
   await starters
     .getByRole("listitem")
     .filter({ hasText: "Chief of Staff" })
-    .getByRole("button", { name: "Start Chat", exact: true })
+    .getByRole("button", { name: "Start chat", exact: true })
     .click();
   await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
