@@ -1,3 +1,4 @@
+import { localSupervisedBudgetMs, MAX_TIMER_DELAY_MS } from "../shared/local-speech-budget";
 import { voiceSetupMessage } from "../shared/voice-provider";
 import { stripIpcErrorPrefix } from "./ipc-error";
 
@@ -28,19 +29,16 @@ export class DictationOperationGate {
 }
 
 export const CLOUD_TRANSCRIPTION_BUDGET_MS = 45_000;
-export const LOCAL_TRANSCRIPTION_BUDGET_MS = 125_000;
-/** setTimeout fires immediately for delays above a signed 32-bit millisecond count. */
-export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+export { MAX_TIMER_DELAY_MS };
 
 /**
- * The speech worker allows max(120 s, 20× real time) per transcription; the
- * renderer budget adds IPC settlement headroom on top. `audioSeconds` is the
- * recording length measured from capture start to stop.
+ * The outer budget for one transcription. On-device work covers the supervised
+ * load, transcribe and retry in the speech host (see localSupervisedBudgetMs).
+ * `audioSeconds` is the recording length measured from capture start to stop.
  */
 export function transcriptionBudgetMs(provider: string, audioSeconds?: number): number {
   if (provider !== "local") return CLOUD_TRANSCRIPTION_BUDGET_MS;
-  const seconds = typeof audioSeconds === "number" && Number.isFinite(audioSeconds) ? Math.max(0, audioSeconds) : 0;
-  return Math.max(LOCAL_TRANSCRIPTION_BUDGET_MS, 20_000 * seconds + 15_000);
+  return localSupervisedBudgetMs(typeof audioSeconds === "number" ? audioSeconds : 0);
 }
 
 export async function withDictationTimeout<T>(

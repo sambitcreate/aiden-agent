@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import { voiceSetupMessage } from "../../renderer/shared/voice-provider.js";
+import { LOAD_DEADLINE_MS, STATUS_DEADLINE_MS, transcribeDeadlineMs } from "../../renderer/shared/local-speech-budget.js";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
 import {
   isLocalSpeechWorkerMessage,
@@ -14,17 +15,11 @@ import {
   type LocalSpeechWorkerMessage,
 } from "./local-speech-protocol.js";
 
-export const LOAD_DEADLINE_MS = 180_000;
-export const STATUS_DEADLINE_MS = 30_000;
+export { LOAD_DEADLINE_MS, transcribeDeadlineMs };
 const STDERR_TAIL_LINES = 64;
 const SAMPLE_RATE = 16_000;
 /** Rough Opus bytes per second of speech, used only to size a deadline. */
 const OGG_OPUS_BYTES_PER_SECOND = 2_000;
-
-/** Transcription gets at least two minutes, and 20× real time for long clips. */
-export function transcribeDeadlineMs(audioSeconds: number): number {
-  return Math.max(120_000, Math.ceil(20_000 * audioSeconds));
-}
 
 /**
  * Audio length used to size the transcribe deadline. The Ogg/Opus estimate is
