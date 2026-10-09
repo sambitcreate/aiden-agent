@@ -77,6 +77,19 @@
   Android needs `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` and
   `ANDROID_HOME=~/Library/Android/sdk` in this worktree (no `local.properties`).
 
+## Final-review fixes
+
+- Ogg/Opus notes are bounded like PCM: the worker rejects a decode over `MAX_PCM_SAMPLES` (30 min) with
+  `unsupported-audio` / "This voice note is too long for on-device transcription.", and `audioSeconds()` caps the
+  Ogg estimate at 1800 s so the transcribe deadline can't reach hours.
+- `LocalSpeechWorkerError` replaces an `engine-unavailable` failure's text with `voiceSetupMessage("local-engine-unavailable")`
+  (raw loader text kept in `.detail`); the renderer's `voiceErrorMessage` passes that exact copy through.
+- Remote `selectedModelId` is the effective local model (`effectiveLocalModelId` over installed models), not the raw setting.
+- Settings → Voice: a model without auto-detect explains that Automatic uses English; Translate to English is disabled
+  unless `effectiveTask` would translate (known non-English source).
+- Disk write failures only say "Free up space" for ENOSPC/EDQUOT.
+- Copy no longer claims on-device = Parakeet (onboarding tile, iOS/Android paired-Mac caption, CLI `/voice`).
+
 ## Deferred
 
 - **Onboarding:** AGENTS.md asks onboarding to introduce setup-critical features. This sub-project intentionally
@@ -84,7 +97,7 @@
 - Live acceptance still owed on real hardware: crash-mid-decode retry in the app, needs-setup pill on a fresh profile,
   Telegram voice note → local usage record, iOS/Android select+download against a live Mac, Translate caption screenshot.
 - Review minors deferred across tasks (see the SDD ledger `.superpowers/sdd/2026-10-09-stt-engine-foundation/progress.md`):
-  disk error copy says "Free up space" for EACCES; no stall guard on the final flush; `settings:set` silently drops an
+  no stall guard on the final flush; `settings:set` silently drops an
   invalid `voiceLanguage`; parent supervision has no end-to-end integration test; opening Settings → Voice may fork the
   worker for `engineStatus`; explicit cloud + stale `localVoiceModel` shows "(automatic)"; on-device with no model shows
   the cloud language list; worker deadline not clamped to the 32-bit timer range (> 12 days of audio only).

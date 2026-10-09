@@ -4,8 +4,8 @@
  * the microphone with a detected CLI recorder and inserts the transcript into
  * the editor. Cloud transcription uses the same providers as the desktop
  * (Gemini, OpenAI) with credentials from the standard environment variables.
- * On-device Parakeet remains a desktop capability — the CLI shows it as
- * unavailable rather than pretending.
+ * On-device models are installed and run through `aiden speech`; /dictate
+ * uses the cloud providers configured here.
  */
 
 import { mkdtempSync } from "node:fs";
@@ -133,7 +133,7 @@ export function createVoiceInlineExtension(options: { agentDir: string }): { nam
 					const openaiReady = Boolean(process.env.OPENAI_API_KEY);
 					const current = settings.voice?.provider ?? "off";
 					const choice = await ctx.ui.select(
-						`Voice transcription (current: ${current}; on-device Parakeet is desktop-only)`,
+						`Voice transcription (current: ${current}; on-device models run via \`aiden speech\`)`,
 						[
 							`gemini — Gemini cloud transcription${geminiReady ? "" : " (needs GEMINI_API_KEY)"}`,
 							`openai — OpenAI cloud transcription${openaiReady ? "" : " (needs OPENAI_API_KEY)"}`,
