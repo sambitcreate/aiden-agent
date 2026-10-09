@@ -31,6 +31,8 @@ function pointFromPointer(event: React.PointerEvent<HTMLDivElement>, rect: DOMRe
   };
 }
 
+const PAD_CENTER: ModelPoint = { x: 0.5, y: 0.5 };
+
 function directionForKey(key: string): ModelDirection | null {
   if (key === "ArrowLeft") return "left";
   if (key === "ArrowRight") return "right";
@@ -158,7 +160,9 @@ export function ModelPickerPad({
 
   const selected = models.find((model) => model.value === selectedValue);
   const preview = models.find((model) => model.value === (previewValue ?? selectedValue));
-  const active = preview ?? selected ?? models[0];
+  // A current model that is not on the Pad leaves it without an active option:
+  // no knob, no tag and nothing for Enter to commit.
+  const active = preview ?? selected;
   const puckPoint = active;
   const crosshairPoint = active;
   const activeColumn = crosshairPoint ? Math.round(crosshairPoint.x * (gridSize - 1)) : -1;
@@ -282,7 +286,12 @@ export function ModelPickerPad({
     if (direction) {
       event.preventDefault();
       event.stopPropagation();
-      const next = findDirectionalModel(models, activeValueRef.current, direction);
+      const hasActive = models.some((model) => model.value === activeValueRef.current);
+      // Without an active model, the first press lands on the model nearest the
+      // center whatever the direction, so it is predictable.
+      const next = hasActive
+        ? findDirectionalModel(models, activeValueRef.current, direction)
+        : nearestModel(models, PAD_CENTER);
       if (next) {
         activeValueRef.current = next.value;
         setConfirmedValue(undefined);

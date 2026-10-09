@@ -156,3 +156,60 @@ test("on a short Pad the knob tag drops below a model that a tall Pad labels abo
     unmount();
   });
 });
+
+test("an unplaced current model leaves the Pad without an active option, knob or tag", () => {
+  const commits: string[] = [];
+  const { container } = render(
+    <ModelPickerPad
+      models={models}
+      gridSize={7}
+      selectedValue="elsewhere"
+      previewValue="elsewhere"
+      onPreview={() => {}}
+      onCommit={(model) => commits.push(model.value)}
+    />,
+  );
+  const listbox = screen.getByRole("listbox");
+  assert.equal(listbox.getAttribute("aria-activedescendant"), null);
+  for (const option of screen.getAllByRole("option")) {
+    assert.equal(option.getAttribute("aria-selected"), "false");
+    assert.equal(option.dataset.state, "resting");
+  }
+  assert.equal(container.querySelector("[data-model-pad-knob-tag]"), null);
+  assert.equal(container.querySelector(".model-pad-knob"), null);
+
+  fireEvent.keyDown(listbox, { key: "Enter" });
+  fireEvent.keyDown(listbox, { key: " " });
+  assert.deepEqual(commits, []);
+});
+
+test("the first arrow press on an unplaced current model starts at the model nearest the center", () => {
+  // The center model is listed last so "the first Pad model" would be a different one.
+  const centerLast = positionSavedModels(
+    [
+      entry("southwest", "Southwest Model", "Corner Co"),
+      entry("north", "North Model", "Northern Labs"),
+      entry("middle", "Middle Model", "Acme Cloud"),
+    ],
+    {
+      southwest: { x: 0, y: 0, xSource: "user", ySource: "user" },
+      north: { x: 0.5, y: 1, xSource: "user", ySource: "user" },
+      middle: { x: 0.45, y: 0.55, xSource: "user", ySource: "user" },
+    },
+  );
+  for (const key of ["ArrowUp", "ArrowLeft"]) {
+    const previews: Array<string | undefined> = [];
+    const { unmount } = render(
+      <ModelPickerPad
+        models={centerLast}
+        gridSize={7}
+        selectedValue="elsewhere"
+        onPreview={(value) => previews.push(value)}
+        onCommit={() => {}}
+      />,
+    );
+    fireEvent.keyDown(screen.getByRole("listbox"), { key });
+    assert.deepEqual(previews, ["middle"], `${key} starts at the center model`);
+    unmount();
+  }
+});

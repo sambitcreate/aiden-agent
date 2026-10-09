@@ -28,13 +28,13 @@ import {
   positionModels,
   visibleModelEntries,
   type ModelEntry,
-  type PositionedModel,
 } from "../lib/model-picker-data";
 import { useProvidersModelInfo } from "../lib/queries";
 import {
   BASE_MODEL_PAD_GRID_SIZE,
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_RANGE_PERCENT,
+  addModelPadPlacement,
   modelPadGridSizeForPlacements,
 } from "../lib/model-pad-layout";
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
@@ -215,7 +215,7 @@ function ModelHoverDetails({
   model,
   metadataLoading,
 }: {
-  model: PositionedModel | undefined;
+  model: ModelEntry | undefined;
   metadataLoading: boolean;
 }) {
   if (!model) return null;
@@ -411,12 +411,20 @@ export function ModelPicker({
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
+  // The current model is available but not placed: the Pad shows no active model
+  // and offers to add it. A model hidden from the picker could not appear, so it
+  // is not offered.
+  const selectedOffPad =
+    hasPadModels && !selectedPosition
+      ? entries.find((entry) => entry.value === selectedValue)
+      : undefined;
   const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
-  const activePosition = !open
+  const activePosition: ModelEntry | undefined = !open
     ? undefined
     : view === "pad"
       ? (positioned.find((entry) => entry.value === previewValue) ??
         selectedPosition ??
+        selected ??
         positioned[0])
       : (detailPosition ??
         detailPositions.find((entry) => entry.value === selectedValue) ??
@@ -452,6 +460,31 @@ export function ModelPicker({
     },
     [saveModelPadPreferences],
   );
+
+  const focusPadAfterAddRef = React.useRef(false);
+  const addSelectedToPad = () => {
+    if (!selectedOffPad) return;
+    const value = selectedOffPad.value;
+    const visibleValues = entries.map((entry) => entry.value);
+    focusPadAfterAddRef.current = true;
+    setPreviewValue(value);
+    void saveModelPadPreferences(({ placements }) => ({
+      modelPadPlacements: addModelPadPlacement(placements, visibleValues, value),
+    })).catch((error: unknown) => {
+      focusPadAfterAddRef.current = false;
+      toast.error(error instanceof Error ? error.message : "Couldn’t add the model to your Pad.");
+    });
+  };
+
+  // The Add button disappears once the model is placed; keep focus on the Pad,
+  // where the knob now rests on the added model.
+  React.useEffect(() => {
+    if (!selectedPosition || !focusPadAfterAddRef.current) return;
+    focusPadAfterAddRef.current = false;
+    contentRef.current
+      ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
+      ?.focus();
+  }, [selectedPosition]);
 
   const commit = React.useCallback(
     (entry: ModelEntry, close = false) => {
@@ -629,6 +662,16 @@ export function ModelPicker({
             aria-labelledby={padTabId}
             className="min-w-0 p-2"
           >
+            {selectedOffPad ? (
+              <div className="mb-2 flex min-w-0 items-center gap-2 rounded-control bg-control/60 py-1 pr-1 pl-2.5">
+                <Text variant="small" color="secondary" as="p" truncate className="min-w-0 flex-1">
+                  {selectedOffPad.label} isn’t on your Pad
+                </Text>
+                <Button size="small" className="shrink-0" onClick={addSelectedToPad}>
+                  Add to Pad
+                </Button>
+              </div>
+            ) : null}
             {hasPadModels ? (
               <ModelPickerPad
                 models={positioned}
