@@ -75,3 +75,23 @@ Status (2026-10-01): merged in PR #279 (on main after 0.51.0); plan moved to `do
   hang deadlines.
 - Opus end trim uses each stream's final granule minus its pre-skip, so chained files decode
   to exact lengths.
+
+## Settings → Voice UI (STT engine foundation, Task 9, 2026-10-09)
+
+- `voice-settings.tsx` exports `VoiceInputSettings` (provider, Language, conditional
+  "Translate to English", cloud model rows, plus `LocalVoiceSettings`); `VoiceSettings` wraps it
+  with the dictation sections so the input rows can be tested without the router.
+- Language options: "Automatic" (value `auto`) then the active on-device model's `languages`, or
+  a fixed cloud list of 17 codes; names come from `Intl.DisplayNames(["en"])`. A stored language
+  the model can't hear stays selectable and shows "<model> doesn't support <X>. Using <Y>."
+  from `effectiveLanguage(...).fallback`. Translate shows when the active model has
+  `capabilities.translateToEnglish` (only Canary today).
+- Captions under a select sit in a `flex w-full flex-col` wrapper because
+  `.settings-field-control` is a flex row.
+- Model cards are `role="group"` named by the model; they show `languagesLabel · sizeLabel`,
+  neutral `Badge` chips (Auto-detect / Translate), and "License: name — attribution". Progress
+  labels: Downloading… N% / Verifying… / Installing….
+- On-Device Engine has a "Trim silence" switch (`voiceTrimSilence`, default on).
+- Tests: `voice-settings.test.tsx`, `model-manager-view.test.tsx`, and the shared fixture
+  `local-models-test-catalog.ts` (real pinned catalog). The old source-grep Gemini deferral test
+  moved to a behavioral test in `voice-settings.test.tsx`.

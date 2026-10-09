@@ -6,30 +6,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import { LocalVoiceSettings } from "./local-voice-settings";
-import type { AppSettings, LocalVoiceModel } from "../../lib/types";
+import type { AppSettings } from "../../lib/types";
+import { localModelsTestCatalog } from "./local-models-test-catalog";
 
 afterEach(cleanup);
 
-function model(id: string, name: string, installed: boolean): LocalVoiceModel {
-  return {
-    id,
-    name,
-    description: "",
-    sizeLabel: "640 MB",
-    quant: "int8",
-    languagesLabel: "25 languages",
-    accuracy: 0.9,
-    speed: 0.9,
-    recommended: id === "parakeet-v3",
-    installed,
-  };
-}
-
-const catalog = [
-  model("parakeet-v3", "Parakeet TDT 0.6B v3", true),
-  model("whisper-turbo", "Whisper Large v3 Turbo", true),
-  model("sense-voice", "SenseVoice Small", false),
-];
+const catalog = localModelsTestCatalog(["parakeet-v3", "whisper-turbo"]);
 
 function mount(settings: Partial<AppSettings>) {
   let current: Partial<AppSettings> = { ...settings };
@@ -69,4 +51,17 @@ test("choosing a model in the manager keeps the provider choice untouched", asyn
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:set")));
   const patches = calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
   assert.deepEqual(patches, [{ localVoiceModel: "whisper-turbo" }]);
+});
+
+test("Trim silence is on by default and can be turned off", async () => {
+  const calls = mount({});
+  const toggle = await screen.findByRole("switch", { name: "Trim silence" });
+  assert.equal(toggle.getAttribute("aria-checked"), "true");
+  fireEvent.click(toggle);
+  await waitFor(() =>
+    assert.deepEqual(
+      calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]),
+      [{ voiceTrimSilence: false }],
+    ),
+  );
 });

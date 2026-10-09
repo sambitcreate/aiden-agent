@@ -1092,6 +1092,15 @@ export interface LocalVoiceModel {
   speed: number; // 0..1
   recommended: boolean;
   installed: boolean;
+  /** ISO 639 codes the model can transcribe. */
+  languages: string[];
+  capabilities: {
+    autoDetect: boolean;
+    languageHint: boolean;
+    translateToEnglish: boolean;
+    maxWindowSeconds: number | null;
+  };
+  license: { name: string; url: string; attribution?: string };
 }
 
 /** State of the bundled on-device (sherpa-onnx) engine. */

@@ -2,7 +2,8 @@
 // dictation hotkey. Cloud providers (OpenAI / Gemini) reuse the keys configured
 // under Providers; "On-device" runs a downloaded model locally (managed below).
 // "Automatic" (no explicit choice) prefers an installed on-device model, then a
-// configured cloud provider.
+// configured cloud provider. Language and translation apply to whichever
+// provider dictation resolves to.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,6 +16,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Text,
   toast,
 } from "../ui";
@@ -27,7 +29,7 @@ import {
   useSettings,
   useVoiceResolution,
 } from "../../lib/queries";
-import type { GeminiUsageScope, VoiceProvider } from "../../lib/types";
+import type { GeminiUsageScope, LocalVoiceModel, VoiceProvider } from "../../lib/types";
 import { GOOGLE_PROVIDER_ID } from "../../shared/google-provider";
 import { defaultGeminiUsageScope } from "../../shared/gemini-usage-scope";
 import {
@@ -40,11 +42,53 @@ import { DictationDictionarySettings } from "./dictation-dictionary-settings";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { LocalVoiceSettings } from "./local-voice-settings";
-import { automaticVoiceCaption } from "../../shared/voice-provider";
+import { automaticVoiceCaption, effectiveLocalModelId } from "../../shared/voice-provider";
+import { effectiveLanguage, normalizeLanguageIntent } from "../../shared/voice-language";
 
 const AUTOMATIC = "automatic";
+const AUTO_LANGUAGE = "auto";
+/** Languages offered for cloud transcription; both providers detect others. */
+const CLOUD_LANGUAGES = [
+  "en", "es", "fr", "de", "it", "pt", "nl", "ja", "ko", "zh", "hi", "ar", "ru", "pl", "tr", "uk", "sv",
+] as const;
+
+let languageNames: Intl.DisplayNames | null | undefined;
+
+function languageName(code: string): string {
+  if (languageNames === undefined) {
+    try {
+      languageNames = new Intl.DisplayNames(["en"], { type: "language" });
+    } catch {
+      languageNames = null;
+    }
+  }
+  try {
+    return languageNames?.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+/** Caption shown when the chosen language isn't one the active model can hear. */
+function languageFallbackCaption(model: LocalVoiceModel, intent: string): string | null {
+  const { fallback } = effectiveLanguage(model, intent);
+  if (fallback === null) return null;
+  const using = fallback === AUTO_LANGUAGE ? "automatic detection" : languageName(fallback);
+  return `${model.name} doesn't support ${languageName(intent)}. Using ${using}.`;
+}
 
 export function VoiceSettings() {
+  return (
+    <div className="flex flex-col gap-6">
+      <VoiceInputSettings />
+      <DictationShortcutSettings />
+      <DictationDictionarySettings />
+    </div>
+  );
+}
+
+/** Provider, language and translation rows, plus the on-device engine when it applies. */
+export function VoiceInputSettings() {
   const { platform } = useAppCapabilities();
   const qc = useQueryClient();
   const settings = useSettings();
@@ -73,13 +117,38 @@ export function VoiceSettings() {
         )
       : null;
   const model = isCloud ? resolveCloudVoiceModel(provider, settings.data?.voiceModel) : "";
+  // The on-device model dictation uses now: the resolved one, else the chosen or first installed.
+  const activeLocalId =
+    provider !== "local"
+      ? undefined
+      : resolution.data?.kind === "ready" && resolution.data.provider === "local"
+        ? resolution.data.modelId
+        : effectiveLocalModelId(
+            settings.data?.localVoiceModel,
+            installedModels.map((candidate) => candidate.id),
+          );
+  const activeLocal = installedModels.find((candidate) => candidate.id === activeLocalId);
+  const language = normalizeLanguageIntent(settings.data?.voiceLanguage) ?? AUTO_LANGUAGE;
+  const offeredLanguages: readonly string[] = activeLocal ? activeLocal.languages : CLOUD_LANGUAGES;
+  const languageChoices =
+    language === AUTO_LANGUAGE || offeredLanguages.includes(language)
+      ? offeredLanguages
+      : [...offeredLanguages, language];
+  const languageCaption =
+    activeLocal && language !== AUTO_LANGUAGE ? languageFallbackCaption(activeLocal, language) : null;
+  const canTranslate = activeLocal?.capabilities.translateToEnglish === true;
   const [geminiDialogOpen, setGeminiDialogOpen] = React.useState(false);
   const [geminiAuthOpen, setGeminiAuthOpen] = React.useState(false);
   const [geminiScope, setGeminiScope] = React.useState<GeminiUsageScope>("transcription_only");
   const [geminiBusy, setGeminiBusy] = React.useState(false);
   const [geminiError, setGeminiError] = React.useState<string | null>(null);
 
-  const patch = async (next: { voiceProvider?: VoiceProvider | null; voiceModel?: string }) => {
+  const patch = async (next: {
+    voiceProvider?: VoiceProvider | null;
+    voiceModel?: string;
+    voiceLanguage?: string;
+    voiceTranslateToEnglish?: boolean;
+  }) => {
     await settingsApi.set(next);
     await qc.invalidateQueries({ queryKey: queryKeys.settings });
     await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
@@ -165,35 +234,81 @@ export function VoiceSettings() {
                 : `Sends recordings to ${explicit === "openai" ? "OpenAI" : "Google"} for transcription.`
           }
         >
-          <Select value={explicit ?? AUTOMATIC} onValueChange={changeProvider}>
-            <SelectTrigger size="small">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={AUTOMATIC}>Automatic</SelectItem>
-              <SelectItem value="openai">Online · OpenAI</SelectItem>
-              <SelectItem value="gemini">Online · Google Gemini</SelectItem>
-              <SelectItem value="local">{platform === "darwin" ? "On this Mac · Private" : "On this device · Private"}</SelectItem>
-            </SelectContent>
-          </Select>
-          {automaticCaption ? (
-            <Text as="p" variant="small" color="tertiary" className="mt-2">
-              {automaticCaption}
-            </Text>
-          ) : null}
-          {provider === "gemini" ? (
-            <div className="mt-2 flex items-center gap-2">
-              <Button variant="transparent" size="small" onClick={openGeminiSetup}>
-                Privacy & access
-              </Button>
-              <Text variant="small" color="tertiary">
-                {settings.data?.geminiUsageScope === "transcription_only"
-                  ? "Transcription only"
-                  : "Models + transcription"}
+          <div className="flex w-full flex-col">
+            <Select value={explicit ?? AUTOMATIC} onValueChange={changeProvider}>
+              <SelectTrigger size="small" aria-label="Voice provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTOMATIC}>Automatic</SelectItem>
+                <SelectItem value="local">{platform === "darwin" ? "On this Mac · Private" : "On this device · Private"}</SelectItem>
+                <SelectItem value="openai">Online · OpenAI</SelectItem>
+                <SelectItem value="gemini">Online · Google Gemini</SelectItem>
+              </SelectContent>
+            </Select>
+            {automaticCaption ? (
+              <Text as="p" variant="small" color="tertiary" className="mt-2">
+                {automaticCaption}
               </Text>
-            </div>
-          ) : null}
+            ) : null}
+            {provider === "gemini" ? (
+              <div className="mt-2 flex items-center gap-2">
+                <Button variant="transparent" size="small" onClick={openGeminiSetup}>
+                  Privacy & access
+                </Button>
+                <Text variant="small" color="tertiary">
+                  {settings.data?.geminiUsageScope === "transcription_only"
+                    ? "Transcription only"
+                    : "Models + transcription"}
+                </Text>
+              </div>
+            ) : null}
+          </div>
         </Field>
+        <Field
+          label="Language"
+          description={
+            activeLocal
+              ? `The language you speak. Automatic lets ${activeLocal.name} decide.`
+              : "The language you speak. Automatic lets the provider detect it."
+          }
+        >
+          <div className="flex w-full flex-col">
+            <Select
+              value={language}
+              onValueChange={(value) => void patch({ voiceLanguage: value })}
+            >
+              <SelectTrigger size="small" aria-label="Language">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTO_LANGUAGE}>Automatic</SelectItem>
+                {languageChoices.map((code) => (
+                  <SelectItem key={code} value={code}>
+                    {languageName(code)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {languageCaption ? (
+              <Text as="p" variant="small" color="tertiary" className="mt-2">
+                {languageCaption}
+              </Text>
+            ) : null}
+          </div>
+        </Field>
+        {canTranslate ? (
+          <Field
+            label="Translate to English"
+            description="Writes what you say in other languages as English text."
+          >
+            <Switch
+              aria-label="Translate to English"
+              checked={settings.data?.voiceTranslateToEnglish === true}
+              onCheckedChange={(value) => void patch({ voiceTranslateToEnglish: value })}
+            />
+          </Field>
+        ) : null}
         {isCloud ? (
           <Field label="Model" description="Used for microphone input and the dictation shortcut.">
             <Select value={model} onValueChange={(v) => void patch({ voiceModel: v })}>
@@ -213,8 +328,6 @@ export function VoiceSettings() {
       </FieldSet>
 
       {explicit === "local" || explicit === undefined ? <LocalVoiceSettings /> : null}
-      <DictationShortcutSettings />
-      <DictationDictionarySettings />
 
       <GeminiVoiceSetupDialog
         open={geminiDialogOpen}

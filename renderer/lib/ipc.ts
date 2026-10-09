@@ -710,7 +710,7 @@ export interface ModelDownloadProgress {
   downloaded: number;
   total: number;
   percentage: number;
-  phase: "download" | "extract";
+  phase: "download" | "verify" | "extract";
 }
 
 export const shortcutApi = {

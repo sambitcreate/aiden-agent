@@ -1,5 +1,5 @@
-// On-device voice settings: engine status, the active Parakeet model, and
-// when an idle model is unloaded to free memory.
+// On-device voice settings: engine status, the active model, when an idle
+// model is unloaded to free memory, and silence trimming.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,6 +14,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Text,
   toast,
 } from "../ui";
@@ -27,6 +28,7 @@ import {
   isLocalVoiceIdleUnloadMinutes,
   LOCAL_VOICE_IDLE_UNLOAD_CHOICES,
 } from "../../shared/dictation-preferences";
+import { voiceTrimSilenceEnabled } from "../../shared/voice-preferences";
 
 function idleUnloadLabel(minutes: number): string {
   if (minutes === 0) return "Never";
@@ -75,6 +77,30 @@ export function IdleUnload() {
   );
 }
 
+function TrimSilence() {
+  const qc = useQueryClient();
+  const settings = useSettings();
+  const enabled = voiceTrimSilenceEnabled(settings.data?.voiceTrimSilence);
+
+  const change = async (value: boolean) => {
+    try {
+      await settingsApi.set({ voiceTrimSilence: value });
+      await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    } catch {
+      toast.error("Aiden couldn’t change silence trimming.");
+    }
+  };
+
+  return (
+    <Field
+      label="Trim silence"
+      description="Skips silence and splits long recordings so every model can transcribe them."
+    >
+      <Switch aria-label="Trim silence" checked={enabled} onCheckedChange={(value) => void change(value)} />
+    </Field>
+  );
+}
+
 function EngineStatus() {
   const status = useEngineStatus();
   if (status.isLoading) {
@@ -97,7 +123,7 @@ function EngineStatus() {
     );
   }
   return (
-    <Field label="Engine" description="Transcription runs locally after you download a Parakeet model.">
+    <Field label="Engine" description="Transcription runs locally after you download a speech model.">
       <Badge color="green">Ready</Badge>
     </Field>
   );
@@ -157,6 +183,7 @@ export function LocalVoiceSettings() {
         <EngineStatus />
         <ActiveModel onManage={() => setManaging(true)} />
         <IdleUnload />
+        <TrimSilence />
       </FieldSet>
     </div>
   );
