@@ -93,8 +93,7 @@
       "stderr"
     ],
     "allowedSchemaProperties": [
-      "BotDetail.instructions",
-      "BotDetail.openingGreeting"
+      "BotDetail.instructions"
     ],
     "chatSummaryOnlyForbiddenNormalizedNames": [
       "messages",
@@ -2252,6 +2251,220 @@
                 "$ref": "#/components/schemas/BotConnectionRequest"
               }
             }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/memory": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotMemory",
+        "description": "Contract revision 27 (bot-memory-v1). What the Bot remembers: its own notes (memory) and what it knows about the person (user). Reading it is a chat read. readable false means a memory file could not be read; only the clear edit is offered then.",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The Bot's memory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotMemory"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/memory/edits": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "editBotMemory",
+        "description": "Contract revision 27 (bot-memory-v1). Replace or remove one entry by its content-addressed id, or clear both stores. A stale entry id is memory_entry_not_found (404); a replacement over the store's budget is memory_over_budget (422); one that looks like a password or an instruction to the Bot is memory_blocked (422); an empty or too long text is invalid_request (422).",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotMemoryEditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The edit applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotMemoryEditResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/routine-proposals/{proposalId}/respond": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "$ref": "#/components/parameters/ProposalId"
+        }
+      ],
+      "post": {
+        "operationId": "respondBotRoutineProposal",
+        "description": "Contract revision 27 (bot-proactive-v1). Accept creates the routine the Bot suggested (once, whichever device answers); dismiss records Not now. A repeated answer returns the settled status unchanged. An unknown proposal is routine_proposal_not_found (404).",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotRoutineProposalRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settled answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineProposalRespondResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/routine-suggestions": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotRoutineSuggestions",
+        "description": "Contract revision 27 (bot-proactive-v1). Starter routines for a Bot with none: a Daily check-in that opens the routine editor prefilled. Empty once the Bot has any routine. Nothing is created until the person saves the routine.",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Routine suggestions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineSuggestionList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/routine-notifications": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotRoutineNotifications",
+        "description": "Contract revision 27 (bot-proactive-v1). Finished runs of Bot routines that notify: a visible reply or a failure (silent, skipped and duplicate runs are left out), newest first, at most 100. Previews are redacted. Clients poll on foreground and post one local notification per id; there is no push.",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read"
+        ],
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Only runs that finished after this host time (the previous response's now).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bot routine notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineNotificationList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -5967,6 +6180,15 @@
           "maxLength": 128
         }
       },
+      "ProposalId": {
+        "name": "proposalId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      },
       "RoutineId": {
         "name": "routineId",
         "in": "path",
@@ -6496,7 +6718,8 @@
                 "host:events",
                 "runs:observe",
                 "runs:control",
-                "simulators:mobile"
+                "simulators:mobile",
+                "bot:cards"
               ]
             },
             "uniqueItems": true
@@ -6529,14 +6752,15 @@
                 "host:events",
                 "runs:observe",
                 "runs:control",
-                "simulators:mobile"
+                "simulators:mobile",
+                "bot:cards"
               ]
             },
             "uniqueItems": true
           },
           "features": {
             "type": "array",
-            "description": "Bounded additive API feature advertisements independent of device grants or vocabulary opt-in. Clients recognize supported values and ignore other bounded values; feature tokens never grant authority. Contract revision 26: phones alone may see mobile-simulators-v1, which gates negotiating simulators:mobile.",
+            "description": "Bounded additive API feature advertisements independent of device grants or vocabulary opt-in. Clients recognize supported values and ignore other bounded values; feature tokens never grant authority. Contract revision 26: phones alone may see mobile-simulators-v1, which gates negotiating simulators:mobile. Contract revision 27 adds bot-memory-v1 (Bot memory routes) and bot-proactive-v1 (routine proposal answers, routine suggestions and the Bot routine notification feed), each announced only while its routes are wired.",
             "maxItems": 32,
             "items": {
               "type": "string",
@@ -6652,9 +6876,9 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries.",
             "minItems": 1,
-            "maxItems": 9,
+            "maxItems": 10,
             "items": {
               "enum": [
                 "tasks:read",
@@ -6665,7 +6889,8 @@
                 "host:events",
                 "runs:observe",
                 "runs:control",
-                "simulators:mobile"
+                "simulators:mobile",
+                "bot:cards"
               ]
             },
             "uniqueItems": true
@@ -6707,7 +6932,8 @@
                 "host:events",
                 "runs:observe",
                 "runs:control",
-                "simulators:mobile"
+                "simulators:mobile",
+                "bot:cards"
               ]
             },
             "uniqueItems": true
@@ -8809,10 +9035,6 @@
             "type": "string",
             "maxLength": 280
           },
-          "openingGreeting": {
-            "type": "string",
-            "maxLength": 2000
-          },
           "instructions": {
             "type": "string",
             "minLength": 1,
@@ -8908,7 +9130,9 @@
           },
           "openingGreeting": {
             "type": "string",
-            "maxLength": 2000
+            "maxLength": 2000,
+            "deprecated": true,
+            "description": "Retired in contract revision 27. Accepted and ignored so older clients keep working; never emitted."
           },
           "instructions": {
             "type": "string",
@@ -8939,7 +9163,9 @@
           },
           "openingGreeting": {
             "type": "string",
-            "maxLength": 2000
+            "maxLength": 2000,
+            "deprecated": true,
+            "description": "Retired in contract revision 27. Accepted and ignored so older clients keep working; never emitted."
           },
           "instructions": {
             "type": "string",
@@ -12126,7 +12352,11 @@
           "schedule_disabled",
           "schedule_run_in_progress",
           "server_interrupted",
-          "internal_error"
+          "internal_error",
+          "memory_entry_not_found",
+          "memory_over_budget",
+          "memory_blocked",
+          "routine_proposal_not_found"
         ]
       },
       "ErrorDetails": {
@@ -13954,6 +14184,89 @@
               }
             },
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Contract revision 27, only for devices holding bot:cards: the Bot saved something to its memory. Clients show a quiet Memory updated line.",
+            "required": [
+              "type",
+              "id"
+            ],
+            "properties": {
+              "type": {
+                "const": "memory_update"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Contract revision 27, only for devices holding bot:cards: a routine the Bot suggested. Pending cards are answered through POST /bots/{botId}/routine-proposals/{proposalId}/respond.",
+            "required": [
+              "type",
+              "id",
+              "proposalId",
+              "name",
+              "prompt",
+              "label",
+              "status"
+            ],
+            "properties": {
+              "type": {
+                "const": "routine_proposal"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "proposalId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "prompt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100000
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "accepted",
+                  "dismissed"
+                ]
+              },
+              "routineId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "description": "Only when accepted."
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": false
           }
         ]
       },
@@ -14111,6 +14424,351 @@
           },
           "deduped": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMemoryEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "description": "First 16 hex of sha256(target + NUL + text): a stale id never overwrites newer text."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMemoryStore": {
+        "type": "object",
+        "required": [
+          "entries",
+          "usedChars",
+          "limitChars",
+          "overBudget"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/BotMemoryEntry"
+            }
+          },
+          "usedChars": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limitChars": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "overBudget": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMemory": {
+        "type": "object",
+        "required": [
+          "botId",
+          "revision",
+          "readable",
+          "memory",
+          "user",
+          "updatedAt"
+        ],
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$"
+          },
+          "readable": {
+            "type": "boolean"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/BotMemoryStore"
+          },
+          "user": {
+            "$ref": "#/components/schemas/BotMemoryStore"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMemoryEditRequest": {
+        "type": "object",
+        "required": [
+          "edit"
+        ],
+        "properties": {
+          "edit": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "target",
+                  "entryId",
+                  "text"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "replace"
+                  },
+                  "target": {
+                    "enum": [
+                      "memory",
+                      "user"
+                    ]
+                  },
+                  "entryId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{16}$"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "target",
+                  "entryId"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "remove"
+                  },
+                  "target": {
+                    "enum": [
+                      "memory",
+                      "user"
+                    ]
+                  },
+                  "entryId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{16}$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "clear"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMemoryEditResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "view"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "view": {
+            "$ref": "#/components/schemas/BotMemory"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineProposalRespondRequest": {
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "enum": [
+              "accept",
+              "dismiss"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineProposalRespondResult": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "accepted",
+              "dismissed"
+            ]
+          },
+          "routineId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "Present exactly when accepted."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineSuggestionList": {
+        "type": "object",
+        "required": [
+          "suggestions"
+        ],
+        "properties": {
+          "suggestions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "prompt",
+                "schedule",
+                "label"
+              ],
+              "properties": {
+                "id": {
+                  "enum": [
+                    "daily-check-in"
+                  ]
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32000
+                },
+                "schedule": {
+                  "$ref": "#/components/schemas/BotRoutineSchedule"
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotRoutineNotificationList": {
+        "type": "object",
+        "required": [
+          "notifications",
+          "now"
+        ],
+        "properties": {
+          "notifications": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "botId",
+                "botName",
+                "routineId",
+                "routineName",
+                "status",
+                "finishedAt",
+                "preview"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "botId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "botName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "routineId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "routineName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "status": {
+                  "enum": [
+                    "succeeded",
+                    "failed"
+                  ]
+                },
+                "finishedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "preview": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false

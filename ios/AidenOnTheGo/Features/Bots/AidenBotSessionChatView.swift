@@ -14,6 +14,8 @@ struct AidenBotSessionChatView: View {
     @State private var summary: AidenBotSummary?
     @State private var draft = ""
     @State private var isShowingProfile = false
+    /// The profile sheet opens straight to Memory (from "Memory updated").
+    @State private var profileOpensMemory = false
     @State private var isShowingAdvanced = false
     @State private var isConfirmingDelete = false
     @State private var isDeleting = false
@@ -34,6 +36,11 @@ struct AidenBotSessionChatView: View {
     /// Answering a Bot's tool approval needs `approval:respond` beside Bot write.
     private var canRespondToApprovals: Bool {
         canWrite && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
+    }
+
+    /// Answering a routine proposal needs Bot write and `bot-proactive-v1`.
+    private var canRespondToProposals: Bool {
+        canWrite && AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, coordinator: coordinator)
     }
 
     private var canRequestConnections: Bool {
@@ -73,7 +80,7 @@ struct AidenBotSessionChatView: View {
                 }
             }
         }
-        .sheet(isPresented: $isShowingProfile) {
+        .sheet(isPresented: $isShowingProfile, onDismiss: { profileOpensMemory = false }) {
             if let bot {
                 AidenBotProfileView(
                     coordinator: coordinator,
@@ -82,7 +89,8 @@ struct AidenBotSessionChatView: View {
                     onDeleted: {
                         isShowingProfile = false
                         dismiss()
-                    }
+                    },
+                    opensMemory: profileOpensMemory
                 )
             }
         }
@@ -223,9 +231,9 @@ struct AidenBotSessionChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(model.entries) { entry in
-                            entryView(entry, model: model)
-                                .id(entry.id)
+                        ForEach(AidenBotTranscriptRow.rows(for: model.entries)) { row in
+                            rowView(row, model: model)
+                                .id(row.id)
                         }
                         if let partial = model.partial {
                             assistantBubble(partial, interrupted: false)
@@ -254,6 +262,20 @@ struct AidenBotSessionChatView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityLabel("Loading chat")
+        }
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: AidenBotTranscriptRow, model: AidenBotSessionModel) -> some View {
+        switch row {
+        case let .entry(entry):
+            entryView(entry, model: model)
+        case .memoryUpdated:
+            AidenBotMemoryUpdatedCaption {
+                profileOpensMemory = true
+                isShowingProfile = true
+            }
+            .disabled(bot == nil)
         }
     }
 
@@ -300,6 +322,18 @@ struct AidenBotSessionChatView: View {
                 canRetry: model.retryableFailedTurn?.id == turn.id && canWrite && model.canSend,
                 isBusy: model.inFlight.contains(.retry),
                 onRetry: { Task { await model.retry() } }
+            )
+        case .memoryUpdate:
+            // Rendered by `rowView` as one caption per run of updates.
+            EmptyView()
+        case let .routineProposal(card):
+            AidenBotRoutineProposalCardView(
+                card: card,
+                canRespond: canRespondToProposals,
+                isBusy: model.respondingProposals.contains(card.proposalId),
+                onRespond: { decision in
+                    Task { await model.respondToProposal(card.proposalId, decision: decision) }
+                }
             )
         }
     }
@@ -446,6 +480,97 @@ func aidenBotSessionConversationChatID(
     conversations: [AidenBotConversationItem]
 ) -> String? {
     aidenCanonicalBotConversations(conversations.filter { $0.botId == botID }).first?.chatId
+}
+
+/// A centred, quiet "Memory updated" line. Tapping it opens Profile → Memory.
+struct AidenBotMemoryUpdatedCaption: View {
+    let onOpen: () -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        Button(action: onOpen) {
+            Label(AidenBotSessionCopy.memoryUpdated, systemImage: AidenBotMemorySymbol.name)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .accessibilityHint("Opens what this Bot remembers")
+    }
+}
+
+/// "Add a routine?" with Add routine and Not now; after a decision it reads
+/// "Added ✓ · {label}" or "Not added".
+struct AidenBotRoutineProposalCardView: View {
+    let card: AidenBotRoutineProposalCard
+    let canRespond: Bool
+    let isBusy: Bool
+    let onRespond: (AidenBotRoutineProposalDecision) -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "calendar.badge.clock")
+                .font(.title3)
+                .foregroundStyle(palette.foreground)
+                .frame(width: 40, height: 40)
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(AidenBotSessionCopy.proposalTitle)
+                    .font(.headline)
+                    .foregroundStyle(palette.foreground)
+                Text(AidenBotSessionCopy.proposalBody(name: card.name, label: card.label))
+                    .font(.subheadline)
+                    .foregroundStyle(palette.foreground)
+                Text(card.prompt)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(2)
+                status
+                    .padding(.top, 4)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        switch card.status {
+        case .accepted:
+            Text(AidenBotSessionCopy.proposalAdded(label: card.label))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(palette.success)
+        case .dismissed:
+            Text(AidenBotSessionCopy.notAdded)
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+        case .pending:
+            if canRespond {
+                HStack(spacing: 10) {
+                    Button(AidenBotSessionCopy.addRoutine) { onRespond(.accept) }
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(palette.accent)
+                        .foregroundStyle(palette.onAccent)
+                    Button(AidenBotSessionCopy.notNow) { onRespond(.dismiss) }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                }
+                .disabled(isBusy)
+            } else {
+                Text(AidenBotSessionCopy.finishOnMacReadOnly)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            }
+        }
+    }
 }
 
 /// `I couldn't finish that reply.`, with Retry on the newest failed turn.

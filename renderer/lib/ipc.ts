@@ -1350,6 +1350,24 @@ export const botsApi = {
     delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
       invoke<void>("bots:routines:delete", input),
   },
+  /** What a Bot remembers (USER.md and MEMORY.md), and the person's edits to it. */
+  memory: {
+    get: (botId: string) => invoke<import("../shared/bot-memory").BotMemoryView>("bots:memory:get", botId),
+    /** A replace, remove or clear; a stale entry id answers `entry_not_found` with the fresh view. */
+    edit: (input: import("../shared/bot-memory").BotMemoryEditInput) =>
+      invoke<import("../shared/bot-memory").BotMemoryEditResult>("bots:memory:edit", input),
+  },
+  /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
+  onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>
+    onNotification<import("../shared/bot-memory").BotMemoryChangedEvent>("bots:memory:changed", handler),
+  routineProposals: {
+    /** Add routine or Not now on a Bot's proposal card; a repeated answer returns the settled status. */
+    respond: (input: import("../shared/bot-routine-proposals").BotRoutineProposalRespondInput) =>
+      invoke<import("../shared/bot-routine-proposals").BotRoutineProposalRespondResult>(
+        "bots:routineProposals:respond",
+        input,
+      ),
+  },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>

@@ -48,7 +48,6 @@ import { ChatForkError } from "./chat-fork-error.js";
 import { jsonStringBytesBounded } from "./json-representation.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
-import { isBoundedBotText } from "../../renderer/shared/bot-capabilities.js";
 import {
   chatSummaryRevision,
   isChatSummaryRevision,
@@ -1188,8 +1187,6 @@ export function createChatStore(
       owner?: ChatOwnerV1;
       providerId?: string;
       model?: string;
-      /** Main-owned Bot greeting copied once into the new durable conversation. */
-      initialAssistantMessage?: string;
       assertCurrent?: () => void;
     }): Promise<Chat> {
       const id = input.id ?? newId();
@@ -1199,14 +1196,7 @@ export function createChatStore(
         if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
           throw new Error("Invalid chat owner.");
         }
-        if (
-          input.initialAssistantMessage !== undefined &&
-          !isBoundedBotText(input.initialAssistantMessage, 2_000)
-        ) {
-          throw new Error("Invalid initial Bot greeting.");
-        }
         const now = Date.now();
-        const openingGreeting = input.initialAssistantMessage?.trim();
         const chat: Chat = {
           id,
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
@@ -1217,14 +1207,7 @@ export function createChatStore(
           model: input.model,
           createdAt: now,
           updatedAt: now,
-          messages: openingGreeting
-            ? [{
-                id: randomUUID(),
-                role: "assistant",
-                content: openingGreeting,
-                createdAt: now,
-              }]
-            : [],
+          messages: [],
         };
         return installNewChat(chat, input.assertCurrent);
       });

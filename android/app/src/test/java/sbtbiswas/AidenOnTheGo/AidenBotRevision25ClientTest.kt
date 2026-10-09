@@ -244,4 +244,100 @@ class AidenBotRevision25ClientTest {
         }
         assertEquals("""{"decision":"deny"}""", server.takeRequest().body.readUtf8())
     }
+
+    // --- Contract revision 27 ---
+
+    @Test
+    fun memoryIsReadAndEditedWithAnIdempotencyKey() = runBlocking {
+        server.enqueue(ok(fixture.getValue("botMemory")))
+        assertEquals(3, client.botMemory("bot_fixture_01").entryCount)
+        assertEquals("/api/aiden/v1/bots/bot_fixture_01/memory", server.takeRequest().path)
+
+        server.enqueue(ok(pair("botMemoryEdit", "response")))
+        val key = UUID.randomUUID()
+        val view = client.editBotMemory(
+            "bot_fixture_01",
+            AidenBotMemoryEdit.Replace(AidenBotMemoryTarget.USER, "0f1e2d3c4b5a6978", "Prefers short, friendly answers."),
+            key
+        )
+        assertEquals("7a7a7a7a7a7a7a7a", view.revision)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/bots/bot_fixture_01/memory/edits", request.path)
+        assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
+        assertEquals(pair("botMemoryEdit", "request"), Json.parseToJsonElement(request.body.readUtf8()))
+
+        // Each refusal the fixture lists reaches the caller with its own code.
+        for (refusal in fixture.getValue("botMemoryEdit").jsonObject.getValue("errors").jsonArray) {
+            val status = refusal.jsonObject.getValue("status").toString().toInt()
+            val code = (refusal.jsonObject.getValue("code") as JsonPrimitive).content
+            server.enqueue(error(status, code))
+            try {
+                client.editBotMemory("bot_fixture_01", AidenBotMemoryEdit.Clear, UUID.randomUUID())
+                fail("$code must be refused")
+            } catch (e: AidenRemoteClientException.Server) {
+                assertEquals(status, e.statusCode)
+                assertEquals(code, e.body.code.rawValue)
+            }
+            server.takeRequest()
+        }
+
+        // Another Bot's memory is never accepted for this one.
+        server.enqueue(ok(fixture.getValue("botMemory")))
+        try {
+            client.botMemory("bot_other")
+            fail("Another Bot's memory must be rejected")
+        } catch (_: AidenRemoteClientException) {
+        }
+    }
+
+    @Test
+    fun aProposalAnswerPostsTheDecisionWithAnIdempotencyKey() = runBlocking {
+        val proposalId = "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11"
+        val key = UUID.randomUUID()
+        server.enqueue(ok(pair("botRoutineProposalRespond", "response")))
+        val result = client.respondToBotRoutineProposal("bot_fixture_01", proposalId, AidenBotRoutineProposalDecision.ACCEPT, key)
+        assertEquals("task_fixture_routine_03", result.routineId)
+        val request = server.takeRequest()
+        assertEquals("/api/aiden/v1/bots/bot_fixture_01/routine-proposals/$proposalId/respond", request.path)
+        assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
+        assertEquals(pair("botRoutineProposalRespond", "request"), Json.parseToJsonElement(request.body.readUtf8()))
+
+        server.enqueue(error(404, "routine_proposal_not_found"))
+        try {
+            client.respondToBotRoutineProposal("bot_fixture_01", proposalId, AidenBotRoutineProposalDecision.DISMISS, UUID.randomUUID())
+            fail("A missing proposal must be refused")
+        } catch (e: AidenRemoteClientException.Server) {
+            assertEquals(AidenRemoteErrorCode.ROUTINE_PROPOSAL_NOT_FOUND, e.body.code)
+        }
+    }
+
+    @Test
+    fun suggestionsAndTheRoutineFeedUseTheirRoutes() = runBlocking {
+        server.enqueue(ok(fixture.getValue("botRoutineSuggestions")))
+        assertEquals("Daily check-in", client.botRoutineSuggestions("bot_fixture_01").suggestions.single().name)
+        assertEquals("/api/aiden/v1/bots/bot_fixture_01/routine-suggestions", server.takeRequest().path)
+
+        server.enqueue(ok(fixture.getValue("botRoutineNotifications")))
+        server.enqueue(ok(fixture.getValue("botRoutineNotifications")))
+        client.botRoutineNotifications()
+        assertEquals("/api/aiden/v1/bots/routine-notifications", server.takeRequest().path)
+        client.botRoutineNotifications(Instant.parse("2026-08-19T15:01:00Z"))
+        val since = server.takeRequest().requestUrl!!.queryParameter("since")
+        assertEquals("2026-08-19T15:01:00.000Z", since)
+    }
+
+    @Test
+    fun theBotCardGrantIsNegotiatedLikeTheOtherPhoneGrants() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"capabilities":["chat:read","chat:write","bot:read","bot:write","bot:cards"]}"""
+        ))
+        val granted = client.updateDeviceCapabilities(listOf(AidenRemoteCapability.BOT_CARDS))
+        assertTrue(granted.contains(AidenRemoteCapability.BOT_CARDS))
+        assertEquals(
+            listOf("bot:cards"),
+            Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.getValue("accepts").jsonArray
+                .map { (it as JsonPrimitive).content }
+        )
+    }
 }

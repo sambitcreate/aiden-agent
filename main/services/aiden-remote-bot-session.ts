@@ -31,7 +31,25 @@ import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.j
 import { botRoutineCron } from "../../renderer/shared/bot-routine-schedule.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import type { BotMemoryView } from "../../renderer/shared/bot-memory.js";
 import {
+  BOT_DAILY_CHECKIN_SUGGESTION,
+  type BotRoutineProposalRespondInput,
+  type BotRoutineProposalRespondResult,
+} from "../../renderer/shared/bot-routine-proposals.js";
+import type { BotMemoryService } from "./bot-memory/bot-memory-main.js";
+import {
+  AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES,
+  parseAidenRemoteBotMemory,
+  parseAidenRemoteBotMemoryEditRequest,
+  parseAidenRemoteBotRoutineProposalId,
+  parseAidenRemoteBotRoutineProposalRespondRequest,
+  parseAidenRemoteBotRoutineSuggestionList,
+  type AidenRemoteBotMemory,
+  type AidenRemoteBotMemoryEditResponse,
+  type AidenRemoteBotRoutineNotificationList,
+  type AidenRemoteBotRoutineProposalRespondResult,
+  type AidenRemoteBotRoutineSuggestionList,
   AIDEN_REMOTE_BOT_PRESETS_MAX,
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS,
@@ -70,7 +88,8 @@ import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
 import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import { livePartialText, projectBotTranscript } from "./bot-runtime/live-projection.js";
 import {
-  BOT_ROUTINE_SILENT_INSTRUCTION,
+  botRoutineLabel,
+  botRoutinePromptOf,
   type BotRoutine,
   type BotRoutineService,
 } from "./scheduled-bot-routines.js";
@@ -130,8 +149,26 @@ export interface AidenRemoteBotSessionServiceOptions {
   connectionRequested?(input: { botId: string; pluginId: string; name: string }): Promise<void>;
   defaultTimezone?(): string;
   notifyBotsChanged?(botId?: string): void;
+  /** Bot memory (`bot-memory-v1`): the same service the desktop Memory page uses. */
+  memory?: Pick<BotMemoryService, "view" | "edit">;
+  /** Answers to routine proposals (`bot-proactive-v1`); the desktop answers through the same service. */
+  proposals?: { respond(input: BotRoutineProposalRespondInput): Promise<BotRoutineProposalRespondResult> };
+  /** The Bot routine notification feed (`bot-proactive-v1`). */
+  routineNotifications?: { list(since: number | undefined): Promise<AidenRemoteBotRoutineNotificationList> };
   now?(): number;
   projectorIdleMs?: number;
+}
+
+/** A Bot memory view in the wire shape. */
+export function projectAidenRemoteBotMemory(view: BotMemoryView): AidenRemoteBotMemory {
+  return parseAidenRemoteBotMemory({
+    botId: view.botId,
+    revision: view.revision,
+    readable: view.readable,
+    memory: view.memory,
+    user: view.user,
+    updatedAt: view.updatedAt === null ? null : new Date(view.updatedAt).toISOString(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -154,14 +191,6 @@ function wireText(text: string, maximum: number): string {
 
 function bounded(text: string): string {
   return wireText(text, AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS);
-}
-
-function stripRoutineInstruction(text: string): string {
-  const suffix = `\n\n${BOT_ROUTINE_SILENT_INSTRUCTION}`;
-  if (text.endsWith(suffix)) return text.slice(0, -suffix.length);
-  return text.endsWith(BOT_ROUTINE_SILENT_INSTRUCTION)
-    ? text.slice(0, -BOT_ROUTINE_SILENT_INSTRUCTION.length).trimEnd()
-    : text;
 }
 
 function isoOf(timestamp: number | undefined): string | undefined {
@@ -194,7 +223,8 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
           type: "message",
           id,
           role: "user",
-          text: bounded(entry.type === "routine" ? stripRoutineInstruction(entry.text) : entry.text),
+          // A routine shows the person's prompt, not its notes block or the silence rule.
+          text: bounded(entry.type === "routine" ? botRoutinePromptOf(entry.text) : entry.text),
           ...(createdAt ? { createdAt } : {}),
           ...(label ? { label } : {}),
         });
@@ -262,11 +292,40 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
         }
         break;
       }
+      // Revision 27 cards; `withoutBotCards` removes them for devices without `bot:cards`.
+      case "memory_update": {
+        const createdAt = isoOf(entry.at);
+        output.push({ type: "memory_update", id, ...(createdAt ? { createdAt } : {}) });
+        break;
+      }
+      case "routine_proposal": {
+        const createdAt = isoOf(entry.at);
+        const { proposal } = entry;
+        output.push({
+          type: "routine_proposal",
+          id,
+          proposalId: proposal.proposalId,
+          name: wireText(proposal.name, 120).trim() || "Routine",
+          prompt: bounded(proposal.prompt).trim() || proposal.name,
+          label: wireText(proposal.label, 120).trim() || "On a schedule",
+          status: entry.status,
+          ...(entry.status === "accepted" && entry.routineId ? { routineId: wireText(entry.routineId, 160) } : {}),
+          ...(createdAt ? { createdAt } : {}),
+        });
+        break;
+      }
       default:
         break;
     }
   }
   return output;
+}
+
+/** The entries a device without `bot:cards` may see: revision-26 parsers throw on the card types. */
+export function withoutBotCards(entries: readonly AidenRemoteBotSessionEntry[]): AidenRemoteBotSessionEntry[] {
+  return entries.filter(
+    (entry) => !(AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES as readonly string[]).includes(entry.type),
+  );
 }
 
 /** Text of the in-flight (or paused) assistant partial, if any. A reply heading for `[SILENT]` is never shown. */
@@ -303,6 +362,8 @@ interface Subscriber {
   frames: string[];
   handle?: CursorSseHandle;
   overflowed: boolean;
+  /** The device negotiated `bot:cards` and may receive memory and routine proposal entries. */
+  cards: boolean;
 }
 
 class BotLiveProjector {
@@ -346,22 +407,23 @@ class BotLiveProjector {
     this.armIdle();
   }
 
-  snapshot(): AidenRemoteBotSession {
+  /** The session as a device sees it: without card entries unless it holds `bot:cards`. */
+  snapshot(cards: boolean): AidenRemoteBotSession {
     return parseAidenRemoteBotSession({
       botId: this.botId,
       epoch: this.epoch,
       seq: this.seq,
       ...this.state,
       ...(this.partial !== undefined ? { partial: this.partial } : {}),
-      ...windowed(this.entries),
+      ...windowed(cards ? this.entries : withoutBotCards(this.entries)),
       question: this.question,
       approval: this.approval,
     });
   }
 
   /** The `snapshot` frame for the current seq (first frame of a stream, or a history rewrite). */
-  snapshotFrame(): string {
-    const session = this.snapshot();
+  snapshotFrame(cards: boolean): string {
+    const session = this.snapshot(cards);
     return sseFrame(`${session.epoch}:${session.seq}`, "snapshot", {
       protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
       botId: session.botId,
@@ -372,13 +434,14 @@ class BotLiveProjector {
     });
   }
 
-  private broadcast(text: string): void {
+  /** `legacy` is the same frame as a device without `bot:cards` must see it. */
+  private broadcast(text: string, legacy: string = text): void {
     for (const subscriber of this.subscribers) {
       if (subscriber.frames.length >= MAX_PENDING_FRAMES) {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        subscriber.frames.push(text);
+        subscriber.frames.push(subscriber.cards ? text : legacy);
       }
       subscriber.handle?.wake();
     }
@@ -393,7 +456,20 @@ class BotLiveProjector {
       seq: this.seq,
       ...event,
     };
-    this.broadcast(sseFrame(`${this.epoch}:${this.seq}`, event.type, data));
+    const id = `${this.epoch}:${this.seq}`;
+    const text = sseFrame(id, event.type, data);
+    // A card entry must never reach a revision-26 parser, but its seq must:
+    // clients refetch on any gap. Such a device gets the state it already
+    // holds under that seq instead, which changes nothing it shows.
+    const card =
+      event.type === "entry" &&
+      (AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES as readonly string[]).includes(
+        (event.payload as { entry?: { type?: string } }).entry?.type ?? "",
+      );
+    this.broadcast(
+      text,
+      card ? sseFrame(id, "state", { ...data, type: "state", payload: this.state }) : text,
+    );
   }
 
   /**
@@ -450,7 +526,7 @@ class BotLiveProjector {
       this.question = question;
       this.approval = approval;
       this.seq += 1;
-      this.broadcast(this.snapshotFrame());
+      this.broadcast(this.snapshotFrame(true), this.snapshotFrame(false));
       return;
     }
     for (const entry of next) {
@@ -543,11 +619,20 @@ function mapSessionError(error: unknown): never {
  * an API key, and the text is cut to the wire bound.
  */
 export function redactRemoteError(message: string): string {
-  const redacted = message
+  return redactRemoteText(message, 500) || "This routine failed.";
+}
+
+/**
+ * Routine text for a phone (a failure or a notification preview): local
+ * paths and key-shaped strings are replaced, then the text is cut to
+ * `maximum` code points. May be empty.
+ */
+export function redactRemoteText(text: string, maximum: number): string {
+  const redacted = text
     .replace(/(?:file:\/\/)?(?:~|\/(?:Users|home|private|var|tmp|Volumes|Library|opt))(?:\/[^\s'"`)\]]*)+/gu, "[path]")
     .replace(/\b[A-Za-z]:\\[^\s'"`)\]]+/gu, "[path]")
     .replace(/\b(?:sk|pk|rk|xox[abpr]|gh[pousr]|AIza)[-_A-Za-z0-9]{12,}/gu, "[redacted]");
-  return wireText(redacted, 500).trim() || "This routine failed.";
+  return wireText(redacted.trim(), maximum).trim();
 }
 
 function routineRevision(routine: BotRoutine): string {
@@ -631,6 +716,146 @@ export class AidenRemoteBotSessionService {
 
   get supportsConnectionRequests(): boolean {
     return Boolean(this.options.connectionRequested);
+  }
+
+  get supportsMemory(): boolean {
+    return Boolean(this.options.memory);
+  }
+
+  /** Proposal answers, suggestions and the notification feed are one feature (`bot-proactive-v1`). */
+  get supportsProactive(): boolean {
+    return Boolean(this.options.proposals && this.options.routineNotifications && this.options.routines);
+  }
+
+  // --- Memory (contract revision 27) ---------------------------------------------
+
+  private memoryService() {
+    if (!this.options.memory) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    return this.options.memory;
+  }
+
+  async memory(botId: string): Promise<AidenRemoteBotMemory> {
+    const memory = this.memoryService();
+    const bot = await this.options.bots.bot(botId);
+    return projectAidenRemoteBotMemory(await memory.view(bot.id));
+  }
+
+  /**
+   * Replace, remove or clear, idempotent per request UUID. Entry ids are
+   * content-addressed, so an edit made against stale text is
+   * `memory_entry_not_found` instead of overwriting what changed.
+   */
+  async editMemory(deviceId: string, botId: string, key: string, input: unknown): Promise<AidenRemoteBotMemoryEditResponse> {
+    const memory = this.memoryService();
+    const parsed = parseOrInvalid(parseAidenRemoteBotMemoryEditRequest, input, "The memory edit is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    return this.options.bots.executeIdempotent(
+      { deviceId, route: "POST /bots/{id}/memory/edits", resourceId: bot.id, key },
+      parsed,
+      async () => {
+        const result = await memory.edit({ botId: bot.id, edit: parsed.edit });
+        if (result.ok) return { ok: true as const, view: projectAidenRemoteBotMemory(result.view) };
+        switch (result.code) {
+          case "entry_not_found":
+            throw new AidenRemoteServiceError(
+              "memory_entry_not_found",
+              "This memory changed. Refresh it before trying again.",
+              404,
+            );
+          case "over_budget":
+            throw new AidenRemoteServiceError("memory_over_budget", result.message, 422);
+          case "blocked":
+            throw new AidenRemoteServiceError(
+              "memory_blocked",
+              "This can't be saved because it looks like a password or an instruction to the Bot.",
+              422,
+            );
+          default:
+            throw new AidenRemoteServiceError("invalid_request", result.message, 422);
+        }
+      },
+    );
+  }
+
+  // --- Proactivity (contract revision 27) ----------------------------------------
+
+  private proactive() {
+    const { proposals, routineNotifications, routines } = this.options;
+    if (!proposals || !routineNotifications || !routines) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    return { proposals, routineNotifications, routines };
+  }
+
+  /** Accept or dismiss a routine the Bot suggested. A repeat returns the settled answer. */
+  async respondRoutineProposal(
+    deviceId: string,
+    botId: string,
+    proposalId: string,
+    key: string,
+    input: unknown,
+  ): Promise<AidenRemoteBotRoutineProposalRespondResult> {
+    const { proposals } = this.proactive();
+    const id = parseOrInvalid(parseAidenRemoteBotRoutineProposalId, proposalId, "The routine suggestion is invalid.");
+    const parsed = parseOrInvalid(
+      parseAidenRemoteBotRoutineProposalRespondRequest,
+      input,
+      "The routine suggestion answer is invalid.",
+    );
+    const bot = await this.options.bots.bot(botId);
+    try {
+      const result = await this.options.bots.executeIdempotent(
+        { deviceId, route: "POST /bots/{id}/routine-proposals/{proposalId}/respond", resourceId: `${bot.id}:${id}`, key },
+        parsed,
+        async () => {
+          const settled = await proposals.respond({ botId: bot.id, proposalId: id, decision: parsed.decision });
+          return { status: settled.status, ...(settled.routineId !== undefined ? { routineId: settled.routineId } : {}) };
+        },
+      );
+      this.options.notifyBotsChanged?.(bot.id);
+      return result;
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === "routine_proposal_not_found") {
+        throw new AidenRemoteServiceError("routine_proposal_not_found", "This routine suggestion is no longer available.", 404);
+      }
+      return routineError(error);
+    }
+  }
+
+  /** The Daily check-in starter, offered only while the Bot has no routines. */
+  async routineSuggestions(botId: string): Promise<AidenRemoteBotRoutineSuggestionList> {
+    const { routines } = this.proactive();
+    const bot = await this.options.bots.bot(botId);
+    if ((await routines.list(bot.id)).length > 0) return { suggestions: [] };
+    const suggestion = BOT_DAILY_CHECKIN_SUGGESTION;
+    return parseAidenRemoteBotRoutineSuggestionList({
+      suggestions: [
+        {
+          id: suggestion.id,
+          name: suggestion.name,
+          prompt: suggestion.prompt,
+          schedule: suggestion.schedule,
+          label: botRoutineLabel(
+            suggestion.schedule,
+            this.options.defaultTimezone?.() ?? "UTC",
+            this.options.now?.() ?? Date.now(),
+          ),
+        },
+      ],
+    });
+  }
+
+  /** Finished Bot routine runs a phone should announce, after `since` (ISO). */
+  async routineNotificationFeed(since: string | undefined): Promise<AidenRemoteBotRoutineNotificationList> {
+    const { routineNotifications } = this.proactive();
+    let sinceMs: number | undefined;
+    if (since !== undefined) {
+      sinceMs = Date.parse(since);
+      if (!/^\d{4}-\d{2}-\d{2}T/u.test(since) || !Number.isFinite(sinceMs)) {
+        throw new AidenRemoteServiceError("invalid_request", "since must be an ISO-8601 time.", 400);
+      }
+    }
+    return routineNotifications.list(sinceMs);
   }
 
   private async stateView(botId: string): Promise<AidenRemoteBotSessionStateView> {
@@ -793,7 +1018,8 @@ export class AidenRemoteBotSessionService {
     return projector.closed ? this.projector(botId) : projector;
   }
 
-  async session(botId: string): Promise<AidenRemoteBotSession> {
+  /** `cards`: the device negotiated `bot:cards` (memory and routine proposal entries). */
+  async session(botId: string, options: { cards?: boolean } = {}): Promise<AidenRemoteBotSession> {
     const bot = await this.options.bots.bot(botId);
     try {
       const state = await this.stateView(bot.id);
@@ -807,7 +1033,7 @@ export class AidenRemoteBotSessionService {
       // A state change without a commit (a desktop Stop, a lock change) is not
       // seen by the watch; a fetch always reports the current state.
       await projector.refresh();
-      return projector.snapshot();
+      return projector.snapshot(options.cards === true);
     } catch (error) {
       return mapSessionError(error);
     }
@@ -819,6 +1045,7 @@ export class AidenRemoteBotSessionService {
     botId: string,
     response: ServerResponse,
     admit: () => void = () => {},
+    options: { cards?: boolean } = {},
   ): Promise<void> {
     const bot = await this.options.bots.bot(botId);
     let projector: BotLiveProjector;
@@ -835,7 +1062,8 @@ export class AidenRemoteBotSessionService {
       throw new AidenRemoteServiceError("operation_stale", "This Bot's chat closed. Try again.", 409, true);
     }
     admit();
-    const subscriber: Subscriber = { frames: [projector.snapshotFrame()], overflowed: false };
+    const cards = options.cards === true;
+    const subscriber: Subscriber = { frames: [projector.snapshotFrame(cards)], overflowed: false, cards };
     const unsubscribe = projector.subscribe(subscriber);
     const handle = openCursorSse(response, {
       pull: () => {

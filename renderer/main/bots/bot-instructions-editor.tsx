@@ -53,7 +53,7 @@ export function BotInstructionsEditor({
         if (!saving) guard.requestLeave();
       }}
       heading="Instructions"
-      description={`What ${bot.name} should do, and how it should talk to you. Changes apply from the next message.`}
+      description={`This is ${bot.name}’s personality and how it should help. Memory is separate.`}
       actions={
         <Button variant="accent" disabled={saving || !changed || empty} onClick={() => void save()}>
           {saving ? "Saving…" : "Save"}

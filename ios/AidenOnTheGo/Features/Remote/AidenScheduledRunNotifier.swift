@@ -22,7 +22,8 @@ final class AidenNotificationPresentationDelegate: NSObject, UNUserNotificationC
         identifier: String,
         appState: AidenRunAlertAppState
     ) -> UNNotificationPresentationOptions {
-        if identifier.hasPrefix("aiden.schedule.") {
+        if identifier.hasPrefix("aiden.schedule.")
+            || identifier.hasPrefix(AidenBotRoutineNotifier.identifierPrefix) {
             return [.banner, .sound, .list]
         }
         if identifier.hasPrefix(AidenRunAlertNotifier.identifierPrefix), appState == .active {
@@ -142,6 +143,148 @@ final class AidenScheduledRunNotifier {
             // later poll retries instead of silently skipping runs.
             return
         }
+    }
+}
+
+// MARK: - Bot routine results (`bot-proactive-v1`)
+
+/// The feed the Bot routine notifier polls. `AidenRemoteClient` provides it;
+/// tests substitute a fake.
+protocol AidenBotRoutineNotificationTransport: Sendable {
+    func botRoutineNotifications(since: String?) async throws -> AidenBotRoutineNotificationFeed
+}
+
+extension AidenRemoteClient: AidenBotRoutineNotificationTransport {}
+
+/// The Bot variant of the scheduled-run feed: `GET /bots/routine-notifications`
+/// turned into local notifications that open the Bot's chat. Polling-only,
+/// like schedules: it runs on app foreground and on Bots home refresh. The
+/// cursor (the Mac's own `now`) and the delivered ids are kept per paired Mac,
+/// so a replayed run is never posted twice.
+@MainActor
+final class AidenBotRoutineNotifier {
+    /// The unit-test host never asks for notification permission.
+    static let shared = AidenBotRoutineNotifier(
+        isEnabled: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+    )
+
+    nonisolated static let identifierPrefix = "aiden.bot-routine."
+    private static let maximumDeliveredIds = 500
+
+    private let defaults: UserDefaults
+    private let center: AidenRunAlertCenter
+    private let isEnabled: Bool
+    private var polling: Set<String> = []
+
+    init(
+        isEnabled: Bool = true,
+        defaults: UserDefaults = .standard,
+        center: AidenRunAlertCenter = UNUserNotificationCenter.current()
+    ) {
+        self.defaults = defaults
+        self.center = center
+        self.isEnabled = isEnabled
+    }
+
+    static func cursorKey(_ instanceId: String) -> String {
+        "aiden.botRoutineNotifications.cursor.\(instanceId)"
+    }
+
+    static func deliveredKey(_ instanceId: String) -> String {
+        "aiden.botRoutineNotifications.delivered.\(instanceId)"
+    }
+
+    /// Polls the connected Mac when it serves `bot-proactive-v1`.
+    func deliverIfSupported(coordinator: AidenRemoteCoordinator) async {
+        guard isEnabled,
+              coordinator.connectionState == .connected,
+              AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, coordinator: coordinator),
+              let context = try? coordinator.requestContext(),
+              let client = try? coordinator.remoteClient(for: context) else { return }
+        await deliver(instanceId: context.instanceId, transport: client)
+    }
+
+    func deliver(instanceId: String, transport: any AidenBotRoutineNotificationTransport) async {
+        guard !polling.contains(instanceId) else { return }
+        polling.insert(instanceId)
+        defer { polling.remove(instanceId) }
+        // Permission is asked for only once there is a run to show, never
+        // just because the Bots list refreshed.
+        let status = await center.currentAuthorizationStatus()
+        guard status == .notDetermined || AidenRunAlertPolicy.isAuthorized(status) else { return }
+        let cursor = defaults.string(forKey: Self.cursorKey(instanceId))
+        let feed: AidenBotRoutineNotificationFeed
+        do {
+            feed = try await transport.botRoutineNotifications(since: cursor)
+        } catch {
+            // Keep the cursor so the next poll asks again.
+            return
+        }
+        var deliveredOrder = defaults.stringArray(forKey: Self.deliveredKey(instanceId)) ?? []
+        var delivered = Set(deliveredOrder)
+        func markDelivered(_ id: String) {
+            if delivered.insert(id).inserted { deliveredOrder.append(id) }
+        }
+        func persist(cursor: String) {
+            defaults.set(cursor, forKey: Self.cursorKey(instanceId))
+            defaults.set(Array(deliveredOrder.suffix(Self.maximumDeliveredIds)), forKey: Self.deliveredKey(instanceId))
+        }
+        let oldestFirst = feed.notifications.sorted { $0.finishedAt.date < $1.finishedAt.date }
+        guard let cursor else {
+            // First poll on this Mac: start from its clock without posting
+            // history, so pairing never floods the lock screen.
+            oldestFirst.forEach { markDelivered($0.id) }
+            persist(cursor: feed.now.rawValue)
+            return
+        }
+        // The cursor only moves past runs that were handled in order, so a
+        // run whose post failed is asked for again next time.
+        if status == .notDetermined,
+           oldestFirst.contains(where: { !delivered.contains($0.id) }),
+           !(await center.requestAlertAuthorization()) {
+            return
+        }
+        var nextCursor = cursor
+        var handledAll = true
+        for item in oldestFirst {
+            if delivered.contains(item.id) {
+                nextCursor = item.finishedAt.rawValue
+                continue
+            }
+            do {
+                try await center.add(Self.request(for: item, instanceId: instanceId))
+                markDelivered(item.id)
+                nextCursor = item.finishedAt.rawValue
+            } catch {
+                handledAll = false
+                break
+            }
+        }
+        persist(cursor: handledAll ? feed.now.rawValue : nextCursor)
+    }
+
+    /// Title: the Bot's name. Body: the routine name and the preview. Opens
+    /// the Bot's chat on the Mac it came from.
+    nonisolated static func request(
+        for item: AidenBotRoutineNotification,
+        instanceId: String
+    ) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = AidenScheduledRunNotifier.displaySafe(item.botName, limit: 120)
+        let routineName = AidenScheduledRunNotifier.displaySafe(item.routineName, limit: 120)
+        let preview = AidenScheduledRunNotifier.displaySafe(item.preview, limit: 200)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        content.body = preview.isEmpty ? routineName : "\(routineName): \(preview)"
+        content.threadIdentifier = "aiden.bot-routine.\(instanceId).\(item.botId)"
+        content.sound = .default
+        if let url = AidenDeepLink.botChatURL(instanceId: instanceId, botId: item.botId) {
+            content.userInfo = [AidenRunAlertNotifier.deepLinkUserInfoKey: url.absoluteString]
+        }
+        return UNNotificationRequest(
+            identifier: "\(identifierPrefix)\(item.id)",
+            content: content,
+            trigger: nil
+        )
     }
 }
 

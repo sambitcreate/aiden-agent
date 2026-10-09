@@ -897,13 +897,15 @@ test("canonical revision-14 fixtures parse into explicit bounded contract views"
   const source = await readBotContractFixture();
   const fixture = parseAidenRemoteContractFixture(source);
 
-  assert.equal(fixture.contractRevision, 26);
+  assert.equal(fixture.contractRevision, 27);
   assert.equal(fixture.botList.maxBots, 256);
   assert.equal(fixture.botSummary.health, "ready");
   assert.equal(fixture.botDetail.access.botId, fixture.botDetail.id);
   assert.equal(fixture.botPolicy.accessMode, "full");
   assert.equal(Object.prototype.hasOwnProperty.call(fixture.botPolicy, "custom"), false);
-  assert.equal(fixture.botIdentity.request.openingGreeting, "");
+  // Revision 27 retired the greeting: it is in no Bot fixture.
+  assert.equal("openingGreeting" in fixture.botDetail, false);
+  assert.equal("openingGreeting" in fixture.botIdentity.request, false);
   // Omitted access is Full on revision 25.
   assert.equal(fixture.botCreate.request.access, undefined);
   assert.equal(fixture.botChatCreate.response.botId, fixture.botSummary.id);
@@ -1015,6 +1017,7 @@ test("Bot fixture parsing tolerates response additions and rejects authority-sha
   for (const [fixtureKey, privateKey] of [
     ["botSummary", "instructions"],
     ["botSummary", "openingGreeting"],
+    ["botDetail", "openingGreeting"],
     ["botConversation", "reasoning"],
   ] as const) {
     assertBotFixtureMutationFails(
@@ -1352,10 +1355,18 @@ test("canonical Bot operation fixtures preserve exact identities and applied mut
     source,
     (fixture) => {
       const identity = fixtureRecord(fixture.botIdentity, "botIdentity");
-      fixtureRecord(identity.response, "botIdentity.response").openingGreeting =
-        "The clear did not apply";
+      fixtureRecord(identity.response, "botIdentity.response").purpose = "The patch did not apply";
     },
     /does not apply the exact requested patch/u,
+  );
+  // The retired greeting is never emitted, even in a response.
+  assertBotFixtureMutationFails(
+    source,
+    (fixture) => {
+      const identity = fixtureRecord(fixture.botIdentity, "botIdentity");
+      fixtureRecord(identity.response, "botIdentity.response").openingGreeting = "Hello";
+    },
+    /Forbidden private Bot wire key openingGreeting/u,
   );
   assertBotFixtureMutationFails(
     source,

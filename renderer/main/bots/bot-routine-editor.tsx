@@ -80,7 +80,10 @@ export function routineScheduleFromForm(form: {
   }
 }
 
-function formFromRoutine(routine: BotRoutine) {
+/** A routine to start the form from: a saved routine or a suggestion. */
+type RoutineFormSource = Pick<BotRoutine, "name" | "prompt"> & { schedule?: BotRoutineSchedule | null };
+
+function formFromRoutine(routine: RoutineFormSource) {
   const base = defaultSchedule();
   const schedule = routine.schedule;
   if (!schedule) return { ...base, name: routine.name, prompt: routine.prompt };
@@ -100,6 +103,7 @@ function formFromRoutine(routine: BotRoutine) {
 export function BotRoutineEditor({
   bot,
   routine,
+  draft,
   open,
   onOpenChange,
   onSaved,
@@ -108,12 +112,15 @@ export function BotRoutineEditor({
   bot: Pick<BotDefinition, "id" | "name">;
   /** Undefined adds a routine. */
   routine?: BotRoutine;
+  /** Prefills a new routine (for example the daily check-in); nothing is created until Save. */
+  draft?: { name: string; prompt: string; schedule: BotRoutineSchedule };
   open: boolean;
   onOpenChange(open: boolean): void;
   onSaved(routine: BotRoutine): void;
   onDeleted?(): void;
 }) {
-  const initial = routine ? formFromRoutine(routine) : { ...defaultSchedule(), name: "", prompt: "" };
+  const source = routine ?? draft;
+  const initial = source ? formFromRoutine(source) : { ...defaultSchedule(), name: "", prompt: "" };
   const [name, setName] = React.useState(initial.name);
   const [prompt, setPrompt] = React.useState(initial.prompt);
   const [kind, setKind] = React.useState<BotRoutineScheduleKind>(initial.kind);

@@ -113,7 +113,10 @@ import { botStore } from "./bot-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
-import { systemTimezone } from "./schedule-store.js";
+import { scheduleStore, systemTimezone } from "./schedule-store.js";
+import { botMemoryService } from "./bot-memory/bot-memory-main.js";
+import { botRoutineProposals } from "./bot-routine-proposals-main.js";
+import { createBotRoutineNotificationFeed } from "./bot-routine-notifications.js";
 import {
   AidenRemoteBotSessionService,
   projectBotSessionState,
@@ -894,6 +897,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 },
                 defaultTimezone: systemTimezone,
                 notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
+                // Contract revision 27: the desktop's own memory and proposal services.
+                memory: botMemoryService,
+                proposals: botRoutineProposals,
+                routineNotifications: createBotRoutineNotificationFeed({
+                  store: scheduleStore,
+                  botName: async (botId) => (await botStore.get(botId))?.name,
+                }),
               })
             : undefined;
           activeBotSessions = botSessions;

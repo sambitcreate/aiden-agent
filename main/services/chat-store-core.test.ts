@@ -96,8 +96,8 @@ test("Bot model authority changes durably without changing history or activity t
     botId: "bot:model-owner",
     providerId: "provider:old",
     model: "model:old",
-    initialAssistantMessage: "Welcome",
   });
+  await first.appendMessage(chat.id, { role: "assistant", content: "Welcome" });
   const before = await first.appendMessage(chat.id, {
     role: "user",
     content: "Keep this conversation",

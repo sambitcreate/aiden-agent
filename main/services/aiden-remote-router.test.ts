@@ -206,7 +206,8 @@ async function fixture(options: {
               capability !== "simulators:mobile" &&
               capability !== "host:events" &&
               capability !== "runs:observe" &&
-              capability !== "runs:control",
+              capability !== "runs:control" &&
+              capability !== "bot:cards",
           )
         ) {
           return null;
@@ -1946,6 +1947,234 @@ test("Bot session routes refuse devices without the grants for transcripts and c
     assert.deepEqual(controls, ["session", "resume"]);
   } finally {
     await writer.close();
+  }
+});
+
+/** The revision-27 Bot routes over a recording session service. */
+function recordingRevision27Sessions(seen: string[], supports: { memory: boolean; proactive: boolean }) {
+  const base = recordingBotSessions(seen, { routines: true, presets: true, connections: true }) as unknown as Record<string, unknown>;
+  return {
+    ...base,
+    session: async (botId: string, options: { cards?: boolean } = {}) => {
+      seen.push(`session:${options.cards === true ? "cards" : "plain"}`);
+      return { botId, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries: [], hasOlder: false };
+    },
+    openEvents: async (
+      _deviceId: string,
+      _botId: string,
+      response: import("node:http").ServerResponse,
+      admit: () => void,
+      options: { cards?: boolean } = {},
+    ) => {
+      seen.push(`events:${options.cards === true ? "cards" : "plain"}`);
+      admit();
+      response.writeHead(204);
+      response.end();
+    },
+    supportsMemory: supports.memory,
+    supportsProactive: supports.proactive,
+    ...(supports.memory
+      ? {
+          memory: async (botId: string) => {
+            seen.push(`memory:${botId}`);
+            return { botId, revision: "0".repeat(16), readable: true, memory: {}, user: {}, updatedAt: null };
+          },
+          editMemory: async (deviceId: string, botId: string, key: string, body: unknown) => {
+            seen.push(`memory-edit:${deviceId}:${botId}:${key}:${JSON.stringify(body)}`);
+            return { ok: true };
+          },
+        }
+      : {}),
+    ...(supports.proactive
+      ? {
+          respondRoutineProposal: async (deviceId: string, botId: string, proposalId: string, key: string) => {
+            seen.push(`respond:${deviceId}:${botId}:${proposalId}:${key}`);
+            return { status: "dismissed" };
+          },
+          routineSuggestions: async (botId: string) => {
+            seen.push(`suggestions:${botId}`);
+            return { suggestions: [] };
+          },
+          routineNotificationFeed: async (since: string | undefined) => {
+            seen.push(`notifications:${since ?? "all"}`);
+            return { notifications: [], now: "2026-08-19T15:01:00.000Z" };
+          },
+        }
+      : {}),
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+}
+
+test("revision 27 Bot memory and proactivity tokens are announced only while their routes are wired", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const revision27 = (features: string[]) =>
+    features.filter((feature) => feature === "bot-memory-v1" || feature === "bot-proactive-v1").sort();
+  for (const [supports, expected] of [
+    [{ memory: true, proactive: true }, ["bot-memory-v1", "bot-proactive-v1"]],
+    [{ memory: true, proactive: false }, ["bot-memory-v1"]],
+    [{ memory: false, proactive: false }, []],
+  ] as const) {
+    const seen: string[] = [];
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write", "chat:read"],
+      acceptsBotCapabilities: true,
+      botSessions: recordingRevision27Sessions(seen, supports),
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.deepEqual(revision27(server.features), expected);
+      // An unannounced feature's routes are not found.
+      if (!supports.memory) {
+        const memory = await fetch(`${app.base}/bots/bot-1/memory`, { headers });
+        assert.equal(memory.status, 404);
+        assert.equal((await memory.json()).error.code, "not_found");
+      }
+      if (!supports.proactive) {
+        assert.equal((await fetch(`${app.base}/bots/bot-1/routine-suggestions`, { headers })).status, 404);
+        assert.equal((await fetch(`${app.base}/bots/routine-notifications`, { headers })).status, 404);
+      }
+    } finally {
+      await app.close();
+    }
+  }
+});
+
+test("revision 27 Bot routes enforce their grants, keys and queries", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const post = (key: string | undefined, body: unknown) => ({
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", ...(key ? { "idempotency-key": key } : {}) },
+    body: JSON.stringify(body),
+  });
+  const proposalId = "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11";
+  const edit = { edit: { kind: "clear" } };
+
+  // Bot metadata alone: suggestions only. Memory and the feed quote chats.
+  const metadata: string[] = [];
+  const reader = await fixture({
+    capabilities: ["bot:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingRevision27Sessions(metadata, { memory: true, proactive: true }),
+  });
+  try {
+    assert.equal((await fetch(`${reader.base}/bots/bot-1/routine-suggestions`, { headers })).status, 200);
+    for (const path of ["/bots/bot-1/memory", "/bots/routine-notifications"]) {
+      const response = await fetch(`${reader.base}${path}`, { headers });
+      assert.equal(response.status, 403, path);
+      assert.equal((await response.json()).error.code, "capability_denied", path);
+    }
+    for (const [path, body] of [
+      ["/bots/bot-1/memory/edits", edit],
+      [`/bots/bot-1/routine-proposals/${proposalId}/respond`, { decision: "dismiss" }],
+    ] as const) {
+      assert.equal((await fetch(`${reader.base}${path}`, post("rev27-request-0001", body))).status, 403, path);
+    }
+    assert.deepEqual(metadata, ["suggestions:bot-1"]);
+  } finally {
+    await reader.close();
+  }
+
+  // Bot changes without chat reads may answer a proposal but not edit memory.
+  const changes: string[] = [];
+  const writer = await fixture({
+    capabilities: ["bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingRevision27Sessions(changes, { memory: true, proactive: true }),
+  });
+  try {
+    assert.equal((await fetch(`${writer.base}/bots/bot-1/memory/edits`, post("rev27-request-0002", edit))).status, 403);
+    const answered = await fetch(
+      `${writer.base}/bots/bot-1/routine-proposals/${proposalId}/respond`,
+      post("rev27-request-0003", { decision: "dismiss" }),
+    );
+    assert.equal(answered.status, 200);
+    assert.deepEqual(await answered.json(), { status: "dismissed" });
+    assert.deepEqual(changes, [`respond:device-authorized-12345678:bot-1:${proposalId}:rev27-request-0003`]);
+  } finally {
+    await writer.close();
+  }
+
+  const full: string[] = [];
+  const app = await fixture({
+    capabilities: ["bot:read", "bot:write", "chat:read"],
+    acceptsBotCapabilities: true,
+    botSessions: recordingRevision27Sessions(full, { memory: true, proactive: true }),
+  });
+  try {
+    assert.equal((await fetch(`${app.base}/bots/bot-1/memory`, { headers })).status, 200);
+    // Edits need an Idempotency-Key; the body reaches the service as sent.
+    const missingKey = await fetch(`${app.base}/bots/bot-1/memory/edits`, post(undefined, edit));
+    assert.equal(missingKey.status, 400);
+    assert.equal((await fetch(`${app.base}/bots/bot-1/memory/edits`, post("rev27-request-0004", edit))).status, 200);
+    assert.equal(
+      (await fetch(`${app.base}/bots/bot-1/routine-proposals/${proposalId}/respond`, post(undefined, { decision: "accept" }))).status,
+      400,
+    );
+
+    const since = "2026-08-19T15:00:00.000Z";
+    assert.equal((await fetch(`${app.base}/bots/routine-notifications?since=${since}`, { headers })).status, 200);
+    assert.equal((await fetch(`${app.base}/bots/routine-notifications`, { headers })).status, 200);
+    for (const query of ["limit=5", `since=${since}&since=${since}`, `since=${since}&botId=bot-1`]) {
+      const response = await fetch(`${app.base}/bots/routine-notifications?${query}`, { headers });
+      assert.equal(response.status, 400, query);
+    }
+    assert.equal((await fetch(`${app.base}/bots/bot-1/memory?x=1`, { headers })).status, 400);
+    assert.deepEqual(full, [
+      "memory:bot-1",
+      `memory-edit:device-authorized-12345678:bot-1:rev27-request-0004:${JSON.stringify(edit)}`,
+      `notifications:${since}`,
+      "notifications:all",
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("a device opts into Bot session cards with bot:cards, and only then is served them", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["bot:cards"] }) };
+
+  const seen: string[] = [];
+  const phone = await fixture({
+    capabilities: ["server:read", "bot:read", "chat:read"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botSessions: recordingRevision27Sessions(seen, { memory: true, proactive: true }),
+  });
+  try {
+    const accepted = await fetch(`${phone.base}/device/capabilities`, negotiate);
+    assert.equal(accepted.status, 200);
+    assert.ok((await accepted.json()).capabilities.includes("bot:cards"));
+    // `/server` offers the grant, so a client can confirm and persist it.
+    const server = await (await fetch(`${phone.base}/server`, { headers })).json();
+    assert.ok(server.serverCapabilities.includes("bot:cards"));
+    await fetch(`${phone.base}/bots/bot-1/session`, { headers });
+    await fetch(`${phone.base}/bots/bot-1/session/events`, { headers });
+  } finally {
+    await phone.close();
+  }
+  const carded = await fixture({
+    capabilities: ["server:read", "bot:read", "chat:read", "bot:cards"],
+    acceptsBotCapabilities: true,
+    deviceType: "mac",
+    botSessions: recordingRevision27Sessions(seen, { memory: true, proactive: true }),
+  });
+  try {
+    await fetch(`${carded.base}/bots/bot-1/session`, { headers });
+    await fetch(`${carded.base}/bots/bot-1/session/events`, { headers });
+  } finally {
+    await carded.close();
+  }
+  assert.deepEqual(seen, ["session:plain", "events:plain", "session:cards", "events:cards"]);
+
+  // A host without Bot sessions has no cards to offer.
+  const unwired = await fixture({ capabilities: ["server:read", "bot:read"], acceptsBotCapabilities: true, deviceType: "iphone" });
+  try {
+    const refused = await fetch(`${unwired.base}/device/capabilities`, negotiate);
+    assert.equal(refused.status, 404);
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.equal(server.serverCapabilities.includes("bot:cards"), false);
+  } finally {
+    await unwired.close();
   }
 });
 
@@ -3955,7 +4184,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 26,
+      contractRevision: 27,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });

@@ -2400,8 +2400,9 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      // Design runs never read or write durable memory.
-      if (generationProfile.kind === "default") {
+      // Design runs never read or write durable memory. Bots keep their own
+      // memory files (`bot-memory/`) and never use the workspace store.
+      if (generationProfile.kind === "default" && !generationChat.botId) {
         try {
           const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
             development: !isPackagedRuntime(),
@@ -2411,7 +2412,7 @@ export const llmClient = {
           if (!(await memoryEnabledForChat(configStore, generationChat))) {
             throw new Error("Durable memory is disabled by the current memory policy.");
           }
-          const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
+          const memoryWorkspace = !generationChat.workspaceId
             ? undefined
             : await configStore.getWorkspace(generationChat.workspaceId);
           const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
@@ -2482,8 +2483,8 @@ export const llmClient = {
       }
       const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
       // Arbitrary runtime extensions remain outside the exact Bot catalog.
-      // Only the explicitly admitted task extension and existing memory/recall
-      // contributions enter Bot prompts and schemas.
+      // Only the explicitly admitted task extension and history recall enter
+      // Bot prompts and schemas.
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
         generationProfile.kind === "design"
           ? // Exactly the binding's extension; an empty base fails the composition check.
@@ -2491,7 +2492,6 @@ export const llmClient = {
           : preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
-            ...(memoryExtension ? [memoryExtension] : []),
             // Journalless runs must not offer VCC recall over an empty
             // in-memory journal; history recall would be dishonest.
             ...(piJournalless ? [] : [recallExtension]),

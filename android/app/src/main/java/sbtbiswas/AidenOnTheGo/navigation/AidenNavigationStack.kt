@@ -25,6 +25,8 @@ sealed class AidenScreen {
     /** A Bot's one chat, addressed by Bot id (revision 25); older Macs resolve a chat id. */
     data class BotChat(val botId: String) : AidenScreen()
     data class BotEditor(val botId: String?) : AidenScreen()
+    /** Profile → Memory (revision 27, `bot-memory-v1`). */
+    data class BotMemory(val botId: String) : AidenScreen()
     data class WorkspaceFiles(val workspaceId: String) : AidenScreen()
     data class WorkspaceGit(val workspaceId: String) : AidenScreen()
     data class Settings(val page: AidenSettingsPage = AidenSettingsPage.ROOT) : AidenScreen()
@@ -46,6 +48,7 @@ sealed class AidenScreen {
             is BotProfile -> "bot$SEPARATOR${screen.botId}"
             is BotChat -> "bot-chat$SEPARATOR${screen.botId}"
             is BotEditor -> screen.botId?.let { "bot-edit$SEPARATOR$it" } ?: "bot-new"
+            is BotMemory -> "bot-memory$SEPARATOR${screen.botId}"
             is WorkspaceFiles -> "files$SEPARATOR${screen.workspaceId}"
             is WorkspaceGit -> "git$SEPARATOR${screen.workspaceId}"
             is Settings -> if (screen.page == AidenSettingsPage.ROOT) "settings" else "settings$SEPARATOR${screen.page.token}"
@@ -67,6 +70,7 @@ sealed class AidenScreen {
                 kind == "bot" -> BotProfile(id)
                 kind == "bot-chat" -> BotChat(id)
                 kind == "bot-edit" -> BotEditor(id)
+                kind == "bot-memory" -> BotMemory(id)
                 kind == "files" -> WorkspaceFiles(id)
                 kind == "git" -> WorkspaceGit(id)
                 kind == "settings" -> AidenSettingsPage.fromToken(id)?.let(::Settings)

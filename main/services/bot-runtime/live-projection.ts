@@ -36,6 +36,17 @@ import {
   type BotTranscriptEntry,
 } from "../../../renderer/shared/bot-live.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
+import {
+  BOT_MEMORY_REVIEW_ENTRY_KIND,
+  type BotMemorySource,
+  type BotMemoryTarget,
+} from "../../../renderer/shared/bot-memory.js";
+import {
+  BOT_ROUTINE_PROPOSAL_ENTRY_KIND,
+  BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND,
+  type BotRoutineProposalEntryData,
+  type BotRoutineProposalStatusEntryData,
+} from "../../../renderer/shared/bot-routine-proposals.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
 import { BOT_NOTICE_ENTRY_KIND, type BotNotice, type BotSessionState } from "./bot-session-service.js";
 
@@ -99,8 +110,60 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
   return entry.kind === BOT_NOTICE_ENTRY_KIND && typeof entry.data === "object" && entry.data !== null;
 }
 
+/** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal"]);
+
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
+}
+
+/** The tool whose successful saves show "Memory updated". */
+const MEMORY_TOOL_NAME = "bot_memory";
+
+function memoryTargetsOf(value: unknown): BotMemoryTarget[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((target): target is BotMemoryTarget => target === "memory" || target === "user"))];
+}
+
+/** A review or compaction flush that added something; null otherwise. */
+function memoryReviewOf(data: unknown): { source: BotMemorySource; targets: BotMemoryTarget[] } | null {
+  if (typeof data !== "object" || data === null) return null;
+  const record = data as Record<string, unknown>;
+  if (record.source !== "review" && record.source !== "compaction") return null;
+  if (typeof record.added !== "number" || record.added <= 0) return null;
+  return { source: record.source, targets: memoryTargetsOf(record.targets) };
+}
+
+/** Targets an in-turn `bot_memory` result changed; null when it changed nothing. */
+function memorySaveOf(details: unknown): BotMemoryTarget[] | null {
+  if (typeof details !== "object" || details === null) return null;
+  const record = details as { changed?: unknown; targets?: unknown };
+  if (typeof record.changed !== "number" || record.changed <= 0) return null;
+  return memoryTargetsOf(record.targets);
+}
+
+function proposalOf(data: unknown): BotRoutineProposalEntryData | null {
+  if (typeof data !== "object" || data === null) return null;
+  const record = data as Record<string, unknown>;
+  for (const key of ["proposalId", "name", "prompt", "timezone", "label"] as const) {
+    if (typeof record[key] !== "string") return null;
+  }
+  if (typeof record.schedule !== "object" || record.schedule === null) return null;
+  if (record.reason !== undefined && typeof record.reason !== "string") return null;
+  return data as BotRoutineProposalEntryData;
+}
+
+function proposalStatusOf(data: unknown): BotRoutineProposalStatusEntryData | null {
+  if (typeof data !== "object" || data === null) return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.proposalId !== "string") return null;
+  if (record.status !== "accepted" && record.status !== "dismissed") return null;
+  if (record.routineId !== undefined && typeof record.routineId !== "string") return null;
+  return {
+    proposalId: record.proposalId,
+    status: record.status,
+    ...(record.routineId === undefined ? {} : { routineId: record.routineId }),
+  };
 }
 
 function connectCardOf(data: unknown): ConnectCardEntry | null {
@@ -121,6 +184,11 @@ function connectCardOf(data: unknown): ConnectCardEntry | null {
  *   reply that ended in an error becomes a `failed_turn` (after any text it
  *   wrote), carrying the turn's typed message for Retry.
  * - `aiden.connect-card` → a connect card; `aiden.bot-shared-image` → an image.
+ * - A successful `bot_memory` result that changed something, or an
+ *   `aiden.memory-review` entry that added something → `memory_update`.
+ * - `aiden.routine-proposal` → a `routine_proposal` card whose status is the
+ *   newest `aiden.routine-proposal-status` for its `proposalId` (pending
+ *   without one); status entries themselves are not shown.
  * - A confirmed `write_file` / `edit_file` result in the Bot's folder → a file.
  * - `aiden.bot-notice` → `interrupted` and `session_reset` notices; routine,
  *   silent and hidden markers only shape the entries around them.
@@ -136,6 +204,13 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   /** File tool calls aimed at the default location (the Bot's folder), by call id. */
   const homeFileCalls = new Set<string>();
   let turn: Turn | null = null;
+  /** The newest decision on each proposal: cards show what is true now. */
+  const proposalStatus = new Map<string, BotRoutineProposalStatusEntryData>();
+  for (const record of entries) {
+    if (record.kind !== BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    const status = proposalStatusOf(record.data);
+    if (status) proposalStatus.set(status.proposalId, status);
+  }
 
   for (const record of entries) {
     const id = String(record.id);
@@ -158,6 +233,29 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       if (image) mapped.push({ entry: { id, type: "shared_image", ...image }, turn });
       continue;
     }
+    if (record.kind === BOT_MEMORY_REVIEW_ENTRY_KIND) {
+      const review = memoryReviewOf(record.data);
+      if (review) mapped.push({ entry: { id, type: "memory_update", targets: review.targets, source: review.source }, turn });
+      continue;
+    }
+    if (record.kind === BOT_ROUTINE_PROPOSAL_ENTRY_KIND) {
+      const proposal = proposalOf(record.data);
+      if (proposal) {
+        const decided = proposalStatus.get(proposal.proposalId);
+        mapped.push({
+          entry: {
+            id,
+            type: "routine_proposal",
+            proposal,
+            status: decided?.status ?? "pending",
+            ...(decided?.routineId === undefined ? {} : { routineId: decided.routineId }),
+          },
+          turn,
+        });
+      }
+      continue;
+    }
+    if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
     const message = firstMessage(record);
     if (record.kind === "pi.user" && message?.role === "user") {
       const content = message.content as UserContent;
@@ -252,10 +350,18 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
           turn,
         });
       }
+      // The Bot saved something itself: a quiet "Memory updated" line.
+      const saved = message.toolName === MEMORY_TOOL_NAME && !message.isError ? memorySaveOf(message.details) : null;
+      if (saved) {
+        mapped.push({
+          entry: { id: `${id}:memory`, type: "memory_update", targets: saved, source: "turn", at: message.timestamp },
+          turn,
+        });
+      }
     }
   }
   return mapped
-    .filter(({ entry, turn: owner }) => !(owner?.silent && entry.type !== "connect_card") && !isSilentAnswer(entry))
+    .filter(({ entry, turn: owner }) => !(owner?.silent && !OUTLIVES_SILENT_TURN.has(entry.type)) && !isSilentAnswer(entry))
     .map(({ entry }) => entry);
 }
 

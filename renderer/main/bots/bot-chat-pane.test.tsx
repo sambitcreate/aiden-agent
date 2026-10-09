@@ -666,3 +666,102 @@ test("a streaming reply doesn't pull the chat down while the person reads earlie
   fireEvent.click(await screen.findByRole("button", { name: "Scroll to bottom" }));
   assert.equal(port.scrollTop(), 1_600);
 });
+
+const CHECK_IN_PROPOSAL = {
+  proposalId: "proposal-1",
+  name: "Daily check-in",
+  prompt: "Check in briefly with one or two things worth knowing today.",
+  schedule: { kind: "daily" as const, time: "09:00" },
+  timezone: "UTC",
+  label: "Every day at 9:00 AM",
+};
+
+function proposalEntry(status: "pending" | "accepted" | "dismissed", routineId?: string): BotTranscriptEntry {
+  return { id: "p1", type: "routine_proposal", proposal: CHECK_IN_PROPOSAL, status, ...(routineId ? { routineId } : {}) };
+}
+
+test("Memory updated is a quiet caption, outside Updates, that opens this Bot's Memory page", async () => {
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          userEntry("u1", "I'm vegetarian"),
+          { id: "m1", type: "memory_update", targets: ["user"], source: "turn" },
+          { id: "m2", type: "memory_update", targets: ["memory"], source: "review" },
+          assistantEntry("a1", "Noted."),
+        ],
+      }),
+  });
+  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  await screen.findByText("Noted.");
+  const captions = screen.getAllByRole("button", { name: "Memory updated. Open Memory" });
+  assert.equal(captions.length, 1, "back-to-back saves read as one line");
+  assert.equal(screen.queryByRole("button", { name: /Updates/u }) === null, true, "never folded into Updates");
+  fireEvent.click(captions[0]!);
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
+  assert.equal((router.state.location.search as { page?: string }).page, "memory");
+});
+
+test("a routine proposal shows its name, schedule and prompt, and Add routine accepts it once", async () => {
+  let respond: (value: unknown) => void = () => undefined;
+  const calls = await mountChat({
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () =>
+      snapshot({ entries: [assistantEntry("a1", "Want me to check in daily?"), proposalEntry("pending")] }),
+    "bots:routineProposals:respond": () => new Promise((resolve) => (respond = resolve)),
+  });
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
+  assert.ok(within(card).getByText("Add a routine?"));
+  assert.ok(within(card).getByText("Daily check-in · Every day at 9:00 AM"));
+  assert.ok(within(card).getByText(CHECK_IN_PROPOSAL.prompt));
+
+  fireEvent.click(within(card).getByRole("button", { name: "Add routine" }));
+  fireEvent.click(within(card).getByRole("button", { name: /Add/u }));
+  const responds = () => calls.filter((call) => call.channel === "bots:routineProposals:respond");
+  await waitFor(() => assert.equal(responds().length, 1));
+  assert.deepEqual(responds()[0]!.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "accept" });
+  respond({ status: "accepted", routineId: "task-9" });
+  assert.ok(await within(card).findByText("Added ✓ · Every day at 9:00 AM"));
+  assert.equal(within(card).queryByRole("button") === null, true, "a settled card has no actions");
+  assert.equal(responds().length, 1, "a second click while it was answering sent nothing");
+});
+
+test("Not now dismisses a routine proposal, and the card reads Not added", async () => {
+  const calls = await mountChat({
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ entries: [proposalEntry("pending")] }),
+    "bots:routineProposals:respond": () => ({ status: "dismissed" }),
+  });
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
+  fireEvent.click(within(card).getByRole("button", { name: "Not now" }));
+  assert.ok(await within(card).findByText("Not added"));
+  const respond = calls.find((call) => call.channel === "bots:routineProposals:respond")!;
+  assert.deepEqual(respond.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "dismiss" });
+});
+
+test("a failed answer keeps the proposal answerable, and one answered elsewhere arrives settled", async () => {
+  await mountChat({
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ entries: [proposalEntry("pending")] }),
+    "bots:routineProposals:respond": () => {
+      throw new Error("The Mac is busy.");
+    },
+  });
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
+  fireEvent.click(within(card).getByRole("button", { name: "Add routine" }));
+  await waitFor(() =>
+    assert.equal((within(card).getByRole("button", { name: "Add routine" }) as HTMLButtonElement).disabled, false),
+  );
+  assert.ok(within(card).getByText("Add a routine?"));
+
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "entry",
+    entry: proposalEntry("accepted", "task-9"),
+  });
+  assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM"));
+});

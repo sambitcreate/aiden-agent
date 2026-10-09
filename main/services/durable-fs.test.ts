@@ -51,6 +51,27 @@ test("a failed staged-file fsync keeps the previous bytes and leaves no staging 
   assert.deepEqual(await siblings(directory), ["state.json"]);
 });
 
+test("a rejecting publication fence keeps the previous bytes and leaves no staging file", async (t) => {
+  const directory = await scratch(t);
+  const target = path.join(directory, "state.json");
+  await fs.writeFile(target, "previous");
+
+  let stagedWhenFenced: string[] = [];
+  await assert.rejects(
+    writeFileAtomic(target, "replacement", {
+      beforePublish: async () => {
+        stagedWhenFenced = await siblings(directory);
+        throw new Error("access changed");
+      },
+    }),
+    /access changed/u,
+  );
+
+  assert.equal(stagedWhenFenced.length, 2, "the fence runs once the replacement is staged");
+  assert.equal(await fs.readFile(target, "utf8"), "previous");
+  assert.deepEqual(await siblings(directory), ["state.json"]);
+});
+
 test("a crash-equivalent rename failure keeps the previous bytes", async (t) => {
   const directory = await scratch(t);
   const target = path.join(directory, "state.json");

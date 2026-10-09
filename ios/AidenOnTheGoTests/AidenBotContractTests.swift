@@ -125,7 +125,6 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertEqual(fixture.botCreate.response.avatar.semantic, fixture.botCreate.request.avatar)
         // Omitted create access is Full on revision 25.
         XCTAssertNil(fixture.botCreate.request.access)
-        XCTAssertNil(fixture.botIdentity.response.openingGreeting)
         XCTAssertEqual(fixture.botConversation.activityState, .waitingForApproval)
         XCTAssertEqual(fixture.botConversations.conversations, [fixture.botConversation])
         XCTAssertEqual(fixture.botConversationQuery.limit, 30)
@@ -1122,20 +1121,34 @@ final class AidenBotContractTests: XCTestCase {
         ]
     }
 
-    func testIdentityPatchUsesEmptyGreetingToClearAndRejectsNullOrEmptyPatch() throws {
+    /// Revision 27 retires `openingGreeting`. A body from an older client is
+    /// still accepted with the key ignored; a patch that only carried the
+    /// greeting changes nothing and is rejected like an empty patch.
+    func testIdentityPatchAcceptsAndIgnoresRetiredGreetingAndRejectsEmptyPatch() throws {
         let patch = try AidenRemoteJSONDecoder.decode(
             AidenBotIdentityPatch.self,
-            from: Data(#"{"openingGreeting":""}"#.utf8)
+            from: Data(#"{"purpose":"Plans meals","openingGreeting":"Hi!"}"#.utf8)
         )
-        XCTAssertEqual(patch.openingGreeting, "")
+        XCTAssertEqual(patch.purpose, "Plans meals")
+        let encoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(patch)) as? [String: Any]
+        )
+        XCTAssertEqual(Set(encoded.keys), ["purpose"])
         XCTAssertThrowsError(
             try AidenRemoteJSONDecoder.decode(
                 AidenBotIdentityPatch.self,
-                from: Data(#"{"openingGreeting":null}"#.utf8)
+                from: Data(#"{"openingGreeting":"Hi!"}"#.utf8)
             )
         )
         XCTAssertThrowsError(
             try AidenRemoteJSONDecoder.decode(AidenBotIdentityPatch.self, from: Data(#"{}"#.utf8))
+        )
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(
+                AidenBotIdentityPatch.self,
+                from: Data(#"{"purpose":"Plans meals","openingGreetings":"typo"}"#.utf8)
+            ),
+            "Only the retired key is tolerated; other unknown request keys still fail closed"
         )
     }
 
@@ -1608,14 +1621,16 @@ final class AidenBotContractTests: XCTestCase {
         )
         draft.name = "  Research Helper  "
         draft.purpose = "  Finds and explains sources  "
-        draft.openingGreeting = "  What should we investigate?  "
         draft.instructions = "  Verify important claims before answering.  "
 
         XCTAssertFalse(draft.usesFullAccess)
         let request = try draft.createRequest(catalog: fixture.botCapabilityCatalog)
         XCTAssertEqual(request.name, "Research Helper")
         XCTAssertEqual(request.purpose, "Finds and explains sources")
-        XCTAssertEqual(request.openingGreeting, "What should we investigate?")
+        let encoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+        XCTAssertNil(encoded["openingGreeting"], "Revision 27 never sends a greeting")
         XCTAssertEqual(request.instructions, "Verify important claims before answering.")
         XCTAssertEqual(request.avatar, .recipe(AidenBotEditorDraft.defaultAvatar))
         guard case let .custom(revision, selection, visionSelection) = request.access else {
@@ -1864,5 +1879,191 @@ final class AidenBotContractTests: XCTestCase {
             aidenBotAvatarPresentation(.recipe(recipe)),
             AidenBotAvatarPresentation(shape: .hex, color: .coral)
         )
+    }
+
+    // MARK: Contract revision 27: memory, proactivity and session cards
+
+    private func decodedSharedFixture() throws -> AidenRemoteContractFixture {
+        try AidenRemoteJSONDecoder.decode(
+            AidenRemoteContractFixture.self,
+            from: Data(contentsOf: try XCTUnwrap(sharedContractFixtureURL))
+        )
+    }
+
+    private func decodes<T: Decodable>(_ type: T.Type, _ object: Any) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return false }
+        return (try? AidenRemoteJSONDecoder.decode(type, from: data)) != nil
+    }
+
+    func testRevision27FixturesDecodeMemoryProactivityAndSessionCards() throws {
+        let fixture = try decodedSharedFixture()
+        let raw = try sharedFixtureObject()
+
+        XCTAssertEqual(fixture.contractRevision, 27)
+        XCTAssertTrue(fixture.server.features.contains(AidenBotHostFeature.memory))
+        XCTAssertTrue(fixture.server.features.contains(AidenBotHostFeature.proactive))
+
+        // GET /bots/{id}/memory
+        let memory = fixture.botMemory
+        XCTAssertTrue(memory.readable)
+        XCTAssertEqual(memory.user.entries.map(\.text), ["Prefers short answers.", "Has two kids, Mia (8) and Leo (5)."])
+        XCTAssertEqual(memory.memory.entries.map(\.id), ["a1b2c3d4e5f60718"])
+        XCTAssertEqual(memory.user.limitChars, 1_375)
+        XCTAssertEqual(memory.memory.limitChars, 2_200)
+        XCTAssertEqual(memory.updatedAt?.rawValue, "2026-08-19T15:00:00.000Z")
+        XCTAssertEqual(AidenBotMemoryCopy.count(memory), "3 things")
+
+        // POST /bots/{id}/memory/edits: the request this client sends is the
+        // fixture's request byte-for-byte in meaning, and the view comes back.
+        let edit = try AidenBotMemoryEdit.replacing(
+            target: .user,
+            entryId: "0f1e2d3c4b5a6978",
+            text: "  Prefers short, friendly answers.  "
+        )
+        XCTAssertEqual(fixture.botMemoryEdit.request, AidenBotMemoryEditRequest(edit: edit))
+        let editObject = try XCTUnwrap(raw["botMemoryEdit"] as? [String: Any])
+        let encodedRequest = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AidenBotMemoryEditRequest(edit: edit)))
+        XCTAssertEqual(encodedRequest as? NSDictionary, editObject["request"] as? NSDictionary)
+        XCTAssertTrue(fixture.botMemoryEdit.response.view.user.entries.contains { $0.text == "Prefers short, friendly answers." })
+        XCTAssertEqual(
+            fixture.botMemoryEdit.errors.map { "\($0.status) \($0.code)" },
+            ["404 memory_entry_not_found", "422 memory_over_budget", "422 memory_blocked"]
+        )
+
+        // POST /bots/{id}/routine-proposals/{proposalId}/respond
+        XCTAssertEqual(fixture.botRoutineProposalRespond.request.decision, .accept)
+        XCTAssertEqual(fixture.botRoutineProposalRespond.response.status, .accepted)
+        XCTAssertEqual(fixture.botRoutineProposalRespond.response.routineId, "task_fixture_routine_03")
+
+        // GET /bots/{id}/routine-suggestions, prefilled into the editor.
+        let suggestion = try XCTUnwrap(fixture.botRoutineSuggestions.suggestions.first)
+        XCTAssertEqual(suggestion.id, "daily-check-in")
+        XCTAssertEqual(suggestion.schedule, .daily(time: "09:00"))
+        XCTAssertEqual(suggestion.label, "Every day at 9:00 AM")
+        let draft = AidenBotRoutineDraft(suggestion: suggestion)
+        XCTAssertEqual(draft.name, "Daily check-in")
+        XCTAssertEqual(draft.message, suggestion.prompt)
+        XCTAssertEqual(draft.frequency, .daily)
+        XCTAssertEqual(try draft.createRequest(timezone: "UTC").schedule, .daily(time: "09:00"))
+
+        // GET /bots/routine-notifications
+        let notification = try XCTUnwrap(fixture.botRoutineNotifications.notifications.first)
+        XCTAssertEqual(notification.id, "run_fixture_bot_01")
+        XCTAssertEqual(notification.botName, "Scout")
+        XCTAssertEqual(notification.routineName, "Morning brief")
+        XCTAssertEqual(notification.status, .succeeded)
+        XCTAssertEqual(fixture.botRoutineNotifications.now.rawValue, "2026-08-19T15:01:00.000Z")
+
+        // A `bot:cards` session: a memory caption and two proposal cards.
+        let cards = fixture.botSessionCards
+        XCTAssertEqual(cards.entries.map(\.id), ["entry_20", "entry_21", "entry_22"])
+        guard case .memoryUpdate("entry_20", _) = cards.entries[0],
+              case let .routineProposal(pending) = cards.entries[1],
+              case let .routineProposal(accepted) = cards.entries[2] else {
+            return XCTFail("the cards fixture holds a memory update and two proposals")
+        }
+        XCTAssertEqual(pending.status, .pending)
+        XCTAssertNil(pending.routineId)
+        XCTAssertEqual(pending.proposalId, "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11")
+        XCTAssertEqual(accepted.status, .accepted)
+        XCTAssertEqual(accepted.routineId, "task_fixture_routine_02")
+        XCTAssertEqual(
+            AidenBotTranscriptRow.rows(for: cards.entries).map(\.id),
+            ["entry_20", "entry_21", "entry_22"]
+        )
+        let roundTripped = try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONEncoder().encode(cards))
+        XCTAssertEqual(roundTripped, cards)
+    }
+
+    func testBotCardsIsANegotiableDeviceCapability() throws {
+        let response = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteDeviceCapabilitiesUpdateResponse.self,
+            from: Data(#"{"capabilities":["server:read","bot:read","bot:cards"]}"#.utf8)
+        )
+        XCTAssertTrue(response.capabilities.contains(.botCards))
+
+        // The phone asks for cards only when the Mac lists the opt-in in its
+        // support inventory.
+        let server = try XCTUnwrap(try sharedFixtureObject()["server"] as? [String: Any])
+        XCTAssertFalse(try AidenRemoteJSONDecoder.decode(
+            AidenServer.self,
+            from: JSONSerialization.data(withJSONObject: server)
+        ).supportsBotCards)
+        var offering = server
+        offering["serverCapabilities"] = (try XCTUnwrap(server["serverCapabilities"] as? [String])) + ["bot:cards"]
+        XCTAssertTrue(try AidenRemoteJSONDecoder.decode(
+            AidenServer.self,
+            from: JSONSerialization.data(withJSONObject: offering)
+        ).supportsBotCards)
+    }
+
+    func testRevision27ShapesFailClosedLikeTheHostParsers() throws {
+        let raw = try sharedFixtureObject()
+        let memory = try XCTUnwrap(raw["botMemory"] as? [String: Any])
+        XCTAssertTrue(decodes(AidenBotMemory.self, memory))
+        XCTAssertTrue(decodes(AidenBotMemory.self, memory.merging(["updatedAt": NSNull()]) { $1 }), "nothing saved yet")
+        var noUpdatedAt = memory
+        noUpdatedAt["updatedAt"] = nil
+        XCTAssertFalse(decodes(AidenBotMemory.self, noUpdatedAt), "updatedAt is required, even if null")
+        XCTAssertFalse(decodes(AidenBotMemory.self, memory.merging(["revision": "not-hex-revision"]) { $1 }))
+        XCTAssertFalse(decodes(AidenBotMemory.self, memory.merging(["future": true]) { $1 }))
+        XCTAssertFalse(decodes(AidenBotMemory.self, memory.merging(["botId": "bot/1"]) { $1 }))
+        var user = try XCTUnwrap(memory["user"] as? [String: Any])
+        let entry: [String: Any] = ["id": "0f1e2d3c4b5a6978", "text": "Prefers short answers."]
+        user["entries"] = [entry, entry]
+        XCTAssertFalse(decodes(AidenBotMemory.self, memory.merging(["user": user]) { $1 }), "duplicate entry ids")
+        user["entries"] = [entry.merging(["text": String(repeating: "a", count: 501)]) { $1 }]
+        XCTAssertFalse(decodes(AidenBotMemory.self, memory.merging(["user": user]) { $1 }), "entry text bound")
+        user["entries"] = [entry.merging(["id": "0F1E2D3C4B5A6978"]) { $1 }]
+        XCTAssertFalse(decodes(AidenBotMemory.self, memory.merging(["user": user]) { $1 }), "entry id grammar")
+        user["entries"] = [entry]
+        user["limitChars"] = 0
+        XCTAssertFalse(decodes(AidenBotMemory.self, memory.merging(["user": user]) { $1 }))
+
+        XCTAssertTrue(decodes(AidenBotRoutineProposalRespondResult.self, ["status": "dismissed"]))
+        XCTAssertFalse(decodes(AidenBotRoutineProposalRespondResult.self, ["status": "pending"]))
+        XCTAssertFalse(decodes(AidenBotRoutineProposalRespondResult.self, ["status": "accepted"]),
+                       "an accepted proposal names its routine")
+        XCTAssertFalse(decodes(AidenBotRoutineProposalRespondResult.self, ["status": "dismissed", "routineId": "task_1"]))
+        XCTAssertFalse(decodes(AidenBotRoutineProposalRespondRequest.self, ["decision": "later"]))
+
+        let suggestions = try XCTUnwrap(raw["botRoutineSuggestions"] as? [String: Any])
+        let suggestion = try XCTUnwrap((suggestions["suggestions"] as? [[String: Any]])?.first)
+        XCTAssertTrue(decodes(AidenBotRoutineSuggestionList.self, ["suggestions": [[String: Any]]()]))
+        XCTAssertFalse(decodes(AidenBotRoutineSuggestionList.self, ["suggestions": [suggestion.merging(["enabled": true]) { $1 }]]))
+        XCTAssertFalse(decodes(AidenBotRoutineSuggestionList.self, ["suggestions": [suggestion.merging(["prompt": ""]) { $1 }]]))
+
+        let feed = try XCTUnwrap(raw["botRoutineNotifications"] as? [String: Any])
+        let item = try XCTUnwrap((feed["notifications"] as? [[String: Any]])?.first)
+        XCTAssertFalse(decodes(AidenBotRoutineNotificationFeed.self, feed.merging(["now": "yesterday"]) { $1 }))
+        XCTAssertFalse(decodes(AidenBotRoutineNotificationFeed.self, ["notifications": [item, item], "now": feed["now"] as Any]))
+        XCTAssertFalse(decodes(AidenBotRoutineNotificationFeed.self, ["notifications": [item.merging(["status": "skipped"]) { $1 }], "now": feed["now"] as Any]))
+        XCTAssertFalse(decodes(AidenBotRoutineNotificationFeed.self, ["notifications": [item.merging(["preview": String(repeating: "p", count: 161)]) { $1 }], "now": feed["now"] as Any]))
+    }
+
+    /// Revision 27 hosts never send `openingGreeting`, but an older Mac still
+    /// may; the Bot decodes with the key ignored, and a create body from an
+    /// older client is accepted and re-sent without it.
+    func testRetiredOpeningGreetingIsToleratedAndNeverSent() throws {
+        let raw = try sharedFixtureObject()
+        let detail = try XCTUnwrap(raw["botDetail"] as? [String: Any])
+        XCTAssertNil(detail["openingGreeting"], "the revision-27 fixture no longer carries a greeting")
+        let withGreeting = detail.merging(["openingGreeting": "Hi! What should we look at?"]) { $1 }
+        let decoded = try AidenRemoteJSONDecoder.decode(
+            AidenBotDetail.self,
+            from: JSONSerialization.data(withJSONObject: withGreeting)
+        )
+        XCTAssertEqual(decoded.id, "bot_fixture_01")
+
+        let create = try XCTUnwrap((raw["botCreate"] as? [String: Any])?["request"] as? [String: Any])
+        let olderCreate = create.merging(["openingGreeting": "Hello"]) { $1 }
+        let request = try AidenRemoteJSONDecoder.decode(
+            AidenBotCreateRequest.self,
+            from: JSONSerialization.data(withJSONObject: olderCreate)
+        )
+        let resent = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertNil(resent["openingGreeting"])
+        XCTAssertEqual(resent["name"] as? String, "Scout")
+        XCTAssertFalse(decodes(AidenBotCreateRequest.self, create.merging(["greeting": "Hello"]) { $1 }))
     }
 }

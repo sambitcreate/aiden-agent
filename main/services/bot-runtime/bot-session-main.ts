@@ -5,13 +5,23 @@
 // turn re-admits the Bot's authority through `botRuntimeAuthority`, the same
 // admission path the legacy generation used, and releases it immediately:
 // per-call policy checks admit again, so no long-lived lease spans a restart.
+// The one exception is memory review and compaction steering, which hold an
+// in-process admission for their run (`admitMemoryWork`).
 //
 // Tools are the legacy Bot set, built by `bot-tool-sources-main.ts` and
 // filtered by `bot-tool-assembly.ts` against the Bot's Full/Custom authority.
 // Approvals go through `bot-approvals-main.ts` and resolve by `waitId`.
+//
+// Memory (spec 2026-10-09 §7–§10): every attended turn is offered the
+// main-owned `bot_memory` tool (never on routine or self-intro turns), the
+// `aiden-memory` section renders the service's frozen snapshot, a reply
+// schedules the background review, and compaction flushes memory and steers
+// its summary.
 
+import * as path from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { app, ipcMain, logger } from "../../platform.js";
+import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
@@ -42,6 +52,11 @@ import {
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
 import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
+import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
+import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
+import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
+import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 
 import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
 import { botIngressAllowsTool } from "./bot-tool-policy.js";
@@ -50,6 +65,9 @@ export { BOT_CONNECT_CARD_ENTRY_KIND };
 const MODEL_CACHE_MS = 30_000;
 
 const profileDir = () => app.getPath("userData");
+// Every Bot's session database and memory files live under `<profile>/bots/`;
+// only Aiden writes them, never a Bot's file tools (whatever location they use).
+setBotFileToolProtectedRoots(() => [path.join(profileDir(), "bots")]);
 const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 const resolvedModels = new Map<string, { ref: ModelRef; imageInput: boolean; at: number }>();
@@ -125,6 +143,60 @@ const toolSources = createBotToolSources({
 
 const tools = createBotToolAssembly({ admit, sources: toolSources });
 
+/**
+ * Memory review and compaction work: admit the Bot's authority, keep the
+ * admission (unlike `withAdmission`) until the work releases it, and resolve
+ * the Bot's model from that admission rather than the model cache, so the
+ * work runs on exactly the grant it holds. Its signal aborts the work when
+ * access changes; `revalidate` fences every provider request and memory write.
+ */
+async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
+  if ((await botCapabilityStore.getBotModelAuthority(botId)) === undefined) return { ok: false, reason: "no_model" };
+  if (!(await botStore.get(botId))) return { ok: false, reason: "not_admitted" };
+  let admission: BotRuntimeAuthorityAdmission | undefined;
+  try {
+    admission = await admit(botId);
+    await admission.revalidateBeforeEffect();
+    const { sourceProviderId, sourceModelId } = admission.authority.provider;
+    const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
+    runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
+    const models = runtimeModels.modelsFor(botId);
+    const model = models.getModel(runtime.model.provider, runtime.model.id);
+    if (model === undefined) {
+      admission.release();
+      return { ok: false, reason: "no_model" };
+    }
+    const held = admission;
+    return {
+      ok: true,
+      model: { models, model },
+      lease: { signal: held.signal, revalidate: () => held.revalidateBeforeEffect(), release: () => held.release() },
+    };
+  } catch (error) {
+    admission?.release();
+    logger.warn("bots", `Bot ${botId} memory work was not admitted.`, error);
+    return { ok: false, reason: "not_admitted" };
+  }
+}
+
+const memoryReview = createBotMemoryReview({
+  memory,
+  conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
+  isIdle: async (botId) => (await (await botSessionRuntime()).state(botId)).kind === "idle",
+  admit: admitMemoryWork,
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} memory review failed.`, error),
+});
+
+const compactionSteering = createBotCompactionSteering({
+  memory,
+  admit: admitMemoryWork,
+  appendEntry: async (botId, kind, data) => {
+    const conversation = await (await botSessionRuntime()).conversation(botId);
+    await conversation.submit({ type: "write", entry: { kind, data: { ...data } } }, BACKGROUND_CONTEXT);
+  },
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
+});
+
 const extension: BotExtensionDeps = {
   loadBot,
   async systemSections(bot, offered) {
@@ -156,10 +228,16 @@ const extension: BotExtensionDeps = {
       ];
     });
   },
-  currentTools: (bot, turn) => tools.currentTools(bot.id, turn),
-  checkPolicy: (botId, toolName, call) => tools.checkPolicy(botId, toolName, call),
-  // Per run: the self-intro uses no tools; routine and Telegram turns get no question card.
-  turnAllows: botIngressAllowsTool,
+  memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+  currentTools: async (bot, turn) => [...(await tools.currentTools(bot.id, turn)), botMemoryToolEntry(bot.id, memory)],
+  // `bot_memory` writes only this Bot's own memory: no file authority, no approval.
+  checkPolicy: (botId, toolName, call) =>
+    toolName === BOT_MEMORY_TOOL_NAME ? Promise.resolve({ allowed: true }) : tools.checkPolicy(botId, toolName, call),
+  // Per run: the self-intro uses no tools; routine and Telegram turns get no
+  // question card; routine and self-intro turns never save memory.
+  turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+  afterReply: (botId) => memoryReview.afterReply(botId),
+  beforeCompact: compactionSteering,
   requestApproval: (request) => botApprovals.request(request),
   async readmit(botId) {
     if (!(await botStore.get(botId))) return { ok: false, reason: "bot_missing" };
@@ -275,9 +353,17 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     extension,
     resolveModel,
     knownBotIds: async () => new Set((await botStore.list()).map(({ id }) => id)),
+    // Each harness open is a new session: the prompt re-reads memory.
+    onSessionOpen: (botId) => memory.beginSession(botId),
+    compactionInstructions: BOT_COMPACTION_FOCUS,
     deleteEffects: [
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),
+      // No review or memory write may follow; `host.destroy` already removed the files.
+      async (botId) => {
+        memoryReview.cancel(botId);
+        memory.forgetBot(botId);
+      },
       (botId) => toolSources.forgetBot(botId),
       async (botId) => {
         runtimeModels.forget(botId);
@@ -330,6 +416,7 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   runtime = undefined;
   initialized = undefined;
   await liveProjection?.close();
+  memoryReview.shutdown();
   await service?.shutdown();
   await toolSources.shutdown();
 }

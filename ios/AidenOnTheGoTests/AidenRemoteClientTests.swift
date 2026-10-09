@@ -471,6 +471,8 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenBotHostFeature.routines,
             AidenBotHostFeature.connectionRequests,
             AidenBotHostFeature.presets,
+            AidenBotHostFeature.memory,
+            AidenBotHostFeature.proactive,
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
         XCTAssertTrue(server.supportsChatReadState)

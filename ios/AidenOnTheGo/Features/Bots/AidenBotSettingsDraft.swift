@@ -164,7 +164,6 @@ enum AidenBotEditorMode: Identifiable, Sendable {
 struct AidenBotEditorDraft: Equatable {
     var name: String
     var purpose: String
-    var openingGreeting: String
     var instructions: String
     var avatar: AidenBotAvatarRecipe
     var usesFullAccess: Bool
@@ -176,7 +175,6 @@ struct AidenBotEditorDraft: Equatable {
         guard let customAccess = AidenBotCustomAccessDraft(catalog: catalog) else { return nil }
         name = ""
         purpose = ""
-        openingGreeting = ""
         instructions = Self.defaultInstructions
         avatar = Self.defaultAvatar
         // Full Access is the default; there is no notice to accept.
@@ -198,7 +196,6 @@ struct AidenBotEditorDraft: Equatable {
         }
         name = detail.name
         purpose = detail.purpose
-        openingGreeting = detail.openingGreeting ?? ""
         instructions = detail.instructions
         avatar = AidenBotCharacterDraft(avatar: detail.avatar.semantic).recipe
         usesFullAccess = detail.access.accessMode.rawValue == AidenBotAccessMode.full.rawValue
@@ -304,7 +301,6 @@ struct AidenBotEditorDraft: Equatable {
         try AidenBotCreateRequest(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             purpose: purpose.trimmingCharacters(in: .whitespacesAndNewlines),
-            openingGreeting: Self.optionalTrimmed(openingGreeting),
             instructions: instructions.trimmingCharacters(in: .whitespacesAndNewlines),
             avatar: .recipe(avatar),
             access: try accessUpdate(catalog: catalog)
@@ -314,17 +310,14 @@ struct AidenBotEditorDraft: Equatable {
     func identityPatch(comparedTo detail: AidenBotDetail) throws -> AidenBotIdentityPatch? {
         let nextName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextPurpose = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextGreeting = openingGreeting.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextInstructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextAvatar = AidenBotSemanticAvatar.recipe(avatar)
-        let greetingChanged = nextGreeting != (detail.openingGreeting ?? "")
         guard nextName != detail.name || nextPurpose != detail.purpose
-                || greetingChanged || nextInstructions != detail.instructions
+                || nextInstructions != detail.instructions
                 || nextAvatar != detail.avatar.semantic else { return nil }
         return try AidenBotIdentityPatch(
             name: nextName == detail.name ? nil : nextName,
             purpose: nextPurpose == detail.purpose ? nil : nextPurpose,
-            openingGreeting: greetingChanged ? nextGreeting : nil,
             instructions: nextInstructions == detail.instructions ? nil : nextInstructions,
             avatar: nextAvatar == detail.avatar.semantic ? nil : nextAvatar
         )
@@ -351,11 +344,6 @@ struct AidenBotEditorDraft: Equatable {
     func isSatisfied(by detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog) throws -> Bool {
         try identityPatch(comparedTo: detail) == nil
             && !changesAccess(comparedTo: detail, catalog: catalog)
-    }
-
-    private static func optionalTrimmed(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -438,9 +426,6 @@ func aidenBotEditorRebasedDraft(
     if let identityPatch = try draft.identityPatch(comparedTo: baseline) {
         if identityPatch.name != nil { rebased.name = draft.name }
         if identityPatch.purpose != nil { rebased.purpose = draft.purpose }
-        if identityPatch.openingGreeting != nil {
-            rebased.openingGreeting = draft.openingGreeting
-        }
         if identityPatch.instructions != nil { rebased.instructions = draft.instructions }
         if identityPatch.avatar != nil { rebased.avatar = draft.avatar }
     }

@@ -11,6 +11,7 @@ import { BotCreateFlow } from "./bots/bot-create-flow";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
 import { BotList, type BotListRow } from "./bots/bot-list";
+import { BotMemoryPage } from "./bots/bot-memory-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
 import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
 import { BotProfile } from "./bots/bot-profile";
@@ -130,6 +131,8 @@ function BotPage({ botId }: { botId: string }) {
         <BotInstructionsEditor key={`${current.id}:instructions`} bot={current} onClose={back} />
       ) : page === "advanced" ? (
         <BotAdvanced key={`${current.id}:advanced`} bot={current} onClose={back} />
+      ) : page === "memory" ? (
+        <BotMemoryPage key={`${current.id}:memory`} bot={current} onClose={back} />
       ) : (
         <BotProfile
           bot={current}
@@ -137,6 +140,7 @@ function BotPage({ botId }: { botId: string }) {
           onOpenChat={() => void navigate(botChatPath(current.id))}
           onOpenInstructions={() => openPage("instructions")}
           onOpenAdvanced={() => openPage("advanced")}
+          onOpenMemory={() => openPage("memory")}
           onDelete={() => setDeleting(true)}
         />
       )}

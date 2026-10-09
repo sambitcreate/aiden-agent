@@ -83,7 +83,6 @@ function bot(id: string, overrides: Partial<BotDefinition> = {}): BotDefinition 
     name: "Planner",
     description: "Keeps projects moving",
     instructions: "Help plan projects.",
-    openingGreeting: "What should we plan?",
     avatar: { version: 1, shape: "wisp", color: "lilac" },
     createdAt: 1,
     updatedAt: 1,
@@ -277,7 +276,6 @@ function fixture(options: {
         botId?: string;
         providerId?: string;
         model?: string;
-        initialAssistantMessage?: string;
         assertCurrent?: () => void;
       }) {
         input.assertCurrent?.();
@@ -291,12 +289,7 @@ function fixture(options: {
           model: input.model,
           createdAt: 1,
           updatedAt: 1,
-          messages: input.initialAssistantMessage ? [{
-            id: "greeting",
-            role: "assistant",
-            content: input.initialAssistantMessage,
-            createdAt: 1,
-          }] : [],
+          messages: [],
         };
         chats.set(created.id, created);
         return created;
@@ -720,12 +713,10 @@ test("identity updates require a live Bot, exact revision, managed home, and pol
     name: "Updated planner",
     description: "Keeps the current plan moving",
     instructions: "Keep the plan current.",
-    openingGreeting: "What changed?",
     avatar: { version: 1, shape: "orb", color: "sky" },
   };
   const updated = await app.service.updateBot(input);
   assert.equal(updated.name, input.name);
-  assert.equal(updated.openingGreeting, input.openingGreeting);
   assert.notEqual(updated.revision, input.expectedRevision);
   assert.deepEqual(app.events, ["identity:update"]);
 
@@ -1361,7 +1352,6 @@ test("Bot creation commits home then policy then visible identity", async () => 
     bot: {
       name: "Planner",
       instructions: "Plan carefully.",
-      openingGreeting: "What should we plan?",
       avatar: { version: 1, shape: "wisp", color: "lilac" },
     },
   });
@@ -1551,7 +1541,7 @@ test("new Bot chats publish policy before chat and later copies reopen it", asyn
   app.events.length = 0;
   const chat = await app.service.createChat({ audienceId: "device:a", botId: "bot:one" });
   assert.equal(chat.workspaceId, WORKSPACE_ID);
-  assert.equal(chat.messages[0]?.content, "What should we plan?");
+  assert.deepEqual(chat.messages, [], "a new Bot chat starts empty: no opening greeting");
   assert.ok(app.events.indexOf("chat-policy:create") < app.events.indexOf("chat:create"));
 
   chat.workspaceId = "legacy-workspace";

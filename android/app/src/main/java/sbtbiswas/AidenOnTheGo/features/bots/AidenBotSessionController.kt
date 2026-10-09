@@ -34,6 +34,13 @@ interface AidenBotSessionTransport {
     suspend fun requestConnection(botId: String, pluginId: String, key: UUID): AidenBotConnectionRequestReceipt
     /** The generic `POST /approvals/{waitId}/respond`; a Bot approval takes no scope. */
     suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID): AidenApprovalResponse
+    /** Revision 27 (`bot-proactive-v1`): Add routine or Not now on a proposal card. */
+    suspend fun respondToRoutineProposal(
+        botId: String,
+        proposalId: String,
+        decision: AidenBotRoutineProposalDecision,
+        key: UUID
+    ): AidenBotRoutineProposalRespondResult
 }
 
 class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : AidenBotSessionTransport {
@@ -53,7 +60,48 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
         client.requestBotConnection(botId, pluginId, key)
     override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID) =
         client.respondToApproval(waitId, decision, idempotencyKey = key)
+    override suspend fun respondToRoutineProposal(
+        botId: String,
+        proposalId: String,
+        decision: AidenBotRoutineProposalDecision,
+        key: UUID
+    ) = client.respondToBotRoutineProposal(botId, proposalId, decision, key)
 }
+
+/** One transcript row. Consecutive `memory_update` entries share one quiet caption. */
+sealed class AidenBotSessionRow {
+    abstract val key: String
+
+    data class Entry(val entry: AidenBotSessionEntry) : AidenBotSessionRow() {
+        override val key: String get() = entry.id
+    }
+
+    /** "Memory updated", standing for one or more back-to-back memory saves. */
+    data class MemoryUpdated(val entryIds: List<String>) : AidenBotSessionRow() {
+        override val key: String get() = "memory-${entryIds.first()}"
+    }
+}
+
+/** The rows a session's entries render as, folding each run of memory updates into one caption. */
+fun aidenBotSessionRows(entries: List<AidenBotSessionEntry>): List<AidenBotSessionRow> {
+    val rows = mutableListOf<AidenBotSessionRow>()
+    for (entry in entries) {
+        if (entry is AidenBotSessionEntry.MemoryUpdate) {
+            val last = rows.lastOrNull()
+            if (last is AidenBotSessionRow.MemoryUpdated) {
+                rows[rows.lastIndex] = last.copy(entryIds = last.entryIds + entry.id)
+            } else {
+                rows += AidenBotSessionRow.MemoryUpdated(listOf(entry.id))
+            }
+        } else {
+            rows += AidenBotSessionRow.Entry(entry)
+        }
+    }
+    return rows
+}
+
+/** Where this phone's answer to a routine proposal stands while the card is still pending. */
+enum class AidenBotProposalPhase { SENDING, FAILED }
 
 /** What applying one live event to the known session means. */
 sealed class AidenBotSessionEventOutcome {
@@ -102,6 +150,8 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
                 )
             )
         }
+        // A newer entry type this build can't show: keep the sequence, show nothing.
+        is AidenBotSessionEventPayload.SkippedEntry -> AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq))
         is AidenBotSessionEventPayload.State -> AidenBotSessionEventOutcome.Applied(
             current.copy(
                 seq = event.seq,
@@ -165,6 +215,8 @@ data class AidenBotSessionUiState(
     val isRespondingToApproval: Boolean = false,
     val actionError: String? = null,
     val connectRequests: Map<String, AidenBotConnectRequestPhase> = emptyMap(),
+    /** Routine proposal answers in flight or failed, by proposal id. A settled card has none. */
+    val proposalResponses: Map<String, AidenBotProposalPhase> = emptyMap(),
     /** The Bot's state from the home list, used until the session loads. */
     val knownState: AidenBotSessionState? = null
 ) {
@@ -242,6 +294,10 @@ class AidenBotSessionController(
                 outcome.session.entries.filterIsInstance<AidenBotSessionEntry.ConnectCard>()
                     .filter { it.status != AidenBotConnectCardStatus.PENDING }
                     .forEach { card -> _state.update { it.copy(connectRequests = it.connectRequests - card.pluginId) } }
+                // A proposal settled on the Mac or another phone needs no answer from here.
+                outcome.session.entries.filterIsInstance<AidenBotSessionEntry.RoutineProposal>()
+                    .filter { it.status != AidenBotRoutineProposalStatus.PENDING }
+                    .forEach { card -> _state.update { it.copy(proposalResponses = it.proposalResponses - card.proposalId) } }
                 true
             }
             AidenBotSessionEventOutcome.Ignored -> true
@@ -481,6 +537,67 @@ class AidenBotSessionController(
         _state.update { it.copy(connectRequests = it.connectRequests + (pluginId to next)) }
     }
 
+    /**
+     * Answers a pending routine proposal once. The card settles straight from the Mac's answer
+     * ("Added ✓" or "Not added"); a failure keeps Add routine and Not now so the person can try
+     * again, with the same key for the same choice. A proposal the Mac no longer has reloads the
+     * session. A second tap while one is in flight sends nothing.
+     */
+    suspend fun respondToProposal(proposalId: String, decision: AidenBotRoutineProposalDecision): Boolean {
+        val card = _state.value.session?.entries
+            ?.filterIsInstance<AidenBotSessionEntry.RoutineProposal>()
+            ?.firstOrNull { it.proposalId == proposalId }
+            ?: return false
+        if (card.status != AidenBotRoutineProposalStatus.PENDING) return false
+        var claimed = false
+        _state.update { current ->
+            if (current.proposalResponses[proposalId] == AidenBotProposalPhase.SENDING) current else {
+                claimed = true
+                current.copy(proposalResponses = current.proposalResponses + (proposalId to AidenBotProposalPhase.SENDING))
+            }
+        }
+        if (!claimed) return false
+        val action = "$RESPOND_PROPOSAL:$proposalId:${decision.name}"
+        return try {
+            val result = transport.respondToRoutineProposal(botId, proposalId, decision, keys.key(action))
+            keys.complete(action)
+            settleProposal(proposalId, result)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            _state.update { it.copy(proposalResponses = it.proposalResponses + (proposalId to AidenBotProposalPhase.FAILED)) }
+            val server = error as? AidenRemoteClientException.Server
+            if (server?.statusCode == 404 && server.body.code == AidenRemoteErrorCode.ROUTINE_PROPOSAL_NOT_FOUND) {
+                _state.update { it.copy(proposalResponses = it.proposalResponses - proposalId) }
+                refetch()
+            }
+            false
+        }
+    }
+
+    private fun settleProposal(proposalId: String, result: AidenBotRoutineProposalRespondResult) {
+        val status = when (result.status) {
+            AidenBotRoutineProposalOutcome.ACCEPTED -> AidenBotRoutineProposalStatus.ACCEPTED
+            AidenBotRoutineProposalOutcome.DISMISSED -> AidenBotRoutineProposalStatus.DISMISSED
+        }
+        _state.update { current ->
+            val session = current.session
+            val entries = session?.entries?.map { entry ->
+                if (entry is AidenBotSessionEntry.RoutineProposal && entry.proposalId == proposalId) {
+                    entry.copy(status = status, routineId = result.routineId)
+                } else {
+                    entry
+                }
+            }
+            current.copy(
+                session = if (session != null && entries != null) session.copy(entries = entries) else session,
+                proposalResponses = current.proposalResponses - proposalId
+            )
+        }
+    }
+
     private suspend fun control(
         action: String,
         inFlight: (AidenBotSessionUiState) -> Boolean,
@@ -526,6 +643,7 @@ class AidenBotSessionController(
         const val ANSWER_QUESTION = "answerQuestion"
         const val RESPOND_APPROVAL = "respondApproval"
         const val RETRY = "retry"
+        const val RESPOND_PROPOSAL = "respondProposal"
     }
 }
 

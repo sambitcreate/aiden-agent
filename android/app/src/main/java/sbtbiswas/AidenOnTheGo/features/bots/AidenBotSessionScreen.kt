@@ -18,7 +18,10 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.material.icons.outlined.EventRepeat
+import androidx.compose.material.icons.outlined.SdStorage
 import androidx.compose.material3.*
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -81,6 +84,8 @@ object AidenBotSessionTags {
     const val FAILED_TURN_CARD = "bot_session_failed_turn_card"
     const val NEEDS_MODEL_CARD = "bot_session_needs_model_card"
     const val COMPOSER = "bot_session_composer"
+    const val MEMORY_CAPTION = "bot_session_memory_caption"
+    const val PROPOSAL_CARD = "bot_session_proposal_card"
 }
 
 /** Neutral squircle tile with a connection glyph; no coloured border. */
@@ -110,7 +115,9 @@ fun AidenBotSessionScreen(
     onNavigateBack: () -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
     botDeleter: AidenBotDeleter? = AidenRemoteBotDeleter,
-    onBotDeleted: () -> Unit = onNavigateBack
+    onBotDeleted: () -> Unit = onNavigateBack,
+    /** The "Memory updated" caption opens Profile → Memory. */
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
@@ -183,8 +190,11 @@ fun AidenBotSessionScreen(
     }
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
     val canRequestConnections = serverInfo?.supportsBotConnectionRequests == true
+    val canAnswerProposals = serverInfo?.supportsBotProactive == true
+    val canOpenMemory = serverInfo?.supportsBotMemory == true
     val listState = rememberLazyListState()
     val entries = ui.session?.entries.orEmpty()
+    val rows = remember(entries) { aidenBotSessionRows(entries) }
     val partial = ui.session?.partial
 
     LaunchedEffect(entries.size, partial, ui.isInterrupted, ui.needsModel) {
@@ -275,8 +285,13 @@ fun AidenBotSessionScreen(
                         )
                     }
                 }
-                items(entries, key = { it.id }) { entry ->
-                    when (entry) {
+                items(rows, key = { it.key }) { row ->
+                    if (row is AidenBotSessionRow.MemoryUpdated) {
+                        AidenBotMemoryUpdatedCaption(
+                            onOpen = if (canOpenMemory) ({ onNavigateToBotMemory(botId) }) else null
+                        )
+                    }
+                    if (row is AidenBotSessionRow.Entry) when (val entry = row.entry) {
                         is AidenBotSessionEntry.Message -> AidenBotSessionMessageRow(entry)
                         is AidenBotSessionEntry.ConnectCard -> AidenBotConnectCard(
                             card = entry,
@@ -294,6 +309,15 @@ fun AidenBotSessionScreen(
                         is AidenBotSessionEntry.FailedTurn -> AidenBotFailedTurnCard(
                             canRetry = ui.retryableFailedTurn?.id == entry.id,
                             onRetry = { scope.launch { controller.retry() } }
+                        )
+                        // Folded into a caption row above; never rendered on its own.
+                        is AidenBotSessionEntry.MemoryUpdate -> Unit
+                        is AidenBotSessionEntry.RoutineProposal -> AidenBotRoutineProposalCard(
+                            card = entry,
+                            botName = identity.name,
+                            canAnswer = canAnswerProposals,
+                            phase = ui.proposalResponses[entry.proposalId],
+                            onAnswer = { decision -> scope.launch { controller.respondToProposal(entry.proposalId, decision) } }
                         )
                     }
                 }
@@ -526,6 +550,119 @@ fun AidenBotConnectCard(
                     )
                     if (phase == AidenBotConnectRequestPhase.FAILED) {
                         Text(stringResource(R.string.bot_session_unreachable), style = MaterialTheme.typography.bodySmall, color = palette.danger)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A quiet centred "Memory updated" line; tapping it opens Profile → Memory when the Mac offers it. */
+@Composable
+fun AidenBotMemoryUpdatedCaption(onOpen: (() -> Unit)?) {
+    val palette = AidenTheme.palette
+    val label = stringResource(R.string.bot_memory_updated)
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        val content: @Composable () -> Unit = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Icon(Icons.Outlined.SdStorage, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(label, style = MaterialTheme.typography.labelMedium, color = palette.secondary)
+            }
+        }
+        if (onOpen != null) {
+            Surface(
+                onClick = onOpen,
+                color = androidx.compose.ui.graphics.Color.Transparent,
+                shape = AidenShape.Button,
+                modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget).testTag(AidenBotSessionTags.MEMORY_CAPTION)
+            ) {
+                Box(contentAlignment = Alignment.Center) { content() }
+            }
+        } else {
+            Box(Modifier.testTag(AidenBotSessionTags.MEMORY_CAPTION)) { content() }
+        }
+    }
+}
+
+/**
+ * "Add a routine?" — a routine the Bot suggested. Pending cards offer Add routine and Not now
+ * when the Mac takes answers from phones; a settled card reads "Added ✓ · {label}" or "Not added".
+ */
+@Composable
+fun AidenBotRoutineProposalCard(
+    card: AidenBotSessionEntry.RoutineProposal,
+    botName: String,
+    canAnswer: Boolean,
+    phase: AidenBotProposalPhase?,
+    onAnswer: (AidenBotRoutineProposalDecision) -> Unit
+) {
+    val palette = AidenTheme.palette
+    Surface(
+        color = palette.raised,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.PROPOSAL_CARD)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(36.dp).clip(AidenShape.Button).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Outlined.EventRepeat, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.bot_proposal_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.foreground
+                    )
+                    Text(
+                        stringResource(R.string.bot_proposal_subtitle, botName, card.label),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary
+                    )
+                }
+            }
+            Text(
+                card.prompt,
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.secondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            when (card.status) {
+                AidenBotRoutineProposalStatus.ACCEPTED -> Text(
+                    stringResource(R.string.bot_proposal_added, card.label),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = palette.success
+                )
+                AidenBotRoutineProposalStatus.DISMISSED -> Text(
+                    stringResource(R.string.bot_proposal_not_added),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = palette.secondary
+                )
+                AidenBotRoutineProposalStatus.PENDING -> if (canAnswer) {
+                    val busy = phase == AidenBotProposalPhase.SENDING
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AidenPrimaryButton(
+                            text = stringResource(R.string.bot_proposal_add),
+                            enabled = !busy,
+                            onClick = { onAnswer(AidenBotRoutineProposalDecision.ACCEPT) }
+                        )
+                        AidenTonalButton(
+                            text = stringResource(R.string.bot_proposal_not_now),
+                            enabled = !busy,
+                            onClick = { onAnswer(AidenBotRoutineProposalDecision.DISMISS) }
+                        )
+                    }
+                    if (phase == AidenBotProposalPhase.FAILED) {
+                        Text(stringResource(R.string.bot_proposal_failed), style = MaterialTheme.typography.bodySmall, color = palette.danger)
                     }
                 }
             }

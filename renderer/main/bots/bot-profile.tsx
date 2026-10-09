@@ -2,6 +2,7 @@ import * as React from "react";
 import { Camera, ChevronRight, Ellipsis, MessageCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BotAvatar } from "../../components/bot-avatar";
+import { MemoryCardIcon } from "../../components/memory-card-icon";
 import {
   Button,
   DropdownMenu,
@@ -19,10 +20,12 @@ import { botsApi } from "../../lib/ipc";
 import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
+import type { BotMemoryView } from "../../shared/bot-memory";
 import { BotCharacterCard } from "./bot-character-card";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { BotRoutines } from "./bot-routines";
+import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
 
 /** The file's bytes as base64 (no data: prefix). */
 function readFileAsBase64(file: Blob): Promise<string> {
@@ -99,6 +102,41 @@ function InlineField({
   );
 }
 
+const PROFILE_ROW_CLASS =
+  "settings-field relative flex w-full min-w-0 items-center gap-3 p-4 text-left outline-none transition-colors duration-150 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none";
+
+function memorySummary(view: BotMemoryView | undefined): string | null {
+  if (!view) return null;
+  if (!view.readable) return "Couldn’t be read";
+  const count = botMemoryCount(view);
+  return count === 0 ? "Nothing yet" : botMemoryCountLabel(count);
+}
+
+/** "Memory" with the SD-card icon and a quiet count; opens Profile → Memory. */
+function MemoryRow({ botId, onOpen }: { botId: string; onOpen(): void }) {
+  const memory = useBotMemory(botId);
+  const countId = React.useId();
+  const summary = memorySummary(memory.data);
+  return (
+    <button
+      type="button"
+      aria-label="Memory"
+      aria-describedby={summary ? countId : undefined}
+      className={PROFILE_ROW_CLASS}
+      onClick={onOpen}
+    >
+      <MemoryCardIcon aria-hidden="true" className="size-4 shrink-0 text-secondary" />
+      <span className="min-w-0 flex-1 text-strong text-primary">Memory</span>
+      {summary ? (
+        <span id={countId} className="shrink-0 text-small text-secondary">
+          {summary}
+        </span>
+      ) : null}
+      <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+    </button>
+  );
+}
+
 /** The first line of the instructions, as a one-line preview. */
 function instructionsPreview(instructions: string): string {
   return instructions.trim().split(/\r?\n/u).find((line) => line.trim())?.trim() ?? "";
@@ -115,6 +153,7 @@ export function BotProfile({
   onOpenChat,
   onOpenInstructions,
   onOpenAdvanced,
+  onOpenMemory,
   onDelete,
 }: {
   bot: BotDefinition;
@@ -122,6 +161,7 @@ export function BotProfile({
   onOpenChat(): void;
   onOpenInstructions(): void;
   onOpenAdvanced(): void;
+  onOpenMemory(): void;
   onDelete(): void;
 }) {
   const qc = useQueryClient();
@@ -250,7 +290,7 @@ export function BotProfile({
           type="button"
           aria-label="Instructions"
           aria-describedby={preview ? previewId : undefined}
-          className="settings-field relative flex w-full min-w-0 items-center gap-3 p-4 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
+          className={PROFILE_ROW_CLASS}
           onClick={onOpenInstructions}
         >
           <span className="min-w-0 flex-1">
@@ -263,6 +303,7 @@ export function BotProfile({
           </span>
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
+        <MemoryRow botId={bot.id} onOpen={onOpenMemory} />
       </FieldSet>
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />

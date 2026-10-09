@@ -37,6 +37,18 @@ struct AidenBotRoutineDraft: Equatable {
         message = routine.message
         enabled = routine.enabled
         guard let schedule = routine.schedule else { return }
+        apply(schedule)
+    }
+
+    /// The editor prefilled from a Mac suggestion. Nothing exists on the Mac
+    /// until the person saves it.
+    init(suggestion: AidenBotRoutineSuggestion) {
+        name = suggestion.name
+        message = suggestion.prompt
+        apply(suggestion.schedule)
+    }
+
+    private mutating func apply(_ schedule: AidenBotRoutineSchedule) {
         let parts = schedule.time.split(separator: ":").compactMap { Int($0) }
         if parts.count == 2 { hour = parts[0]; minute = parts[1] }
         switch schedule {
@@ -104,8 +116,13 @@ struct AidenBotRoutineDraft: Equatable {
     }()
 }
 
+enum AidenBotRoutinesCopy {
+    static let tryDailyCheckIn = "Try a daily check-in"
+}
+
 /// Profile → Routines: each routine's name, the host's schedule label, and an
-/// enabled toggle, plus "Add routine".
+/// enabled toggle, plus "Add routine". A Bot with no routines on a Mac that
+/// serves `bot-proactive-v1` also offers "Try a daily check-in".
 struct AidenBotRoutinesSection: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let botID: String
@@ -116,6 +133,7 @@ struct AidenBotRoutinesSection: View {
     @State private var isLoaded = false
     @State private var editing: AidenBotRoutineEditorTarget?
     @State private var errorMessage: String?
+    @State private var suggestion: AidenBotRoutineSuggestion?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -126,6 +144,10 @@ struct AidenBotRoutinesSection: View {
             VStack(spacing: 0) {
                 ForEach(routines) { routine in
                     row(routine)
+                    Divider().padding(.leading, 16)
+                }
+                if routines.isEmpty, let suggestion {
+                    suggestionRow(suggestion)
                     Divider().padding(.leading, 16)
                 }
                 Button {
@@ -153,7 +175,8 @@ struct AidenBotRoutinesSection: View {
             AidenBotRoutineEditorView(
                 coordinator: coordinator,
                 botID: botID,
-                routine: target.routine
+                routine: target.routine,
+                prefill: target.prefill
             ) { change in
                 switch change {
                 case let .saved(routine):
@@ -199,6 +222,31 @@ struct AidenBotRoutinesSection: View {
         .padding(.vertical, 12)
     }
 
+    private func suggestionRow(_ suggestion: AidenBotRoutineSuggestion) -> some View {
+        Button {
+            editing = .suggestion(suggestion)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "calendar.badge.clock")
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(AidenBotRoutinesCopy.tryDailyCheckIn)
+                        .foregroundStyle(palette.foreground)
+                    Text(suggestion.label)
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canWrite)
+    }
+
     @MainActor
     private func load() async {
         guard let context = try? coordinator.requestContext(),
@@ -209,6 +257,11 @@ struct AidenBotRoutinesSection: View {
             routines = loaded
             isLoaded = true
             errorMessage = nil
+            suggestion = await aidenBotRoutineSuggestion(
+                routines: loaded,
+                hostFeatures: coordinator.server?.features,
+                load: { try await client.botRoutineSuggestions(botId: botID) }
+            )
         } catch is CancellationError {
             return
         } catch {
@@ -241,19 +294,39 @@ struct AidenBotRoutinesSection: View {
     }
 }
 
+/// The suggestion to offer: only for a Bot with no routines, only when the
+/// Mac serves `bot-proactive-v1`, and nothing when the lookup fails.
+func aidenBotRoutineSuggestion(
+    routines: [AidenBotRoutine],
+    hostFeatures: [String]?,
+    load: () async throws -> [AidenBotRoutineSuggestion]
+) async -> AidenBotRoutineSuggestion? {
+    guard routines.isEmpty,
+          AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, by: hostFeatures) else { return nil }
+    return (try? await load())?.first
+}
+
 enum AidenBotRoutineEditorTarget: Identifiable {
     case new
     case existing(AidenBotRoutine)
+    /// A new routine prefilled from the Mac's suggestion.
+    case suggestion(AidenBotRoutineSuggestion)
 
     var id: String {
         switch self {
         case .new: "new"
         case let .existing(routine): routine.id
+        case let .suggestion(suggestion): "suggestion-\(suggestion.id)"
         }
     }
 
     var routine: AidenBotRoutine? {
         if case let .existing(routine) = self { return routine }
+        return nil
+    }
+
+    var prefill: AidenBotRoutineDraft? {
+        if case let .suggestion(suggestion) = self { return AidenBotRoutineDraft(suggestion: suggestion) }
         return nil
     }
 }
@@ -306,6 +379,7 @@ struct AidenBotRoutineEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let botID: String
     let routine: AidenBotRoutine?
+    var prefill: AidenBotRoutineDraft?
     let onChange: (AidenBotRoutineChange) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -381,7 +455,11 @@ struct AidenBotRoutineEditorView: View {
             }
         }
         .onAppear {
-            if let routine { draft = AidenBotRoutineDraft(routine: routine) }
+            if let routine {
+                draft = AidenBotRoutineDraft(routine: routine)
+            } else if let prefill {
+                draft = prefill
+            }
         }
     }
 

@@ -309,6 +309,10 @@ function normalizeInput(
     webSearchEnabled,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
     ...(botId !== undefined ? { botId, routineSchedule } : {}),
+    // Set once, when a Bot proposal is accepted; never changed by an edit.
+    ...(botId !== undefined && (existing?.sourceProposalId ?? input.sourceProposalId) !== undefined
+      ? { sourceProposalId: existing?.sourceProposalId ?? input.sourceProposalId }
+      : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
@@ -456,6 +460,9 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     webSearchEnabled,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
     ...(botId !== undefined ? { botId, ...(routineSchedule ? { routineSchedule } : {}) } : {}),
+    ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
+      ? { sourceProposalId: task.sourceProposalId }
+      : {}),
     notify: task.notify !== false,
     lastResult: scheduleError
       ? "error"
