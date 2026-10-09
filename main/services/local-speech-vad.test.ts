@@ -51,3 +51,23 @@ test("fixedChunks covers the clip in ≤28 s pieces for windowed models", () => 
   assert.deepEqual(fixedChunks(s(60), 30).map((r) => r.end - r.start), [s(28), s(28), s(4)]);
   assert.deepEqual(fixedChunks(s(60), null), [{ start: 0, end: s(60) }]);
 });
+
+test("tiny window limits clamp to at least one second instead of looping forever", () => {
+  for (const maxWindow of [2, 1, 0, -5]) {
+    const plan = planSegments([{ start: 0, end: s(5) }], s(5), maxWindow);
+    assert.ok(plan.length > 0 && plan.length <= 5, `${maxWindow}: ${plan.length}`);
+    for (const range of plan) assert.ok(range.end - range.start <= s(1));
+    assert.equal(plan[plan.length - 1]!.end, s(5));
+    const chunks = fixedChunks(s(3), maxWindow);
+    assert.deepEqual(chunks.map((r) => r.end - r.start), [s(1), s(1), s(1)]);
+  }
+});
+
+test("overlapping and nested regions are merged so no audio is dropped", () => {
+  const plan = planSegments([{ start: s(1), end: s(9) }, { start: s(2), end: s(3) }], s(10), null);
+  assert.equal(plan.length, 1);
+  assert.ok(plan[0]!.start <= s(1) && plan[0]!.end >= s(9), JSON.stringify(plan));
+  const touching = planSegments([{ start: s(4), end: s(6) }, { start: s(1), end: s(4) }, { start: s(5), end: s(5.5) }], s(10), 30);
+  const covered = touching.filter((r) => r.start <= s(1) && r.end >= s(6));
+  assert.equal(covered.length, 1, JSON.stringify(touching));
+});

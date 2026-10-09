@@ -10,11 +10,23 @@ const DEFAULT_RATE = 16_000;
 export const VAD_PAD_SAMPLES = Math.round(0.45 * DEFAULT_RATE);
 export const MAX_SEGMENT_SECONDS = 28;
 
-function paddedBounds(regions: readonly SampleRange[], total: number, pad: number): SampleRange[] {
+/** Clip to the recording, sort, and merge overlapping or touching regions. */
+function mergedRegions(regions: readonly SampleRange[], total: number): SampleRange[] {
   const sorted = [...regions]
     .map((r) => ({ start: Math.max(0, r.start), end: Math.min(total, r.end) }))
     .filter((r) => r.end > r.start)
     .sort((a, b) => a.start - b.start);
+  const merged: SampleRange[] = [];
+  for (const region of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && region.start <= last.end) last.end = Math.max(last.end, region.end);
+    else merged.push(region);
+  }
+  return merged;
+}
+
+function paddedBounds(regions: readonly SampleRange[], total: number, pad: number): SampleRange[] {
+  const sorted = mergedRegions(regions, total);
   return sorted.map((region, index) => {
     const previous = sorted[index - 1];
     const next = sorted[index + 1];
@@ -26,6 +38,11 @@ function paddedBounds(regions: readonly SampleRange[], total: number, pad: numbe
       : Math.min(total, region.end + pad);
     return { start, end };
   });
+}
+
+/** Window length in samples: 2 s headroom under the model window, capped at 28 s, never below 1 s. */
+function windowLimit(maxWindowSeconds: number, sampleRate: number): number {
+  return Math.max(sampleRate, Math.floor(Math.min(maxWindowSeconds - 2, MAX_SEGMENT_SECONDS) * sampleRate));
 }
 
 function split(range: SampleRange, limit: number): SampleRange[] {
@@ -43,7 +60,7 @@ export function planSegments(
   const bounds = paddedBounds(regions, totalSamples, Math.round(VAD_PAD_SAMPLES * (sampleRate / DEFAULT_RATE)));
   if (bounds.length === 0) return [];
   if (maxWindowSeconds === null) return [{ start: bounds[0]!.start, end: bounds[bounds.length - 1]!.end }];
-  const limit = Math.min(maxWindowSeconds - 2, MAX_SEGMENT_SECONDS) * sampleRate;
+  const limit = windowLimit(maxWindowSeconds, sampleRate);
   const windows: SampleRange[] = [];
   for (const range of bounds.flatMap((r) => (r.end - r.start > limit ? split(r, limit) : [r]))) {
     const last = windows[windows.length - 1];
@@ -56,5 +73,5 @@ export function planSegments(
 export function fixedChunks(totalSamples: number, maxWindowSeconds: number | null, sampleRate = DEFAULT_RATE): SampleRange[] {
   if (totalSamples <= 0) return [];
   if (maxWindowSeconds === null) return [{ start: 0, end: totalSamples }];
-  return split({ start: 0, end: totalSamples }, Math.min(maxWindowSeconds - 2, MAX_SEGMENT_SECONDS) * sampleRate);
+  return split({ start: 0, end: totalSamples }, windowLimit(maxWindowSeconds, sampleRate));
 }
