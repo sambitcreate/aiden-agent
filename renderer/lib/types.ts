@@ -923,6 +923,10 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Aiden Live (voice and on-screen actions). Omitted means enabled. */
+  aidenLiveEnabled?: boolean;
+  /** Show the idle Live button. Omitted means shown; active sessions always show it. */
+  aidenLiveButtonVisible?: boolean;
   /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
   formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
