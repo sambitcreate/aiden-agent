@@ -42,7 +42,7 @@ export function AidenLiveSwitches({
   onChange(patch: AidenLiveSwitchPatch): void;
 }): React.ReactElement {
   return (
-    <FieldSet title="Aiden Live">
+    <FieldSet title="Availability">
       <Field label="Aiden Live" description="Turns voice and on-screen actions on or off.">
         <Switch
           aria-label="Aiden Live"

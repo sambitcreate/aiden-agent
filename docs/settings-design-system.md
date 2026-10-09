@@ -29,7 +29,7 @@ Duplicate workspace names receive a short stable ID suffix in both visible and a
 
 ## Aiden Live
 
-Settings → Aiden Live opens with an "Aiden Live" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+Settings → Aiden Live opens with an "Availability" group of two trailing switches (not titled "Aiden Live", so the page keeps one heading with that name). `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
 
 ## Icons and illustrations
 
