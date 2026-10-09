@@ -824,6 +824,58 @@ textarea {
   background: transparent;
 }
 
+/* Inline visual: no card chrome. Undo the UA [popover] border, padding,
+   Canvas fill, and scroll box while it sits in the transcript. */
+.aiden-inline-visual:not(:popover-open) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+}
+
+.aiden-inline-visual-frame {
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  transition: height var(--motion-duration) var(--motion-easing);
+}
+
+/* Title and actions float over the visual's top-right corner and appear on
+   hover or keyboard focus; touch devices keep them visible. */
+.aiden-inline-visual-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 12px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms var(--motion-easing);
+}
+
+.aiden-inline-visual:hover > .aiden-inline-visual-toolbar,
+.aiden-inline-visual:focus-within > .aiden-inline-visual-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (pointer: coarse) {
+  .aiden-inline-visual-toolbar {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiden-inline-visual-frame,
+  .aiden-inline-visual-toolbar {
+    transition: none;
+  }
+}
+
 .reasoning-surface {
   --scroll-fade-size: 20px;
 }

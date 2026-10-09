@@ -155,14 +155,12 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/html-artifact-frame.tsx"),
     "utf8",
   );
-  assert.match(frame, /max-w-\[42rem\]/u);
   assert.match(frame, /popover="auto"/u);
   assert.match(frame, /section\.showPopover\(\)/u);
   assert.match(frame, /section\.hidePopover\(\)/u);
   assert.match(frame, /isolateExpandedArtifact\(section\)/u);
   assert.equal(frame.match(/<HtmlArtifactIframe\b/gu)?.length, 1);
   assert.match(frame, /trigger\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(frame, /role=\{expanded \? "dialog" : undefined\}/u);
   assert.match(frame, /aria-modal=\{expanded \|\| undefined\}/u);
   assert.match(frame, /aria-label=\{`Expand \$\{artifact\.title\}`\}/u);
   assert.match(frame, /aria-label=\{`Export \$\{artifact\.title\}`\}/u);

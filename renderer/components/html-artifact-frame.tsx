@@ -1,13 +1,51 @@
 import * as React from "react";
 import { Download, Maximize2, X } from "lucide-react";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
+import { GENERATIVE_UI_IFRAME_SANDBOX } from "../shared/generative-ui";
 import {
-  GENERATIVE_UI_ESCAPE_MESSAGE,
-  GENERATIVE_UI_IFRAME_SANDBOX,
-} from "../shared/generative-ui";
+  GENERATIVE_UI_THEME_MESSAGE,
+  clampInlineVisualHeight,
+  parseGuestBridgeMessage,
+} from "../shared/generative-ui-bridge";
 import { chatsApi } from "../lib/ipc";
-import { Button, Text } from "./ui";
+import {
+  readGenerativeUiTheme,
+  subscribeGenerativeUiTheme,
+} from "../lib/generative-ui-theme-snapshot";
+import { Button, Callout, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
+
+/** Height before the guest first reports its content size. */
+const INITIAL_VISUAL_HEIGHT = 160;
+/** Preview tokens live 30 minutes in main; refetch a little before that. */
+const PREVIEW_REUSE_MS = 25 * 60 * 1000;
+
+interface CachedPreview {
+  id: string;
+  src: string;
+  height?: number;
+  fetchedAt: number;
+}
+
+/**
+ * Last preview URL and measured height per visual. The live response and the
+ * settled message render a visual under different parents, so the iframe
+ * remounts at stream handoff; this lets the remount reuse the same document
+ * and height without another round trip or a layout jump.
+ */
+const previewCache = new Map<string, CachedPreview>();
+
+function cacheKey(chatId: string, mediaId: string): string {
+  return `${chatId}\u0000${mediaId}`;
+}
+
+function cachedPreview(chatId: string, artifact: ChatHtmlArtifactV1): CachedPreview | undefined {
+  const cached = previewCache.get(cacheKey(chatId, artifact.mediaId));
+  if (!cached || cached.id !== artifact.id || Date.now() - cached.fetchedAt > PREVIEW_REUSE_MS) {
+    return undefined;
+  }
+  return cached;
+}
 
 interface HtmlArtifactFrameError {
   kind: "preview" | "export";
@@ -52,53 +90,62 @@ function isolateExpandedArtifact(section: HTMLElement): () => void {
   };
 }
 
-function themeTokensFromDocument(): {
-  colorScheme: "light" | "dark";
-  canvas: string;
-  foreground: string;
-  secondary: string;
-  accent: string;
-} {
-  const root = document.documentElement;
-  const styles = getComputedStyle(root);
-  const hex = (name: string, fallback: string): string => {
-    const value = styles.getPropertyValue(name).trim();
-    return /^#[0-9a-f]{6}$/iu.test(value) ? value.toLowerCase() : fallback;
-  };
-  return {
-    colorScheme: root.classList.contains("dark") ? "dark" : "light",
-    canvas: hex("--surface-popover", "#f6f7f9"),
-    foreground: hex("--text-primary", "#3d3f41"),
-    secondary: hex("--text-secondary", "#6b6b68"),
-    accent: hex("--accent", "#006ad6"),
-  };
-}
-
 function HtmlArtifactIframe({
   src,
   title,
   className,
   onEscape,
+  onHeight,
+  onPrompt,
 }: {
   src: string;
   title: string;
   className?: string;
   onEscape?: () => void;
+  onHeight?: (height: number) => void;
+  onPrompt?: (text: string, frameFocused: boolean) => void;
 }) {
   const frameRef = React.useRef<HTMLIFrameElement | null>(null);
+  const handlers = React.useRef({ onEscape, onHeight, onPrompt });
+  React.useLayoutEffect(() => {
+    handlers.current = { onEscape, onHeight, onPrompt };
+  }, [onEscape, onHeight, onPrompt]);
+
   React.useEffect(() => {
-    if (!onEscape) return;
     const receiveMessage = (event: MessageEvent) => {
-      if (
-        event.source === frameRef.current?.contentWindow &&
-        event.data === GENERATIVE_UI_ESCAPE_MESSAGE
-      ) {
-        onEscape();
-      }
+      const frame = frameRef.current;
+      const guest = frame?.contentWindow;
+      // A detached frame has no window; never let a sourceless message match.
+      if (!frame || !guest || event.source !== guest) return;
+      const message = parseGuestBridgeMessage(event.data);
+      if (!message) return;
+      if (message.type === "escape") handlers.current.onEscape?.();
+      else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
+      else handlers.current.onPrompt?.(message.text, document.activeElement === frame);
     };
     window.addEventListener("message", receiveMessage);
     return () => window.removeEventListener("message", receiveMessage);
-  }, [onEscape]);
+  }, []);
+
+  React.useEffect(() => {
+    const sendTheme = () => {
+      const guest = frameRef.current?.contentWindow;
+      if (!guest) return;
+      const theme = readGenerativeUiTheme();
+      guest.postMessage(
+        { type: GENERATIVE_UI_THEME_MESSAGE, colorScheme: theme.colorScheme, vars: theme.vars },
+        "*",
+      );
+    };
+    const frame = frameRef.current;
+    frame?.addEventListener("load", sendTheme);
+    const unsubscribe = subscribeGenerativeUiTheme(sendTheme);
+    return () => {
+      frame?.removeEventListener("load", sendTheme);
+      unsubscribe();
+    };
+  }, []);
+
   return (
     <iframe
       ref={frameRef}
@@ -106,7 +153,7 @@ function HtmlArtifactIframe({
       sandbox={GENERATIVE_UI_IFRAME_SANDBOX}
       src={src}
       referrerPolicy="no-referrer"
-      className={cn("block h-full w-full border-0 bg-control", className)}
+      className={cn("block h-full w-full border-0 bg-transparent", className)}
     />
   );
 }
@@ -114,11 +161,19 @@ function HtmlArtifactIframe({
 function HtmlArtifactFrameImpl({
   chatId,
   artifact,
+  onGuestPrompt,
 }: {
   chatId: string;
   artifact: ChatHtmlArtifactV1;
+  /** A guest asked to send a follow-up; the caller applies the admission policy. */
+  onGuestPrompt?: (text: string, frameFocused: boolean) => void;
 }) {
-  const [src, setSrc] = React.useState<string | null>(null);
+  const [src, setSrc] = React.useState<string | null>(
+    () => cachedPreview(chatId, artifact)?.src ?? null,
+  );
+  const [height, setHeight] = React.useState<number>(
+    () => cachedPreview(chatId, artifact)?.height ?? INITIAL_VISUAL_HEIGHT,
+  );
   const [error, setError] = React.useState<HtmlArtifactFrameError | null>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
@@ -132,20 +187,35 @@ function HtmlArtifactFrameImpl({
     setExpanded(false);
   }, []);
 
+  const recordHeight = React.useCallback(
+    (next: number) => {
+      setHeight(next);
+      const cached = previewCache.get(cacheKey(chatId, artifact.mediaId));
+      if (cached?.id === artifact.id) cached.height = next;
+    },
+    [artifact.id, artifact.mediaId, chatId],
+  );
+
   // A same-title replace keeps the mediaId and only changes the content hash,
   // so the fetch resolves into an in-place iframe navigation. The previous
   // preview stays mounted and interactive until the replacement arrives —
   // clearing src here would flash the placeholder on every replace.
   React.useEffect(() => {
+    if (cachedPreview(chatId, artifact)) return;
     let cancelled = false;
     void chatsApi
-      .htmlArtifactSrcdoc(chatId, artifact.mediaId, themeTokensFromDocument())
+      .htmlArtifactSrcdoc(chatId, artifact.mediaId, readGenerativeUiTheme())
       .then((result) => {
         if (cancelled) return;
         if (!result?.src) {
           setError({ kind: "preview", message: "This visualization is no longer available." });
           return;
         }
+        previewCache.set(cacheKey(chatId, artifact.mediaId), {
+          id: artifact.id,
+          src: result.src,
+          fetchedAt: Date.now(),
+        });
         setError(null);
         setSrc(result.src);
       })
@@ -159,6 +229,7 @@ function HtmlArtifactFrameImpl({
     return () => {
       cancelled = true;
     };
+    // `artifact` is read for its id/mediaId only; both are listed.
   }, [artifact.id, artifact.mediaId, chatId]);
 
   React.useLayoutEffect(() => {
@@ -215,38 +286,44 @@ function HtmlArtifactFrameImpl({
     }
   }, [artifact.mediaId, chatId, exporting]);
 
+  const exportButton = (
+    <Button
+      iconOnly
+      size="small"
+      variant={expanded ? "transparent" : "glass"}
+      aria-label={`Export ${artifact.title}`}
+      disabled={exporting}
+      onClick={() => void exportArtifact()}
+    >
+      <Download aria-hidden="true" />
+    </Button>
+  );
+
   return (
     <section
       ref={sectionRef}
       popover="auto"
-      role={expanded ? "dialog" : undefined}
+      role={expanded ? "dialog" : "region"}
       aria-modal={expanded || undefined}
+      aria-label={expanded ? undefined : artifact.title}
       aria-labelledby={expanded ? expandedTitleId : undefined}
       className={cn(
-        "aiden-html-artifact-popover max-w-[42rem] overflow-hidden rounded-xl bg-control p-0 text-primary",
-        expanded && "flex max-w-none flex-col rounded-dialog bg-popover shadow-modal",
+        "aiden-html-artifact-popover aiden-inline-visual group/visual relative min-w-0 p-0 text-primary",
+        expanded && "flex max-w-none flex-col overflow-hidden rounded-dialog bg-popover shadow-modal",
       )}
       data-html-artifact={artifact.mediaId}
+      data-inline-visual={artifact.mediaId}
       data-html-artifact-expanded={expanded || undefined}
     >
       {expanded ? (
-        <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-separator px-5 py-3">
+        <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-separator px-5 py-3">
           <h2
             id={expandedTitleId}
             className="min-w-0 flex-1 truncate text-heading2 font-semibold"
           >
             {artifact.title}
           </h2>
-          <Button
-            iconOnly
-            size="small"
-            variant="transparent"
-            aria-label={`Export ${artifact.title}`}
-            disabled={exporting}
-            onClick={() => void exportArtifact()}
-          >
-            <Download aria-hidden="true" />
-          </Button>
+          {exportButton}
           <Button
             ref={expandedCloseRef}
             iconOnly
@@ -257,59 +334,56 @@ function HtmlArtifactFrameImpl({
           >
             <X aria-hidden="true" />
           </Button>
-        </header>
+        </div>
       ) : (
-        <header className="flex items-center gap-2 border-b border-separator px-3 py-2">
-          <Text variant="small-strong" className="min-w-0 flex-1 truncate">
+        <div className="aiden-inline-visual-toolbar" data-inline-visual-toolbar="">
+          <Text variant="small" color="secondary" className="min-w-0 max-w-[16rem] truncate px-1">
             {artifact.title}
           </Text>
           <Button
             ref={expandTriggerRef}
             iconOnly
             size="small"
-            variant="transparent"
+            variant="glass"
             aria-label={`Expand ${artifact.title}`}
             onClick={() => setExpanded(true)}
           >
             <Maximize2 aria-hidden="true" />
           </Button>
-          <Button
-            iconOnly
-            size="small"
-            variant="transparent"
-            aria-label={`Export ${artifact.title}`}
-            disabled={exporting}
-            onClick={() => void exportArtifact()}
-          >
-            <Download aria-hidden="true" />
-          </Button>
-        </header>
+          {exportButton}
+        </div>
       )}
       {error && src ? (
-        <div
-          role="alert"
-          className="border-b border-separator bg-control-hover px-3 py-2"
-          data-html-artifact-error={error.kind}
-        >
+        <Callout color="red" role="alert" className="mb-2" data-html-artifact-error={error.kind}>
           <Text variant="small" color="red">
             {error.kind === "preview"
               ? `Could not refresh this visualization. Showing the previous version. ${error.message}`
               : `Could not export this visualization. ${error.message}`}
           </Text>
-        </div>
+        </Callout>
       ) : null}
-      <div className={cn(expanded ? "min-h-0 flex-1" : "h-[22rem] min-h-[12rem]")}>
+      <div
+        className={cn(expanded ? "min-h-0 flex-1" : "aiden-inline-visual-frame")}
+        data-inline-visual-frame=""
+        style={expanded ? undefined : { height }}
+      >
         {src ? (
           <HtmlArtifactIframe
             src={src}
             title={artifact.title}
             onEscape={expanded ? closeExpanded : undefined}
+            onHeight={recordHeight}
+            onPrompt={onGuestPrompt}
           />
-        ) : (
+        ) : error ? (
           <div className="flex h-full items-center justify-center px-4 text-center">
             <Text variant="small" color="secondary">
-              {error?.message ?? "Loading visualization…"}
+              {error.message}
             </Text>
+          </div>
+        ) : (
+          <div className="h-full w-full rounded-card bg-well" aria-busy="true">
+            <span className="sr-only">Loading visualization…</span>
           </div>
         )}
       </div>
