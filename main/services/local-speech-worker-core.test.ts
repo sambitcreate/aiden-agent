@@ -3,7 +3,11 @@ import test from "node:test";
 import { speechModel, type SpeechModelSpec } from "./local-speech-catalog.js";
 import { ModelMissingError, type EngineTranscribeRequest } from "./local-speech-engine.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechParentMessage } from "./local-speech-protocol.js";
-import { createLocalSpeechMessageHandler, type LocalSpeechWorkerEngine } from "./local-speech-worker-core.js";
+import {
+  createLocalSpeechMessageHandler,
+  replyToWorkerFrame,
+  type LocalSpeechWorkerEngine,
+} from "./local-speech-worker-core.js";
 
 const parakeet = speechModel("parakeet-v3")!;
 const canary = speechModel("canary-180m-flash")!;
@@ -151,4 +155,23 @@ test("status, load and release answer with engine results", async () => {
     requestId: "r1",
   });
   assert.equal(fake.releases(), 1);
+});
+
+test("an invalid frame that names a request fails at once instead of timing out", async () => {
+  const fake = fakeEngine();
+  const handle = createLocalSpeechMessageHandler(fake.engine);
+  const invalid = { ...transcribe(parakeet), requestId: "bad-1", language: "not a language" };
+  assert.deepEqual(await replyToWorkerFrame(invalid, handle), {
+    version: 2,
+    kind: "failure",
+    requestId: "bad-1",
+    message: "Invalid on-device transcription request.",
+    code: "decode-failed",
+  });
+  assert.equal(fake.requests.length, 0);
+  assert.equal(await replyToWorkerFrame({ kind: "transcribe" }, handle), null);
+  assert.equal(await replyToWorkerFrame({ requestId: "" }, handle), null);
+  assert.equal(await replyToWorkerFrame("noise", handle), null);
+  const valid = await replyToWorkerFrame({ version: 2, kind: "status", requestId: "s9" }, handle);
+  assert.equal(valid?.kind, "result");
 });

@@ -154,10 +154,21 @@ interface Slot { id: string; directory: string; configKey: string; recognizer: S
 export interface SpeechEngineDeps {
   /** File probe used before building a recognizer (defaults to `existsSync`). */
   exists?: (filePath: string) => boolean;
+  /**
+   * Diagnostic sink. The engine runs in the speech worker, where the main
+   * logger is unavailable, so the default writes to stderr (which the parent
+   * keeps as the worker's stderr tail).
+   */
+  warn?: (message: string) => void;
+}
+
+function warnToStderr(message: string): void {
+  process.stderr.write(`[local-speech] ${message}\n`);
 }
 
 export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineDeps = {}) {
   const exists = deps.exists ?? existsSync;
+  const warn = deps.warn ?? warnToStderr;
   let slot: Slot | null = null;
 
   function holds(spec: SpeechModelSpec, dir: string): boolean {
@@ -218,7 +229,7 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
       drain();
       return regions;
     } catch (error) {
-      console.warn(`Voice activity detection failed; decoding the whole clip: ${error instanceof Error ? error.message : String(error)}`);
+      warn(`Voice activity detection failed; decoding the whole clip: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }

@@ -199,14 +199,16 @@ test("CJK segments join without spaces; others with one space", () => {
   assert.equal(joinSegmentTexts(["こんにちは！", "「世界」"]), "こんにちは！「世界」");
 });
 
-test("VAD failure fails open to decoding the clip", (t) => {
-  const warn = t.mock.method(console, "warn", () => {});
+test("VAD failure fails open to decoding the clip", () => {
+  const warnings: string[] = [];
   const fake = fakeSherpa();
   (fake.module as unknown as { Vad: unknown }).Vad = class { constructor() { throw new Error("no vad"); } };
-  const result = newEngine(fake.module).transcribe(req(v3, { trimSilence: true }));
+  const engine = createSpeechEngine(() => fake.module, { exists: () => true, warn: (message) => warnings.push(message) });
+  const result = engine.transcribe(req(v3, { trimSilence: true }));
   assert.equal(fake.decodes(), 1);
   assert.ok(result.text.length > 0);
-  assert.equal(warn.mock.callCount(), 1);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /no vad/);
 });
 
 // ---- Real sherpa-onnx-node Silero VAD against the bundled model ----

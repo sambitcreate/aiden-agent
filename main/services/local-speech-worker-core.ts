@@ -5,6 +5,7 @@ import { effectiveTask } from "../../renderer/shared/voice-language.js";
 import { speechEngine, type EngineTranscribeRequest, type EngineTranscribeResult } from "./local-speech-engine.js";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
 import {
+  isLocalSpeechParentMessage,
   LOCAL_SPEECH_PROTOCOL_VERSION,
   type LocalSpeechAudio,
   type LocalSpeechFailureCode,
@@ -93,3 +94,28 @@ export function createLocalSpeechMessageHandler(
 }
 
 export const handleLocalSpeechMessage = createLocalSpeechMessageHandler(speechEngine);
+
+const INVALID_REQUEST_MESSAGE = "Invalid on-device transcription request.";
+
+/**
+ * Entry-point adapter for raw frames from the parent. Valid frames go to the
+ * handler. An invalid frame that still names a request gets an immediate
+ * failure so the parent does not wait out its hang deadlines; anything else
+ * yields null and is dropped.
+ */
+export async function replyToWorkerFrame(
+  frame: unknown,
+  handle: (message: LocalSpeechParentMessage) => Promise<LocalSpeechWorkerMessage> = handleLocalSpeechMessage,
+): Promise<LocalSpeechWorkerMessage | null> {
+  if (isLocalSpeechParentMessage(frame)) return handle(frame);
+  const requestId =
+    typeof frame === "object" && frame !== null ? (frame as { requestId?: unknown }).requestId : undefined;
+  if (typeof requestId !== "string" || requestId.length === 0) return null;
+  return {
+    version: LOCAL_SPEECH_PROTOCOL_VERSION,
+    kind: "failure",
+    requestId,
+    message: INVALID_REQUEST_MESSAGE,
+    code: "decode-failed",
+  };
+}
