@@ -110,3 +110,5 @@
   `managers/model/download.rs`, `engine_supervisor/supervisor.rs`, `audio_toolkit/audio/vad.rs`,
   `managers/model.rs` (`effective_language`), `src/overlay/RecordingOverlay.tsx`. Catalog scores are Handy's
   `catalog.json` values / 100 (relative display hints measured on transcribe.cpp).
+
+Status (2026-10-09): opened as PR #436 with auto-merge on.
