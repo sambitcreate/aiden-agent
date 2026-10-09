@@ -10,9 +10,11 @@ import {
   GENERATIVE_UI_PARENT_FRAME_SRC,
   GENERATIVE_UI_PROTOCOL_SCHEME,
 } from "../../renderer/shared/generative-ui.js";
+import { GENERATIVE_UI_DEFAULT_THEME_VARS } from "../../renderer/shared/generative-ui-theme.js";
 import {
   generativeUiDraftDocumentHead,
   generativeUiExportDocument,
+  parseGenerativeUiTheme,
   validateGenerativeUiHtml,
   wrapGenerativeUiHtml,
 } from "./generative-ui-html.js";
@@ -243,6 +245,24 @@ test("legacy four-color theme callers still render", () => {
   });
   assert.match(doc, /--artifact-accent: #0b7de5;/u);
   assert.match(doc, /<p>x<\/p>/u);
+});
+
+test("legacy four-color themes derive their semantic foreground and series from the caller colors", () => {
+  const legacyDark = {
+    colorScheme: "dark", canvas: "#101010", foreground: "#fafafa", secondary: "#a0a0a0", accent: "#3399ff",
+  };
+  const vars = parseGenerativeUiTheme(legacyDark).vars ?? {};
+  assert.equal(vars["--text-primary"], "#fafafa");
+  assert.equal(vars["--focus-ring"], "#fafafa");
+  assert.equal(vars["--text-secondary"], "#a0a0a0");
+  assert.equal(vars["--accent"], "#3399ff");
+  // Caller-supplied explicit vars stay authoritative over the derived defaults.
+  const explicit = parseGenerativeUiTheme({ ...legacyDark, vars: { "--text-primary": "#123456" } }).vars ?? {};
+  assert.equal(explicit["--text-primary"], "#123456");
+  assert.equal(explicit["--text-secondary"], "#a0a0a0");
+  // Without a caller theme the light defaults are unchanged.
+  const none = wrapGenerativeUiHtml("<p>x</p>", "T");
+  assert.match(none, new RegExp(`--text-primary: ${GENERATIVE_UI_DEFAULT_THEME_VARS["--text-primary"]};`, "u"));
 });
 
 test("export inlines the generated Aiden kit without a caller-supplied copy", () => {

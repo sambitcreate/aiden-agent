@@ -18,6 +18,7 @@ const MODULES: Record<GenerativeUiGuideModule, string> = {
 - Redraw custom canvases on \`window.addEventListener("aiden:themechange", …)\`.`,
   charts: `## Charts
 - Chart.js is preconfigured with Aiden's text, grid, and font colors. Color datasets from \`aiden.series()\` (eight categorical colors) — never from status colors.
+- Colors taken directly from \`aiden.series()\` are recolored automatically when the theme changes. Colors derived from them (for example with added transparency) or drawn on custom canvases must be recomputed in a \`window.addEventListener("aiden:themechange", …)\` handler, then \`chart.update()\`.
 - Put the canvas in a container with an explicit height and use \`responsive: true, maintainAspectRatio: false\`.
 - Prefer bar/line/area/doughnut in Chart.js; use Plotly for 3D, statistical, or scientific plots; KaTeX for math.
 - Label axes and units, and keep the key number visible as text (for example a \`.aiden-stat\`) beside the chart.`,

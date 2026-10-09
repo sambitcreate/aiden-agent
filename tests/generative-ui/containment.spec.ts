@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 import {
@@ -315,8 +317,9 @@ type BridgeMessage = { type?: string; height?: number; text?: string } | string 
 async function loadWrappedGuest(
   page: PlaywrightTestModule.Page,
   html: string,
+  options: { theme?: Parameters<typeof wrapGenerativeUiHtml>[2]; inline?: boolean } = {},
 ): Promise<{ messages: () => Promise<BridgeMessage[]>; close: () => Promise<void> }> {
-  const guest = wrapGenerativeUiHtml(html, "Bridge probe", undefined, { inline: true });
+  const guest = wrapGenerativeUiHtml(html, "Bridge probe", options.theme, { inline: options.inline ?? true });
   const site = await listen((request, response) => {
     if (request.url === "/guest") {
       response.writeHead(200, {
@@ -447,6 +450,21 @@ test("wrapped documents keep the browser's 16px rem in inline and standalone mod
   }
 });
 
+test("a legacy four-color dark theme paints body text in its foreground in inline and standalone modes", async ({ page }) => {
+  const darkLegacyTheme = {
+    colorScheme: "dark" as const, canvas: "#101010", foreground: "#fafafa", secondary: "#a0a0a0", accent: "#3399ff",
+  };
+  for (const inline of [true, false]) {
+    const guest = await loadWrappedGuest(page, "<p>Pricing</p>", { theme: darkLegacyTheme, inline });
+    try {
+      const color = await page.frameLocator("#artifact").locator("p").evaluate((el) => getComputedStyle(el).color);
+      expect(color, inline ? "inline" : "standalone").toBe("rgb(250, 250, 250)");
+    } finally {
+      await guest.close();
+    }
+  }
+});
+
 test("sendPrompt posts a typed prompt message and nothing else", async ({ page }) => {
   const guest = await loadWrappedGuest(
     page,
@@ -487,6 +505,59 @@ test("theme messages from the parent update guest variables without reloading", 
     expect(await paragraph.evaluate(() => (window as unknown as { __loaded: number }).__loaded)).toBe(1);
   } finally {
     await guest.close();
+  }
+});
+
+test("theme messages recolor chart datasets that were colored from aiden.series()", async ({ page }) => {
+  // The real vendored Chart.js, inlined by the standalone export the app uses for libraries.
+  const chartSource = await fs.readFile(path.join(process.cwd(), "resources", "generative-ui", "chart.umd.min.js"), "utf8");
+  const exported = generativeUiExportDocument(
+    `<div style="height:240px"><canvas id="c"></canvas></div><script>
+      window.__chart = new Chart(document.getElementById("c"), {
+        type: "bar",
+        data: {
+          labels: ["Q1"],
+          datasets: [
+            { label: "palette", data: [3], backgroundColor: aiden.series()[0] },
+            { label: "custom", data: [5], backgroundColor: "#123456" },
+          ],
+        },
+        options: { animation: false, responsive: true, maintainAspectRatio: false },
+      });
+    </script>`,
+    "Chart recolor",
+    {
+      "chart.js": chartSource,
+      "plotly.js": "window.Plotly = {};",
+      "katex.js": "window.katex = {};",
+      "katex.css": "body { min-height: 100%; }",
+    },
+  );
+  const site = await listen((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(exported);
+  });
+  try {
+    await page.goto(site.origin, { waitUntil: "domcontentloaded" });
+    const canvas = page.frameLocator("iframe").locator("#c");
+    const seriesOne = () => canvas.evaluate(() => (window as unknown as { aiden: { series(): string[] } }).aiden.series()[0]);
+    const datasetColors = () => canvas.evaluate(() =>
+      (window as unknown as { __chart: { data: { datasets: { backgroundColor: string }[] } } }).__chart
+        .data.datasets.map((dataset) => dataset.backgroundColor));
+    const initial = await seriesOne();
+    expect(initial).not.toBe("#83d8ff");
+    expect(await datasetColors()).toEqual([initial, "#123456"]);
+    await page.evaluate(() => {
+      const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+      iframe.contentWindow!.postMessage(
+        { type: "aiden:generative-ui:theme", colorScheme: "light", vars: { "--chart-1": "#83d8ff" } },
+        "*",
+      );
+    });
+    await expect.poll(seriesOne).toBe("#83d8ff");
+    await expect.poll(datasetColors).toEqual(["#83d8ff", "#123456"]);
+  } finally {
+    await site.close();
   }
 });
 

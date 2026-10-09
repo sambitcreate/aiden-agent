@@ -100,6 +100,36 @@ function guestBridgeScript(nonce?: string): string {
   }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
   window.addEventListener("load", schedule);
   const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const seriesSlots = () => [1, 2, 3, 4, 5, 6, 7, 8].map((i) => cssVar("--chart-" + i));
+  const chartColorKeys = [
+    "backgroundColor", "borderColor", "pointBackgroundColor", "pointBorderColor",
+    "hoverBackgroundColor", "hoverBorderColor",
+  ];
+  // Datasets colored straight from aiden.series() hold copied strings, so a
+  // theme change would leave them on the old palette. Swap only those values.
+  const remapSeriesColors = (before, after) => {
+    const Chart = window.Chart;
+    if (!Chart || !Chart.instances) return;
+    const key = (value) => String(value).trim().toLowerCase();
+    const swaps = new Map();
+    before.forEach((previous, index) => {
+      const next = after[index];
+      if (previous && next && key(previous) !== key(next)) swaps.set(key(previous), next);
+    });
+    if (swaps.size === 0) return;
+    const swap = (value) => (typeof value === "string" && swaps.has(key(value)) ? swaps.get(key(value)) : value);
+    for (const chart of Object.values(Chart.instances)) {
+      const datasets = chart && chart.data && Array.isArray(chart.data.datasets) ? chart.data.datasets : [];
+      for (const dataset of datasets) {
+        if (!dataset || typeof dataset !== "object") continue;
+        for (const name of chartColorKeys) {
+          const value = dataset[name];
+          if (Array.isArray(value)) dataset[name] = value.map(swap);
+          else if (typeof value === "string") dataset[name] = swap(value);
+        }
+      }
+    }
+  };
   const applyChartDefaults = () => {
     const Chart = window.Chart;
     if (!Chart || !Chart.defaults) return;
@@ -115,6 +145,7 @@ function guestBridgeScript(nonce?: string): string {
     if (!data || data.type !== ${JSON.stringify(GENERATIVE_UI_THEME_MESSAGE)} || !data.vars || typeof data.vars !== "object") return;
     const root = document.documentElement;
     const scheme = data.colorScheme === "dark" ? "dark" : "light";
+    const seriesBefore = seriesSlots();
     root.dataset.colorScheme = scheme;
     root.style.colorScheme = scheme;
     for (const [name, value] of Object.entries(data.vars)) {
@@ -122,6 +153,7 @@ function guestBridgeScript(nonce?: string): string {
         root.style.setProperty(name, value);
       }
     }
+    remapSeriesColors(seriesBefore, seriesSlots());
     applyChartDefaults();
     window.dispatchEvent(new CustomEvent("aiden:themechange"));
   });
@@ -159,10 +191,38 @@ const DEFAULT_THEME: GenerativeUiThemeTokens = {
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/iu;
 
+/**
+ * Semantic defaults implied by a legacy four-color caller. Only fields the
+ * caller supplied as valid hex contribute; explicit `vars` are applied after
+ * these and always win.
+ */
+function legacyDerivedVars(record: Record<string, unknown>): Record<string, string> {
+  const hex = (input: unknown): string | undefined =>
+    typeof input === "string" && HEX_COLOR.test(input) ? input.toLowerCase() : undefined;
+  const derived: Record<string, string> = {};
+  const foreground = hex(record.foreground);
+  if (foreground) {
+    derived["--text-primary"] = foreground;
+    derived["--focus-ring"] = foreground;
+  }
+  const secondary = hex(record.secondary);
+  if (secondary) {
+    derived["--text-secondary"] = secondary;
+    derived["--text-tertiary"] = secondary;
+    derived["--text-quaternary"] = secondary;
+  }
+  const accent = hex(record.accent);
+  if (accent) derived["--accent"] = accent;
+  return derived;
+}
+
 export function parseGenerativeUiTheme(
   value: unknown,
 ): GenerativeUiThemeTokens {
   if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULT_THEME;
+  // The built-in default keeps its own light token values rather than deriving
+  // them from its four legacy colors.
+  if (value === DEFAULT_THEME) return DEFAULT_THEME;
   const record = value as Record<string, unknown>;
   const colorScheme = record.colorScheme === "dark" ? "dark" : "light";
   const color = (input: unknown, fallback: string): string =>
@@ -173,7 +233,11 @@ export function parseGenerativeUiTheme(
     foreground: color(record.foreground, DEFAULT_THEME.foreground),
     secondary: color(record.secondary, DEFAULT_THEME.secondary),
     accent: color(record.accent, DEFAULT_THEME.accent),
-    vars: { ...GENERATIVE_UI_DEFAULT_THEME_VARS, ...sanitizeGenerativeUiThemeVars(record.vars) },
+    vars: {
+      ...GENERATIVE_UI_DEFAULT_THEME_VARS,
+      ...legacyDerivedVars(record),
+      ...sanitizeGenerativeUiThemeVars(record.vars),
+    },
   };
 }
 
