@@ -119,7 +119,10 @@ export interface AssistantScheduleProposal {
   >;
 }
 
-const APPROVED_MCP_BINDINGS = Symbol("assistant-approved-mcp-bindings");
+// Approval state belongs to this invocation, not the model's JSON arguments.
+// The runtime hashes those arguments after approval; hidden symbol properties
+// make them invalid JSON and prevent an approved task from ever dispatching.
+const approvedMcpByArguments = new WeakMap<object, ScheduledMcpServerBinding[]>();
 
 export function attachAssistantScheduleMcpApproval(
   args: unknown,
@@ -128,12 +131,7 @@ export function attachAssistantScheduleMcpApproval(
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     throw new Error("Automation approval arguments are invalid.");
   }
-  Object.defineProperty(args, APPROVED_MCP_BINDINGS, {
-    configurable: false,
-    enumerable: false,
-    writable: false,
-    value: structuredClone(bindings),
-  });
+  approvedMcpByArguments.set(args, structuredClone([...bindings]));
 }
 
 function approvedMcpBindings(
@@ -144,7 +142,7 @@ function approvedMcpBindings(
   const bindings =
     args && typeof args === "object" && !Array.isArray(args)
       ? validateScheduledMcpServerBindings(
-          (args as { [APPROVED_MCP_BINDINGS]?: unknown })[APPROVED_MCP_BINDINGS],
+          approvedMcpByArguments.get(args),
         )
       : undefined;
   if (
@@ -598,7 +596,7 @@ export function canonicalizeAssistantScheduleToolArguments(
     cron: proposal.input.cron,
     timezone: proposal.input.timezone,
     prompt: proposal.input.prompt,
-    workspaceId: proposal.input.workspaceId,
+    ...(proposal.input.workspaceId ? { workspaceId: proposal.input.workspaceId } : {}),
     permission: proposal.input.permission,
     mcpServerIds: proposal.input.mcpServerIds,
     notify: proposal.input.notify,
@@ -923,7 +921,7 @@ interface PreparedStandardScheduleApproval {
   details: ScheduledTaskApprovalDetails;
 }
 
-const PREPARED_STANDARD_SCHEDULE = Symbol("prepared-standard-schedule");
+const preparedStandardByArguments = new WeakMap<object, PreparedStandardScheduleApproval>();
 
 function sameIds(left: readonly string[] | undefined, right: readonly string[]): boolean {
   return (left?.length ?? 0) === right.length && right.every((id, index) => left?.[index] === id);
@@ -1320,12 +1318,7 @@ export async function prepareStandardScheduleApproval(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Scheduled task arguments are invalid.");
   }
-  Object.defineProperty(value, PREPARED_STANDARD_SCHEDULE, {
-    configurable: false,
-    enumerable: false,
-    writable: false,
-    value: structuredClone(prepared),
-  });
+  preparedStandardByArguments.set(value, structuredClone(prepared));
   return { summary: prepared.summary, details: prepared.details };
 }
 
@@ -1337,9 +1330,7 @@ async function standardScheduleApprovalForExecution(
 ): Promise<PreparedStandardScheduleApproval> {
   const attached =
     value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { [PREPARED_STANDARD_SCHEDULE]?: PreparedStandardScheduleApproval })[
-          PREPARED_STANDARD_SCHEDULE
-        ]
+      ? preparedStandardByArguments.get(value)
       : undefined;
   if (attached) return structuredClone(attached);
   return resolveStandardScheduleApproval(value, selection, dependencies, defaultWorkspaceId);

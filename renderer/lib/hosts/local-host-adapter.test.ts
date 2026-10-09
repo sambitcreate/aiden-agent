@@ -23,6 +23,10 @@ function recordingApis(overrides: Partial<LocalChatApis> = {}) {
       calls.push(["respondRemoteApproval", ...args]);
       return { resolved: true as const };
     },
+    respondRemoteQuestion: async (...args) => {
+      calls.push(["respondRemoteQuestion", ...args]);
+      return { status: "answered" as const };
+    },
     stop: async (...args) => {
       calls.push(["stop", ...args]);
       return false;
@@ -104,6 +108,28 @@ test("local failures reach the pane unchanged", async () => {
   await assert.rejects(adapter.respondApproval("c1", { approvalId: "a1", decision: "allow" }), {
     message: "That approval is no longer pending.",
   });
+});
+
+test("phone-owned questions use host settlement and preserve an answer from another device", async () => {
+  const { apis, calls } = recordingApis({
+    answerQuestionnaire: async () => { throw new Error("Wrong renderer owner"); },
+    respondRemoteQuestion: async (...args) => {
+      calls.push(["respondRemoteQuestion", ...args]);
+      return { status: "elsewhere" };
+    },
+  });
+  const session = new ChatSessionControl(new LocalHostAdapter(apis), { hostId: LOCAL_HOST_ID, chatId: "c1" }, new ChatIntentLedger());
+  session.attach();
+  const result = await session.answerQuestion({
+    source: "remote", promptId: "q1",
+    response: { version: 1, promptId: "q1", cancelled: false, answers: [{ questionIndex: 0, kind: "custom", answer: "Every weekday" }] },
+  });
+  assert.equal(result?.status, "elsewhere");
+  // The host scope comes from the attached session, not from the answer payload.
+  // A single host dispatch must retain it even when another device answered first.
+  assert.deepEqual(calls.map(([route, chatId, promptId]) => [route, chatId, promptId]), [
+    ["respondRemoteQuestion", "c1", "q1"],
+  ]);
 });
 
 test("local turns never go through the host send path", async () => {

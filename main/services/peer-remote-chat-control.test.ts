@@ -406,6 +406,7 @@ test("the same session control drives a chat on this Mac and one on another Mac 
     markRead: unused,
     answerQuestionnaire: unused,
     respondRemoteApproval: unused,
+    respondRemoteQuestion: unused,
     approve: async (approvalId, decision, options) => {
       local.approve({ runId: localRuns.runForPrompt(approvalId)!, chatId: "chat-1", approvalId, decision, scope: options?.scope });
     },

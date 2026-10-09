@@ -83,7 +83,6 @@ test("the hotkey waits for the central command listener and uses the dock comman
 test("Scheduled Tasks remains a visible control surface for Live Computer Use", () => {
   const scheduledTasks = source("../components/scheduled-tasks-view.tsx");
   const dock = source("../components/assistant/assistant-dock.tsx");
-  const root = source("../main/root-view.tsx");
   const chatPane = source("../main/chat-pane.tsx");
   const composer = source("../components/composer.tsx");
   assert.match(scheduledTasks, /Create with Aiden/u);
@@ -91,8 +90,6 @@ test("Scheduled Tasks remains a visible control surface for Live Computer Use", 
   assert.match(scheduledTasks, /requestAssistantAutomationComposer/u);
   assert.match(scheduledTasks, /onCloseAutoFocus/u);
   assert.match(scheduledTasks, /event\.preventDefault\(\)/u);
-  assert.match(root, /onAssistantAutomationComposerRequested/u);
-  assert.match(root, /openNewChat\(ASSISTANT_AUTOMATION_DRAFT\)/u);
   assert.match(chatPane, /initialText=\{draft\?\.initialText\}/u);
   assert.match(composer, /initialText \|\| loadComposerDraft\(chatId\)\.text/u);
   assert.match(dock, /scheduledTasks/u);

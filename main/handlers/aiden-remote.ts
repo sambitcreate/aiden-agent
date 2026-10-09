@@ -47,6 +47,27 @@ async function settingsSnapshot(): Promise<AidenRemoteSettingsSnapshot> {
 export function registerAidenRemoteHandlers(): void {
   ipcMain.handle("remote:get", settingsSnapshot);
 
+  ipcMain.handle("remote:getPendingQuestion", async (event, chatId: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Questions require the active application document."));
+    const question = (await getAidenRemoteRuntime()).pendingQuestionForChat(
+      parseAidenRemoteScopedIdentifier(chatId),
+    );
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return question ? { ...question, version: 1, source: "remote" } : null;
+  });
+
+  ipcMain.handle("remote:respondQuestionFromHost", async (event, chatId: unknown, promptId: unknown, response: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Questions require the active application document."));
+    const runtime = await getAidenRemoteRuntime();
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const resolved = runtime.respondQuestionFromHost(
+      parseAidenRemoteScopedIdentifier(chatId),
+      parseAidenRemoteScopedIdentifier(promptId),
+      response,
+    );
+    return { status: resolved ? "answered" : "elsewhere" };
+  });
+
   ipcMain.handle("remote:getPendingApproval", async (event, chatId: unknown) => {
     const owner = rendererDocumentOwner(
       event,

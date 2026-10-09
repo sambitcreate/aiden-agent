@@ -809,6 +809,7 @@
     <string name="chat_question_cannot_respond">This paired device cannot respond to prompts.</string>
     <string name="chat_question_skip">Skip</string>
     <string name="chat_question_submit">Submit</string>
+    <string name="chat_question_next">Next</string>
 
     <!-- Chat: approvals, code, transcript chrome -->
     <string name="chat_approval_approve_task">Approve task</string>

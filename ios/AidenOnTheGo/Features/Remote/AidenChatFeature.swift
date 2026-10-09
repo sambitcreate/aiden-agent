@@ -1188,6 +1188,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var suppressesDraftPersistence = false
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
+    @ObservationIgnored private var didConsumeVoiceLaunch = false
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -3023,6 +3024,15 @@ final class AidenChatViewModel {
             && installation.hasNegotiatedAccess(to: .botWrite))
     }
 
+    /// A launch intent belongs to the chat lifetime, not a removable composer.
+    /// Consume before awaiting capture so remounts cannot replay it.
+    func startVoiceForLaunch(if requested: Bool, start: () async -> Void) async {
+        guard requested, !didConsumeVoiceLaunch else { return }
+        didConsumeVoiceLaunch = true
+        guard !isReadOnlyPresentation, !isRemoved, !isStreaming, pendingQuestion == nil else { return }
+        await start()
+    }
+
     @discardableResult
     func stop() async -> Bool {
         if activeStreamID == nil, foreignRun != nil, !isRemoved { return await stopForeignRun() }
@@ -4765,6 +4775,11 @@ struct AidenChatDetailView: View {
         .onChange(of: botPrimarySupportsImages, initial: true) { _, supportsImages in
             model.setBotPrimarySupportsImages(supportsImages)
         }
+        .onChange(of: model.pendingQuestion?.id) { _, id in
+            guard id != nil else { return }
+            composerIsFocused = false
+            attachmentPicker.dismiss()
+        }
         .onChange(of: model.isStreaming) { _, isStreaming in
             guard isStreaming else { return }
             attachmentPicker.dismiss()
@@ -5076,16 +5091,34 @@ struct AidenChatDetailView: View {
                     .padding(.horizontal, 4)
                     .padding(.bottom, 6)
             }
-            AidenComposerView(
-                model: model,
-                autoStartVoice: autoStartVoice,
-                composerFocus: $composerIsFocused,
-                attachmentPicker: attachmentPicker,
-                motionNamespace: attachmentMotionNamespace,
-                canToggleAttachments: canToggleAttachmentPicker,
-                onToggleAttachmentPicker: toggleAttachmentPicker,
-                placeholder: botToolsModel?.bot.map { "Ask \($0.name)" } ?? "Message Aiden"
-            )
+            if let question = model.pendingQuestion {
+                AidenQuestionCard(
+                    model: model,
+                    prompt: question,
+                    onSubmit: { request in
+                        Task {
+                            await model.respondToQuestion(
+                                request,
+                                promptID: question.id,
+                                idempotencyKey: UUID()
+                            )
+                        }
+                    }
+                )
+                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToQuestion || model.isStopping)
+                .id(question.id)
+            } else {
+                AidenComposerView(
+                    model: model,
+                    autoStartVoice: autoStartVoice,
+                    composerFocus: $composerIsFocused,
+                    attachmentPicker: attachmentPicker,
+                    motionNamespace: attachmentMotionNamespace,
+                    canToggleAttachments: canToggleAttachmentPicker,
+                    onToggleAttachmentPicker: toggleAttachmentPicker,
+                    placeholder: botToolsModel?.bot.map { "Ask \($0.name)" } ?? "Message Aiden"
+                )
+            }
         }
         .disabled(model.isReadOnlyPresentation)
         .padding(.horizontal, 16)
@@ -7010,23 +7043,6 @@ private struct AidenLiveResponseView: View {
                 .id(approval.id)
             }
 
-            if let question = model.pendingQuestion {
-                AidenQuestionCard(
-                    prompt: question,
-                    onSubmit: { request in
-                        Task {
-                            await model.respondToQuestion(
-                                request,
-                                promptID: question.id,
-                                idempotencyKey: UUID()
-                            )
-                        }
-                    }
-                )
-                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToQuestion || model.isStopping)
-                .id(question.id)
-            }
-
             if chronologicalRows == nil && !visibleText.isEmpty {
                 AidenMarkdownView(content: visibleText)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
@@ -7232,205 +7248,218 @@ struct AidenQuestionCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
 
+    /// The workspace chat whose run the card can stop. Bot session questions have no run to stop.
+    var model: AidenChatViewModel? = nil
     let prompt: AidenPendingQuestion
     let onSubmit: (AidenQuestionRespondRequest) -> Void
 
-    @State private var selections: [Int: Set<String>] = [:]
-    @State private var customDrafts: [Int: String] = [:]
-    @State private var customOpen: Set<Int> = []
+    @State private var draft = AidenQuestionComposerDraft()
 
-    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    var stopButton: AidenChatStopButton? { model.map { AidenChatStopButton(model: $0) } }
 
-    private var answers: [AidenQuestionAnswer] {
-        AidenQuestionAnswerDraft.answers(
-            for: prompt.questions,
-            selections: selections,
-            customAnswers: customDrafts
-        )
-    }
-
-    private func toggle(_ label: String, questionIndex: Int, multiSelect: Bool) {
-        selections = AidenQuestionAnswerDraft.toggled(
-            selections: selections,
-            questionIndex: questionIndex,
-            label: label,
-            multiSelect: multiSelect
-        )
-    }
+    private var answers: [AidenQuestionAnswer] { draft.answers(for: prompt.questions) }
 
     private func binding(for index: Int) -> Binding<String> {
         Binding(
-            get: { customDrafts[index] ?? "" },
-            set: { customDrafts[index] = $0.isEmpty ? nil : $0 }
+            get: { draft.customAnswers[index] ?? "" },
+            set: { draft.customAnswers[index] = $0.isEmpty ? nil : $0 }
         )
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "questionmark.bubble")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(palette.accent)
-                    .frame(width: 32, height: 32)
-                    .background(palette.accent.opacity(0.12), in: Circle())
-                    .accessibilityHidden(true)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "questionmark.bubble")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(palette.accent)
+                        .frame(width: 32, height: 32)
+                        .background(palette.accent.opacity(0.12), in: Circle())
+                        .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Aiden needs your input")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(palette.foreground)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Aiden needs your input")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(palette.foreground)
 
-                    Text(prompt.questions.count > 1
-                         ? String(localized: "Answer what you can — unanswered questions are skipped.")
-                         : String(localized: "Choose an option or type your own answer."))
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            ForEach(Array(prompt.questions.enumerated()), id: \.offset) { index, question in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Text(question.header)
-                            .font(.caption2.weight(.semibold))
+                        Text(prompt.questions.count > 1
+                             ? String(localized: "Answer what you can — unanswered questions are skipped.")
+                             : String(localized: "Choose an option or type your own answer."))
+                            .font(.caption)
                             .foregroundStyle(palette.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(palette.canvas, in: Capsule())
-                        if question.multiSelect {
-                            Text("Select all that apply")
-                                .font(.caption2)
-                                .foregroundStyle(palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if let stopButton { stopButton }
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(prompt.questions.enumerated()), id: \.offset) { index, question in
+                            Button { draft.move(to: index, questions: prompt.questions) } label: {
+                                Text("\(index + 1). \(question.header)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(index == draft.activeIndex ? palette.foreground : palette.secondary)
+                                    .padding(.horizontal, 12)
+                                    .frame(minHeight: 44)
+                                    .background(index == draft.activeIndex ? palette.canvas : .clear,
+                                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(index == draft.activeIndex ? .isSelected : [])
+                            .accessibilityLabel("Question \(index + 1) of \(prompt.questions.count), \(question.header)")
                         }
                     }
-                    .accessibilityHidden(true)
-
-                    Text(question.question)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(palette.foreground)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    ForEach(question.options, id: \.label) { option in
-                        let selected = selections[index]?.contains(option.label) == true
-                        Button {
-                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
-                                toggle(option.label, questionIndex: index, multiSelect: question.multiSelect)
+                }
+                ForEach(Array(prompt.questions.enumerated()).filter { $0.offset == draft.activeIndex }, id: \.offset) { index, question in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text(question.header)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(palette.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(palette.canvas, in: Capsule())
+                            if question.multiSelect {
+                                Text("Select all that apply")
+                                    .font(.caption2)
+                                    .foregroundStyle(palette.secondary)
                             }
-                        } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: question.multiSelect
-                                      ? (selected ? "checkmark.square.fill" : "square")
-                                      : (selected ? "checkmark.circle.fill" : "circle"))
-                                    .font(.system(size: 16))
-                                    .foregroundStyle(selected ? palette.accent : palette.secondary)
-                                    .frame(width: 20)
-                                    .accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.label)
-                                        .font(.callout)
-                                        .foregroundStyle(palette.foreground)
-                                    Text(option.description)
-                                        .font(.caption)
-                                        .foregroundStyle(palette.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityHidden(true)
+
+                        Text(question.question)
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(palette.foreground)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        ForEach(question.options, id: \.label) { option in
+                            let selected = draft.selections[index]?.contains(option.label) == true
+                            Button {
+                                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+                                    draft.toggle(option.label, questions: prompt.questions)
                                 }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .background(
-                            selected ? palette.accent.opacity(0.10) : palette.canvas,
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        )
-                        .accessibilityLabel(option.label)
-                        .accessibilityValue(selected
-                            ? String(localized: "Selected")
-                            : String(localized: "Not selected"))
-                        .accessibilityHint(option.description)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                    }
-
-                    if customOpen.contains(index) {
-                        TextField(
-                            String(localized: "Type your answer"),
-                            text: binding(for: index),
-                            axis: .vertical
-                        )
-                            .font(.callout)
-                            .lineLimit(1...4)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .accessibilityLabel(String(localized: "Custom answer"))
-                            .accessibilityHint(String(localized: "Overrides the selected options for this question"))
-                    } else {
-                        Button {
-                            customOpen.insert(index)
-                        } label: {
-                            Label("Type something.", systemImage: "text.cursor")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(palette.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: question.multiSelect
+                                          ? (selected ? "checkmark.square.fill" : "square")
+                                          : (selected ? "checkmark.circle.fill" : "circle"))
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(selected ? palette.accent : palette.secondary)
+                                        .frame(width: 20)
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(option.label)
+                                            .font(.callout)
+                                            .foregroundStyle(palette.foreground)
+                                        Text(option.description)
+                                            .font(.caption)
+                                            .foregroundStyle(palette.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 8)
                                 .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(
+                                selected ? palette.accent.opacity(0.10) : palette.canvas,
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            )
+                            .accessibilityLabel(option.label)
+                            .accessibilityValue(selected
+                                ? String(localized: "Selected")
+                                : String(localized: "Not selected"))
+                            .accessibilityHint(option.description)
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                        }
+
+                        if draft.customOpen.contains(index) {
+                            TextField(
+                                String(localized: "Type your answer"),
+                                text: binding(for: index),
+                                axis: .vertical
+                            )
+                                .font(.callout)
+                                .lineLimit(1...4)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .accessibilityLabel(String(localized: "Custom answer"))
+                                .accessibilityHint(String(localized: "Overrides the selected options for this question"))
+                        } else {
+                            Button {
+                                draft.customOpen.insert(index)
+                            } label: {
+                                Label("Type something.", systemImage: "text.cursor")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(palette.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint(String(localized: "Shows a field for a custom answer"))
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+
+                if !prompt.canRespond {
+                    Label("This paired device cannot respond to prompts.", systemImage: "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                } else {
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+
+                        Button {
+                            onSubmit(AidenQuestionRespondRequest(cancelled: true, answers: []))
+                        } label: {
+                            Text("Skip")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.foreground)
+                                .padding(.horizontal, 13)
+                                .frame(height: 34)
+                                .aidenApprovalActionGlass()
                         }
                         .buttonStyle(.plain)
-                        .accessibilityHint(String(localized: "Shows a field for a custom answer"))
+                        .padding(.vertical, 5)
+                        .accessibilityHint(String(localized: "Dismisses the prompt without answers"))
+
+                        Button {
+                            if draft.activeIndex < prompt.questions.count - 1 {
+                                draft.move(to: draft.activeIndex + 1, questions: prompt.questions)
+                            } else {
+                                onSubmit(AidenQuestionRespondRequest(cancelled: false, answers: answers))
+                            }
+                        } label: {
+                            Text(draft.activeIndex < prompt.questions.count - 1 ? "Next" : "Submit")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.canvas)
+                                .padding(.horizontal, 13)
+                                .frame(height: 34)
+                                .aidenApprovalActionGlass(tint: palette.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 5)
+                        .disabled(draft.activeIndex == prompt.questions.count - 1 && answers.isEmpty)
+                        .opacity(draft.activeIndex == prompt.questions.count - 1 && answers.isEmpty ? 0.5 : 1)
+                        .accessibilityHint(draft.activeIndex < prompt.questions.count - 1
+                            ? String(localized: "Moves to the next question and keeps your answers")
+                            : answers.isEmpty
+                            ? String(localized: "Select an option or type an answer first")
+                            : String(localized: "Sends your answers to your Mac"))
                     }
                 }
-                .accessibilityElement(children: .contain)
             }
-
-            if !prompt.canRespond {
-                Label("This paired device cannot respond to prompts.", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else {
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-
-                    Button {
-                        onSubmit(AidenQuestionRespondRequest(cancelled: true, answers: []))
-                    } label: {
-                        Text("Skip")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.foreground)
-                            .padding(.horizontal, 13)
-                            .frame(height: 34)
-                            .aidenApprovalActionGlass()
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.vertical, 5)
-                    .accessibilityHint(String(localized: "Dismisses the prompt without answers"))
-
-                    Button {
-                        onSubmit(AidenQuestionRespondRequest(cancelled: false, answers: answers))
-                    } label: {
-                        Text("Submit")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(palette.canvas)
-                            .padding(.horizontal, 13)
-                            .frame(height: 34)
-                            .aidenApprovalActionGlass(tint: palette.accent)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.vertical, 5)
-                    .disabled(answers.isEmpty)
-                    .opacity(answers.isEmpty ? 0.5 : 1)
-                    .accessibilityHint(answers.isEmpty
-                        ? String(localized: "Select an option or type an answer first")
-                        : String(localized: "Sends your answers to your Mac"))
-                }
-            }
+            .padding(12)
         }
-        .padding(12)
-        .background(palette.raised, in: shape)
-        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
+        .frame(maxHeight: 360)
+        .aidenComposerGlass()
         .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
         .accessibilityElement(children: .contain)
     }
@@ -7662,6 +7691,32 @@ private struct AidenToolActivityCard: View {
     }
 }
 
+/// Shared by the message and question composers so cancellation remains reachable.
+struct AidenChatStopButton: View {
+    @Environment(\.aidenPalette) private var palette
+    @Bindable var model: AidenChatViewModel
+
+    var canStop: Bool { model.canControlCurrentRun && !model.isStopping }
+
+    @discardableResult
+    func stop() async -> Bool { await model.stop() }
+
+    var body: some View {
+        if model.isStreaming {
+            Button { Task { await stop() } } label: {
+                Image(systemName: "stop.fill")
+                    .frame(width: 30, height: 30)
+                    .background(palette.foreground, in: Circle())
+                    .foregroundStyle(palette.canvas)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canStop)
+            .accessibilityLabel(model.isStopping ? "Stopping response" : "Stop response")
+        }
+    }
+}
+
 private struct AidenComposerView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.aidenPalette) private var palette
@@ -7676,7 +7731,6 @@ private struct AidenComposerView: View {
     let onToggleAttachmentPicker: () -> Void
     var placeholder = "Message Aiden"
     @State private var voiceInput = ComposerVoiceInputController()
-    @State private var didAutoStartVoice = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -7927,16 +7981,7 @@ private struct AidenComposerView: View {
                     if model.showsRunInputOptions {
                         runInputPill
                     }
-                    Button { Task { await model.stop() } } label: {
-                        Image(systemName: "stop.fill")
-                            .frame(width: 30, height: 30)
-                            .background(palette.foreground, in: Circle())
-                            .foregroundStyle(palette.canvas)
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!model.canControlCurrentRun || model.isStopping)
-                    .accessibilityLabel(model.isStopping ? "Stopping response" : "Stop response")
+                    AidenChatStopButton(model: model)
                 } else {
                     Button {
                         voiceInput.stopBeforeSubmittingDraft()
@@ -7983,14 +8028,14 @@ private struct AidenComposerView: View {
             value: visiblePendingAttachments.map(\.id) + attachmentPicker.committingAssets.map(\.localIdentifier)
         )
         .task {
-            guard !model.isReadOnlyPresentation, autoStartVoice, !didAutoStartVoice else { return }
-            didAutoStartVoice = true
-            model.readAloud.stop()
-            await voiceInput.toggle(
-                currentDraft: model.draft,
-                updateDraft: { model.draft = $0 },
-                macTranscriber: model.transcribeMacSpeech
-            )
+            await model.startVoiceForLaunch(if: autoStartVoice) {
+                model.readAloud.stop()
+                await voiceInput.toggle(
+                    currentDraft: model.draft,
+                    updateDraft: { model.draft = $0 },
+                    macTranscriber: model.transcribeMacSpeech
+                )
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
             voiceInput.cancelDiscardingRecording()

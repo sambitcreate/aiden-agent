@@ -745,6 +745,60 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testQuestionComposerStopCancelsRunWithoutSubmittingAnAnswer() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-question-stop-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let (model, _, _) = try await makeControlModel(mode: .questions, root: root)
+        try await waitUntil { model.pendingQuestion != nil }
+        let card = AidenQuestionCard(model: model, prompt: try XCTUnwrap(model.pendingQuestion)) { _ in
+            XCTFail("Stopping a run must not submit or skip the question")
+        }
+        let host = UIHostingController(rootView: card.frame(width: 320))
+        host.loadViewIfNeeded()
+        XCTAssertGreaterThanOrEqual(host.sizeThatFits(in: CGSize(width: 320, height: 400)).height, 44)
+        let stopButton = try XCTUnwrap(card.stopButton)
+        XCTAssertTrue(stopButton.canStop)
+        let writesBeforeStop = AidenChatProgressLifecycleURLProtocol.postPaths
+        model.setAllowsMutations(false)
+        XCTAssertFalse(stopButton.canStop)
+        let denied = await stopButton.stop()
+        XCTAssertFalse(denied)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.postPaths, writesBeforeStop)
+        model.setAllowsMutations(true)
+        let stopped = await stopButton.stop()
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(model.streamState, .cancelled)
+        XCTAssertNil(model.pendingQuestion)
+        XCTAssertFalse(stopButton.canStop)
+        XCTAssertEqual(Array(AidenChatProgressLifecycleURLProtocol.postPaths.dropFirst(writesBeforeStop.count)), [
+            "/api/aiden/v1/streams/stream-control/cancel"
+        ])
+    }
+
+    @MainActor
+    func testDictationLaunchCannotReplayAfterQuestionComposerReturns() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-question-voice-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .questions, cache: cache)
+        var captureStarts = 0
+        await model.startVoiceForLaunch(if: false) { captureStarts += 1 }
+        await model.startVoiceForLaunch(if: true) { captureStarts += 1 }
+        XCTAssertEqual(captureStarts, 1)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        try await waitUntil { model.pendingQuestion != nil }
+        await model.startVoiceForLaunch(if: true) { captureStarts += 1 }
+        let stopped = await model.stop()
+        XCTAssertTrue(stopped)
+        XCTAssertNil(model.pendingQuestion)
+        XCTAssertFalse(model.isStreaming)
+        // The restored composer's startup task sees the same launch flag.
+        await model.startVoiceForLaunch(if: true) { captureStarts += 1 }
+        XCTAssertEqual(captureStarts, 1)
+    }
+
+    @MainActor
     func testMismatchedApprovalReceiptCannotReplaceNewerRequest() async throws {
         try await exerciseControlResponse(stop: false, nextApproval: "approval-next", mode: .mismatchedApproval)
     }
@@ -7326,6 +7380,8 @@ final class AidenChatTests: XCTestCase {
     func testReadOnlyFixtureChatRejectsEveryLiveEntryPointWithoutMutatingItsChat() async {
         let chat = sampleChat()
         let model = AidenChatViewModel(readOnlyFixture: chat)
+        var captureStarts = 0
+        await model.startVoiceForLaunch(if: true) { captureStarts += 1 }
 
         XCTAssertFalse(model.isConnected)
         XCTAssertFalse(model.canSend)
@@ -7347,6 +7403,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.draft, "This must stay local")
         XCTAssertTrue(model.pendingAttachments.isEmpty)
         XCTAssertNil(model.presentedError)
+        XCTAssertEqual(captureStarts, 0, "A read-only chat cannot start microphone capture")
     }
 #endif
 
@@ -7490,6 +7547,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var _approvalReadCount = 0
     static var approvalReadCount: Int { lock.withLock { _approvalReadCount } }
     static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
+    nonisolated(unsafe) private static var _postPaths: [String] = []
+    static var postPaths: [String] { lock.withLock { _postPaths } }
     static func setApprovalID(_ id: String) { lock.withLock { approvalID = id } }
     nonisolated(unsafe) private static var approvalResolved = false
     /// The Mac resolved the approval: later approval reads return none.
@@ -7595,6 +7654,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         lock.lock()
         self.mode = mode
         _controlWriteCount = 0
+        _postPaths = []
         approvalID = "approval-current"
         approvalReadFails = false
         approvalResolved = false
@@ -7622,6 +7682,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             return
         }
         let path = request.url?.path ?? ""
+        if request.httpMethod == "POST" { Self.lock.withLock { Self._postPaths.append(path) } }
         if path.contains("/attachments/"), request.httpMethod == "DELETE" { Self.lock.withLock { Self._attachmentDeleteCount += 1 } }
         if path.hasSuffix("/attachments"), request.httpMethod == "POST" { Self.lock.withLock { Self._uploadRequestCount += 1 } }
         if path.hasSuffix("/turns") { Self.lock.withLock { Self._turnRequestCount += 1 } }
@@ -7689,7 +7750,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 """.utf8))
         case "/api/aiden/v1/approvals/approval-current/respond", "/api/aiden/v1/streams/stream-control/cancel":
             Self.lock.withLock { Self._controlWriteCount += 1 }
-            if Self.lock.withLock({ Self.mode == .mismatchedApproval }) {
+            if Self.lock.withLock({ Self.mode == .questions }), path.hasSuffix("/cancel") {
+                result = Self.response(for: request, status: 202, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"cancelled","lastSequence":1,"updatedAt":"2026-09-22T12:00:01Z"}"#.utf8))
+            } else if Self.lock.withLock({ Self.mode == .mismatchedApproval }) {
                 result = Self.response(for: request, status: 200, contentType: "application/json", data: Data(#"{"approvalId":"approval-other","decision":"allow","resolvedAt":"2026-09-22T12:00:00Z"}"#.utf8))
             } else if Self.lock.withLock({ Self.mode == .mismatchedStop }) {
                 result = Self.response(for: request, status: 202, contentType: "application/json", data: Data(#"{"streamId":"stream-other","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"reconciling","lastSequence":0,"updatedAt":"2026-09-22T12:00:00Z"}"#.utf8))
@@ -9462,6 +9525,26 @@ extension AidenChatTests {
                 AidenRemoteQuestionOption(label: "1.0 mm", description: "Heavy."),
             ]
         )
+    }
+
+    func testQuestionTabsRetainCustomAndMultiSelectAnswersWhenRevisited() {
+        let questions = [questionFixture(), questionFixture(multiSelect: true)]
+        var draft = AidenQuestionComposerDraft()
+        draft.customOpen.insert(0)
+        draft.customAnswers[0] = "  Make it 2 mm  "
+        draft.move(to: 1, questions: questions)
+        draft.toggle("0.5 mm", questions: questions)
+        draft.toggle("1.0 mm", questions: questions)
+        draft.move(to: 0, questions: questions)
+        XCTAssertEqual(draft.activeIndex, 0)
+        XCTAssertTrue(draft.customOpen.contains(0))
+        XCTAssertEqual(draft.customAnswers[0], "  Make it 2 mm  ")
+        draft.move(to: 7, questions: questions)
+        XCTAssertEqual(draft.activeIndex, 0)
+        XCTAssertEqual(draft.answers(for: questions), [
+            .custom(questionIndex: 0, answer: "Make it 2 mm"),
+            .multi(questionIndex: 1, selected: ["0.5 mm", "1.0 mm"]),
+        ])
     }
 
     func testQuestionAnswerDraftBuildsWireAnswersInOrder() {

@@ -32,6 +32,7 @@ export interface LocalChatApis {
   approve: typeof chatsApi.approve;
   answerQuestionnaire: typeof chatsApi.answerQuestionnaire;
   respondRemoteApproval: typeof aidenRemoteApi.respondApproval;
+  respondRemoteQuestion: typeof aidenRemoteApi.respondQuestion;
   stop: (streamId: string) => Promise<boolean>;
   admitRunInput: typeof admitChatRunInput;
 }
@@ -44,6 +45,8 @@ const defaultApis: LocalChatApis = {
   answerQuestionnaire: (promptId, response) => chatsApi.answerQuestionnaire(promptId, response),
   respondRemoteApproval: (chatId, approvalId, decision, scope) =>
     aidenRemoteApi.respondApproval(chatId, approvalId, decision, scope),
+  respondRemoteQuestion: (chatId, promptId, response) =>
+    aidenRemoteApi.respondQuestion(chatId, promptId, response),
   stop: (streamId) => stopDetachedGeneration(streamId),
   admitRunInput: (streamId, input) => admitChatRunInput(streamId, input),
 };
@@ -152,7 +155,10 @@ export class LocalHostAdapter implements HostChatAdapter {
     return { resolution: "applied" };
   }
 
-  async answerQuestion(_chatId: string, input: HostChatQuestionInput): Promise<HostChatQuestionResult> {
+  async answerQuestion(chatId: string, input: HostChatQuestionInput): Promise<HostChatQuestionResult> {
+    if (input.source === "remote") {
+      return this.apis.respondRemoteQuestion(chatId, input.promptId, input.response);
+    }
     const answer = await this.apis.answerQuestionnaire(input.promptId, input.response);
     return { status: answer?.status };
   }

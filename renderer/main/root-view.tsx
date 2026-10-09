@@ -39,10 +39,7 @@ import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
-import {
-  ASSISTANT_AUTOMATION_DRAFT,
-  onAssistantAutomationComposerRequested,
-} from "../lib/assistant-dock";
+import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
 
 export function RootView() {
   useTheme();
@@ -209,8 +206,8 @@ function RootContent() {
   );
   React.useEffect(
     () =>
-      onAssistantAutomationComposerRequested(() => {
-        void openNewChat(ASSISTANT_AUTOMATION_DRAFT);
+      onAssistantAutomationComposerRequested((draft) => {
+        void openNewChat(draft);
       }),
     [openNewChat],
   );

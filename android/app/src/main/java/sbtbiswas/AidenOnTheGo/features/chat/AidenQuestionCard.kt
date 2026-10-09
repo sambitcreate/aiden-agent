@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +12,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.SolidColor
@@ -60,7 +66,7 @@ import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.R
 
 /** `ask_user_question` prompt card (iOS parity: AidenQuestionCard). All
- * questions render stacked; a non-blank custom draft overrides that question's
+ * questions appear one at a time; a non-blank custom draft overrides that question's
  * option selections, and unaddressed questions are sent as skipped. */
 @Composable
 fun AidenQuestionCard(
@@ -69,6 +75,7 @@ fun AidenQuestionCard(
     onSubmit: (AidenQuestionRespondRequest) -> Unit
 ) {
     val palette = AidenTheme.palette
+    var activeIndex by remember(prompt.id) { mutableStateOf(0) }
     val customAnswerDescription = stringResource(R.string.chat_question_custom_answer_cd)
     val typeSomethingDescription = stringResource(R.string.chat_question_type_something_cd)
     var selections by remember(prompt.id) { mutableStateOf(mapOf<Int, Set<String>>()) }
@@ -89,7 +96,10 @@ fun AidenQuestionCard(
         colors = CardDefaults.cardColors(containerColor = palette.raised),
         shape = MaterialTheme.shapes.extraLarge
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier
+            .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.55f).dp)
+            .verticalScroll(rememberScrollState())
+            .padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Default.QuestionMark,
@@ -116,7 +126,23 @@ fun AidenQuestionCard(
                     )
                 }
             }
-            prompt.questions.forEachIndexed { index, question ->
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup()) {
+                prompt.questions.forEachIndexed { index, question ->
+                    Text(
+                        text = "${index + 1}. ${question.header}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (index == activeIndex) palette.foreground else palette.secondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (index == activeIndex) palette.canvas else palette.raised)
+                            .selectable(selected = index == activeIndex, enabled = enabled, role = Role.Tab,
+                                onClick = { activeIndex = index })
+                            .padding(horizontal = 12.dp, vertical = 14.dp)
+                    )
+                }
+            }
+            prompt.questions.getOrNull(activeIndex)?.let { question ->
+                val index = activeIndex
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -293,9 +319,16 @@ fun AidenQuestionCard(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     AidenPrimaryButton(
-                        text = stringResource(R.string.chat_question_submit),
-                        onClick = { onSubmit(AidenQuestionRespondRequest(cancelled = false, answers = answers)) },
-                        enabled = enabled && answers.isNotEmpty()
+                        text = if (activeIndex < prompt.questions.lastIndex) {
+                            stringResource(R.string.chat_question_next)
+                        } else {
+                            stringResource(R.string.chat_question_submit)
+                        },
+                        onClick = {
+                            if (activeIndex < prompt.questions.lastIndex) activeIndex += 1
+                            else onSubmit(AidenQuestionRespondRequest(cancelled = false, answers = answers))
+                        },
+                        enabled = enabled && (activeIndex < prompt.questions.lastIndex || answers.isNotEmpty())
                     )
                 }
             }

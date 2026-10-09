@@ -1966,7 +1966,9 @@ export function EnvironmentWorkbench({
       data-environment-surface-mode={panel.surfaceMode}
       data-quick-view-open={quickViewOpen ? "true" : "false"}
       data-environment-stacked={stacked ? "true" : "false"}
-      className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden"
+      // Offscreen panels are clipped at the workbench boundary. A scrollport
+      // here lets focus/scrollIntoView pan the entire chat beneath the sidebar.
+      className="relative flex h-full min-h-0 w-full flex-1 overflow-clip"
     >
       <div
         data-browser-floating-container

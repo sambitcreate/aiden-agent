@@ -9,6 +9,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
 import org.junit.Assert.assertEquals
@@ -43,6 +48,37 @@ class AidenQuestionCardUiTest {
         expiresAt = Instant.now().plusSeconds(300),
         canRespond = true
     )
+
+    @Test
+    fun longQuestionnaireKeepsLastAnswerAndSubmitReachableInSmallWindow() {
+        var submitted: AidenQuestionRespondRequest? = null
+        val longPrompt = prompt().copy(questions = (0..3).map { index ->
+            AidenRemoteQuestion(
+                question = "Choose the timing for task ${index + 1}",
+                header = "Task ${index + 1}", multiSelect = false,
+                options = listOf(option("Morning ${index + 1}"), option("Evening ${index + 1}"))
+            )
+        })
+        compose.setContent {
+            AidenTheme {
+                Box(Modifier.height(240.dp)) {
+                    AidenQuestionCard(prompt = longPrompt, enabled = true, onSubmit = { submitted = it })
+                }
+            }
+        }
+        compose.onNodeWithText("Morning 1").performScrollTo().performClick()
+        compose.onNodeWithText("4. Task 4").performScrollTo().performClick()
+        compose.onNodeWithText("Morning 1").assertDoesNotExist()
+        compose.onNodeWithText("Evening 4").performScrollTo().performClick()
+        compose.onNodeWithText("1. Task 1").performScrollTo().performClick()
+        compose.onNodeWithText("Morning 1").assertIsOn()
+        compose.onNodeWithText("4. Task 4").performScrollTo().performClick()
+        compose.onNodeWithText("Submit").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(AidenQuestionAnswer.Option(0, "Morning 1"), AidenQuestionAnswer.Option(3, "Evening 4")), submitted?.answers)
+            assertEquals(false, submitted?.cancelled)
+        }
+    }
 
     @Test
     fun questionCardSubmitsSingleChoiceAnswer() {
