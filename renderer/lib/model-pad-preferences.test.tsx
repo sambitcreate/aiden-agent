@@ -157,3 +157,17 @@ test("overlapping pin saves never lose an update when replies arrive late", asyn
   assert.deepEqual(cachedPins(), ["p::x", "p::y", "p::z"]);
   assert.equal(server.exaEnabled, true);
 });
+
+test("an update that changes nothing sends no write and leaves the cache alone", async () => {
+  const initial: AppSettings = { pinnedModels: ["p::x"] };
+  const server = settingsServer(initial);
+  const client = createBotTestQueryClient();
+  await client.fetchQuery({ queryKey: queryKeys.settings, queryFn: async () => structuredClone(initial) });
+  const before = client.getQueryData<AppSettings>(queryKeys.settings);
+
+  const result = await saveModelPadPreferences(client, () => ({}));
+
+  assert.ok(!server.calls.some((call) => call.channel === "settings:set"));
+  assert.equal(client.getQueryData<AppSettings>(queryKeys.settings), before);
+  assert.deepEqual(result.pinnedModels, ["p::x"]);
+});

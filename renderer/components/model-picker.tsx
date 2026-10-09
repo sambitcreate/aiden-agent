@@ -447,20 +447,6 @@ function ModelHoverDetails({
   );
 }
 
-/** Keeps the previous catalog object while every provider's cached answer is unchanged. */
-function useStableModelInfo(
-  data: Record<string, Record<string, ModelInfo>>,
-): Record<string, Record<string, ModelInfo>> {
-  const ref = React.useRef(data);
-  const previous = ref.current;
-  const keys = Object.keys(data);
-  const same =
-    keys.length === Object.keys(previous).length &&
-    keys.every((key) => previous[key] === data[key]);
-  if (!same) ref.current = data;
-  return same ? previous : data;
-}
-
 /** Matches the knob's 250ms confirm transition closely enough to read as one beat. */
 const PAD_COMMIT_CLOSE_DELAY_MS = 200;
 
@@ -505,10 +491,10 @@ export function ModelPicker({
   // The composer re-renders on every streamed token. Keep the catalog derivation
   // keyed on its real inputs, and derive list order and detail positions only
   // while the popover is open.
-  const catalogData = useStableModelInfo(catalog.data);
+  // `catalog.data` keeps its identity until some provider's model info changes.
   const allEntries = React.useMemo(
-    () => createModelEntries(providers, modelInfoByValue(providers, catalogData)),
-    [providers, catalogData],
+    () => createModelEntries(providers, modelInfoByValue(providers, catalog.data)),
+    [providers, catalog.data],
   );
   const entries = React.useMemo(
     () => visibleModelEntries(allEntries, hiddenModelsByProvider),

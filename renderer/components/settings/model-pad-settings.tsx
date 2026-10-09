@@ -359,10 +359,13 @@ function ModelPadBenchmarkConnection() {
 /** A burst of arrow-key nudges with shorter gaps than this is one save and one Undo step. */
 const NUDGE_BURST_MS = 500;
 const SAVE_ERROR_MESSAGE = "Aiden couldn’t save your Model Pad.";
+/** Every action toast shares one id, so only the latest action is ever undoable. */
+const ACTION_TOAST_ID = "model-pad-action";
 
 /** A move shown on the Pad ahead of its save: a dropped drag, or an open nudge burst. */
 interface PendingModelPadMove {
   value: string;
+  /** Provider-qualified, since one model can be on the Pad through two providers. */
   label: string;
   placement: ModelPadPlacement;
   gridSize: number;
@@ -391,6 +394,9 @@ export function ModelPadSettings() {
   const [pendingMove, setPendingMove] = React.useState<PendingModelPadMove>();
   const pendingMoveRef = React.useRef<PendingModelPadMove | undefined>(undefined);
   const nudgeTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Bumped by every save and Undo; an older generation's toast or Undo is stale.
+  const saveGenerationRef = React.useRef(0);
+  const browseButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const [filter, setFilter] = React.useState("");
   const [activeValue, setActiveValue] = React.useState<string>();
   const [benchmarkMetric, setBenchmarkMetric] = React.useState<ModelBenchmarkMetric>("coding");
@@ -598,6 +604,7 @@ export function ModelPadSettings() {
       clearTimeout(nudgeTimerRef.current);
       pendingMoveRef.current = undefined;
       setPendingMove(undefined);
+      saveGenerationRef.current += 1;
       savePadPreferences({ modelPadPlacements: snapshot }).catch(() => {
         toast.error(SAVE_ERROR_MESSAGE);
       });
@@ -614,18 +621,29 @@ export function ModelPadSettings() {
     (compute: (current: ModelPadPlacements) => ModelPadAction | null) => {
       let snapshot: ModelPadPlacements | undefined;
       let message = "";
+      let generation = 0;
       return savePadPreferences((current) => {
         const action = compute(current.placements);
+        // A no-op writes nothing and leaves the latest toast undoable.
         if (!action) return {};
+        generation = ++saveGenerationRef.current;
         snapshot = current.placements;
         message = action.message;
         return { modelPadPlacements: action.placements };
       }).then(
         () => {
           const before = snapshot;
-          if (!before) return;
+          // A later action or Undo owns the toast now; undoing this one
+          // would silently revert everything after it.
+          if (!before || generation !== saveGenerationRef.current) return;
           toast(message, {
-            action: { label: "Undo", onClick: () => restorePlacements(before) },
+            id: ACTION_TOAST_ID,
+            action: {
+              label: "Undo",
+              onClick: () => {
+                if (generation === saveGenerationRef.current) restorePlacements(before);
+              },
+            },
           });
         },
         () => {
@@ -691,7 +709,7 @@ export function ModelPadSettings() {
   const dropPlacement = (entry: ModelEntry, point: ModelPadPoint) => {
     showPendingMove({
       value: entry.value,
-      label: entry.label,
+      label: placementLabel(entry),
       placement: { ...point, xSource: "user", ySource: "user" },
       gridSize,
       visibleValues,
@@ -712,7 +730,7 @@ export function ModelPadSettings() {
     if (modelPadPointKey(point, gridSize) === modelPadPointKey(placement, gridSize)) return;
     showPendingMove({
       value,
-      label: entry.label,
+      label: placementLabel(entry),
       placement: {
         ...placement,
         ...point,
@@ -732,7 +750,7 @@ export function ModelPadSettings() {
     setActiveValue(entry.value);
     void persistAction((current) => {
       const next = addModelPadPlacement(current, visibleValues, entry.value);
-      return next === current ? null : { placements: next, message: `Added ${entry.label}` };
+      return next === current ? null : { placements: next, message: `Added ${placementLabel(entry)}` };
     });
   };
 
@@ -743,13 +761,15 @@ export function ModelPadSettings() {
       if (!current[entry.value]) return null;
       const next = { ...current };
       delete next[entry.value];
-      return { placements: next, message: `Removed ${entry.label}` };
+      return { placements: next, message: `Removed ${placementLabel(entry)}` };
     });
   };
 
   const removeAll = () => {
     flushPendingMove();
     setActiveValue(undefined);
+    // Pad management closes once the Pad is empty; keep focus on a stable control.
+    browseButtonRef.current?.focus();
     void persistAction((current) =>
       Object.keys(current).length > 0 ? { placements: {}, message: "Cleared the Pad" } : null,
     );
@@ -823,6 +843,7 @@ export function ModelPadSettings() {
           </div>
           <div className="model-pad-toolbar-actions flex flex-wrap justify-end gap-2">
             <Button
+              ref={browseButtonRef}
               size="small"
               variant={activePanel === "models" ? "filled" : "transparent"}
               aria-expanded={activePanel === "models"}

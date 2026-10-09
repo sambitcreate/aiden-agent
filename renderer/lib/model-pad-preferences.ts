@@ -58,6 +58,7 @@ const saveQueues = new WeakMap<QueryClient, SaveQueue>();
  *   late reply to an older write never rolls back a newer optimistic state.
  *
  * Each field in the patch replaces the stored value; omitted fields are untouched.
+ * An empty patch writes nothing and resolves with the current settings.
  */
 export async function saveModelPadPreferences(
   queryClient: QueryClient,
@@ -78,6 +79,13 @@ export async function saveModelPadPreferences(
   // optimistic write and the ticket cannot interleave with another save.
   const previous = queryClient.getQueryData<AppSettings>(queryKeys.settings);
   const patch = typeof update === "function" ? update(modelPadPreferencesFrom(previous)) : update;
+  // Nothing to store: skip the disk write (and any error it could raise).
+  if (Object.keys(patch).length === 0) {
+    return (
+      previous ??
+      queryClient.ensureQueryData({ queryKey: queryKeys.settings, queryFn: settingsApi.get })
+    );
+  }
   if (previous) queryClient.setQueryData<AppSettings>(queryKeys.settings, { ...previous, ...patch });
   const ticket = ++queue.latest;
   const write = queue.tail.catch(() => undefined).then(() => settingsApi.set(patch));

@@ -176,9 +176,10 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
   await expect(marker).not.toHaveAttribute("style", before!);
   // The editor autosaves: the nudge burst settles into one save with an Undo toast.
   const moved = page.locator("[data-sonner-toast]", {
-    hasText: `Moved ${E2E_MODEL_DISPLAY_NAME}`,
+    hasText: new RegExp(`Moved ${E2E_MODEL_DISPLAY_NAME} from `, "u"),
   });
   await expect(moved).toBeVisible();
-  await expect(moved.getByRole("button", { name: "Undo", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Save Pad", exact: true })).toHaveCount(0);
+  await moved.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(marker).toHaveAttribute("style", before!);
 });
