@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
@@ -188,14 +188,19 @@ test("Gemini without a key collects one, then saves voice without needing a chat
   fireEvent.click(within(disclosure).getByRole("button", { name: "Continue to API key" }));
 
   const editor = await screen.findByRole("dialog", { name: "Set up Google" });
-  fireEvent.click(within(editor).getByRole("button", { name: "Enter API key" }));
+  // The editor's async setup session updates state after the click; let it settle inside act.
+  await act(async () => {
+    fireEvent.click(within(editor).getByRole("button", { name: "Enter API key" }));
+  });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "providers:auth:start")));
   const start = calls.find((call) => call.channel === "providers:auth:start")!.args[0] as { flowId: string };
 
   // Pi stores the key; Google still has no chat models, which voice-only setup accepts.
   providers = [{ ...(providers[0] as object), hasKey: true, models: [] }];
   assert.ok(!calls.some((call) => call.channel === "settings:setGeminiVoiceSetup"));
-  emitBotTestNotification("providers:auth:done", { flowId: start.flowId, providerId: "google", cancelled: false });
+  await act(async () => {
+    emitBotTestNotification("providers:auth:done", { flowId: start.flowId, providerId: "google", cancelled: false });
+  });
 
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setGeminiVoiceSetup")));
   assert.equal(screen.queryByText(/no usable chat model/), null);

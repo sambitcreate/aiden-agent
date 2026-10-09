@@ -4,6 +4,11 @@
 // time and peak RSS, and deletes everything afterwards.
 //
 // Run with `npm run test:stt-smoke`. Never part of `npm test` or CI.
+//
+// Needs two macOS voices: "Samantha" (English; required, the test skips
+// without it) and "Anna" (German; without it the Whisper language-switch and
+// Canary German/translate checks are skipped). Add missing voices in System
+// Settings → Accessibility → Spoken Content → System Voice → Manage Voices.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -21,6 +26,22 @@ const SKIP_REASON = "set AIDEN_STT_SMOKE=1 on macOS to run the on-device speech 
 const PHRASE = "The quick brown fox jumps over the lazy dog";
 const VAD_MODEL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../resources/speech/silero_vad.onnx");
 const SAMPLE_RATE = 16_000;
+const ENGLISH_VOICE = "Samantha";
+const GERMAN_VOICE = "Anna";
+const VOICE_HELP = "add it in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices";
+
+/** Installed `say` voice names, or an empty set when they can't be listed. */
+function installedVoices(): Set<string> {
+  if (process.platform !== "darwin") return new Set();
+  try {
+    const listing = execFileSync("say", ["-v", "?"]).toString();
+    // Lines look like "Anna (German (Germany)) de_DE    # Hallo!…" or "Albert      en_US    # …".
+    return new Set(listing.split("\n").map((line) => /^(.+?)(?:\s+\(|\s{2,})/.exec(line)?.[1] ?? "").filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+const VOICES = installedVoices();
 const GERMAN_PHRASE = "Guten Morgen, ich möchte heute einen Kaffee trinken.";
 // About 90 seconds of speech: numbered sentences so the first and last can be
 // checked after VAD segmentation into Whisper's 30 s windows.
@@ -29,7 +50,7 @@ LONG_SENTENCES[0] = "Pineapple begins the long recording.";
 LONG_SENTENCES[LONG_SENTENCES.length - 1] = "Elephant ends the long recording.";
 
 /** Speaks the phrase with macOS `say` and returns 16 kHz mono float PCM. */
-function spokenPhrase(scratch: string, voice = "Samantha", phrase = PHRASE): Float32Array {
+function spokenPhrase(scratch: string, voice = ENGLISH_VOICE, phrase = PHRASE): Float32Array {
   const aiff = path.join(scratch, "smoke.aiff");
   const wav = path.join(scratch, "smoke.wav");
   execFileSync("say", ["-v", voice, "-o", aiff, phrase]);
@@ -55,14 +76,15 @@ function transcribe(spec: SpeechModelSpec, dir: string, samples: Float32Array, l
   return result;
 }
 
-test("every catalog model transcribes a spoken phrase and returns nothing for silence", { skip: ENABLED ? false : SKIP_REASON, timeout: 60 * 60_000 }, async (t) => {
+test("every catalog model transcribes a spoken phrase and returns nothing for silence", { skip: !ENABLED ? SKIP_REASON : !VOICES.has(ENGLISH_VOICE) ? `macOS voice "${ENGLISH_VOICE}" is not installed; ${VOICE_HELP}` : false, timeout: 60 * 60_000 }, async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "aiden-stt-smoke-"));
   const rows: Row[] = [];
   try {
     const manager = createSpeechModelManager({ root: () => path.join(root, "voice-models") });
     const speech = spokenPhrase(root);
-    const germanSpeech = spokenPhrase(root, "Anna", GERMAN_PHRASE);
-    const longSpeech = spokenPhrase(root, "Samantha", LONG_SENTENCES.join(" "));
+    const germanSpeech = VOICES.has(GERMAN_VOICE) ? spokenPhrase(root, GERMAN_VOICE, GERMAN_PHRASE) : null;
+    if (!germanSpeech) t.diagnostic(`skipping German checks: macOS voice "${GERMAN_VOICE}" is not installed; ${VOICE_HELP}`);
+    const longSpeech = spokenPhrase(root, ENGLISH_VOICE, LONG_SENTENCES.join(" "));
     const silence = new Float32Array(10 * SAMPLE_RATE);
 
     for (const spec of SPEECH_MODELS) {
@@ -95,13 +117,15 @@ test("every catalog model transcribes a spoken phrase and returns nothing for si
           t.diagnostic(`whisper de="${german.text}" auto="${auto.text}"`);
           // German audio shows the switch has an effect: auto keeps German,
           // a forced "en" makes Whisper answer in English, and auto returns.
-          const heardGerman = transcribe(spec, dir, germanSpeech, null).text.toLowerCase();
-          const forcedEnglish = transcribe(spec, dir, germanSpeech, "en").text.toLowerCase();
-          const backToAuto = transcribe(spec, dir, germanSpeech, null).text.toLowerCase();
-          t.diagnostic(`whisper german auto="${heardGerman}" en="${forcedEnglish}" auto="${backToAuto}"`);
-          assert.ok(heardGerman.includes("morgen"), `auto heard "${heardGerman}"`);
-          assert.ok(forcedEnglish.includes("morning") && !forcedEnglish.includes("morgen"), `forced en heard "${forcedEnglish}"`);
-          assert.ok(backToAuto.includes("morgen"), `auto again heard "${backToAuto}"`);
+          if (germanSpeech) {
+            const heardGerman = transcribe(spec, dir, germanSpeech, null).text.toLowerCase();
+            const forcedEnglish = transcribe(spec, dir, germanSpeech, "en").text.toLowerCase();
+            const backToAuto = transcribe(spec, dir, germanSpeech, null).text.toLowerCase();
+            t.diagnostic(`whisper german auto="${heardGerman}" en="${forcedEnglish}" auto="${backToAuto}"`);
+            assert.ok(heardGerman.includes("morgen"), `auto heard "${heardGerman}"`);
+            assert.ok(forcedEnglish.includes("morning") && !forcedEnglish.includes("morgen"), `forced en heard "${forcedEnglish}"`);
+            assert.ok(backToAuto.includes("morgen"), `auto again heard "${backToAuto}"`);
+          }
 
           // A ~90 s recording is segmented into windows without dropping its ends.
           const long = transcribe(spec, dir, longSpeech).text.toLowerCase();
@@ -109,7 +133,7 @@ test("every catalog model transcribes a spoken phrase and returns nothing for si
           assert.ok(long.includes("pineapple") && long.includes("elephant"), `long clip heard "${long}"`);
         }
 
-        if (spec.family === "nemo-canary") {
+        if (spec.family === "nemo-canary" && germanSpeech) {
           const german = transcribe(spec, dir, germanSpeech, "de").text.toLowerCase();
           const translated = transcribe(spec, dir, germanSpeech, "de", "translate").text.toLowerCase();
           t.diagnostic(`canary de="${german}" translate="${translated}"`);

@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
@@ -63,12 +63,14 @@ test("a download in its verification phase says it is verifying", async () => {
   const canary = await card("Canary 180M Flash");
   fireEvent.click(within(canary).getByRole("button", { name: /Download/ }));
   await within(canary).findByText(/Downloading…/);
-  emitBotTestNotification("localModels:progress", {
-    id: "canary-180m-flash",
-    downloaded: 1,
-    total: 1,
-    percentage: 100,
-    phase: "verify",
+  act(() => {
+    emitBotTestNotification("localModels:progress", {
+      id: "canary-180m-flash",
+      downloaded: 1,
+      total: 1,
+      percentage: 100,
+      phase: "verify",
+    });
   });
   await within(canary).findByText(/Verifying…/);
   assert.equal(within(canary).queryByText(/Downloading…/), null);
@@ -79,12 +81,14 @@ test("after verification, the download reports that it is installing", async () 
   const canary = await card("Canary 180M Flash");
   fireEvent.click(within(canary).getByRole("button", { name: /Download/ }));
   await within(canary).findByText(/Downloading…/);
-  emitBotTestNotification("localModels:progress", {
-    id: "canary-180m-flash",
-    downloaded: 1,
-    total: 1,
-    percentage: 100,
-    phase: "extract",
+  act(() => {
+    emitBotTestNotification("localModels:progress", {
+      id: "canary-180m-flash",
+      downloaded: 1,
+      total: 1,
+      percentage: 100,
+      phase: "extract",
+    });
   });
   await within(canary).findByText("Installing…");
   assert.equal(within(canary).queryByText(/Downloading…|Verifying…/), null);

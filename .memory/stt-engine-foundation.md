@@ -61,7 +61,9 @@
 ## Verification (2026-10-09)
 
 - `npm run test:stt-smoke` (opt-in, never in CI; downloads ≈1.96 GB into a temp root and deletes it): all six
-  models transcribe "The quick brown fox jumps over the lazy dog" exactly and return `""` for 10 s of silence.
+  models transcribe "The quick brown fox jumps over the lazy dog" recognizably (the test checks for "quick" and "fox"; every model returned the full sentence, with casing that varies by model) and return `""` for 10 s of silence.
+  The test needs the macOS voices "Samantha" (required; the test skips without it) and "Anna" (German; its checks are skipped
+  without it); add them in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices.
   Moonshine `.ort` loads on 1.13.8, so it stays. Whisper: de → auto works on the same engine; German speech
   auto/en/auto gives German/English/German; a 112 s clip keeps both ends. Canary: `de` gives German, translate gives English.
 - Isolated RSS after load / peak (fresh process, short clips): parakeet-v3 1962/2000 MB, parakeet-v2 1940/1980,
