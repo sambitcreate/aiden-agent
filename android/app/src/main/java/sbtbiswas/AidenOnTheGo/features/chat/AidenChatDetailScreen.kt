@@ -1354,8 +1354,10 @@ private fun AssistantMessageRow(
 
     val displayText = projection?.finalText ?: message.text
     val visuals = message.visuals.orEmpty()
+    // Rows for the visuals that render; an html visual without a snapshot is left to its notice.
+    val rowVisuals = aidenVisualsWithRows(message)
     val chronologicalRows = if (isBotChat) null else
-        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, visuals)
+        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals)
     val progressText = projection?.progressText ?: ""
     // Visual snapshots render inside their visual rows, never as ordinary attachments.
     val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
@@ -1460,7 +1462,7 @@ private fun AssistantMessageRow(
             }
         }
         // Without a chronological timeline, visuals trail the reply in order.
-        visuals.forEach { visual ->
+        rowVisuals.forEach { visual ->
             key(visual.id) {
                 Spacer(modifier = Modifier.height(8.dp))
                 renderVisual(visual)
@@ -1562,6 +1564,21 @@ internal fun aidenUnsupportedHtmlArtifacts(message: AidenChatMessage): List<Aide
         .filter { it.kind == AidenChatVisual.KIND_HTML && aidenVisualDisplay(it, attachments).snapshot != null }
         .mapTo(HashSet()) { it.id }
     return message.htmlArtifacts.orEmpty().filterNot { it.id in shown }
+}
+
+/**
+ * Whether [visual] gets its own row. An html visual without a usable snapshot
+ * has nothing to show beyond its title, which the "view in Aiden Agent" notice
+ * already carries, so only that notice represents it. ui visuals always get a
+ * row (snapshot, else fallback text, else title).
+ */
+internal fun aidenVisualHasRow(visual: AidenChatVisual, attachments: List<AidenMessageAttachment>): Boolean =
+    visual.kind != AidenChatVisual.KIND_HTML || aidenVisualDisplay(visual, attachments).snapshot != null
+
+/** The message's visuals that render as rows, in reply order. */
+internal fun aidenVisualsWithRows(message: AidenChatMessage): List<AidenChatVisual> {
+    val attachments = message.attachments.orEmpty()
+    return message.visuals.orEmpty().filter { aidenVisualHasRow(it, attachments) }
 }
 
 private const val VISUAL_FALLBACK_COLLAPSED_LINES = 6

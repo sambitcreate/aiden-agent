@@ -50,6 +50,7 @@ import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualsWithRows
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
@@ -617,6 +618,29 @@ class AidenChatTest {
         val titleOnly = aidenVisualDisplay(html, emptyList())
         assertNull(titleOnly.snapshot)
         assertEquals("Weekly total", titleOnly.text)
+    }
+
+    @Test
+    fun htmlVisualWithoutASnapshotIsLeftToItsUnsupportedNotice() {
+        val message = fixtureVisualMessage()
+        val (html, ui) = message.visuals.orEmpty()
+        // With snapshots, both visuals get rows.
+        assertEquals(listOf(html.id, ui.id), aidenVisualsWithRows(message).map { it.id })
+
+        // Without one, the html visual is represented only by its notice; the ui visual keeps its fallback row.
+        val noSnapshots = message.copy(attachments = emptyList())
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(noSnapshots).map { it.id })
+        assertEquals(listOf(html.id), aidenUnsupportedHtmlArtifacts(noSnapshots).map { it.id })
+
+        // A ui visual with neither snapshot nor fallback text still shows its title.
+        val bareUi = noSnapshots.copy(visuals = listOf(ui.copy(fallbackText = null)))
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(bareUi).map { it.id })
+
+        // The chronological transcript built from those visuals carries no html row either.
+        val rows = AidenChronologicalProjection.rows(
+            noSnapshots.text, "", noSnapshots.timeline, aidenVisualsWithRows(noSnapshots)
+        )!!
+        assertEquals(listOf(ui.id), rows.mapNotNull { it.visual?.id })
     }
 
     @Test
