@@ -1,5 +1,39 @@
 import type { ChatMessage } from "./types";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
+import { isToolStep } from "../shared/generation-timeline";
+import type { AssistantPresentationRow } from "./assistant-message-presentation";
+
+export interface HtmlArtifactSlots {
+  byRowKey: Map<string, ChatHtmlArtifactV1[]>;
+  trailing: ChatHtmlArtifactV1[];
+}
+
+/** Put each artifact right after the activity row holding its producing tool call. */
+export function htmlArtifactSlots(
+  rows: readonly AssistantPresentationRow[] | null,
+  artifacts: readonly ChatHtmlArtifactV1[],
+  placements: ReadonlyMap<string, string>,
+): HtmlArtifactSlots {
+  const rowKeyByCall = new Map<string, string>();
+  for (const row of rows ?? []) {
+    if (row.kind !== "activity") continue;
+    for (const step of row.steps) if (isToolStep(step)) rowKeyByCall.set(step.toolCallId, row.key);
+  }
+  const byRowKey = new Map<string, ChatHtmlArtifactV1[]>();
+  const trailing: ChatHtmlArtifactV1[] = [];
+  for (const artifact of artifacts) {
+    const call = placements.get(artifact.mediaId);
+    const rowKey = call ? rowKeyByCall.get(call) : undefined;
+    if (!rowKey) {
+      trailing.push(artifact);
+      continue;
+    }
+    const list = byRowKey.get(rowKey);
+    if (list) list.push(artifact);
+    else byRowKey.set(rowKey, [artifact]);
+  }
+  return { byRowKey, trailing };
+}
 
 export interface HtmlArtifactTranscriptEntry {
   key: string;

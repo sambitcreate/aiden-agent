@@ -526,6 +526,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
+  const [streamingArtifactPlacements, setStreamingArtifactPlacements] = React.useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
     null,
@@ -1273,6 +1276,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            if (artifact.kind === "html" && event.toolCallId) {
+              const toolCallId = event.toolCallId;
+              // mediaIds are unique per generation, so this map only grows;
+              // entries for artifacts no longer shown are never looked up.
+              setStreamingArtifactPlacements((current) =>
+                current.get(artifact.mediaId) === toolCallId
+                  ? current
+                  : new Map(current).set(artifact.mediaId, toolCallId),
+              );
+            }
             if (artifact.kind === "html") {
               const index = streamingArtifactsRef.current.findIndex(
                 (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
@@ -2971,6 +2984,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingText={displayedStreamingText}
             streamingReasoning={displayedStreamingReasoning}
             streamingArtifacts={displayedStreamingArtifacts}
+            streamingArtifactPlacements={streamingArtifactPlacements}
             streamComplete={streamComplete || visibleDetachedProjection !== null}
             persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}

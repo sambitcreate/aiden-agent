@@ -22,7 +22,7 @@ import {
 } from "../lib/assistant-message-presentation";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
-import type { ChatArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatArtifactV1, ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { HtmlArtifactFrame } from "./html-artifact-frame";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
@@ -40,8 +40,8 @@ import {
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
 import {
+  htmlArtifactSlots,
   htmlArtifactTranscriptPlan,
-  type HtmlArtifactTranscriptEntry,
 } from "../lib/html-artifact-transcript";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
@@ -54,6 +54,8 @@ interface MessageListProps {
   streamingReasoning: string | null;
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
   streamingArtifacts?: readonly ChatArtifactV1[];
+  /** mediaId → producing render_artifact toolCallId for the live response. */
+  streamingArtifactPlacements?: ReadonlyMap<string, string>;
   streamComplete?: boolean;
   /** Persisted assistant message that duplicates the completed streaming row during handoff. */
   persistedHandoffMessageId?: string | null;
@@ -98,7 +100,15 @@ interface AssistantResponseProps {
   /** Settled turn facts; joins the tail action row, or stands alone without prose. */
   footer?: React.ReactNode;
   fork?: MessageForkAction;
+  /** HTML visuals this response owns, placed after their producing tool row. */
+  visuals?: readonly ChatHtmlArtifactV1[];
+  /** mediaId → render_artifact toolCallId. */
+  visualPlacements?: ReadonlyMap<string, string>;
+  renderVisual?: (artifact: ChatHtmlArtifactV1) => React.ReactNode;
 }
+
+const EMPTY_VISUALS: readonly ChatHtmlArtifactV1[] = [];
+const EMPTY_PLACEMENTS: ReadonlyMap<string, string> = new Map();
 
 function AssistantResponse({
   content,
@@ -113,8 +123,14 @@ function AssistantResponse({
   richLinks = true,
   footer,
   fork,
+  visuals = EMPTY_VISUALS,
+  visualPlacements = EMPTY_PLACEMENTS,
+  renderVisual,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
+  const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements);
+  const visualNodes = (artifacts: readonly ChatHtmlArtifactV1[] | undefined) =>
+    renderVisual && artifacts?.length ? artifacts.map(renderVisual) : null;
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
@@ -153,6 +169,7 @@ function AssistantResponse({
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
         {!content ? proselessActions(footer, fork) : null}
+        {visualNodes(slots.trailing)}
       </>
     );
   }
@@ -190,6 +207,7 @@ function AssistantResponse({
                 timeline={activityTimelineFragment(timeline, row.steps)}
                 animate={streaming}
               />
+              {visualNodes(slots.byRowKey.get(row.key))}
               {subagentActivityKey === row.key ? subagentChips : null}
             </React.Fragment>
           );
@@ -216,6 +234,7 @@ function AssistantResponse({
         <MessageAttachments attachments={attachments} role="assistant" />
       ) : null}
       {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
+      {visualNodes(slots.trailing)}
     </>
   );
 }
@@ -248,6 +267,10 @@ interface SettledMessageRowProps {
   forkDisabledReason?: string | null;
   /** Stable like `onFork`; present when a fork from this row can summarize what followed. */
   onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
+  /** HTML visuals this row currently owns (live copies win during handoff). */
+  visuals?: readonly ChatHtmlArtifactV1[];
+  /** Stable across renders so settled rows stay memoized. */
+  renderVisual?: (artifact: ChatHtmlArtifactV1) => React.ReactNode;
 }
 
 /**
@@ -263,7 +286,13 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   onFork,
   forkDisabledReason,
   onForkWithSummary,
+  visuals,
+  renderVisual,
 }: SettledMessageRowProps) {
+  const visualPlacements = React.useMemo(
+    () => new Map((message.htmlArtifactPlacements ?? []).map((p) => [p.mediaId, p.toolCallId])),
+    [message.htmlArtifactPlacements],
+  );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
     if (!onFork || (message.role !== "user" && message.role !== "assistant")) return undefined;
     const position: ChatForkPosition = message.role === "user" ? "before" : "after";
@@ -293,6 +322,9 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
                 <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
               ) : undefined
             }
+            visuals={visuals}
+            visualPlacements={visualPlacements}
+            renderVisual={renderVisual}
           />
           {message.providerFailure ? (
             <ProviderFailureCallout failure={message.providerFailure} />
@@ -348,6 +380,7 @@ export function MessageList({
   streamingText,
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
+  streamingArtifactPlacements = EMPTY_PLACEMENTS,
   streamComplete,
   persistedHandoffMessageId = null,
   onStreamHandoffComplete,
@@ -426,15 +459,23 @@ export function MessageList({
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
     [liveHtmlArtifacts, messages, streamingRowVisible],
   );
+  // The plan decides which anchor owns each artifact (live copies win during
+  // handoff); the owning response then places it after its tool row.
   const htmlArtifactsByAnchor = React.useMemo(() => {
-    const entries = new Map<string, HtmlArtifactTranscriptEntry[]>();
+    const entries = new Map<string, ChatHtmlArtifactV1[]>();
     for (const entry of htmlArtifactPlan) {
       const anchored = entries.get(entry.anchor) ?? [];
-      anchored.push(entry);
+      anchored.push(entry.artifact);
       entries.set(entry.anchor, anchored);
     }
     return entries;
   }, [htmlArtifactPlan]);
+  const renderVisual = React.useCallback(
+    (artifact: ChatHtmlArtifactV1) => (
+      <HtmlArtifactFrame key={`html:${artifact.mediaId}`} chatId={chatId} artifact={artifact} />
+    ),
+    [chatId],
+  );
 
   React.useEffect(() => {
     const captureFocusedChip = (target: EventTarget | null) => {
@@ -494,14 +535,6 @@ export function MessageList({
     }
   });
 
-  const artifactFrames = (anchor: string) =>
-    (htmlArtifactsByAnchor.get(anchor) ?? []).map((entry) => (
-      <HtmlArtifactFrame
-        key={entry.key}
-        chatId={chatId}
-        artifact={entry.artifact}
-      />
-    ));
 
   const transcriptRows: React.ReactNode[] = [];
   const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
@@ -519,9 +552,10 @@ export function MessageList({
         onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
         forkDisabledReason={forkDisabledReason}
         onForkWithSummary={summaryRows?.has(message.id) ? stableOnForkWithSummary : undefined}
+        visuals={htmlArtifactsByAnchor.get(`message:${message.id}`)}
+        renderVisual={renderVisual}
       />,
     );
-    transcriptRows.push(...artifactFrames(`message:${message.id}`));
     if (forkSummary?.afterMessageId === message.id) {
       transcriptRows.push(<React.Fragment key="fork-summary">{forkSummary.node}</React.Fragment>);
     }
@@ -543,10 +577,12 @@ export function MessageList({
           streaming
           streamComplete={streamComplete}
           onStreamHandoffComplete={onStreamHandoffComplete}
+          visuals={htmlArtifactsByAnchor.get("streaming")}
+          visualPlacements={streamingArtifactPlacements}
+          renderVisual={renderVisual}
         />
       </div>,
     );
-    transcriptRows.push(...artifactFrames("streaming"));
   }
 
   return (
