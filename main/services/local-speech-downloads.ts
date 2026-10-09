@@ -113,6 +113,26 @@ async function fileSize(file: string): Promise<number> {
   }
 }
 
+/**
+ * Bytes already in a partial download. A non-regular entry at the partial path
+ * (a directory, say) is a local write problem, not download bytes. It is
+ * reported as a disk failure before any size is read, and it is never removed
+ * here, so a resume cannot try to delete it non-recursively.
+ */
+export async function partialDownloadBytes(file: string): Promise<number> {
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.lstat(file);
+  } catch {
+    return 0;
+  }
+  if (!stat.isFile()) {
+    const code = stat.isDirectory() ? "EISDIR" : "EEXIST";
+    throw new DiskFailure(Object.assign(new Error(`${file} is not a regular file`), { code }));
+  }
+  return stat.size;
+}
+
 async function sha256File(file: string, signal: AbortSignal): Promise<string> {
   const hash = createHash("sha256");
   const stream = fs.createReadStream(file, { signal });
@@ -234,7 +254,7 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
 
     try {
       await fs.promises.mkdir(path.dirname(part), { recursive: true, mode: 0o700 });
-      let have = await fileSize(part);
+      let have = await partialDownloadBytes(part);
       if (have > total) {
         await fs.promises.rm(part, { force: true });
         have = 0;
