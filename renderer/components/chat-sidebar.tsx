@@ -77,6 +77,7 @@ import { chatRowStateFor } from "../lib/chat-activity";
 import { isChatUnread } from "../shared/chat-row-state";
 import { ChatRowStatus } from "./chat-row-status";
 import { ChatRowContextGlyphs } from "./chat-row-context";
+import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
@@ -483,16 +484,6 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace])),
     [workspaces],
   );
-  // Sorted so re-ordering chats keeps the same cache-only read.
-  const sidebarChatIds = React.useMemo(
-    () =>
-      (chats.data ?? [])
-        .slice(0, MAX_SIDEBAR_PULL_REQUEST_CHATS)
-        .map((chat) => chat.id)
-        .sort(),
-    [chats.data],
-  );
-  const sidebarPullRequests = useSidebarChatPullRequests(sidebarChatIds).data ?? {};
   const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [search, setSearch] = React.useState("");
   const initialPreferences = React.useMemo(
@@ -514,6 +505,18 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
   } | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = React.useState(
     () => new Set(initialPreferences.expandedWorkspaceIds),
+  );
+  const sidebarChatIds = React.useMemo(
+    () => sidebarPullRequestChatIds(chats.data ?? [], expandedWorkspaceIds, MAX_SIDEBAR_PULL_REQUEST_CHATS),
+    [chats.data, expandedWorkspaceIds],
+  );
+  const sidebarPullRequestsQuery = useSidebarChatPullRequests(sidebarChatIds);
+  const sidebarPullRequests = sidebarPullRequestsQuery.data?.rows ?? {};
+  // Only chats the bulk read actually asked about have known dismissals; a
+  // missing entry for any other chat is not proof that nothing was unlinked.
+  const sidebarPullRequestsKnown = React.useMemo(
+    () => new Set(sidebarPullRequestsQuery.data?.chatIds ?? []),
+    [sidebarPullRequestsQuery.data?.chatIds],
   );
   const [fullyRevealedWorkspaceIds, setFullyRevealedWorkspaceIds] = React.useState(
     () => new Set<string>(),
@@ -1088,7 +1091,7 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
     }
   }, []);
 
-  const renderChatRow = (chat: ChatMeta, indented = false) => {
+  const renderChatRow = (chat: ChatMeta, indented = false, liveContext = false) => {
     const shortcutNumber = shortcutNumberByChatId.get(chat.id);
     const shortcutBinding = shortcutNumber
       ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
@@ -1147,12 +1150,13 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
                     {prettyAccelerator(shortcutBinding)}
                   </kbd>
                 ) : null}
-                {/* Indented rows sit in an expanded workspace group; only those read
-                    live branch PRs, as the old group indicator did. */}
+                {/* Only rows in a group the user expanded (not one search opened)
+                    read live branch PRs, as the old group indicator did, and only
+                    once their dismissals are known. */}
                 <ChatRowContextGlyphs
                   workspace={chat.workspaceId ? workspacesById.get(chat.workspaceId) : undefined}
                   pullRequests={sidebarPullRequests[chat.id]}
-                  live={indented}
+                  live={liveContext && sidebarPullRequestsKnown.has(chat.id)}
                 />
                 <ChatRowStatus state={rowState} unread={unread} />
               </>
@@ -1232,10 +1236,10 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
     />
   );
 
-  const renderSidebarChat = (summary: SidebarRow, indented = false) =>
+  const renderSidebarChat = (summary: SidebarRow, indented = false, liveContext = false) =>
     isRemoteSidebarChat(summary)
       ? renderRemoteChatRow(summary, indented)
-      : renderChatRow(summary.chat, indented);
+      : renderChatRow(summary.chat, indented, liveContext);
 
   // A workspace that lives only on a paired host. Its rows are last-known while the
   // host is unreachable, and nothing here changes the host's data.
@@ -1702,7 +1706,7 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
-                          {visibleChats.map((summary) => renderSidebarChat(summary, true))}
+                          {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
                           {group.chats.length === 0 ? (
                             <SidebarListItem
                               className="pl-9 text-secondary"

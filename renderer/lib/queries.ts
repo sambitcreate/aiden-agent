@@ -516,7 +516,8 @@ export function useChatCurrentPullRequest(chatId: string | undefined, enabled = 
 export function useSidebarChatPullRequests(chatIds: readonly string[]) {
   return useQuery({
     queryKey: queryKeys.chatPullRequestsSidebar(chatIds),
-    queryFn: () => pullRequestsApi.sidebar(chatIds),
+    // Carry the asked-about ids so rows can tell "no dismissals" from "not read yet".
+    queryFn: async () => ({ chatIds: [...chatIds], rows: await pullRequestsApi.sidebar(chatIds) }),
     enabled: chatIds.length > 0,
     staleTime: 30_000,
     placeholderData: keepPreviousData,

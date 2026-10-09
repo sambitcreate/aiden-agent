@@ -8,10 +8,12 @@ Branch `worktree-sidebar-status-icons`, desktop only, with no Remote contract ch
 
 ## Implementation
 - `ChatPullRequestService.sidebar(chatIds)` and IPC `pullRequests:sidebar` return `ChatSidebarPullRequests` for each chat: the best linked PR from cached snapshots (`resolveCurrentPullRequest(links, {})`) and the dismissed ref keys. They **never call GitHub**.
-- `parseSidebarChatIds` keeps only safe, unique ids and refuses anything over `MAX_SIDEBAR_PULL_REQUEST_CHATS` (500). The newest 500 chats are asked about; older chats show no linked-PR glyph.
+- `parseSidebarChatIds` keeps only safe, unique ids and refuses anything over `MAX_SIDEBAR_PULL_REQUEST_CHATS` (500).
+- Up to 500 chats are asked about (`sidebarPullRequestChatIds`): chats in expanded workspace groups first, then the newest of the rest. Chats outside that set show no linked-PR glyph.
+- The query result carries the ids it asked about (`{ chatIds, rows }`), so a row can tell "no dismissals" apart from "not read yet".
 - `useSidebarChatPullRequests(sortedIds)` is a single query, invalidated by `chats:pull-requests-changed` in `root-view.tsx`.
 - **Live branch reads:**
-  - `ChatRowContextGlyphs` reads `useGitPullRequestStatus` only for rows marked `live`, which means indented rows inside an expanded workspace group.
+  - `ChatRowContextGlyphs` reads `useGitPullRequestStatus` only for rows marked `live`: rows in a group the user **explicitly** expanded (not one search opened) whose dismissals the bulk read has loaded. Unknown metadata never permits branch-PR fallback (PR #427 review).
   - The workspace must also be a managed worktree whose linked PR is not already merged.
   - This matches the old group indicator's polling footprint. The chronological view makes no GitHub reads.
 - **`sidebarRowPullRequest` merge rules:**

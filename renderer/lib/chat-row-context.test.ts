@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatPullRequestView } from "../shared/chat-pull-requests";
-import { rowPullRequestLabel, sidebarRowPullRequest } from "./chat-row-context";
+import { rowPullRequestLabel, sidebarPullRequestChatIds, sidebarRowPullRequest } from "./chat-row-context";
 import type { GitHubPullRequestSummary } from "./types";
 
 function linked(number: number, overrides: Partial<ChatPullRequestView> = {}): ChatPullRequestView {
@@ -97,4 +97,18 @@ test("labels only mention checks for open, ready PRs", () => {
     rowPullRequestLabel(sidebarRowPullRequest(linked(3, { checksState: null }), undefined)!),
     "Pull request #3, open",
   );
+});
+
+test("the bounded PR read keeps older chats in expanded groups ahead of newer collapsed ones", () => {
+  const chats = [
+    { id: "new-collapsed", workspaceId: "w-collapsed" },
+    { id: "newer-loose" },
+    { id: "old-expanded", workspaceId: "w-open" },
+    { id: "oldest-collapsed", workspaceId: "w-collapsed" },
+  ];
+  assert.deepEqual(
+    sidebarPullRequestChatIds(chats, new Set(["w-open"]), 2),
+    ["new-collapsed", "old-expanded"],
+  );
+  assert.deepEqual(sidebarPullRequestChatIds(chats, new Set(), 2), ["new-collapsed", "newer-loose"]);
 });

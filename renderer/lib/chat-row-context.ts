@@ -96,3 +96,22 @@ export function rowPullRequestLabel(pullRequest: SidebarRowPullRequest): string 
 export function rowWorktreeLabel(branch: string): string {
   return `Worktree on ${branch}`;
 }
+
+/**
+ * The chats the sidebar's bounded cache-only PR read asks about. Chats in
+ * expanded workspace groups come first, so every row that may read a live
+ * branch PR also has its links and dismissals; then the newest of the rest.
+ * Sorted, so re-ordering chats keeps the same read.
+ */
+export function sidebarPullRequestChatIds(
+  chats: readonly { id: string; workspaceId?: string | null }[],
+  expandedWorkspaceIds: ReadonlySet<string>,
+  max: number,
+): string[] {
+  const expanded = (chat: { workspaceId?: string | null }) =>
+    Boolean(chat.workspaceId && expandedWorkspaceIds.has(chat.workspaceId));
+  return [...chats.filter(expanded), ...chats.filter((chat) => !expanded(chat))]
+    .slice(0, max)
+    .map((chat) => chat.id)
+    .sort();
+}
