@@ -1915,5 +1915,173 @@
     }
   },
   "botAvatarPalette": {"face":"#292735","colors":{"lilac":"#C6A9FF","sky":"#83D8FF","mint":"#88E8B1","sun":"#FFDA7B","periwinkle":"#B2BCFF","coral":"#FF9F9B","peach":"#FFC294","aqua":"#78E8DF","rose":"#FFA3C7","lime":"#C6EC7E","plum":"#DDA8F2","graphite":"#C5C5CE"}},
-  "botSessionFailedTurns": [{"type":"failed_turn","id":"entry_14:failed","createdAt":"2026-08-19T16:00:05.000Z","retryText":"Plan my week, please."},{"type":"failed_turn","id":"entry_16:failed"}]
+  "botSessionFailedTurns": [{"type":"failed_turn","id":"entry_14:failed","createdAt":"2026-08-19T16:00:05.000Z","retryText":"Plan my week, please."},{"type":"failed_turn","id":"entry_16:failed"}],
+  "botMemory": {
+    "botId": "bot_fixture_01",
+    "revision": "9f2c1a0b7d3e4f51",
+    "readable": true,
+    "memory": {
+      "entries": [
+        {
+          "id": "a1b2c3d4e5f60718",
+          "text": "Weekly meal plan is vegetarian except Fridays."
+        }
+      ],
+      "usedChars": 46,
+      "limitChars": 2200,
+      "overBudget": false
+    },
+    "user": {
+      "entries": [
+        {
+          "id": "0f1e2d3c4b5a6978",
+          "text": "Prefers short answers."
+        },
+        {
+          "id": "1122334455667788",
+          "text": "Has two kids, Mia (8) and Leo (5)."
+        }
+      ],
+      "usedChars": 58,
+      "limitChars": 1375,
+      "overBudget": false
+    },
+    "updatedAt": "2026-08-19T15:00:00.000Z"
+  },
+  "botMemoryEdit": {
+    "request": {
+      "edit": {
+        "kind": "replace",
+        "target": "user",
+        "entryId": "0f1e2d3c4b5a6978",
+        "text": "Prefers short, friendly answers."
+      }
+    },
+    "response": {
+      "ok": true,
+      "view": {
+        "botId": "bot_fixture_01",
+        "revision": "7a7a7a7a7a7a7a7a",
+        "readable": true,
+        "memory": {
+          "entries": [
+            {
+              "id": "a1b2c3d4e5f60718",
+              "text": "Weekly meal plan is vegetarian except Fridays."
+            }
+          ],
+          "usedChars": 46,
+          "limitChars": 2200,
+          "overBudget": false
+        },
+        "user": {
+          "entries": [
+            {
+              "id": "5e5e5e5e5e5e5e5e",
+              "text": "Prefers short, friendly answers."
+            },
+            {
+              "id": "1122334455667788",
+              "text": "Has two kids, Mia (8) and Leo (5)."
+            }
+          ],
+          "usedChars": 68,
+          "limitChars": 1375,
+          "overBudget": false
+        },
+        "updatedAt": "2026-08-19T15:05:00.000Z"
+      }
+    },
+    "errors": [
+      {
+        "status": 404,
+        "code": "memory_entry_not_found"
+      },
+      {
+        "status": 422,
+        "code": "memory_over_budget"
+      },
+      {
+        "status": 422,
+        "code": "memory_blocked"
+      }
+    ]
+  },
+  "botRoutineProposalRespond": {
+    "request": {
+      "decision": "accept"
+    },
+    "response": {
+      "status": "accepted",
+      "routineId": "task_fixture_routine_03"
+    }
+  },
+  "botRoutineSuggestions": {
+    "suggestions": [
+      {
+        "id": "daily-check-in",
+        "name": "Daily check-in",
+        "prompt": "Check in briefly. Using what you remember about me and anything new you can see, share one or two things worth knowing today.",
+        "schedule": {
+          "kind": "daily",
+          "time": "09:00"
+        },
+        "label": "Every day at 9:00 AM"
+      }
+    ]
+  },
+  "botRoutineNotifications": {
+    "notifications": [
+      {
+        "id": "run_fixture_bot_01",
+        "botId": "bot_fixture_01",
+        "botName": "Scout",
+        "routineId": "task_fixture_routine_01",
+        "routineName": "Morning brief",
+        "status": "succeeded",
+        "finishedAt": "2026-08-19T15:00:09.000Z",
+        "preview": "Your first meeting is at 9:30 with Priya."
+      }
+    ],
+    "now": "2026-08-19T15:01:00.000Z"
+  },
+  "botSessionCards": {
+    "botId": "bot_fixture_01",
+    "epoch": "epoch_fixture_01",
+    "seq": 3,
+    "state": "idle",
+    "interrupted": false,
+    "partial": null,
+    "entries": [
+      {
+        "type": "memory_update",
+        "id": "entry_20",
+        "createdAt": "2026-08-19T15:02:00.000Z"
+      },
+      {
+        "type": "routine_proposal",
+        "id": "entry_21",
+        "proposalId": "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11",
+        "name": "Daily check-in",
+        "prompt": "Check in briefly…",
+        "label": "Every day at 9:00 AM",
+        "status": "pending",
+        "createdAt": "2026-08-19T15:02:05.000Z"
+      },
+      {
+        "type": "routine_proposal",
+        "id": "entry_22",
+        "proposalId": "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
+        "name": "Weekly meal plan",
+        "prompt": "Plan this week's meals.",
+        "label": "Every Sunday at 9:00 AM",
+        "status": "accepted",
+        "routineId": "task_fixture_routine_02",
+        "createdAt": "2026-08-19T15:03:00.000Z"
+      }
+    ],
+    "hasOlder": false,
+    "question": null,
+    "approval": null
+  }
 }
