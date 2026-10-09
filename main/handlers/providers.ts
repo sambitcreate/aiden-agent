@@ -558,6 +558,11 @@ export function registerProviderHandlers(): void {
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;
     }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
+    for (const key of ["aidenLiveEnabled", "aidenLiveButtonVisible"] as const) {
+      if (p[key] === undefined) continue;
+      if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
+      next[key] = p[key];
+    }
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
       next.skillsEnabled = p.skillsEnabled;
@@ -576,6 +581,11 @@ export function registerProviderHandlers(): void {
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     if (next.cacheWarmingEnabled === false) stopAllPiCacheWarmers();
+    if (next.aidenLiveEnabled === false) {
+      // A disabled feature must not keep an attended session running in any window.
+      const { geminiLiveService } = await import("../services/gemini-live/service-main.js");
+      geminiLiveService.stopAllSessions();
+    }
     if (next.localVoiceIdleUnloadMinutes !== undefined) {
       const { reconfigureLocalSpeechIdleUnload } = await import("../services/local-speech.js");
       void reconfigureLocalSpeechIdleUnload();

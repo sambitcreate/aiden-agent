@@ -2478,6 +2478,8 @@ test("malformed known settings fields are dropped before type-assuming consumers
         profileName: { bad: true },
         exaEnabled: "yes",
         showLocalModelReasoning: "yes",
+        aidenLiveEnabled: "off",
+        aidenLiveButtonVisible: 0,
         lastProviderId: 7,
         futureSetting: { retained: true },
       },
@@ -2509,6 +2511,26 @@ test("local reasoning visibility is a durable boolean presentation preference", 
     fakeSecrets().port,
   );
   assert.equal((await next.getSettings()).showLocalModelReasoning, false);
+});
+
+test("Aiden Live switches default on and persist an explicit off", async (t) => {
+  const h = await harness(t);
+
+  const initial = await h.store.getSettings();
+  assert.equal(initial.aidenLiveEnabled, undefined);
+  assert.equal(initial.aidenLiveButtonVisible, undefined);
+  await h.store.setSettings({ aidenLiveEnabled: false, aidenLiveButtonVisible: false });
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  const reloaded = await next.getSettings();
+  assert.equal(reloaded.aidenLiveEnabled, false);
+  assert.equal(reloaded.aidenLiveButtonVisible, false);
 });
 
 test("future nested settings versions survive unrelated writes", async (t) => {

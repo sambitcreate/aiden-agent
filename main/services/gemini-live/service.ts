@@ -30,6 +30,7 @@ export class GeminiLiveStartError extends Error {
     readonly reason:
       | Exclude<AssistantLiveAvailabilityReason, "available">
       | "live_start_failed"
+      | "aiden_live_disabled"
       | "google_live_authentication_failed"
       | "google_live_quota_exceeded"
       | "google_live_model_unavailable"
@@ -46,6 +47,8 @@ export class GeminiLiveStartError extends Error {
             ? "The saved Google API key is not valid for Live."
             : reason === "live_model_unverified"
               ? "No Google Live model has passed Aiden's production contract probe yet."
+              : reason === "aiden_live_disabled"
+                ? "Aiden Live is turned off in Settings."
               : reason === "google_live_authentication_failed"
                 ? "Google rejected this API key for Live. Check the key's restrictions or replace it in Settings."
                 : reason === "google_live_quota_exceeded"
@@ -94,6 +97,12 @@ export function safeGeminiLiveStartError(error: unknown): GeminiLiveStartError {
 
 export interface GeminiLiveServiceOptions {
   credentials: Pick<CredentialStore, "read">;
+  /**
+   * The persisted Aiden Live switch. When it resolves false, every start is
+   * refused before a session, credential read, or provider connection exists.
+   * Absent means enabled.
+   */
+  enabled?(): boolean | Promise<boolean>;
   createConnector(apiKey: string): GeminiLiveConnector;
   resolveModel(): string | null | Promise<string | null>;
   /**
@@ -349,6 +358,11 @@ export class GeminiLiveService {
     if (this.shuttingDown) throw new GeminiLiveStartError("live_start_failed");
     if (owner.isDestroyed())
       throw new GeminiLiveStartError("live_start_failed");
+    if (this.options.enabled && (await this.options.enabled()) !== true) {
+      throw new GeminiLiveStartError("aiden_live_disabled");
+    }
+    if (this.shuttingDown || owner.isDestroyed())
+      throw new GeminiLiveStartError("live_start_failed");
     // A screen intent is valid only while the recorded-acceptance gate is open
     // and this exact document bound the picker ahead of the session start.
     if (
@@ -499,6 +513,14 @@ export class GeminiLiveService {
   }
 
   revokeComputerUse(): void {
+    this.stopAllSessions();
+  }
+
+  /**
+   * Ends every attended session and tells each owning renderer. Used when a
+   * global gate (Computer Use or the Aiden Live switch) is withdrawn.
+   */
+  stopAllSessions(): void {
     for (const session of this.sessions.values()) {
       // A withdrawn global gate terminates the attended session,
       // not just its tool adapter. Otherwise an issued provider call can stay

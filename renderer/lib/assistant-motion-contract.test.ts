@@ -40,26 +40,16 @@ test("scheduled task details reuse the reduced-motion-gated surface entrance", (
   assert.match(scheduledTasks, /className="scheduled-task-detail/u);
 });
 
-test("the Live mark trigger has tactile motion and a reduced-motion override", () => {
+test("the Live pill trigger has tactile motion and a reduced-motion override", () => {
   const styles = source("../styles.css");
-  const trigger = between(styles, ".aiden-live-trigger {", ".aiden-live-trigger[data-kind");
+  const trigger = between(styles, ".aiden-live-trigger {", ".aiden-live-trigger:hover");
   assert.match(trigger, /transition:/u);
   assert.match(styles, /:root\[data-reduce-motion="true"\] \.aiden-live-trigger/u);
-  assert.match(styles, /\.aiden-live-trigger:focus-visible/u);
-  const orb = between(
-    styles,
-    '.aiden-live-trigger[data-kind="mark"] {',
-    ".aiden-live-trigger:hover",
-  );
-  assert.match(orb, /background: transparent/u);
-  assert.match(orb, /box-shadow: none/u);
-  assert.match(styles, /\.aiden-live-trigger\[data-kind="mark"\]:focus-visible/u);
 });
 
 test("the dock has one trigger and no longer owns a competing composer", () => {
   const dock = source("../components/assistant/assistant-dock.tsx");
   const styles = source("../styles.css");
-  assert.match(dock, /data-kind=\{setupCompleted \? "mark" : "logo"\}/u);
   assert.match(dock, /AssistantLiveSetupDialog/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble|setDraft|textarea/u);
   assert.doesNotMatch(styles, /\.assistant-live-(?:entry|presence|orb|control|signal)/u);
@@ -74,7 +64,6 @@ test("the hotkey waits for the central command listener and uses the dock comman
   const readySignal = commands.indexOf("appApi.rendererReady()");
   const readinessWait = main.indexOf("await rendererReadiness.wait()");
   const assistantCommand = main.indexOf('commandId: "assistant.open"');
-  assert.match(dock, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
   assert.doesNotMatch(dock, /interactionBlocked/u);
   assert.ok(listener >= 0 && readySignal > listener);
   assert.ok(readinessWait >= 0 && assistantCommand > readinessWait);

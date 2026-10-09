@@ -1834,7 +1834,7 @@ function cssLength(value: string, rootFontSize: number, fallback: number): numbe
 
 /** The chat column's maximum width and inner gutter, read from its CSS tokens as Appearance sets them. */
 function useChatColumnMetrics(): { maxWidth: number; gutter: number } {
-  const [metrics, setMetrics] = React.useState({ maxWidth: 832, gutter: 72 });
+  const [metrics, setMetrics] = React.useState({ maxWidth: 832, gutter: 96 });
   React.useLayoutEffect(() => {
     const root = document.documentElement;
     const read = () => {
@@ -1842,7 +1842,7 @@ function useChatColumnMetrics(): { maxWidth: number; gutter: number } {
       const rootFontSize = Number.parseFloat(style.fontSize) || 16;
       const next = {
         maxWidth: cssLength(style.getPropertyValue("--chat-content-max-width"), rootFontSize, 832),
-        gutter: cssLength(style.getPropertyValue("--aiden-dock-gutter"), rootFontSize, 72),
+        gutter: cssLength(style.getPropertyValue("--aiden-dock-gutter"), rootFontSize, 96),
       };
       setMetrics((current) =>
         current.maxWidth === next.maxWidth && current.gutter === next.gutter ? current : next,

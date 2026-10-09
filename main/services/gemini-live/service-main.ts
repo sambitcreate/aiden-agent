@@ -82,6 +82,7 @@ let disposeDisplayMediaGuards: (() => void) | null = null;
  */
 export const geminiLiveService = new GeminiLiveService({
   credentials: piCredentialStore,
+  enabled: async () => (await configStore.getSettings()).aidenLiveEnabled !== false,
   acceptanceEvidence: createGeminiLiveAcceptanceEvidenceRecorder(
     process.env,
     app.getPath("userData"),

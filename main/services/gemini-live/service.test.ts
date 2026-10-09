@@ -751,6 +751,54 @@ test("only a non-empty stored Google API-key credential is eligible", async () =
   }
 });
 
+test("a disabled Aiden Live refuses every start before credentials or a provider connection", async () => {
+  let enabled = false;
+  let credentialReads = 0;
+  const servers: FakeGeminiLiveServer[] = [];
+  const service = new GeminiLiveService({
+    enabled: async () => enabled,
+    credentials: {
+      read: async () => {
+        credentialReads += 1;
+        return { type: "api_key", key: "KEY_SENTINEL" };
+      },
+    },
+    resolveModel: () => "gemini-3.8-live",
+    createConnector: () => {
+      const server = new FakeGeminiLiveServer();
+      servers.push(server);
+      return server.connector;
+    },
+  });
+  const owner = new FakeOwner(31, "31:1:live-disabled");
+
+  await assert.rejects(
+    service.start(owner, intent),
+    (error: unknown) =>
+      error instanceof GeminiLiveStartError &&
+      error.reason === "aiden_live_disabled" &&
+      error.message === "Aiden Live is turned off in Settings.",
+  );
+  assert.equal(credentialReads, 0);
+  assert.equal(servers.length, 0);
+  assert.equal(service.sessions.values().length, 0);
+
+  // Turning the switch back on takes effect on the next start, without a restart.
+  enabled = true;
+  assert.equal((await service.start(owner, intent)).available, true);
+  assert.equal(servers.length, 1);
+
+  // Turning it off again ends the attended session and tells its renderer.
+  enabled = false;
+  service.stopAllSessions();
+  assert.equal(servers[0].latest.closed, true);
+  assert.equal(service.sessions.values().length, 0);
+  assert.equal(
+    owner.events.some((event) => event.type === "snapshot" && event.snapshot.state === "closed"),
+    true,
+  );
+});
+
 test("credential-store failures are normalized without exposing private detail", async () => {
   const service = new GeminiLiveService({
     credentials: {
