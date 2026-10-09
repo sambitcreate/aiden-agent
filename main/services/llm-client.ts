@@ -398,6 +398,7 @@ import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
+import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
@@ -2455,6 +2456,28 @@ export const llmClient = {
           } catch (error) {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
           }
+        }
+        if (messageId && (displayedHtmlArtifacts.length > 0 || displayedUiVisuals.length > 0)) {
+          // Snapshots for clients that cannot draw visuals; never delays this reply.
+          enqueueVisualSnapshots({
+            chatId: params.chatId,
+            messageId,
+            visuals: [
+              ...displayedHtmlArtifacts.map((artifact) => ({
+                kind: "html" as const,
+                visualId: artifact.mediaId,
+                title: artifact.title,
+                ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
+              })),
+              ...displayedUiVisuals.map((visual) => ({
+                kind: "ui" as const,
+                visualId: visual.id,
+                title: visual.title,
+                visual,
+                ...(visual.layout === "wide" ? { layout: "wide" as const } : {}),
+              })),
+            ],
+          });
         }
         return { chat, error: undefined, messageId };
       } catch (error) {

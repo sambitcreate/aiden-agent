@@ -647,6 +647,7 @@ const ButtonComponent: CatalogComponent = ({ node, ctx }) => {
   return (
     <Button
       size="small"
+      className="self-start"
       variant={(BUTTON_VARIANTS.has(variant) ? variant : "filled") as "accent"}
       disabled={ctx.draft || !isAction(action)}
       onClick={() => {

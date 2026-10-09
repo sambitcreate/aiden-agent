@@ -13,6 +13,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { app, BrowserWindow, ipcMain, logger, Notification, onBroadcast } from "../platform.js";
+import { isAuxiliaryWindow } from "../windows/auxiliary-windows.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { recordRemoteRequestHealth } from "./diagnostic-health.js";
@@ -449,7 +450,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     isSupported: () => Notification.isSupported(),
     create: (options) => new Notification(options),
     focusApp: () => {
-      const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => !candidate.isDestroyed() && !isAuxiliaryWindow(candidate),
+      );
       if (!window) return;
       if (window.isMinimized()) window.restore();
       window.show();

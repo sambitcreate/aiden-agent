@@ -98,6 +98,8 @@ import { displayImageArtifactStore } from "./services/display-image-artifact-sto
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
+import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
 import { designProjectStore, designRunService } from "./services/design/main.js";
@@ -1749,6 +1751,7 @@ if (!ownsSingleInstanceLock) {
 
   app.on("will-quit", () => {
     logger.info("electron-lifecycle", "Application will-quit");
+    disposeVisualSnapshots();
     cleanupApplication();
   });
   app.on("quit", (_event, exitCode) => {
@@ -1881,6 +1884,13 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      // Phones and other clients that cannot draw a visual get its snapshot.
+      installVisualSnapshotQueue(
+        createMainVisualSnapshotQueue({
+          htmlFor: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
+          addVisualSnapshots: (chatId, messageId, snapshots) => chatStore.addVisualSnapshots(chatId, messageId, snapshots),
+        }),
+      );
       await startStudioAssets({
         enabled: studioAssetsEnabled(),
         store: studioAssetStore,
