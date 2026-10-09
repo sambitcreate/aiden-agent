@@ -1,4 +1,5 @@
 import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
+import { HistoryNavButtons } from "./history-nav";
 import { forkedFromLabel } from "../lib/chat-copy-view";
 // Unified workspace/chat sidebar with workspace-grouped, recent, and
 // needs-attention views, route-driven selection, and workspace/chat actions.
@@ -1666,7 +1667,11 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
         searchPlaceholder="Search chats…"
         searchValue={search}
         onSearchChange={setSearch}
-        actions={<SplitView.SidebarToggle />}
+        actions={
+          <SplitView.SidebarToggle>
+            <HistoryNavButtons />
+          </SplitView.SidebarToggle>
+        }
         footer={
           <SidebarFooter>
             <UpdateReadyBanner blockedReason={updateRestartBlockedReason} />

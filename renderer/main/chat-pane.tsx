@@ -57,6 +57,7 @@ import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
+import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
@@ -2518,6 +2519,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A Bot chat redirects to its Bot route above; render nothing while it leaves.
   if (botChatId) return null;
 
+  const chatTitleMenu = (
+    <ChatTitleMenu
+      chatId={chatId}
+      title={chat.data?.title ?? "New agent"}
+      persisted={!draft && Boolean(persistedChat.data)}
+      onDuplicate={() => copyChat()}
+    />
+  );
+
   return (
     <>
       <ScrollArea
@@ -2526,7 +2536,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         title={
           forkSourceLabel ? (
             <span className="block min-w-0" data-chat-fork-lineage>
-              <span className="block truncate">{chat.data?.title ?? "New agent"}</span>
+              {chatTitleMenu}
               <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
                 <GitFork aria-hidden="true" className="size-3 shrink-0" />
                 {forkSource ? (
@@ -2545,32 +2555,55 @@ export function ChatPane({ chatId }: { chatId: string }) {
               </span>
             </span>
           ) : (
-            (chat.data?.title ?? "New agent")
+            chatTitleMenu
           )
         }
-        actions={
-          <>
-            <OpenInEditorPicker
-              workspaceId={effectiveWorkspace?.id}
-              folderPath={effectiveWorkspace?.folderPath}
+        titleAccessory={
+          effectiveWorkspace ? (
+            <WorkspaceChip
+              workspace={effectiveWorkspace}
+              git={effectiveWorkspace.folderPath ? git.data : undefined}
+              canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
+              onOpenTerminal={() => {
+                if (!terminal.open) terminal.toggle();
+              }}
             />
-            <EnvironmentPanelToggle />
-            <QuickViewToggle disabled={!effectiveWorkspace} />
-            <Button
-              iconOnly
-              variant="toolbar"
-              size="large"
-              onClick={terminal.toggle}
-              disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-              aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-              aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-              aria-pressed={terminal.open}
-              title={`Toggle terminal (${terminalShortcut})`}
-              data-terminal-toggle
-            >
-              <TerminalSquare />
-            </Button>
-          </>
+          ) : null
+        }
+        actions={
+          <WorkspaceToolButtons
+            hasFolder={Boolean(effectiveWorkspace?.folderPath)}
+            hasFolderAccess={Boolean(
+              effectiveWorkspace?.folderPath && effectiveWorkspace.permission !== "none",
+            )}
+            isRepo={git.data?.isRepo === true}
+            terminalButton={
+              <Button
+                iconOnly
+                variant="bar"
+                size="small"
+                onClick={terminal.toggle}
+                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                aria-pressed={terminal.open}
+                title={`Toggle terminal (${terminalShortcut})`}
+                data-terminal-toggle
+              >
+                <TerminalSquare />
+              </Button>
+            }
+            trailing={
+              <>
+                <QuickViewToggle disabled={!effectiveWorkspace} />
+                <EnvironmentPanelToggle />
+                <OpenInEditorPicker
+                  workspaceId={effectiveWorkspace?.id}
+                  folderPath={effectiveWorkspace?.folderPath}
+                />
+              </>
+            }
+          />
         }
         autoScrollToBottom
         autoScrollResetKey={chatId}

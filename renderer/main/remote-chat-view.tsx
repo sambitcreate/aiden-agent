@@ -561,7 +561,7 @@ export function RemoteChatPane({
           showChatMenu ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button iconOnly variant="toolbar" size="large" aria-label="Chat actions">
+                <Button iconOnly variant="bar" size="small" aria-label="Chat actions">
                   <MoreHorizontal />
                 </Button>
               </DropdownMenuTrigger>

@@ -49,6 +49,7 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
     | "transparent"
     | "glass"
     | "toolbar"
+    | "bar"
     | "glassAccent"
     | "accent"
     | "destructive";
@@ -95,6 +96,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
           "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
         variant === "toolbar" &&
           "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        // Quiet top-bar action: no fill at rest, a soft fill on hover, and the
+        // list selection fill while its surface is open (aria-pressed/expanded).
+        variant === "bar" &&
+          "bg-transparent text-toolbar-icon hover:bg-list-hover hover:text-primary active:bg-list-selection aria-pressed:bg-list-selection aria-pressed:text-primary aria-expanded:bg-list-selection aria-expanded:text-primary focus-visible:bg-list-hover",
         variant === "glassAccent" &&
           "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
         variant === "accent" &&
@@ -390,6 +395,13 @@ const SplitContext = React.createContext<{
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
 
+/**
+ * Left padding that keeps a full-width header clear of the window controls and
+ * the leading sidebar-toggle/history cluster while the sidebar is collapsed.
+ * The cluster starts at 90px and holds up to three 28px actions.
+ */
+export const SPLIT_VIEW_COLLAPSED_HEADER_INSET = 190;
+
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
 export function useSplitViewCollapsed(): boolean {
   return React.useContext(SplitContext)?.collapsed === true;
@@ -650,7 +662,7 @@ function SplitViewRoot({
           inert={contentModalOpen ? true : undefined}
           aria-hidden={contentModalOpen ? true : undefined}
           className={cn(
-            "absolute left-[90px] top-0 z-40 flex h-13 w-9 items-center justify-center",
+            "absolute left-[90px] top-0 z-40 flex h-13 items-center gap-0.5",
             contentModalOpen && "pointer-events-none",
           )}
         />
@@ -659,27 +671,36 @@ function SplitViewRoot({
   );
 }
 
-function SidebarToggle() {
+/**
+ * The sidebar toggle, portaled beside the window controls so it stays put
+ * whether the sidebar is open or collapsed. `children` follow it in the same
+ * cluster (history navigation).
+ */
+function SidebarToggle({ children }: { children?: React.ReactNode }) {
   const context = React.useContext(SplitContext);
   const shortcut = useShortcutLabel("sidebar.toggle");
   const shortcutBinding = useShortcutBinding("sidebar.toggle");
   if (!context) return null;
-  const button = (
-    <Button
-      iconOnly
-      size={context.collapsed ? "large" : "small"}
-      variant={context.collapsed ? "toolbar" : "transparent"}
-      onClick={context.toggle}
-      aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
-      aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
-      aria-pressed={!context.collapsed}
-      title={`Toggle sidebar (${shortcut})`}
-      className="no-drag transition-[width,height,background-color] duration-300 ease-emphasized motion-reduce:transition-none"
-    >
-      <PanelLeft />
-    </Button>
+  const cluster = (
+    <>
+      <Button
+        iconOnly
+        size="small"
+        variant="bar"
+        onClick={context.toggle}
+        aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
+        aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
+        aria-pressed={!context.collapsed}
+        title={`Toggle sidebar (${shortcut})`}
+        // The open sidebar is its own state cue; keep the toggle quiet.
+        className="no-drag aria-pressed:bg-transparent aria-pressed:text-toolbar-icon aria-pressed:hover:bg-list-hover aria-pressed:hover:text-primary"
+      >
+        <PanelLeft />
+      </Button>
+      {children}
+    </>
   );
-  return context.leadingAnchor ? createPortal(button, context.leadingAnchor) : null;
+  return context.leadingAnchor ? createPortal(cluster, context.leadingAnchor) : null;
 }
 
 export const SplitView = Object.assign(SplitViewRoot, { SidebarToggle });
@@ -842,6 +863,7 @@ export function SidebarListItem({
 
 export function ScrollArea({
   title,
+  titleAccessory,
   leading,
   actions,
   toolbar,
@@ -857,6 +879,8 @@ export function ScrollArea({
   children,
 }: React.PropsWithChildren<{
   title?: React.ReactNode;
+  /** Sits right after the title (outside the heading), such as a workspace chip. */
+  titleAccessory?: React.ReactNode;
   leading?: React.ReactNode;
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
@@ -1021,10 +1045,13 @@ export function ScrollArea({
       <header
         data-toolbar
         className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4 transition-[padding] duration-300 ease-emphasized motion-reduce:transition-none"
-        style={{ paddingLeft: split?.collapsed ? 142 : undefined }}
+        style={{ paddingLeft: split?.collapsed ? SPLIT_VIEW_COLLAPSED_HEADER_INSET : undefined }}
       >
         <div className="no-drag flex shrink-0 items-center">{leading}</div>
-        <h1 className="min-w-0 flex-1 truncate text-strong text-primary">{title}</h1>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <h1 className="min-w-0 truncate text-strong text-primary">{title}</h1>
+          {titleAccessory}
+        </div>
         <div className="no-drag flex items-center gap-2">{actions}</div>
       </header>
     ) : null);

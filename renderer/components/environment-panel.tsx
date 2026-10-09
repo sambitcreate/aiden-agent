@@ -1440,7 +1440,8 @@ function EnvironmentPanelSurface({
         inline
           ? "inset-y-0 right-0 border-l border-separator"
           : "bottom-3 right-3 rounded-sheet shadow-dialog",
-        !inline && (containerWidth - width < 160 ? "top-14" : "top-3"),
+        // Float below the top bar so its tool buttons stay reachable, like Quick View.
+        !inline && "top-14",
         resizing
           ? "transition-none"
           : "transition-[width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
@@ -2023,8 +2024,8 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
   return (
     <Button
       iconOnly
-      variant="toolbar"
-      size="large"
+      variant="bar"
+      size="small"
       onClick={panel.toggleTools}
       disabled={disabled || panel.gitOperationBusy}
       aria-label={active ? "Hide Environment" : "Show Environment"}
@@ -2064,8 +2065,8 @@ export function QuickViewToggle({ disabled = false }: { disabled?: boolean }) {
   return (
     <Button
       iconOnly
-      variant="toolbar"
-      size="large"
+      variant="bar"
+      size="small"
       onClick={panel.toggleQuickView}
       disabled={disabled || panel.gitOperationBusy}
       aria-label={active ? "Hide Quick View" : "Show Quick View"}

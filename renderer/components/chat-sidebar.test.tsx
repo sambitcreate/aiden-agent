@@ -297,7 +297,8 @@ test("sidebar collapse keeps shared chrome geometry on one synchronized motion c
     ui,
     /scroll-area-header[\s\S]{0,180}transition-\[padding\] duration-300 ease-emphasized motion-reduce:transition-none/u,
   );
-  assert.match(ui, /style=\{\{ paddingLeft: split\?\.collapsed \? 142 : undefined \}\}/u);
+  // Collapsed-header clearance of the leading cluster is measured in
+  // tests/e2e/chat-top-bar.spec.ts.
 });
 
 test("sidebar breakpoint hands layout width through an animated spacer", () => {

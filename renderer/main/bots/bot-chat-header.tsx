@@ -22,13 +22,13 @@ export function BotChatTitle({
 }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <Button iconOnly variant="toolbar" size="large" aria-label="All Bots" onClick={onBack}>
+      <Button iconOnly variant="bar" size="small" aria-label="All Bots" onClick={onBack}>
         <ChevronLeft />
       </Button>
       <Button
-        variant="toolbar"
-        size="large"
-        className="min-w-0 gap-2 pl-1.5"
+        variant="bar"
+        size="medium"
+        className="min-w-0 gap-1.5 pl-0.5 text-primary"
         aria-label={`${bot.name} profile`}
         onClick={onOpenProfile}
       >
@@ -54,7 +54,7 @@ export function BotChatActions({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button iconOnly variant="toolbar" size="large" aria-label={`More for ${bot.name}`}>
+        <Button iconOnly variant="bar" size="small" aria-label={`More for ${bot.name}`}>
           <Ellipsis />
         </Button>
       </DropdownMenuTrigger>

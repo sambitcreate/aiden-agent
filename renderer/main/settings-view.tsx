@@ -1,5 +1,6 @@
 // In-app full-screen settings: left nav + section content, with "Back to app".
 
+import { HistoryNavButtons } from "../components/history-nav";
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Button, ScrollArea, Sidebar, SplitView } from "../components/ui";
@@ -159,7 +160,11 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
       storageKey="aiden-agent"
       sidebarSize={{ default: 272, min: 236, max: 340 }}
       sidebar={
-        <Sidebar actions={<SplitView.SidebarToggle />}>
+        <Sidebar actions={
+          <SplitView.SidebarToggle>
+            <HistoryNavButtons />
+          </SplitView.SidebarToggle>
+        }>
           <div className="flex min-h-full flex-col px-3 pb-4">
             <Button
               variant="transparent"
