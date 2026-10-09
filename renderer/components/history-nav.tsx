@@ -4,7 +4,8 @@
 
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { Button } from "./ui";
+import { useEnvironmentPanel } from "./environment-panel";
+import { Button, toast } from "./ui";
 import { historyNavigationAvailability } from "../lib/history-navigation";
 
 // `aria-disabled` rather than `disabled`: reaching the first or last entry
@@ -13,6 +14,25 @@ const UNAVAILABLE = "no-drag aria-disabled:opacity-45 aria-disabled:hover:bg-tra
 
 export function HistoryNavButtons() {
   const router = useRouter();
+  const environmentPanel = useEnvironmentPanel();
+  // The same protections as opening another chat or Settings from the sidebar:
+  // the Files editor keeps unsaved text only while it is mounted, and leaving
+  // mid-Git-operation would hide its outcome. These are action checks, not
+  // registered route blockers, so traversal must consult them itself.
+  const blockedReason = environmentPanel.gitOperationBusy
+    ? "Wait for the current Git operation to finish"
+    : environmentPanel.editorState.saving
+      ? "Wait for the open file to finish saving"
+      : environmentPanel.editorState.dirty
+        ? "Save or discard the open file's edits first"
+        : null;
+  const traverse = (go: () => void) => {
+    if (blockedReason) {
+      toast.info(blockedReason);
+      return;
+    }
+    go();
+  };
   // Re-render on every navigation; the entry index lives in location state.
   const entryIndex = useRouterState({
     select: (state) => (state.location.state as { __TSR_index?: number }).__TSR_index,
@@ -32,7 +52,7 @@ export function HistoryNavButtons() {
         title="Go back"
         aria-disabled={!canGoBack || undefined}
         onClick={() => {
-          if (canGoBack) router.history.back();
+          if (canGoBack) traverse(() => router.history.back());
         }}
       >
         <ArrowLeft />
@@ -46,7 +66,7 @@ export function HistoryNavButtons() {
         title="Go forward"
         aria-disabled={!canGoForward || undefined}
         onClick={() => {
-          if (canGoForward) router.history.forward();
+          if (canGoForward) traverse(() => router.history.forward());
         }}
       >
         <ArrowRight />

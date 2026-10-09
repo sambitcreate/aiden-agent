@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
 
@@ -185,6 +187,42 @@ test.describe("folder workspaces", () => {
     await files.click();
     await expect(tools).not.toHaveAttribute("inert", "");
     await expect(files).toHaveAttribute("aria-pressed", "true");
+  });
+  test("history traversal keeps unsaved file edits until they are saved", async ({ aiden }) => {
+    const { page } = aiden;
+    const notes = path.join(aiden.workspaceDir, "notes.txt");
+    await writeFile(notes, "original\n");
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await startPersistedChat(page);
+    const back = page.getByRole("button", { name: "Go back", exact: true });
+    const forward = page.getByRole("button", { name: "Go forward", exact: true });
+    const settingsNav = page.getByRole("navigation", { name: "Settings" });
+
+    // Put a history entry outside the chat shell ahead of the chat.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(settingsNav).toBeVisible();
+    await back.click();
+    await expect(page.locator("[data-chat-title-menu]")).toBeVisible();
+    await expect(forward).toBeEnabled();
+
+    await page.locator('[data-workspace-tool="files"]').click();
+    const panel = page.getByRole("complementary", { name: "Environment work surface" });
+    await panel.getByRole("button", { name: "Refresh files" }).click();
+    await panel.getByRole("button", { name: "notes.txt" }).click();
+    const editor = panel.getByRole("textbox", { name: "Edit notes.txt" });
+    await editor.fill("unsaved edit\n");
+
+    await forward.click();
+    await expect(page.getByText("Save or discard the open file's edits first")).toBeVisible();
+    await expect(settingsNav).toHaveCount(0);
+    await expect(editor).toHaveValue("unsaved edit\n");
+
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => readFile(notes, "utf8")).toBe("unsaved edit\n");
+    // Only once the save has settled (not merely started) may traversal leave the editor.
+    await expect(panel.getByText("Saved", { exact: true })).toBeVisible();
+    await forward.click();
+    await expect(settingsNav).toBeVisible();
   });
 });
 
