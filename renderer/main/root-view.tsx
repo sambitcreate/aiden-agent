@@ -19,7 +19,9 @@ import {
 import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
 import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
+import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
@@ -59,6 +61,7 @@ function RootContent() {
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
   const terminal = useWorkspaceTerminal();
+  const capabilities = useAppCapabilities();
   const { activeId } = useActiveWorkspace();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -160,6 +163,18 @@ function RootContent() {
     }
     void navigate({ to: "/settings" });
   });
+  const openStudio = React.useCallback(
+    (to: "/design" | "/images") => {
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return;
+      }
+      void navigate({ to });
+    },
+    [navigate, navigationBlockedReason],
+  );
+  useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
+  useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
   const openNewChat = React.useCallback(
     async (initialText?: string) => {
       if (!activeId) {
@@ -285,7 +300,7 @@ function RootContent() {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
         queryClient.invalidateQueries({ queryKey: ["bot"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-live-summary"] }),
         queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
       ]);
@@ -402,10 +417,13 @@ function RootContent() {
   return (
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
-      <OnboardingFlow />
+      <OnboardingFlow
+        onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
+      />
       <AssistantDock rightInset={environmentPanel.dockRightInset} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
       <PairingRequestSheet />
+      {capabilities.bots ? <BotConnectionSetupHost /> : null}
     </div>
   );
 }

@@ -15,24 +15,24 @@ const idle = {
   toolActivity: null,
 };
 
-test("maps each active generation phase to a purposeful orb", () => {
+test("maps each active generation phase to a purposeful activity mark", () => {
   assert.equal(resolveAgentActivity(idle), null);
   assert.deepEqual(resolveAgentActivity({ ...idle, isStarting: true }), {
     phase: "preparing",
     label: "Preparing…",
-    orbState: "shaping",
+    mark: "bounce",
   });
   assert.deepEqual(resolveAgentActivity({ ...idle, streamingText: "" }), {
     phase: "thinking",
     label: "Thinking",
-    orbState: "solving",
+    mark: "tri-step",
   });
   assert.deepEqual(
     resolveAgentActivity({ ...idle, streamingText: "Hello", textStreaming: true }),
     {
       phase: "responding",
       label: "Responding…",
-      orbState: "composing",
+      mark: "compose",
     },
   );
 });
@@ -43,7 +43,7 @@ test("stale prose does not pin the row while the model works elsewhere", () => {
     {
       phase: "thinking",
       label: "Thinking",
-      orbState: "solving",
+      mark: "tri-step",
     },
   );
   assert.deepEqual(
@@ -62,7 +62,7 @@ test("shows model loading ahead of empty-stream thinking", () => {
     {
       phase: "loading",
       label: "Model loading…",
-      orbState: "shaping",
+      mark: "bounce",
     },
   );
   assert.equal(
@@ -91,12 +91,12 @@ test("distinguishes discovery tools from other agent work", () => {
   assert.deepEqual(resolveAgentActivity({ ...idle, toolActivity: reading }), {
     phase: "searching",
     label: "Read file…",
-    orbState: "searching",
+    mark: "scan-grid",
   });
   assert.deepEqual(resolveAgentActivity({ ...idle, toolActivity: editing }), {
     phase: "working",
     label: "Edit file…",
-    orbState: "working",
+    mark: "quad-shuffle",
   });
 });
 
@@ -117,7 +117,7 @@ test("render_artifact surfaces a Visualizing phase", () => {
     {
       phase: "visualizing",
       label: "Visualizing",
-      orbState: "working",
+      mark: "scan-grid",
     },
   );
   assert.equal(

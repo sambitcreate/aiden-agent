@@ -75,24 +75,14 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(quickViewToggle).toHaveAttribute("aria-pressed", "false");
   await environment.click();
   await expect(environmentSurface).toBeVisible();
-  await expect(environmentSurface.getByRole("tab", { name: "Review" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  const reviewPanel = environmentSurface.getByRole("tabpanel", { name: "Review" });
-  await expect(reviewPanel.getByText("No workspace folder", { exact: true })).toBeVisible();
-  await expect(
-    reviewPanel.getByText(
-      "Choose a local workspace to review file changes beside the conversation.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(environmentSurface.getByRole("tab", { name: "New tab", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(environmentSurface.getByRole("button", { name: "Files", exact: false })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Hide Environment" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
 
-  await environmentSurface.getByRole("button", { name: "Show Quick View" }).click();
+  await environmentSurface.getByRole("button", { name: "Quick View", exact: true }).click();
   await expect(quickView).toBeVisible();
   await expect(quickView.getByText("No workspace folder", { exact: true })).toBeVisible();
   await expect(

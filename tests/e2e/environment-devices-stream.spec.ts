@@ -7,6 +7,7 @@ import {
   E2E_ASSISTANT_RESPONSE,
   expect,
   finishLmStudioOnboarding,
+  waitForToastsToClear,
   REPOSITORY_ROOT,
   test,
 } from "./fixtures";
@@ -97,6 +98,8 @@ test.describe("Simulator stream", () => {
     appEnvironment: {
       AIDEN_EXPERIMENTAL_DEVICES: "1",
       AIDEN_E2E_FAKE_HUB_LOG: hubLog,
+      // An empty SDK folder: this spec covers iOS only, whatever Android SDK the machine has.
+      ANDROID_HOME: path.join(fakeRoot, "no-android-sdk"),
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? "/usr/bin:/bin"}`,
     },
   });
@@ -122,11 +125,17 @@ test.describe("Simulator stream", () => {
 
     const tools = page.getByRole("complementary", { name: "Environment work surface" });
     if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
-    await tools.getByRole("tab", { name: "Simulator", exact: true }).click();
+    await tools.getByRole("button", { name: "More tools…", exact: true }).click();
+    await tools.getByRole("button", { name: "Device", exact: true }).click();
     const panel = page.locator("#environment-devices-panel");
+    const strip = tools.getByRole("tablist", { name: "Environment views" });
+    const deviceTab = (name: string) => strip.getByRole("tab", { name, exact: true });
 
     await panel.getByRole("button", { name: "Start", exact: true }).click();
     await panel.getByRole("button", { name: `Open ${DEVICE_NAME}` }).click();
+    // The picker gives way to the device's own tab, named after it.
+    await expect(deviceTab(DEVICE_NAME)).toHaveAttribute("aria-selected", "true");
+    await expect(deviceTab("Device")).toHaveCount(0);
 
     const screen = panel.getByRole("application");
     const status = panel.locator(".device-viewer-status");
@@ -186,11 +195,14 @@ test.describe("Simulator stream", () => {
     for (const origin of streamOrigins) expect([undefined, "file://"]).toContain(origin);
 
     // The compatibility stream cannot be framed in 3D; the reason stays reachable by keyboard.
-    const frameToggle = panel.getByRole("button", { name: "3D frame" });
+    const frameToggle = panel.getByRole("button", { name: "3D view" });
     await expect(frameToggle).toHaveAttribute("aria-disabled", "true");
-    await expect(frameToggle).toHaveAccessibleDescription("3D frame unavailable with the compatibility stream");
+    await expect(frameToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(frameToggle).toHaveAccessibleDescription("3D view unavailable with the compatibility stream");
     await frameToggle.focus();
     await expect(frameToggle).toBeFocused();
+    // The flat view is what is showing.
+    await expect(panel.getByRole("button", { name: "Flat view" })).toHaveAttribute("aria-pressed", "true");
 
     // The tools drawer takes focus on open and hands it back on Escape.
     const toolsToggle = panel.getByRole("button", { name: "Device tools" });
@@ -207,6 +219,80 @@ test.describe("Simulator stream", () => {
     await expect(shutdown).toBeHidden();
     await expect(status).toHaveText("Live");
 
+    // Rename the tab inline; Enter keeps the new name.
+    await deviceTab(DEVICE_NAME).dblclick();
+    const nameField = strip.getByRole("textbox", { name: "Device tab name" });
+    await expect(nameField).toBeFocused();
+    await nameField.fill("Checkout flow");
+    await nameField.press("Enter");
+    await expect(deviceTab("Checkout flow")).toHaveAttribute("aria-selected", "true");
+
+    // Float it over the chat: the panel steps aside and the player streams and takes input.
+    const touchEnds = async () =>
+      (await readHubLog()).filter(
+        (entry) => entry.kind === "ws-message" && entry.tag === MSG_TOUCH && entry.body?.type === "end",
+      ).length;
+    const before = await touchEnds();
+    await panel.getByRole("button", { name: "Float over chat" }).click();
+    await expect(tools).toBeHidden();
+    const player = page.locator("[data-device-mini-player]");
+    await expect(player).toBeVisible();
+    const handle = player.getByRole("group", { name: "Move Checkout flow" });
+    await expect(handle).toBeVisible();
+    await expect(player.getByRole("status")).toHaveText("Live");
+    await player.getByRole("application").click();
+    await expect.poll(touchEnds).toBeGreaterThan(before);
+
+    // Dragging stays inside the chat; a drop near the top-left corner snaps into it.
+    // A toast from onboarding or the screenshot can sit over the handle; let it clear, then make sure the
+    // handle itself receives the pointer before dragging it.
+    await waitForToastsToClear(page);
+    await handle.hover();
+    const start = await handle.boundingBox();
+    const box = await player.boundingBox();
+    const viewport = await page.locator("[data-browser-floating-container] [data-scroll-top]").first().boundingBox();
+    expect(start && box && viewport).toBeTruthy();
+    // Grab the handle by its grip (a narrow player's header buttons fill the rest of it, and a press on a
+    // button never starts a drag) and drop the player just inside the chat's top-left corner.
+    const grabX = start!.x + 10;
+    const grabY = start!.y + start!.height / 2;
+    await page.mouse.move(grabX, grabY);
+    await page.mouse.down();
+    await page.mouse.move(viewport!.x + 20 + (grabX - box!.x), viewport!.y + 30 + (grabY - box!.y), { steps: 12 });
+    await page.mouse.up();
+    await expect
+      .poll(async () => Math.round((await player.boundingBox())!.x - viewport!.x))
+      .toBe(12);
+
+    // The floating size and position belong to the window and survive docking.
+    const floated = await player.boundingBox();
+    // Escape on the player docks it back into its tab.
+    await handle.focus();
+    await page.keyboard.press("Escape");
+    await expect(player).toHaveCount(0);
+    await expect(tools).toBeVisible();
+    await expect(deviceTab("Checkout flow")).toHaveAttribute("aria-selected", "true");
+    await expect(status).toHaveText("Live");
+    await strip.getByRole("tab", { name: "Checkout flow" }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Float over chat" }).click();
+    await expect(player).toBeVisible();
+    await expect.poll(async () => (await player.boundingBox())?.x).toBe(floated!.x);
+    await player.getByRole("button", { name: "Dock device in its tab" }).click();
+    await expect(player).toHaveCount(0);
+
+    // Closing the tab ends the viewer session without shutting the simulator down, and it stays closed.
+    await strip.getByRole("button", { name: "Close Checkout flow tab" }).click();
+    await expect(deviceTab("Checkout flow")).toHaveCount(0);
+    await tools.getByRole("button", { name: "New workspace tab" }).click();
+    const deviceLauncher = tools.getByRole("button", { name: "Device", exact: true });
+    if (!(await deviceLauncher.isVisible())) await tools.getByRole("button", { name: "More tools…", exact: true }).click();
+    await deviceLauncher.click();
+    await expect(panel.getByRole("button", { name: `Open ${DEVICE_NAME}` })).toBeVisible();
+    await expect(deviceTab("Checkout flow")).toHaveCount(0);
+
+    // Opening the same device again in this chat brings back its saved name.
+    await panel.getByRole("button", { name: `Open ${DEVICE_NAME}` }).click();
+    await expect(deviceTab("Checkout flow")).toHaveAttribute("aria-selected", "true");
     await panel.getByRole("button", { name: "Close simulator" }).click();
     await expect(panel.getByRole("button", { name: `Open ${DEVICE_NAME}` })).toBeVisible();
   });

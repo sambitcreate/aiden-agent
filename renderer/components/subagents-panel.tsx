@@ -28,7 +28,7 @@ import {
   type SubagentDetailAnnouncementState,
 } from "../lib/subagent-panel-state";
 import type { SubagentEffectActivityV1, SubagentRunSnapshot } from "../shared/subagent-runs";
-import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
+import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { SubagentDetail } from "./subagent-detail";
 import {
   SubagentOwnerFocusBoundary,
@@ -106,7 +106,7 @@ const SubagentDetailPending = React.forwardRef<
     >
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
         <header className="flex min-w-0 items-start gap-2.5">
-          <SubagentOrb role={run.role} state={run.state} className="mt-0.5" />
+          <SubagentMark role={run.role} state={run.state} className="mt-0.5" />
           <span className="min-w-0 flex-1">
             <h2
               ref={headingRef}

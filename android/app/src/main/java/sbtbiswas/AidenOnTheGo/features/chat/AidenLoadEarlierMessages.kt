@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -29,10 +28,13 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /**
  * Elevated tonal capsule at the top of a windowed transcript that pages back
@@ -47,7 +49,8 @@ fun AidenLoadEarlierMessages(
 ) {
     val palette = AidenTheme.palette
     val reduceMotion = aidenReduceMotion()
-    val label = if (isLoading) "Loading earlier messages" else "Load earlier messages"
+    val label = if (isLoading) stringResource(R.string.chat_load_earlier_loading) else stringResource(R.string.chat_load_earlier)
+    val loadingState = stringResource(R.string.state_loading)
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
@@ -68,7 +71,7 @@ fun AidenLoadEarlierMessages(
                 .tactilePress(interaction)
                 .semantics {
                     role = Role.Button
-                    if (isLoading) stateDescription = "Loading"
+                    if (isLoading) stateDescription = loadingState
                 }
         ) {
             Row(
@@ -83,19 +86,10 @@ fun AidenLoadEarlierMessages(
                     },
                     label = "load_earlier_icon"
                 ) { loading ->
-                    if (loading && reduceMotion) {
-                        CircularProgressIndicator(
-                            progress = { 0.75f },
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = palette.secondary
-                        )
-                    } else if (loading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = palette.secondary
-                        )
+                    if (loading) {
+                        Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+                            AidenActivityDot(color = palette.secondary, size = 7.dp)
+                        }
                     } else {
                         Icon(
                             imageVector = Icons.Default.ArrowUpward,

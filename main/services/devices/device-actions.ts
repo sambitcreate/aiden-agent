@@ -13,10 +13,12 @@ import {
   type DeviceActionInput,
   type DeviceColorFilter,
   type DevicePermission,
+  type DevicePlatform,
   type DeviceSettings,
   type DeviceTextSize,
   type DeviceToggle,
 } from "../../../renderer/shared/devices.js";
+import { DEVICE_CLIPBOARD_MAX_BYTES, checkDeviceClipboardText } from "../../../renderer/shared/device-features.js";
 import type { DeviceCommandOptions, DeviceHostReady } from "./device-host.js";
 
 const SIMCTL_ACTION_TIMEOUT_MS = 30_000;
@@ -55,8 +57,9 @@ const IOS_PRIVACY_SERVICES: Record<Exclude<DevicePermission, "notifications">, s
   location: "location",
 };
 
-// Aiden toggle names -> `serve-sim-ax-settings` options. Increase Contrast uses `simctl ui`.
-const IOS_AX_TOGGLES: Record<Exclude<DeviceToggle, "increaseContrast">, string> = {
+// Aiden toggle names -> `serve-sim-ax-settings` options. Increase Contrast uses `simctl ui`;
+// the network switch is Android-only.
+const IOS_AX_TOGGLES: Record<Exclude<DeviceToggle, "increaseContrast" | "networkEnabled">, string> = {
   reduceMotion: "reduce-motion",
   reduceTransparency: "reduce-transparency",
   showBorders: "show-borders",
@@ -113,6 +116,9 @@ export function iosActionCommand(
       if (input.setting === "increaseContrast") {
         return simctl(udid, "ui", "increase_contrast", input.value ? "enabled" : "disabled");
       }
+      if (input.setting === "networkEnabled") {
+        throw new DeviceActionUnavailableError("iOS Simulators cannot turn the network off.");
+      }
       return axSettings(ready, udid, "set", IOS_AX_TOGGLES[input.setting], input.value ? "on" : "off");
     case "setLiquidGlass":
       return axSettings(ready, udid, "set", "liquid-glass", input.value);
@@ -149,6 +155,8 @@ export function iosActionCommand(
       return simctl(udid, "location", "set", `${input.latitude},${input.longitude}`);
     case "clearLocation":
       return simctl(udid, "location", "clear");
+    case "setOrientation":
+      throw new DeviceActionUnavailableError("Rotate an iOS Simulator with the rail's Rotate button.");
   }
 }
 
@@ -165,6 +173,7 @@ const ACTION_LABELS: Record<DeviceActionInput["type"], string> = {
   setPermission: "change the permission",
   setLocation: "set the location",
   clearLocation: "clear the location",
+  setOrientation: "rotate",
 };
 
 export async function runDeviceAction(ready: DeviceHostReady, input: DeviceActionInput): Promise<void> {
@@ -223,4 +232,117 @@ export async function readDeviceSettings(ready: DeviceHostReady, udid: string): 
     ...(contrast === "enabled" || contrast === "disabled" ? { increaseContrast: contrast === "enabled" } : {}),
     ...(ax ? parseAxStatus(ax) : {}),
   };
+}
+
+// ── Device power features: erase, clipboard, and screen recording ───────────
+// Each takes the target's platform so Android's adb variants can slot in
+// beside iOS. These builders are iOS-only and refuse any other platform before
+// anything runs; Android's live in `android-device-feature-actions.ts`.
+
+type DeviceRun = DeviceHostReady["run"];
+const SIMCTL_SHUTDOWN_TIMEOUT_MS = 60_000;
+const SIMCTL_ERASE_TIMEOUT_MS = 120_000;
+const SIMCTL_CLIPBOARD_TIMEOUT_MS = 15_000;
+
+function requireIos(platform: DevicePlatform, feature: string): void {
+  if (platform !== "ios") throw new DeviceActionUnavailableError(`${feature} is not available for this device yet.`);
+}
+
+function lastLine(stderr: string): string | undefined {
+  return stderr.trim().split("\n").slice(-1)[0]?.trim() || undefined;
+}
+
+/** The two steps of an erase: `simctl erase` refuses a booted simulator, so it shuts down first. */
+export function deviceEraseCommands(
+  platform: DevicePlatform,
+  udid: string,
+): { shutdown: DeviceActionCommand; erase: DeviceActionCommand } {
+  requireIos(platform, "Erasing");
+  return { shutdown: simctl(udid, "shutdown"), erase: simctl(udid, "erase") };
+}
+
+export function deviceClipboardWriteCommand(platform: DevicePlatform, udid: string, text: string): DeviceActionCommand {
+  requireIos(platform, "Pasting");
+  return { ...simctl(udid, "pbcopy"), options: { stdin: text } };
+}
+
+export function deviceClipboardReadCommand(platform: DevicePlatform, udid: string): DeviceActionCommand {
+  requireIos(platform, "Copying");
+  return simctl(udid, "pbpaste");
+}
+
+/** A long-running recorder. SIGINT makes simctl finalize the file; H.264 plays everywhere. */
+export function deviceRecordVideoCommand(platform: DevicePlatform, udid: string, file: string): DeviceActionCommand {
+  requireIos(platform, "Screen recording");
+  return { command: "xcrun", args: ["simctl", "io", udid, "recordVideo", "--codec=h264", "--force", file] };
+}
+
+export type DeviceErasePhase = "shutting-down" | "erasing" | "erased";
+
+/**
+ * Shuts a booted simulator down, then erases all of its content and settings.
+ * A shutdown that loses a race with another one (the simulator is already
+ * off) still erases. A failed shutdown never erases.
+ */
+export async function eraseDevice(
+  run: DeviceRun,
+  input: { platform: DevicePlatform; deviceId: string; booted: boolean },
+  onPhase: (phase: DeviceErasePhase) => void = () => undefined,
+): Promise<{ wasBooted: boolean }> {
+  const commands = deviceEraseCommands(input.platform, input.deviceId);
+  if (input.booted) {
+    onPhase("shutting-down");
+    const result = await run(commands.shutdown.command, commands.shutdown.args, {
+      timeoutMs: SIMCTL_SHUTDOWN_TIMEOUT_MS,
+    });
+    if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
+      const detail = lastLine(result.stderr);
+      throw new Error(`The simulator did not shut down, so it was not erased${detail ? `: ${detail}` : "."}`);
+    }
+  }
+  onPhase("erasing");
+  const result = await run(commands.erase.command, commands.erase.args, { timeoutMs: SIMCTL_ERASE_TIMEOUT_MS });
+  if (result.code !== 0) {
+    const detail = lastLine(result.stderr);
+    throw new Error(`The simulator could not be erased${detail ? `: ${detail}` : "."}`);
+  }
+  onPhase("erased");
+  return { wasBooted: input.booted };
+}
+
+/** Puts text on the simulator's pasteboard. The caller sends Cmd+V so the focused field receives it. */
+export async function writeDeviceClipboard(
+  run: DeviceRun,
+  input: { platform: DevicePlatform; deviceId: string },
+  value: unknown,
+): Promise<{ bytes: number }> {
+  const checked = checkDeviceClipboardText(value);
+  if (!checked.ok) throw new Error(checked.reason);
+  const command = deviceClipboardWriteCommand(input.platform, input.deviceId, checked.text);
+  const result = await run(command.command, command.args, {
+    timeoutMs: SIMCTL_CLIPBOARD_TIMEOUT_MS,
+    ...command.options,
+  });
+  if (result.code !== 0) {
+    const detail = lastLine(result.stderr);
+    throw new Error(`The simulator clipboard could not be set${detail ? `: ${detail}` : "."}`);
+  }
+  return { bytes: checked.bytes };
+}
+
+/** Reads the simulator's pasteboard text. Empty, non-text, and oversized contents are refused. */
+export async function readDeviceClipboard(
+  run: DeviceRun,
+  input: { platform: DevicePlatform; deviceId: string },
+): Promise<{ text: string; bytes: number }> {
+  const command = deviceClipboardReadCommand(input.platform, input.deviceId);
+  const result = await run(command.command, command.args, { timeoutMs: SIMCTL_CLIPBOARD_TIMEOUT_MS });
+  if (result.code !== 0) {
+    const detail = lastLine(result.stderr);
+    throw new Error(`The simulator clipboard could not be read${detail ? `: ${detail}` : "."}`);
+  }
+  if (result.stdout.length === 0) throw new Error("The simulator clipboard has no text.");
+  const checked = checkDeviceClipboardText(result.stdout);
+  if (!checked.ok) throw new Error(`The simulator clipboard text is larger than ${DEVICE_CLIPBOARD_MAX_BYTES / 1024} KB.`);
+  return { text: checked.text, bytes: checked.bytes };
 }

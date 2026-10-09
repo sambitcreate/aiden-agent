@@ -1,3 +1,5 @@
+import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
@@ -161,6 +163,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -192,12 +195,16 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 
 export interface GitHubPullRequestListStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequests?: GitHubPullRequestSummary[];
 }
 
@@ -210,6 +217,8 @@ export interface GitHubRepositoryRef {
 export interface GitHubRepositoryStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   repository?: GitHubRepositoryRef;
 }
 
@@ -437,6 +446,8 @@ export interface ChatMeta {
   lastAssistantSequence?: number;
   /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
   forkedFrom?: ChatForkLineageV1;
+  /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
+  owner?: ChatOwnerV1;
   createdAt: number;
   updatedAt: number;
 }
@@ -452,7 +463,9 @@ export interface Chat extends ChatMeta {
 export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
-export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
+export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
+/** Why a run was recorded without doing work. Only Bot routines skip today. */
+export type ScheduledRunSkipReason = "bot_paused" | "duplicate";
 
 export interface ScheduledMcpServerBinding {
   id: string;
@@ -489,6 +502,14 @@ export interface ScheduledTask {
   /** Explicit Web Search authority. Missing legacy values are always treated as false. */
   webSearchEnabled?: boolean;
   chatId?: string;
+  /**
+   * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
+   * conversation instead of a workspace chat and is hidden from the generic
+   * scheduled-task surfaces. Immutable once set.
+   */
+  botId?: string;
+  /** Frequency-first schedule a Bot routine was created from; `cron` is derived from it. */
+  routineSchedule?: BotRoutineSchedule;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -502,6 +523,8 @@ export interface ScheduledRun {
   startedAt: number;
   finishedAt: number;
   result: ScheduledRunResult;
+  /** Present only when `result` is "skipped". */
+  reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
   chatId?: string;
@@ -530,6 +553,10 @@ export interface ScheduledTaskInput {
   executionProfile?: ScheduledTaskExecutionProfile;
   /** Explicit Web Search authority. New tasks default to false. */
   webSearchEnabled?: boolean;
+  /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
+  botId?: string;
+  /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
+  routineSchedule?: BotRoutineSchedule;
   notify?: boolean;
 }
 
@@ -707,6 +734,8 @@ export interface AppSettings {
   /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
+  /** Per-subagent model and effort defaults; parsed leniently, absent means children inherit. */
+  subagentModels?: import("./subagents/subagent-model-selection.js").SubagentModelSettings;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
   /** Global skill discovery/invocation gate. Omitted means enabled. */

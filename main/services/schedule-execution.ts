@@ -29,6 +29,9 @@ import {
   scheduledGenerationSurface,
   startSurfaceGeneration,
 } from "./conversation-surface-generation.js";
+import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { createBotRoutineExecutor, type BotRoutineExecutor } from "./scheduled-bot-routines.js";
+import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -116,9 +119,32 @@ function notify(task: ScheduledTask, body: string, chatId: string | undefined): 
   });
 }
 
+function notifyBotRoutine(task: ScheduledTask, body: string): void {
+  showScheduledNotification(task, body, task.botId, {
+    isSupported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    openChat: async (botId) => {
+      // The routine posted into the Bot's chat, not its Profile.
+      await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
+    },
+    onError: (stage) => {
+      logger.warn("schedule", `Routine notification ${stage} failed.`);
+    },
+  });
+}
+
 export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeStreams = new Map<string, string>();
   const activeControllers = new Map<string, AbortController>();
+  // Bot routines submit to their Bot's conversation, never a workspace chat.
+  let botRoutines: BotRoutineExecutor | undefined;
+  const botRoutineExecutor = () =>
+    (botRoutines ??= createBotRoutineExecutor({
+      store,
+      ports: async () => (await import("./scheduled-bot-routines-main.js")).botRoutinePorts(),
+      notify: notifyBotRoutine,
+      broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
+    }));
 
   async function ensureChat(task: ScheduledTask): Promise<string> {
     const create = (claimedChatId: string) =>
@@ -233,12 +259,19 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
     if (workspace) await assertManagedWorktreeAdmission(workspace);
     const settings = await configStore.getSettings();
+    if (!task.providerId && isAcpHarnessProvider(settings.lastProviderId ?? "")) {
+      throw new Error(
+        "This task follows your last-used model, which can't run scheduled tasks. Pin a model in the task's settings.",
+      );
+    }
     const providerId = task.providerId ?? settings.lastProviderId;
     if (!providerId) throw new Error("Choose a provider before running this scheduled task.");
     const provider =
       (await providerRegistry.selectionProvider(providerId)) ??
       (await configStore.getProvider(providerId));
     if (!provider) throw new Error("The task provider no longer exists.");
+    const harnessReason = acpHarnessUnavailableReason(providerId);
+    if (harnessReason) throw new Error(harnessReason);
     if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) {
       throw new Error(
         "Google chat models are off while Gemini is configured for transcription only.",
@@ -345,12 +378,27 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   return {
-    async run(task: ScheduledTask, runId?: string): Promise<ScheduledRun> {
+    async run(
+      task: ScheduledTask,
+      runId?: string,
+      trigger?: ScheduledRunTrigger,
+    ): Promise<ScheduledRun> {
       if (activeControllers.has(task.id)) {
         throw new Error("This scheduled task is already running.");
       }
       const controller = new AbortController();
       activeControllers.set(task.id, controller);
+      if (task.botId !== undefined) {
+        try {
+          return await botRoutineExecutor().run(task, {
+            runId,
+            trigger,
+            signal: controller.signal,
+          });
+        } finally {
+          activeControllers.delete(task.id);
+        }
+      }
       const startedAt = Date.now();
       let chatId: string | undefined;
       let result: ScheduledRun["result"] = "error";

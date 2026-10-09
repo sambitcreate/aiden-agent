@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.config
 
 import android.content.Context
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +24,21 @@ enum class AidenThemePresetID(val title: String) {
     CALM("Calm"),
     GRAPHITE("Graphite"),
     DUSK("Dusk"),
-    MIDNIGHT("Midnight")
+    MIDNIGHT("Midnight"),
+    MONOCHROME("Monochrome"),
+
+    /** Material You: the palette follows the device wallpaper colors (Android 12+). */
+    DYNAMIC("System");
+
+    val isDynamic: Boolean get() = this == DYNAMIC
+
+    companion object {
+        const val DYNAMIC_MIN_SDK = 31
+
+        /** Presets offered on a device running [sdkInt]; dynamic color needs Android 12. */
+        fun available(sdkInt: Int): List<AidenThemePresetID> =
+            entries.filter { !it.isDynamic || sdkInt >= DYNAMIC_MIN_SDK }
+    }
 }
 
 @Serializable
@@ -58,15 +73,22 @@ data class AidenPalette(
     val warningHex: String,
     val dangerHex: String
 ) {
-    val canvas: Color get() = hexToColor(canvasHex)
-    val sidebar: Color get() = hexToColor(sidebarHex)
-    val raised: Color get() = hexToColor(raisedHex)
-    val foreground: Color get() = hexToColor(foregroundHex)
-    val secondary: Color get() = hexToColor(secondaryHex)
-    val accent: Color get() = hexToColor(accentHex)
-    val success: Color get() = hexToColor(successHex)
-    val warning: Color get() = hexToColor(warningHex)
-    val danger: Color get() = hexToColor(dangerHex)
+    // Parsed once per palette: these are read on every recomposition across the app.
+    val canvas: Color = hexToColor(canvasHex)
+    val sidebar: Color = hexToColor(sidebarHex)
+    val raised: Color = hexToColor(raisedHex)
+    val foreground: Color = hexToColor(foregroundHex)
+    val secondary: Color = hexToColor(secondaryHex)
+    val accent: Color = hexToColor(accentHex)
+    val success: Color = hexToColor(successHex)
+    val warning: Color = hexToColor(warningHex)
+    val danger: Color = hexToColor(dangerHex)
+
+    /**
+     * Readable text and icon color on an accent fill: white or black, whichever has the
+     * higher WCAG contrast, matching the desktop's `accentForeground`.
+     */
+    val onAccent: Color = readableOn(accent)
 
     fun applyingContrast(contrast: Int, baseline: Int = 50): AidenPalette {
         if (contrast == baseline) return this
@@ -88,6 +110,17 @@ data class AidenPalette(
                 Color(colorInt)
             }
         }
+
+        /** WCAG 2.x contrast ratio between two opaque colors. */
+        fun contrastRatio(a: Color, b: Color): Float {
+            val la = a.luminance()
+            val lb = b.luminance()
+            return (maxOf(la, lb) + 0.05f) / (minOf(la, lb) + 0.05f)
+        }
+
+        /** White or black, whichever reads better on [fill]. */
+        fun readableOn(fill: Color): Color =
+            if (contrastRatio(fill, Color.White) >= contrastRatio(fill, Color.Black)) Color.White else Color.Black
 
         fun mixHex(hexA: String, hexB: String, fraction: Float): String {
             val a = hexToColor(hexA)
@@ -122,12 +155,12 @@ object AidenThemeCatalog {
             AidenPalette(canvasHex = "#18201C", sidebarHex = "#202A25", raisedHex = "#29342E", foregroundHex = "#D1D6D3", secondaryHex = "#95A39B", accentHex = "#42B596", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
         ),
         AidenThemePresetID.PAPER to listOf(
-            AidenPalette(canvasHex = "#F5F3EE", sidebarHex = "#ECE8E0", raisedHex = "#FFFFFF", foregroundHex = "#3E3C38", secondaryHex = "#6F6A60", accentHex = "#7E5E2A", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
-            AidenPalette(canvasHex = "#1E1C19", sidebarHex = "#262320", raisedHex = "#2E2A26", foregroundHex = "#D6D2CA", secondaryHex = "#A39E93", accentHex = "#C9A97C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
+            AidenPalette(canvasHex = "#FBFBFA", sidebarHex = "#F5F4F1", raisedHex = "#FFFFFF", foregroundHex = "#373329", secondaryHex = "#5A554A", accentHex = "#7E5E2A", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
+            AidenPalette(canvasHex = "#242016", sidebarHex = "#2F2B21", raisedHex = "#413D33", foregroundHex = "#F5F4F1", secondaryHex = "#B0AB9F", accentHex = "#C9A97C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
         ),
         AidenThemePresetID.CALM to listOf(
-            AidenPalette(canvasHex = "#F7F3EA", sidebarHex = "#EFE9DD", raisedHex = "#FFFDF8", foregroundHex = "#44403A", secondaryHex = "#6E685C", accentHex = "#7E5B2C", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
-            AidenPalette(canvasHex = "#201D18", sidebarHex = "#28241E", raisedHex = "#322C25", foregroundHex = "#D8D3C8", secondaryHex = "#A8A091", accentHex = "#D9A86C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
+            AidenPalette(canvasHex = "#F5F4F1", sidebarHex = "#EAE7E1", raisedHex = "#FBFBFA", foregroundHex = "#373329", secondaryHex = "#5A554A", accentHex = "#7E5B2C", successHex = "#3DBF7D", warningHex = "#D4A22A", dangerHex = "#E05353"),
+            AidenPalette(canvasHex = "#2F2B21", sidebarHex = "#242016", raisedHex = "#413D33", foregroundHex = "#F5F4F1", secondaryHex = "#B0AB9F", accentHex = "#D9A86C", successHex = "#47D18C", warningHex = "#D9B43A", dangerHex = "#EB6B6B")
         ),
         AidenThemePresetID.GRAPHITE to listOf(
             AidenPalette(canvasHex = "#F4F4F5", sidebarHex = "#E9E9EB", raisedHex = "#FFFFFF", foregroundHex = "#38383B", secondaryHex = "#64646A", accentHex = "#52525B", successHex = "#30D158", warningHex = "#FF9F0A", dangerHex = "#FF453A"),
@@ -140,6 +173,10 @@ object AidenThemeCatalog {
         AidenThemePresetID.MIDNIGHT to listOf(
             AidenPalette(canvasHex = "#EFF2F8", sidebarHex = "#E3E8F2", raisedHex = "#FFFFFF", foregroundHex = "#38405A", secondaryHex = "#5F6880", accentHex = "#3B5BA9", successHex = "#30D158", warningHex = "#FF9F0A", dangerHex = "#FF453A"),
             AidenPalette(canvasHex = "#141826", sidebarHex = "#1B2133", raisedHex = "#262D42", foregroundHex = "#D2D8E6", secondaryHex = "#94A0BC", accentHex = "#7FA0F0", successHex = "#32D17A", warningHex = "#FFB020", dangerHex = "#FF5E57")
+        ),
+        AidenThemePresetID.MONOCHROME to listOf(
+            AidenPalette(canvasHex = "#FFFFFF", sidebarHex = "#F5F5F5", raisedHex = "#FFFFFF", foregroundHex = "#000000", secondaryHex = "#525252", accentHex = "#000000", successHex = "#00906C", warningHex = "#B58A00", dangerHex = "#D70022"),
+            AidenPalette(canvasHex = "#0A0A0A", sidebarHex = "#141414", raisedHex = "#1F1F1F", foregroundHex = "#FFFFFF", secondaryHex = "#A3A3A3", accentHex = "#FFFFFF", successHex = "#2FBF8F", warningHex = "#FFD60A", dangerHex = "#FF4D5E")
         )
     )
 

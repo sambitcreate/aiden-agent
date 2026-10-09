@@ -94,6 +94,8 @@ class AidenChatChromeUiTest {
             loading = true
         }
         compose.onNodeWithText("Loading earlier messages").assertIsNotEnabled()
+        // Paging back is a read: it never shows a spinner.
+        compose.onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertDoesNotExist()
     }
 
     @Test

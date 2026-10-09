@@ -1,4 +1,5 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { ChatProgressEvents } from "./chat-progress-events.js";
@@ -73,8 +74,11 @@ export function createChatProgressAuthorizer(
       const metadata = (await ports.chatMetadata()).find(
         (entry) => entry.id === chatId,
       );
+      const surface = metadata ? chatSurface(metadata) : undefined;
+      // The Assistant workspace stays refused even for a Bot-tagged record.
       if (
         !metadata ||
+        (surface !== "regular" && surface !== "bot") ||
         persistedChatWorkspaceId(metadata.workspaceId) === ASSISTANT_WORKSPACE_ID
       ) {
         throw new AidenRemoteServiceError(

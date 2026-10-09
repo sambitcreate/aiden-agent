@@ -46,7 +46,7 @@ function harness(t: test.TestContext) {
     return () => reads.get(name) ?? 0;
   };
   const emit = (channel: string, payload: unknown) => handlers.get(channel)?.(payload);
-  return { mount, emit, activate: () => activate() };
+  return { client, mount, emit, activate: () => activate() };
 }
 
 test("a repository change refreshes that workspace's mounted Git reads only", async (t) => {
@@ -189,4 +189,51 @@ test("pull-request status polls GitHub every five minutes and repository changes
   h.emit("git:changed", { workspaceId: "ws-1", generation: 2 });
   await flush();
   assert.equal(status(), 3, "a change once the answer is a minute old refreshes it");
+});
+
+test("a GitHub rate-limit pause holds pull-request polls and change refreshes until it ends", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+  const globals = globalThis as { document?: unknown };
+  const previous = globals.document;
+  globals.document = { visibilityState: "visible", hasFocus: () => true };
+  t.after(() => { globals.document = previous; });
+
+  const h = harness(t);
+  const start = Date.now();
+  const pullRequest = { number: 7, title: "Change", url: "https://github.com/acme/app/pull/7", state: "open", headBranch: "a", baseBranch: "main", checks: [] };
+  const retryAt = start + 20 * 60_000;
+  let calls = 0;
+  const { queryKey, refetchInterval, staleTime, structuralSharing } = gitPullRequestStatusQueryOptions("ws-1");
+  const observer = new QueryObserver(h.client, {
+    queryKey,
+    queryFn: async () => {
+      calls += 1;
+      return calls === 2 ? { availability: "rate-limited", retryAt, message: "paused" } : { availability: "ready", pullRequest };
+    },
+    refetchInterval,
+    staleTime,
+    structuralSharing,
+  } as QueryObserverOptions<unknown, Error>);
+  const unsubscribe = observer.subscribe(() => {});
+  t.after(unsubscribe);
+  await flush();
+  const minute = async (n = 1) => {
+    for (let i = 0; i < n; i++) { t.mock.timers.tick(60_000); await flush(); }
+  };
+
+  await minute(5);
+  assert.equal(calls, 2, "the five-minute poll hit the rate limit");
+  const paused = observer.getCurrentResult().data as { availability: string; pullRequest?: { number: number } };
+  assert.equal(paused.availability, "rate-limited");
+  assert.equal(paused.pullRequest?.number, 7, "the last pull request stays visible");
+
+  await minute(2);
+  h.emit("git:changed", { workspaceId: "ws-1", generation: 1 });
+  h.activate();
+  await flush();
+  await minute(12);
+  assert.equal(calls, 2, "no change event, activation or poll asks GitHub during the pause");
+
+  await minute(2);
+  assert.equal(calls, 3, "polling resumes once the pause is over");
 });

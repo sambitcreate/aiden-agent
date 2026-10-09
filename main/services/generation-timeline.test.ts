@@ -291,6 +291,17 @@ test("safe tool descriptors retain only relative targets", () => {
   });
 });
 
+test("device tool rows name the simulator action and never keep the device ids", () => {
+  const args = { hostId: "local", deviceId: "5A1E2E00-0000-4000-8000-00000000E2E0" };
+  assert.deepEqual(safeToolDescriptor("device_list", {}), { label: "List simulators" });
+  assert.deepEqual(safeToolDescriptor("device_open", args), { label: "Open simulator" });
+  assert.deepEqual(safeToolDescriptor("device_screenshot", args), { label: "Screenshot simulator" });
+  assert.deepEqual(safeToolDescriptor("device_close", args), { label: "Close simulator" });
+  assert.deepEqual(safeToolDescriptor("device_close", { ...args, shutdown: true }), {
+    label: "Shut down simulator",
+  });
+});
+
 test("a command's detail is the model's description, never the command", () => {
   assert.deepEqual(
     safeToolDescriptor("run_command", {

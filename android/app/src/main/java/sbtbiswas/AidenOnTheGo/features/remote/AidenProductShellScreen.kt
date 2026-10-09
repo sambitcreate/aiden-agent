@@ -27,11 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import sbtbiswas.AidenOnTheGo.R
-import sbtbiswas.AidenOnTheGo.config.AidenAppearanceStore
-import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsHomeScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
-import sbtbiswas.AidenOnTheGo.features.settings.AidenAppearanceSettingsScreen
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceShellScreen
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceHomeViewModel
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
@@ -41,11 +38,12 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.abs
+import androidx.compose.ui.res.stringResource
+import androidx.annotation.StringRes
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,14 +52,15 @@ fun AidenProductShellScreen(
     navigationStore: AidenProductNavigationStore,
     installationStore: AidenInstallationStore,
     chatCache: AidenChatCache,
-    appearanceStore: AidenAppearanceStore? = null,
-    voiceInputStore: AidenVoiceInputStore,
     botsViewModel: AidenBotsViewModel,
     onNavigateToChat: (String) -> Unit,
     onNavigateToBotProfile: (String) -> Unit,
+    onNavigateToBotChat: (String) -> Unit = {},
     onNavigateToBotEditor: (String?) -> Unit,
     onNavigateToWorkspaceFiles: (String) -> Unit,
-    onNavigateToWorkspaceGit: (String) -> Unit
+    onNavigateToWorkspaceGit: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenInstallations: () -> Unit
 ) {
     val activeArea by navigationStore.activeArea.collectAsStateWithLifecycle()
     val activeInstallationId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
@@ -72,8 +71,6 @@ fun AidenProductShellScreen(
         factory = AidenWorkspaceHomeViewModel.factory(coordinator, chatCache)
     )
 
-    var showPairingDialog by remember { mutableStateOf(false) }
-    var showSettingsSheet by remember { mutableStateOf(false) }
     val activeInstallation = installations.firstOrNull { it.id == activeInstallationId }
     val selectArea: (AidenProductArea) -> Unit = { area ->
         val instanceId = activeInstallationId
@@ -109,7 +106,7 @@ fun AidenProductShellScreen(
                 productSwitcher = {
                     AidenProductSwitcher(activeArea, botsAvailable, selectArea)
                 },
-                onOpenSettings = { showSettingsSheet = true },
+                onOpenSettings = onOpenSettings,
                 isActive = activeArea == AidenProductArea.WORKSPACES,
                 modifier = Modifier
                     .fillMaxSize()
@@ -128,7 +125,7 @@ fun AidenProductShellScreen(
                     .semantics { if (activeArea != AidenProductArea.BOTS) hideFromAccessibility() }
             ) {
                 AidenProductTopBar(
-                    title = "Bots",
+                    title = stringResource(R.string.shell_area_bots),
                     connectionState = connectionState,
                     productSwitcher = {
                         AidenProductSwitcher(
@@ -141,20 +138,20 @@ fun AidenProductShellScreen(
                     primaryAction = {
                         AidenProductTopBarPrimaryAction(
                             icon = Icons.Outlined.Add,
-                            contentDescription = "New Bot",
+                            contentDescription = stringResource(R.string.shell_new_bot_cd),
                             onClick = { onNavigateToBotEditor(null) }
                         )
                     }
                 ) {
                     AidenProductTopBarAction(
                         icon = Icons.Outlined.Devices,
-                        contentDescription = "Installations",
-                        onClick = { showPairingDialog = true }
+                        contentDescription = stringResource(R.string.shell_installations_cd),
+                        onClick = onOpenInstallations
                     )
                     AidenProductTopBarAction(
                         icon = Icons.Outlined.Settings,
-                        contentDescription = "Settings",
-                        onClick = { showSettingsSheet = true }
+                        contentDescription = stringResource(R.string.settings_title),
+                        onClick = onOpenSettings
                     )
                 }
                 Box(
@@ -167,49 +164,13 @@ fun AidenProductShellScreen(
                         viewModel = botsViewModel,
                         onNavigateToChat = onNavigateToChat,
                         onNavigateToBotProfile = onNavigateToBotProfile,
+                        onNavigateToBotChat = onNavigateToBotChat,
+                        botDeleter = sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter,
                         onNavigateToCreateBot = { onNavigateToBotEditor(null) },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
             }
-        }
-    }
-
-    // Settings sheet
-    if (showSettingsSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showSettingsSheet = false },
-            containerColor = palette.raised,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            dragHandle = null,
-            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
-        ) {
-            AidenAppearanceSettingsScreen(
-                appearanceStore = appearanceStore,
-                voiceInputStore = voiceInputStore,
-                remoteClient = coordinator.client.collectAsStateWithLifecycle().value,
-                onOpenInstallations = {
-                    showSettingsSheet = false
-                    showPairingDialog = true
-                }
-            )
-        }
-    }
-
-    // Pairing sheet
-    if (showPairingDialog) {
-        ModalBottomSheet(
-            onDismissRequest = { showPairingDialog = false },
-            containerColor = palette.raised,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            dragHandle = null,
-            sheetGesturesEnabled = AidenUi.ScrollableSheetGesturesEnabled
-        ) {
-            AidenPairingScreen(
-                coordinator = coordinator,
-                installationStore = installationStore,
-                onDismiss = { showPairingDialog = false }
-            )
         }
     }
 }
@@ -229,19 +190,20 @@ fun AidenProductSwitcher(
         label = "ProductSwitcherChevron"
     )
     val interaction = remember { MutableInteractionSource() }
+    val switcherDescription = stringResource(R.string.shell_switcher_cd, stringResource(activeArea.displayTitle))
 
     Box {
         Surface(
             onClick = { expanded = true },
             color = androidx.compose.ui.graphics.Color.Transparent,
-            shape = RoundedCornerShape(24.dp),
+            shape = MaterialTheme.shapes.extraLarge,
             interactionSource = interaction,
             modifier = Modifier
                 .height(48.dp)
                 .width(58.dp)
                 .tactilePress(interaction)
                 .semantics {
-                    contentDescription = "Aiden. Current area: ${activeArea.displayTitle}. Choose Bots or Workspaces."
+                    contentDescription = switcherDescription
                 }
         ) {
             Row(
@@ -275,7 +237,7 @@ fun AidenProductSwitcher(
         ) {
             AidenProductArea.entries.forEach { area ->
                 DropdownMenuItem(
-                    text = { Text(area.displayTitle) },
+                    text = { Text(stringResource(area.displayTitle)) },
                     leadingIcon = {
                         Icon(
                             imageVector = if (area == AidenProductArea.BOTS) Icons.Outlined.SmartToy else Icons.Outlined.FolderOpen,
@@ -285,7 +247,7 @@ fun AidenProductSwitcher(
                     },
                     trailingIcon = {
                         if (area == activeArea) {
-                            Icon(Icons.Outlined.Check, contentDescription = "Selected", tint = palette.accent)
+                            Icon(Icons.Outlined.Check, contentDescription = stringResource(R.string.state_selected), tint = palette.accent)
                         }
                     },
                     onClick = {
@@ -300,8 +262,9 @@ fun AidenProductSwitcher(
     }
 }
 
-private val AidenProductArea.displayTitle: String
-    get() = if (this == AidenProductArea.BOTS) "Bots" else "Workspaces"
+@get:StringRes
+private val AidenProductArea.displayTitle: Int
+    get() = if (this == AidenProductArea.BOTS) R.string.shell_area_bots else R.string.shell_area_workspaces
 
 /** Horizontal travel of an entering or leaving area, as a fraction of the shell width. */
 private const val AidenProductAreaSlideFraction = 0.2f

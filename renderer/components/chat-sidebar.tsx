@@ -56,7 +56,7 @@ import {
   SquarePen,
   UserRound,
 } from "lucide-react";
-import { BotSidebarIcon } from "./bot-avatar";
+import { SidebarPrimaryNav } from "./sidebar-primary-nav";
 import { appUpdatesApi, chatsApi, gitApi, peerHostsApi, workspacesApi } from "../lib/ipc";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import {
@@ -71,7 +71,8 @@ import {
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
 import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
-import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
+import { queryKeys, refreshGitPullRequestStatus, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
+import { formatGitHubPausedUntil, githubPausedUntil } from "../lib/github-pause";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, GitHubPullRequestCheck, GitHubPullRequestChecksState, Workspace } from "../lib/types";
@@ -339,10 +340,39 @@ function pullRequestStateLabel(state: "open" | "closed" | "merged", isDraft?: bo
 }
 
 function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }: { workspace: Workspace; visible: boolean; accessibilityName: string }) {
+  const queryClient = useQueryClient();
   const enabled = visible && Boolean(workspace.folderPath && workspace.permission !== "none");
   const status = useGitPullRequestStatus(workspace.id, enabled);
+  const refreshStatus = () => void refreshGitPullRequestStatus(queryClient, workspace.id);
   const pullRequest = status.data?.pullRequest;
   if (!enabled || status.isLoading) return null;
+  const pausedUntil = githubPausedUntil(status.data, Date.now());
+  const pausedLabel = pausedUntil === undefined ? undefined : formatGitHubPausedUntil(pausedUntil, Date.now());
+
+  if (!pullRequest && pausedLabel) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            className="text-tertiary"
+            aria-label={`${accessibilityName} GitHub pull request status: ${pausedLabel}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Clock3 aria-hidden="true" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-3" align="start" aria-label="GitHub pull request status">
+          <p className="text-small-strong text-primary">{pausedLabel}</p>
+          <p className="mt-1 text-small text-secondary">
+            GitHub's API rate limit was reached. Aiden checks pull requests again once it resets.
+          </p>
+        </PopoverContent>
+      </Popover>
+    );
+  }
 
   if (!pullRequest) {
     const message = status.data?.message;
@@ -370,7 +400,7 @@ function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }
           <p className="text-small-strong text-primary">GitHub status unavailable</p>
           <p className="mt-1 text-small text-secondary">{message}</p>
           <div className="mt-3 flex justify-end">
-            <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
+            <Button variant="muted" size="small" onClick={refreshStatus} disabled={status.isFetching}>
               {status.isFetching ? "Refreshing…" : "Refresh"}
             </Button>
           </div>
@@ -454,9 +484,15 @@ function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }
             ) : null}
           </div>
         ) : null}
+        {pausedLabel ? (
+          <p className="mt-3 flex items-center gap-1.5 text-small text-secondary" role="status">
+            <Clock3 className="size-3.5 shrink-0" aria-hidden="true" />
+            {pausedLabel}. Showing the last status.
+          </p>
+        ) : null}
         <div className="mt-3 flex items-center justify-between gap-2">
           {status.isFetching ? <span className="inline-flex items-center gap-1.5 text-small text-tertiary"><Loader2 className="size-3.5 animate-spin" />Refreshing…</span> : <span className="text-small text-tertiary">Refreshes every 30 seconds.</span>}
-          <Button variant="muted" size="small" onClick={() => void status.refetch()} disabled={status.isFetching}>
+          <Button variant="muted" size="small" onClick={refreshStatus} disabled={status.isFetching || pausedLabel !== undefined}>
             Refresh
           </Button>
         </div>
@@ -1660,28 +1696,13 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
           </SidebarFooter>
         }
       >
-        <div className="flex flex-col gap-0.5 px-2.5 pb-2">
-          <SidebarListItem
-            icon={<SquarePen />}
-            title="New Agent"
-            disabled={!activeId || appendReconciliationRequired}
-            onClick={() => void newAgent()}
-          />
-          <SidebarListItem
-            icon={<Clock3 />}
-            title="Scheduled"
-            selected={pathname === "/scheduled"}
-            onClick={() => navigate({ to: "/scheduled" })}
-          />
-          {capabilities.bots ? (
-            <SidebarListItem
-              icon={<BotSidebarIcon />}
-              title="Bots"
-              selected={pathname.startsWith("/bots")}
-              onClick={() => navigate({ to: "/bots" })}
-            />
-          ) : null}
-        </div>
+        <SidebarPrimaryNav
+          pathname={pathname}
+          capabilities={capabilities}
+          newAgentDisabled={!activeId || appendReconciliationRequired}
+          onNewAgent={() => void newAgent()}
+          onNavigate={(to) => void navigate({ to })}
+        />
 
         {hasHosts ? (
           <RemoteHostStatusList

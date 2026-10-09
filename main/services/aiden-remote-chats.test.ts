@@ -244,7 +244,7 @@ function fixture(
               revision: `botrev:${id}`,
               name: "Fixture bot",
               instructions: "Be helpful.",
-              avatar: "spark" as const,
+              avatar: { version: 1 as const, shape: "wisp" as const, color: "lilac" as const },
               createdAt: 1_000,
               updatedAt: 2_000,
               ...(botArchived ? { archivedAt: 3_000 } : {}),
@@ -736,29 +736,6 @@ test("chat classification reads only main-owned metadata before payload access",
   assert.equal(payloadReads, 0);
   await service.get("chat-1");
   assert.equal(payloadReads, 1);
-});
-
-test("Bot chat mutation rechecks authoritative archive state inside the lifecycle gate", async () => {
-  const app = fixture(chat({ botId: "bot-1" }), {
-    retainedBotChatAuthorizer: () => true,
-  });
-  const classification = await app.service.classify("chat-1");
-  let mutated = false;
-
-  app.setBotArchived(true);
-  await assert.rejects(
-    app.service.runMutation("device-1", "chat-1", classification, async () => {
-      mutated = true;
-    }),
-    (error: unknown) =>
-      (error as { code?: string; status?: number }).code === "bot_archived" &&
-      (error as { status?: number }).status === 409,
-  );
-  assert.equal(mutated, false);
-  assert.deepEqual(await app.service.classify("chat-1"), {
-    botId: "bot-1",
-    botArchived: true,
-  });
 });
 
 test("retained Bot chat authorization is absent-by-default and fails closed", async () => {
@@ -2397,4 +2374,21 @@ test("a fork too large to send from a paired device is refused without creating 
   // A retry with the same key is refused like any replayed rejection, and still creates nothing.
   await assert.rejects(fork(), hasCode("internal_error", 409));
   assert.equal((await store.list()).length, 1);
+});
+
+test("Remote classification refuses feature-owned chats before any payload read", async () => {
+  let payloadReads = 0;
+  const { service } = fixture(
+    chat({ owner: { kind: "design-project", projectId: "project-1" } }),
+    { onPayloadGet: () => { payloadReads += 1; } },
+  );
+
+  await assert.rejects(
+    service.classify("chat-1"),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      (error as { code?: string; status?: number }).code === "not_found" &&
+      (error as { status?: number }).status === 404,
+  );
+  assert.equal(payloadReads, 0);
 });

@@ -3,16 +3,21 @@ import { createDecipheriv, hkdfSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import {
+  parseAidenRemoteBotSession,
+  parseAidenRemoteBotSessionEntry,
+  parseAidenRemoteBotSessionEvent,
   AIDEN_REMOTE_BASE_PATH,
+  AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
   AIDEN_REMOTE_RUN_EVENT_TYPES,
   AIDEN_REMOTE_RUN_STATES,
-  AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
   AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS,
   AIDEN_REMOTE_ERROR_CODES,
   AIDEN_REMOTE_EVENT_TYPES,
@@ -98,9 +103,12 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
   ["[2001:db8:0:0:0:0:0]", false],
 ];
 
-// Simulator control is a desktop-to-desktop grant that pairing never issues.
+// Simulator control is a desktop-to-desktop grant that pairing never issues,
+// and the phone simulator viewer grant is negotiated only after pairing.
 const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
-  (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+  (capability) =>
+    !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
+    !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
 );
 // Host-wide grants are issued to desktops only, so phones are never told they
 // exist either and the shared mobile fixture omits both families.
@@ -110,7 +118,7 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 24);
+  assert.equal(fixture.contractRevision, 26);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -388,6 +396,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   // parses without the section and is refused with it.
   const revision19 = structuredClone(raw);
   delete revision19.phoneRunEvents;
+  delete revision19.mobileSimulators;
   revision19.contractRevision = 19;
   record(revision19.hostHealth, "hostHealth").contractRevision = 19;
   // The messages window's metadata is revision 23, so the older fixture omits it.
@@ -513,19 +522,26 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments/{attachmentId}/content",
     "/bots",
     "/bots/{botId}",
-    "/bots/{botId}/restore",
+    "/bot-presets",
+    "/bots/from-preset",
+    "/bots/{botId}/session",
+    "/bots/{botId}/session/events",
+    "/bots/{botId}/messages",
+    "/bots/{botId}/resume",
+    "/bots/{botId}/dismiss",
+    "/bots/{botId}/stop",
+    "/bots/{botId}/questions/{waitId}/answer",
+    "/bots/{botId}/routines",
+    "/bots/{botId}/routines/{routineId}",
+    "/bots/{botId}/connection-requests",
     "/bot-conversations",
     "/bots/{botId}/chats",
     "/bot-capabilities",
     "/bots/{botId}/capabilities",
-    "/chats/{chatId}/capabilities",
     "/bot-conversations/{chatId}/files",
     "/bot-conversations/{chatId}/files/{fileId}",
     "/bots/{botId}/avatar",
     "/bots/{botId}/avatar/{assetRevision}",
-    "/bot-favorites",
-    "/bot-access-notice",
-    "/bot-access-notice/acknowledgement",
     "/streams/{streamId}",
     "/streams/{streamId}/events",
     "/streams/{streamId}/approval",
@@ -926,23 +942,30 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["get /bots/{botId}", ["bot:read"]],
     ["patch /bots/{botId}", ["bot:read", "bot:write"]],
     ["delete /bots/{botId}", ["bot:read", "bot:write"]],
-    ["post /bots/{botId}/restore", ["bot:read", "bot:write"]],
+    ["get /bot-presets", ["bot:read"]],
+    ["post /bots/from-preset", ["bot:read", "bot:write"]],
+    ["get /bots/{botId}/session", ["bot:read", "chat:read"]],
+    ["get /bots/{botId}/session/events", ["bot:read", "chat:read"]],
+    ["post /bots/{botId}/messages", ["bot:read", "bot:write", "chat:write"]],
+    ["post /bots/{botId}/resume", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/dismiss", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/stop", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/questions/{waitId}/answer", ["bot:read", "bot:write"]],
+    ["get /bots/{botId}/routines", ["bot:read"]],
+    ["post /bots/{botId}/routines", ["bot:read", "bot:write"]],
+    ["patch /bots/{botId}/routines/{routineId}", ["bot:read", "bot:write"]],
+    ["delete /bots/{botId}/routines/{routineId}", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/connection-requests", ["bot:read", "bot:write"]],
     ["get /bot-conversations", ["bot:read", "chat:read"]],
     ["post /bots/{botId}/chats", ["bot:read", "bot:write", "chat:write"]],
     ["get /bot-capabilities", ["bot:read"]],
     ["patch /bots/{botId}/capabilities", ["bot:read", "bot:write"]],
-    ["get /chats/{chatId}/capabilities", ["bot:read", "chat:read"]],
-    ["patch /chats/{chatId}/capabilities", ["bot:read", "bot:write", "chat:write"]],
     ["get /bot-conversations/{chatId}/files", ["bot:read", "files:read"]],
     ["get /bot-conversations/{chatId}/files/{fileId}", ["bot:read", "files:read"]],
     ["put /bot-conversations/{chatId}/files/{fileId}", ["bot:read", "bot:write", "files:write"]],
     ["put /bots/{botId}/avatar", ["bot:read", "bot:write"]],
     ["delete /bots/{botId}/avatar", ["bot:read", "bot:write"]],
     ["get /bots/{botId}/avatar/{assetRevision}", ["bot:read"]],
-    ["get /bot-favorites", ["bot:read"]],
-    ["patch /bot-favorites", ["bot:read", "bot:write"]],
-    ["get /bot-access-notice", ["bot:read"]],
-    ["post /bot-access-notice/acknowledgement", ["bot:read", "bot:write"]],
   ]);
   for (const [operationKey, expected] of conjunctiveCapabilities) {
     const separator = operationKey.indexOf(" ");
@@ -988,7 +1011,19 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "BotAvatarAsset",
     "BotAvatarView",
     "BotSummary",
-    "BotFavoritesView",
+    "BotSessionState",
+    "BotSession",
+    "BotMessageRequest",
+    "BotMessageReceipt",
+    "BotRoutine",
+    "BotRoutineList",
+    "BotRoutineCreateRequest",
+    "BotRoutineUpdateRequest",
+    "BotConnectionRequest",
+    "BotConnectionRequestReceipt",
+    "BotPresetList",
+    "BotPresetCreateRequest",
+    "BotPresetCreateResult",
     "BotList",
     "BotCapabilityOption",
     "BotFileScopeOption",
@@ -1001,19 +1036,14 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "BotIdentityPatch",
     "BotConversationItem",
     "BotConversationPage",
-    "BotFavoritesUpdateRequest",
-    "BotAccessNoticeAcknowledgementRequest",
     "BotAvatarUploadRequest",
   ];
   for (const name of closedBotSchemas) {
     assert.equal(record(schemas[name], name).additionalProperties, false, `${name} must be closed`);
   }
   for (const name of [
-    "BotAccessNoticeStatus",
     "BotAccessView",
     "BotAccessUpdateRequest",
-    "ChatBotAccessView",
-    "ChatBotAccessUpdateRequest",
     "BotChatCreateRequest",
   ]) {
     const variants = record(schemas[name], name).oneOf;
@@ -1023,10 +1053,12 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
       assert.equal(record(variant, `${name}[${index}]`).additionalProperties, false);
     });
   }
-  const avatarVariants = record(schemas.BotSemanticAvatar, "BotSemanticAvatar").oneOf;
-  assert(Array.isArray(avatarVariants));
-  assert.deepEqual(record(avatarVariants[0], "legacy avatar").enum, ["spark", "orbit", "leaf", "prism", "wave", "ember"]);
-  assert.equal(record(avatarVariants[1], "v1 avatar").additionalProperties, false);
+  const avatarSchema = record(schemas.BotSemanticAvatar, "BotSemanticAvatar");
+  assert.deepEqual(avatarSchema.required, ["version", "shape", "color"]);
+  assert.equal(avatarSchema.additionalProperties, false);
+  const avatarProperties = record(avatarSchema.properties, "BotSemanticAvatar properties");
+  assert.deepEqual(record(avatarProperties.color, "avatar color").enum, [...AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES]);
+  assert.equal((record(avatarProperties.color, "avatar color").enum as unknown[]).length, 12);
 
   const botSummary = record(schemas.BotSummary, "BotSummary");
   const botSummaryProperties = record(botSummary.properties, "BotSummary properties");
@@ -1035,17 +1067,13 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal(record(botSummaryProperties.id, "BotSummary id").maxLength, 160);
   assert.equal(record(botSummaryProperties.purpose, "BotSummary purpose").maxLength, 280);
   assert.equal(botSummary["x-aiden-updated-at-not-before-created-at"], true);
-  assert.deepEqual(record(schemas.BotHealth, "BotHealth").enum, ["ready", "degraded", "unavailable", "archived"]);
+  assert.deepEqual(record(schemas.BotHealth, "BotHealth").enum, ["ready", "degraded", "unavailable"]);
   for (const name of ["BotSummary", "BotDetail"]) {
-    const healthCondition = record((record(schemas[name], name).allOf as unknown[])[0], `${name} health condition`);
-    assert.deepEqual(record(healthCondition.then, `${name} archived branch`).required, ["archivedAt"]);
-    assert.deepEqual(record(record(healthCondition.else, `${name} active branch`).not, `${name} active exclusion`).required, ["archivedAt"]);
+    assert.equal("archivedAt" in record(record(schemas[name], name).properties, name), false, `${name} carries no archivedAt`);
   }
   const botListProperties = record(record(schemas.BotList, "BotList").properties, "BotList properties");
   assert.equal(record(botListProperties.bots, "Bot list items").maxItems, 256);
   assert.equal(record(botListProperties.maxBots, "Bot list maximum").const, 256);
-  assert.equal(record(schemas.BotList, "BotList")["x-aiden-favorites-exclude-archived-bots"], true);
-  assert.equal(record(schemas.BotFavoritesView, "BotFavoritesView")["x-aiden-excludes-archived-bots"], true);
 
   const botDetailProperties = record(record(schemas.BotDetail, "BotDetail").properties, "BotDetail properties");
   assert.equal(record(schemas.BotDetail, "BotDetail")["x-aiden-updated-at-not-before-created-at"], true);
@@ -1084,7 +1112,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(record(queryParameter("limit").schema, "limit schema"), { type: "integer", minimum: 1, maximum: 50, default: 30 });
 
   const catalogProperties = record(record(schemas.BotCapabilityCatalog, "BotCapabilityCatalog").properties, "BotCapabilityCatalog properties");
-  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skillsEnabled", "skills", "otherCapabilities", "notice"]);
+  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skillsEnabled", "skills", "otherCapabilities"]);
   assert.equal(record(catalogProperties.providers, "providers").maxItems, 64);
   assert.equal(
     record(catalogProperties.providers, "providers")["x-aiden-max-total-models"],
@@ -1094,7 +1122,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal(record(catalogProperties.skills, "skills").maxItems, 256);
   assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").type, "boolean");
   assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").default, true);
-  assert.equal(record(catalogProperties.notice, "notice").$ref, "#/components/schemas/BotAccessNoticeStatus");
   const customSelection = record(schemas.BotCustomSelection, "BotCustomSelection");
   assert.deepEqual(customSelection.required, ["providerId", "modelId", "fileScopeIds", "shellEnabled", "connectionIds", "skillIds", "otherCapabilityIds"]);
   const customProperties = record(customSelection.properties, "BotCustomSelection properties");
@@ -1112,13 +1139,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal("custom" in record(fullAccess.properties, "full access properties"), false);
   assert.equal(record(record(customAccess.properties, "custom access properties").accessMode, "custom mode").const, "custom");
   assert((customAccess.required as unknown[]).includes("custom"));
-  const chatAccessVariants = record(schemas.ChatBotAccessView, "ChatBotAccessView").oneOf as unknown[];
-  const inheritedAccess = record(chatAccessVariants[0], "inherited ChatBotAccessView");
-  const reducedAccess = record(chatAccessVariants[1], "custom ChatBotAccessView");
-  assert.equal(record(record(inheritedAccess.properties, "inherit properties").mode, "inherit mode").const, "inherit");
-  assert.equal("custom" in record(inheritedAccess.properties, "inherit properties"), false);
-  assert.equal(record(record(reducedAccess.properties, "custom chat properties").mode, "custom chat mode").const, "custom");
-  assert((reducedAccess.required as unknown[]).includes("custom"));
   const botUpdateVariants = record(schemas.BotAccessUpdateRequest, "BotAccessUpdateRequest").oneOf as unknown[];
   assert.deepEqual(record(botUpdateVariants[0], "full Bot update").required, [
     "accessMode",
@@ -1134,18 +1154,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "catalogRevision",
     "custom",
   ]);
-  const chatUpdateVariants = record(schemas.ChatBotAccessUpdateRequest, "ChatBotAccessUpdateRequest").oneOf as unknown[];
-  assert.deepEqual(record(chatUpdateVariants[0], "inherit chat update").required, [
-    "mode",
-    "catalogRevision",
-    "expectedBotPolicyRevision",
-  ]);
-  assert.deepEqual(record(chatUpdateVariants[1], "custom chat update").required, [
-    "mode",
-    "catalogRevision",
-    "expectedBotPolicyRevision",
-    "custom",
-  ]);
   const botChatCreateVariants = record(schemas.BotChatCreateRequest, "BotChatCreateRequest").oneOf as unknown[];
   assert.equal(record(schemas.BotChatCreateRequest, "BotChatCreateRequest")["x-aiden-provider-model-must-be-currently-available"], true);
   assert.equal(record(botChatCreateVariants[0], "inherited Bot chat create").maxProperties, 0);
@@ -1153,30 +1161,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "providerId",
     "modelId",
   ]);
-  const noticeVariants = record(schemas.BotAccessNoticeStatus, "BotAccessNoticeStatus").oneOf as unknown[];
-  const pendingNotice = record(noticeVariants[0], "pending notice");
-  const acceptedNotice = record(noticeVariants[1], "accepted notice");
-  assert.equal(record(record(pendingNotice.properties, "pending notice properties").requiresAcknowledgement, "pending acknowledgement").const, true);
-  assert.equal(
-    record(record(pendingNotice.properties, "pending notice properties").version, "pending version").const,
-    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
-  );
-  assert.equal("acceptedAt" in record(pendingNotice.properties, "pending notice properties"), false);
-  assert.equal(record(record(acceptedNotice.properties, "accepted notice properties").requiresAcknowledgement, "accepted acknowledgement").const, false);
-  assert.equal(
-    record(record(acceptedNotice.properties, "accepted notice properties").version, "accepted version").const,
-    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
-  );
-  assert.deepEqual(acceptedNotice.required, ["version", "requiresAcknowledgement", "acceptedAt", "acceptedDecision"]);
-  assert.deepEqual(record(record(acceptedNotice.properties, "accepted notice properties").acceptedDecision, "acceptedDecision").enum, ["continue_full", "customize_first"]);
-  const acknowledgementProperties = record(record(schemas.BotAccessNoticeAcknowledgementRequest, "BotAccessNoticeAcknowledgementRequest").properties, "ack properties");
-  assert.equal(
-    record(acknowledgementProperties.version, "ack version").const,
-    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
-  );
-  assert.deepEqual(record(acknowledgementProperties.decision, "decision").enum, ["continue_full", "customize_first"]);
-  assert.equal(record(acknowledgementProperties.confirmedForeground, "confirmedForeground").const, true);
-
   const avatarAssetProperties = record(record(schemas.BotAvatarAsset, "BotAvatarAsset").properties, "BotAvatarAsset properties");
   assert.equal(record(avatarAssetProperties.mimeType, "avatar MIME").const, "image/png");
   assert.equal(record(avatarAssetProperties.width, "avatar width").const, 512);
@@ -1222,10 +1206,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}", "patch", "BotIdentityPatch"],
     ["/bots/{botId}/chats", "post", "BotChatCreateRequest"],
     ["/bots/{botId}/capabilities", "patch", "BotAccessUpdateRequest"],
-    ["/chats/{chatId}/capabilities", "patch", "ChatBotAccessUpdateRequest"],
     ["/bots/{botId}/avatar", "put", "BotAvatarUploadRequest"],
-    ["/bot-favorites", "patch", "BotFavoritesUpdateRequest"],
-    ["/bot-access-notice/acknowledgement", "post", "BotAccessNoticeAcknowledgementRequest"],
   ] as const) {
     assert.equal(requestSchemaRef(route, method), `#/components/schemas/${schema}`);
   }
@@ -1234,23 +1215,27 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots", "post", "201", "BotDetail"],
     ["/bots/{botId}", "get", "200", "BotDetail"],
     ["/bots/{botId}", "patch", "200", "BotDetail"],
-    ["/bots/{botId}", "delete", "200", "BotDetail"],
-    ["/bots/{botId}/restore", "post", "200", "BotDetail"],
     ["/bot-conversations", "get", "200", "BotConversationPage"],
     ["/bots/{botId}/chats", "post", "201", "BotChatCreateResponse"],
     ["/bot-capabilities", "get", "200", "BotCapabilityCatalog"],
     ["/bots/{botId}/capabilities", "patch", "200", "BotAccessView"],
-    ["/chats/{chatId}/capabilities", "get", "200", "ChatBotAccessView"],
-    ["/chats/{chatId}/capabilities", "patch", "200", "ChatBotAccessView"],
     ["/bot-conversations/{chatId}/files", "get", "200", "FileIndex"],
     ["/bot-conversations/{chatId}/files/{fileId}", "get", "200", "FileDocument"],
     ["/bot-conversations/{chatId}/files/{fileId}", "put", "200", "FileDocument"],
     ["/bots/{botId}/avatar", "put", "200", "BotAvatarAsset"],
     ["/bots/{botId}/avatar", "delete", "200", "BotDetail"],
-    ["/bot-favorites", "get", "200", "BotFavoritesView"],
-    ["/bot-favorites", "patch", "200", "BotFavoritesView"],
-    ["/bot-access-notice", "get", "200", "BotAccessNoticeStatus"],
-    ["/bot-access-notice/acknowledgement", "post", "200", "BotAccessNoticeStatus"],
+    ["/bot-presets", "get", "200", "BotPresetList"],
+    ["/bots/from-preset", "post", "201", "BotPresetCreateResult"],
+    ["/bots/{botId}/session", "get", "200", "BotSession"],
+    ["/bots/{botId}/messages", "post", "200", "BotMessageReceipt"],
+    ["/bots/{botId}/resume", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/dismiss", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/stop", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/questions/{waitId}/answer", "post", "200", "BotQuestionAnswerReceipt"],
+    ["/bots/{botId}/routines", "get", "200", "BotRoutineList"],
+    ["/bots/{botId}/routines", "post", "201", "BotRoutine"],
+    ["/bots/{botId}/routines/{routineId}", "patch", "200", "BotRoutine"],
+    ["/bots/{botId}/connection-requests", "post", "200", "BotConnectionRequestReceipt"],
   ] as const) {
     assert.equal(responseSchemaRef(route, method, status), `#/components/schemas/${schema}`);
   }
@@ -1264,8 +1249,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/capabilities", "patch", "mutation_blocked"],
     ["/bot-conversations/{chatId}/files/{fileId}", "put", "mutation_blocked"],
     ["/bots/{botId}/avatar", "put", "mutation_blocked"],
-    ["/bots/{botId}/restore", "post", "restore"],
-    ["/bot-favorites", "patch", "reject_archived_additions"],
   ] as const) {
     assert.equal(
       operation(route, method)["x-aiden-archived-access"],
@@ -1292,10 +1275,8 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/chats/{chatId}/fork", "post"],
     ["/chats/{chatId}/turns", "post"],
     ["/bots", "post"],
-    ["/bots/{botId}/restore", "post"],
     ["/bots/{botId}/chats", "post"],
     ["/bots/{botId}/avatar", "put"],
-    ["/bot-access-notice/acknowledgement", "post"],
     ["/streams/{streamId}/cancel", "post"],
     ["/streams/{streamId}/inputs", "post"],
     ["/approvals/{approvalId}/respond", "post"],
@@ -1322,12 +1303,9 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/chats/{chatId}/fork", "post"],
     ["/bots/{botId}", "patch"],
     ["/bots/{botId}", "delete"],
-    ["/bots/{botId}/restore", "post"],
     ["/bots/{botId}/capabilities", "patch"],
-    ["/chats/{chatId}/capabilities", "patch"],
     ["/bots/{botId}/avatar", "put"],
     ["/bots/{botId}/avatar", "delete"],
-    ["/bot-favorites", "patch"],
     ["/scheduled-tasks/{taskId}", "patch"],
     ["/scheduled-tasks/{taskId}", "delete"],
     ["/scheduled-tasks/settings", "patch"],
@@ -2134,4 +2112,137 @@ test("fork lineage parses on chats and rows, and a prefill only follows a fork b
   assert.deepEqual(parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom, rowLineage);
   assert.equal(parseAidenRemoteChatSummaryProjection(row).forkedFrom, undefined);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: lineage() }));
+});
+
+test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG shapes from revision 26", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const section = parseAidenRemoteContractFixture(raw).mobileSimulators;
+  assert.ok(section);
+  assert.equal(section.capability, "simulators:mobile");
+  // The listing carries a running Android emulator and a stopped AVD (listed by
+  // its AVD name), both shown on a phone as "Open on your Mac to view".
+  assert.deepEqual(
+    (section.listing.devices as Array<{ id: string; platform: string }>).map(({ id, platform }) => [id, platform]),
+    [
+      ["5A0C1F3E-0000-4000-8000-000000000001", "ios"],
+      ["5A0C1F3E-0000-4000-8000-000000000002", "ios"],
+      ["emulator-5554", "android"],
+      ["Pixel_9_API_35", "android"],
+    ],
+  );
+  // The second sample frame contains the boundary bytes, so only Content-Length frames it.
+  const second = Buffer.from(section.mjpeg.framesBase64[1]!, "base64");
+  assert.ok(second.includes(Buffer.from("\r\n--frame")));
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => () => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return parseAidenRemoteContractFixture(copy);
+  };
+  const mobile = (copy: Record<string, unknown>) => record(copy.mobileSimulators, "mobileSimulators");
+  assert.throws(
+    mutate((copy) => {
+      delete (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[2]!.platform;
+    }),
+    /missing platform/u,
+  );
+  // The fixture admits exactly the ids the desktop lists: a leading dot or a path separator never parses.
+  for (const id of [".hidden", "../hub/admin", "a b", "x".repeat(129)]) {
+    assert.throws(
+      mutate((copy) => {
+        (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[3]!.id = id;
+      }),
+      /device 3 id is invalid/u,
+      id,
+    );
+  }
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).listing, "listing").chatDeviceIds = ["NOT-LISTED"];
+    }),
+    /chatDeviceIds must name listed devices/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).sharingOff, "sharingOff").devices = [
+        { id: "A", name: "iPhone", platform: "ios", version: "26.0", booted: true, kind: "iphone" },
+      ];
+    }),
+    /no devices while sharing is off/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      // A phone never sends the Duo hinge command or keyboard keys through this contract.
+      (mobile(copy).inputMessages as Array<Record<string, unknown>>)[0]!.tag = 0x10;
+    }),
+    /tag phones never send/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).refusal, "refusal").error = {
+        code: "not_found",
+        message: "x",
+        requestId: "request_fixture_sim_01",
+        retryable: false,
+      };
+    }),
+    /must be capability_denied/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      delete copy.phoneRunEvents;
+      delete copy.chatFork;
+      copy.contractRevision = 25;
+      record(copy.hostHealth, "hostHealth").contractRevision = 25;
+    }),
+    /require contract revision 26/u,
+  );
+});
+
+test("failed-turn entries parse strictly, with and without a message to retry", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botSessionFailedTurns: unknown[] };
+  const [withRetry, withoutRetry] = raw.botSessionFailedTurns.map(parseAidenRemoteBotSessionEntry);
+  assert.deepEqual(withRetry, raw.botSessionFailedTurns[0]);
+  assert.equal(withRetry?.type === "failed_turn" && withRetry.retryText, "Plan my week, please.");
+  assert.deepEqual(withoutRetry, { type: "failed_turn", id: "entry_16:failed" });
+  for (const invalid of [
+    { type: "failed_turn", id: "entry_1:failed", retryText: "" },
+    { type: "failed_turn", id: "entry_1:failed", errorMessage: "provider down" },
+    { type: "failed_turn", id: "entry 1" },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotSessionEntry(invalid));
+  }
+});
+
+test("Bot sessions carry the waiting approval, and approval frames parse strictly", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botSession: Record<string, unknown>; botSessionEvents: unknown[] };
+  const events = raw.botSessionEvents.map(parseAidenRemoteBotSessionEvent);
+  assert.deepEqual(events, raw.botSessionEvents, "every fixture frame round-trips");
+  const approvals = events.flatMap((event) => (event.type === "approval" ? [event.payload.approval] : []));
+  assert.equal(approvals.length, 2);
+  assert.equal(approvals[0]?.canAllow, true);
+  assert.equal(approvals[1], null, "a settled approval clears");
+
+  const waiting = approvals[0]!;
+  assert.deepEqual(parseAidenRemoteBotSession({ ...raw.botSession, approval: waiting }).approval, waiting);
+  const { approval: _approval, ...missing } = raw.botSession;
+  assert.throws(() => parseAidenRemoteBotSession(missing), /approval is required/u);
+  for (const invalid of [
+    { ...waiting, scopes: ["once"] },
+    { ...waiting, canAllow: "yes" },
+    { ...waiting, waitId: "wait id" },
+    { ...waiting, summary: "" },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotSession({ ...raw.botSession, approval: invalid }));
+  }
+});
+
+test("the shared Bot avatar palette fixture is exactly the desktop colour table", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botAvatarPalette?: unknown };
+  // iOS and Android test their palettes against this same fixture.
+  assert.deepEqual(raw.botAvatarPalette, { face: BOT_AVATAR_FACE_HEX, colors: BOT_AVATAR_COLOR_HEX });
+  assert.deepEqual(Object.keys(BOT_AVATAR_COLOR_HEX), [...BOT_AVATAR_COLORS]);
+  for (const value of [BOT_AVATAR_FACE_HEX, ...Object.values(BOT_AVATAR_COLOR_HEX)]) {
+    assert.match(value, /^#[0-9A-F]{6}$/u);
+  }
 });

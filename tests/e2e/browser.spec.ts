@@ -28,7 +28,7 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await finishLmStudioOnboarding(page);
     await page.getByRole("button", { name: "Show Environment" }).click();
     const surface = page.getByRole("complementary", { name: "Environment work surface" });
-    await surface.getByRole("tab", { name: "Browser", exact: true }).click();
+    await surface.getByRole("button", { name: "Browser", exact: true }).click();
     const opened = await command(page, { action: "create", url });
     const tabId = opened.state.activeTabId!;
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.title).toBe("Browser fixture");
@@ -180,9 +180,10 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await command(page, { action: "zoom", tabId, zoom: 1 });
     await command(page, { action: "viewport", tabId, viewport: { mode: "fill", width: 1280, height: 720 } });
 
-    await surface.getByRole("tab", { name: "Review", exact: true }).click();
+    await surface.getByRole("button", { name: "New workspace tab" }).click();
+    await surface.getByRole("button", { name: "Changes", exact: true }).click();
     expect((await state(page)).tabs.some(tab => tab.id === tabId)).toBe(true);
-    await surface.getByRole("tab", { name: "Browser", exact: true }).click();
+    await surface.getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name: "Browser fixture", exact: true }).click();
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
     await surface.getByRole("button", { name: "Browser menu" }).click();
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
@@ -420,7 +421,7 @@ test("deleting a browser profile asks first, and a failure shows inside Browser 
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Show Environment" }).click();
   const surface = page.getByRole("complementary", { name: "Environment work surface" });
-  await surface.getByRole("tab", { name: "Browser", exact: true }).click();
+  await surface.getByRole("button", { name: "Browser", exact: true }).click();
   await command(page, { action: "profile_create", name: "Work" });
   const hasWork = async () => (await state(page)).profiles.some(profile => profile.name === "Work");
   await expect.poll(hasWork).toBe(true);

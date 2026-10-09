@@ -25,7 +25,14 @@ final class AidenNativeIntegrationTests: XCTestCase {
 
     func testBinaryContractRejectionsEmitExactlyOneDiagnosticEach() async throws {
         var records: [(AidenDiagnosticArea, AidenDiagnosticEvent, AidenDiagnosticOutcome, AidenDiagnosticCode)] = []
-        AidenDiagnostics.testSink = { records.append(($0, $1, $2, $3)) }
+        // The sink is process-wide, and other suites trigger the same contract rejections from
+        // async work that can finish while this test runs. Count only diagnostics emitted inside
+        // this test's own task, so the "exactly one each" check measures these two calls alone.
+        let scope = UUID()
+        AidenDiagnostics.testSink = { area, event, outcome, code in
+            guard DiagnosticsTestScope.current == scope else { return }
+            records.append((area, event, outcome, code))
+        }
         defer {
             AidenDiagnostics.testSink = nil
             AidenNativeActivityURLProtocol.handler = nil
@@ -38,40 +45,42 @@ final class AidenNativeIntegrationTests: XCTestCase {
             session: URLSession(configuration: configuration)
         )
 
-        AidenNativeActivityURLProtocol.handler = { request in
-            let response = try XCTUnwrap(HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "image/gif"]
-            ))
-            return (response, Data("GIF89a".utf8))
-        }
-        do {
-            _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
-            XCTFail("Expected the attachment MIME contract to be rejected.")
-        } catch AidenRemoteClientError.invalidResponse {}
+        try await DiagnosticsTestScope.$current.withValue(scope) {
+            AidenNativeActivityURLProtocol.handler = { request in
+                let response = try XCTUnwrap(HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "image/gif"]
+                ))
+                return (response, Data("GIF89a".utf8))
+            }
+            do {
+                _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
+                XCTFail("Expected the attachment MIME contract to be rejected.")
+            } catch AidenRemoteClientError.invalidResponse {}
 
-        AidenNativeActivityURLProtocol.handler = { request in
-            let response = try XCTUnwrap(HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "image/png",
-                    "Cache-Control": "public",
-                    "X-Content-Type-Options": "nosniff",
-                ]
-            ))
-            return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+            AidenNativeActivityURLProtocol.handler = { request in
+                let response = try XCTUnwrap(HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "image/png",
+                        "Cache-Control": "public",
+                        "X-Content-Type-Options": "nosniff",
+                    ]
+                ))
+                return (response, Data([137, 80, 78, 71, 13, 10, 26, 10]))
+            }
+            do {
+                _ = try await client.botAvatar(
+                    botId: "bot-1",
+                    assetRevision: "avatar_revision_0123456789abcdef0123456789abcdef"
+                )
+                XCTFail("Expected the avatar cache/security contract to be rejected.")
+            } catch AidenRemoteClientError.invalidResponse {}
         }
-        do {
-            _ = try await client.botAvatar(
-                botId: "bot-1",
-                assetRevision: "avatar_revision_0123456789abcdef0123456789abcdef"
-            )
-            XCTFail("Expected the avatar cache/security contract to be rejected.")
-        } catch AidenRemoteClientError.invalidResponse {}
 
         XCTAssertEqual(records.count, 2)
         XCTAssertTrue(records.allSatisfy {
@@ -478,7 +487,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
 
         await manager.endAll(forInstanceID: proofID)
 
-        XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
+        await assertDeliveredEnd(of: activity)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
 
@@ -553,7 +562,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(reconciled.responseExcerpt, "")
 
         await adoptingManager.endAll(forInstanceID: proofID)
-        XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
+        await assertDeliveredEnd(of: activity)
         XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
     }
 
@@ -657,7 +666,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
             XCTAssertEqual(reconciled.responseExcerpt, "")
 
             await manager.endAll(forInstanceID: proofID)
-            XCTAssertTrue(activity.activityState == .ended || activity.activityState == .dismissed)
+            await assertDeliveredEnd(of: activity)
             XCTAssertFalse(Activity<AgentRunActivityAttributes>.activities.contains(where: { $0.id == activity.id }))
             print("AIDEN_ACTIVITYKIT_PROCESS checkpoint=reconciled-and-ended proof=\(proofID)")
 
@@ -978,7 +987,7 @@ private func deliveredContent(
     // Race the stream against the ceiling without a task group: ActivityKit's
     // `contentUpdates` does not end when its task is cancelled, and a group
     // would wait for that child before returning, so it would hang anyway.
-    let race = AidenDeliveredContentRace()
+    let race = AidenDeliveryRace<AgentRunActivityAttributes.ContentState>()
     let outcome = await withCheckedContinuation { continuation in
         race.continuation = continuation
         race.observer = Task { @MainActor in
@@ -1021,23 +1030,91 @@ private func deliveredContent(
     return nil
 }
 
-private enum AidenDeliveredContentOutcome: Sendable {
-    case delivered(AgentRunActivityAttributes.ContentState)
+/// `Activity.activities` hands out a separate instance per call, so the
+/// instance a test holds is not the one the manager ends. ActivityKit
+/// propagates the ended state to other instances asynchronously, and under a
+/// loaded simulator that lands after `end(_:dismissalPolicy:)` returns. Await
+/// the delivered state event instead of reading `activityState` right away.
+/// The ceiling has the same failure-only role as in `deliveredContent`.
+@MainActor
+private func assertDeliveredEnd(
+    of activity: Activity<AgentRunActivityAttributes>,
+    failureCeiling: Duration = .seconds(30),
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    let isEnded: @Sendable (ActivityState) -> Bool = { $0 == .ended || $0 == .dismissed }
+    let race = AidenDeliveryRace<ActivityState>()
+    let outcome = await withCheckedContinuation { continuation in
+        race.continuation = continuation
+        race.observer = Task { @MainActor in
+            // Subscribe before reading the current state so a transition that
+            // lands between the two is buffered rather than missed.
+            let updates = activity.activityStateUpdates.makeAsyncIterator()
+            let current = activity.activityState
+            race.last = current
+            if isEnded(current) {
+                race.finish(.delivered(current))
+                return
+            }
+            while let state = await updates.next() {
+                race.last = state
+                if isEnded(state) {
+                    race.finish(.delivered(state))
+                    return
+                }
+            }
+            race.finish(.streamFinished)
+        }
+        race.ceiling = Task { @MainActor in
+            guard (try? await Task.sleep(for: failureCeiling)) != nil else { return }
+            race.finish(.ceilingReached)
+        }
+    }
+    race.observer?.cancel()
+    race.ceiling?.cancel()
+
+    let lastSeen = race.last.map { "\($0)" } ?? "no state"
+    switch outcome {
+    case .delivered:
+        break
+    case .streamFinished:
+        XCTFail(
+            "ActivityKit ended the state stream before the activity ended; last seen: \(lastSeen).",
+            file: file,
+            line: line
+        )
+    case .ceilingReached:
+        XCTFail(
+            "ActivityKit did not deliver the ended state within the \(failureCeiling) failure ceiling; last seen: \(lastSeen).",
+            file: file,
+            line: line
+        )
+    }
+}
+
+private enum AidenDeliveryOutcome<Value: Sendable>: Sendable {
+    case delivered(Value)
     case streamFinished
     case ceilingReached
 }
 
 @MainActor
-private final class AidenDeliveredContentRace {
-    var last: AgentRunActivityAttributes.ContentState?
-    var continuation: CheckedContinuation<AidenDeliveredContentOutcome, Never>?
+private final class AidenDeliveryRace<Value: Sendable> {
+    var last: Value?
+    var continuation: CheckedContinuation<AidenDeliveryOutcome<Value>, Never>?
     var observer: Task<Void, Never>?
     var ceiling: Task<Void, Never>?
 
-    func finish(_ outcome: AidenDeliveredContentOutcome) {
+    func finish(_ outcome: AidenDeliveryOutcome<Value>) {
         continuation?.resume(returning: outcome)
         continuation = nil
     }
+}
+
+/// Tags diagnostics with the test task that caused them (see the binary contract test).
+private enum DiagnosticsTestScope {
+    @TaskLocal static var current: UUID?
 }
 
 private final class AidenNativeActivityURLProtocol: URLProtocol, @unchecked Sendable {

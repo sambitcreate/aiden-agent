@@ -16,6 +16,8 @@ export interface AppCapabilities {
   appleFoundationModels: boolean;
   geminiLive: boolean;
   devices: boolean;
+  designStudio: boolean;
+  createImages: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
@@ -33,6 +35,8 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   appleFoundationModels: false,
   geminiLive: false,
   devices: false,
+  designStudio: false,
+  createImages: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
@@ -56,6 +60,8 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     appleFoundationModels: record.appleFoundationModels === true,
     geminiLive: record.geminiLive === true,
     devices: record.devices === true,
+    designStudio: record.designStudio === true,
+    createImages: record.createImages === true,
   };
 }
 

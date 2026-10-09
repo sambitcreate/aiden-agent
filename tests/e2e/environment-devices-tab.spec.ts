@@ -1,83 +1,51 @@
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-const TAB_NAMES = ["Review", "Subagents", "Files", "Browser", "Simulator"];
-
-test.describe("Simulator tab", () => {
+test.describe("Device tool", () => {
   test.use({ workspaceSeed: true, appEnvironment: { AIDEN_EXPERIMENTAL_DEVICES: "1" } });
 
-  test("stays hidden off macOS even when the flag is set", async ({ aiden }) => {
+  test("stays unavailable off macOS even when the flag is set", async ({ aiden }) => {
     test.skip(process.platform === "darwin", "covered by the macOS test below");
-    const page = aiden.page;
-    await finishLmStudioOnboarding(page);
-    const tools = page.getByRole("complementary", { name: "Environment work surface" });
-    if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();
-    await expect(tools).toBeVisible();
-    const tabs = tools.getByRole("tablist", { name: "Environment views" }).getByRole("tab");
-    await expect(tabs).toHaveCount(TAB_NAMES.length - 1);
-    await expect(tools.getByRole("tab", { name: "Simulator", exact: true })).toHaveCount(0);
-    await expect(page.locator("#environment-devices-panel")).toHaveCount(0);
+    await finishLmStudioOnboarding(aiden.page);
+    await aiden.page.locator("[data-environment-toggle]").click();
+    const tools = aiden.page.getByRole("complementary", { name: "Environment work surface" });
+    await tools.getByRole("button", { name: "More tools…", exact: true }).click();
+    await expect(tools.getByRole("button", { name: "Device", exact: true })).toHaveCount(0);
+    await expect(aiden.page.locator("#environment-devices-panel")).toHaveCount(0);
   });
 
-  test("is the last keyboard-reachable Environment tab, persists, and hides without the flag", async ({
-    aiden,
-  }) => {
+  test("opens from the launcher, supports keyboard tab navigation, and respects the kill switch", async ({ aiden }) => {
     test.skip(process.platform !== "darwin", "iOS Simulator devices are macOS-only");
     let page = aiden.page;
     await finishLmStudioOnboarding(page);
-    const tools = () => page.getByRole("complementary", { name: "Environment work surface" });
-    const tab = (name: string) => tools().getByRole("tab", { name, exact: true });
-
-    // The onboarding success toast renders top-center over the Environment tab
-    // strip, and Sonner pauses its timer while the pointer rests on it.
+    // The onboarding toast can cover the tab strip and pause on hover.
     await page.mouse.move(1, 1);
     await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
-
+    const tools = () => page.getByRole("complementary", { name: "Environment work surface" });
+    const tab = (name: string) => tools().getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name, exact: true });
+    await page.locator("[data-environment-toggle]").click();
+    await tools().getByRole("button", { name: "More tools…", exact: true }).click();
+    await tools().getByRole("button", { name: "Device", exact: true }).click();
     for (const width of [900, 560]) {
-      await aiden.app.evaluate(
-        ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800),
-        width,
-      );
-      if (!(await tools().isVisible())) await page.locator("[data-environment-toggle]").click();
-      await expect(tools()).toBeVisible();
-      const tabs = tools().getByRole("tablist", { name: "Environment views" }).getByRole("tab");
-      await expect(tabs).toHaveCount(TAB_NAMES.length);
-      await expect(tabs.last()).toHaveAccessibleName("Simulator");
-
-      await tab("Review").click();
-      await page.keyboard.press("End");
-      await expect(tab("Simulator")).toBeFocused();
-      await expect(tab("Simulator")).toHaveAttribute("aria-selected", "true");
-      await page.keyboard.press("ArrowRight");
-      await expect(tab("Review")).toBeFocused();
+      await aiden.app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width);
+      await tools().getByRole("button", { name: "New workspace tab" }).click();
+      await expect(tab("New tab")).toBeFocused();
       await page.keyboard.press("ArrowLeft");
-      await expect(tab("Simulator")).toBeFocused();
-      await page.keyboard.press("Home");
-      await expect(tab("Review")).toBeFocused();
-      await page.keyboard.press("End");
-      await expect(tab("Simulator")).toBeFocused();
-
+      await expect(tab("Device")).toBeFocused();
       const devicesPanel = page.locator("#environment-devices-panel");
       await expect(devicesPanel).toBeVisible();
-      // Consent is explicit: the button is offered but never pressed here, so npm is not contacted.
-      await expect(
-        devicesPanel.getByRole("button", { name: "Set up simulator streaming" }),
-      ).toBeEnabled();
+      await expect(devicesPanel.getByRole("button", { name: "Set up simulator streaming" })).toBeEnabled();
       await expect(devicesPanel).toContainText("node-datachannel");
-      if (width === 560) await expect(tab("Simulator")).toHaveAttribute("title", "Simulator");
     }
-
     page = await aiden.relaunch();
     await expect(tools()).toBeVisible();
-    await expect(tab("Simulator")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("New tab")).toHaveAttribute("aria-selected", "true");
+    await tab("Device").click();
     await expect(page.locator("#environment-devices-panel")).toBeVisible();
 
-    page = await aiden.relaunch(undefined, {});
+    page = await aiden.relaunch(undefined, { AIDEN_EXPERIMENTAL_DEVICES: "0" });
     await expect(tools()).toBeVisible();
-    await expect(tab("Simulator")).toHaveCount(0);
+    await expect(tab("Device")).toHaveCount(0);
     await expect(page.locator("#environment-devices-panel")).toHaveCount(0);
-    await expect(tab("Review")).toHaveAttribute("aria-selected", "true");
-    await expect
-      .poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.environment.tab")))
-      .toBe("devices");
+    await expect(tab("New tab")).toHaveAttribute("aria-selected", "true");
   });
 });

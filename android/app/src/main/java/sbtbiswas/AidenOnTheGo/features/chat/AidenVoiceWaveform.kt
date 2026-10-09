@@ -39,6 +39,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import kotlin.math.max
 import kotlin.math.sin
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 internal object AidenVoiceWaveformBars {
     /** Bar heights shaped by a centred harmonic and scaled by the live level, never below [minHeight]. */
@@ -62,7 +64,7 @@ fun AidenVoiceWaveform(
     barCount: Int = 7,
     color: Color = AidenTheme.palette.accent,
     modifier: Modifier = Modifier,
-    label: String? = "Listening...",
+    label: String? = stringResource(R.string.chat_voice_listening),
     contained: Boolean = true
 ) {
     val reduceMotion = aidenReduceMotion()

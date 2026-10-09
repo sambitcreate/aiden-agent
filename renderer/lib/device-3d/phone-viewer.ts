@@ -1,63 +1,96 @@
-// Adapted from t3code packages/client-runtime/src/device/phoneViewer.ts @ 1c127066 (MIT).
-// Procedural iOS bodies only: no imported models, fold scenes, or Android shells.
+// Adapted from t3code packages/client-runtime/src/device/phoneViewer.ts @ a6ec88f7 (MIT).
+// A matching device shows its procedural body at once (`hardware-models.ts`,
+// or a family shape), then T3's bundled GLB body replaces it when it loads. A
+// GLB that fails to load or validate leaves the procedural body in place.
 import {
   AmbientLight,
   Box3,
   CanvasTexture,
   DirectionalLight,
   LinearFilter,
+  Matrix4,
   PerspectiveCamera,
+  Quaternion,
   Scene,
   SRGBColorSpace,
   Vector3,
-  WebGLRenderer,
-  type Object3D,
+  type Group,
 } from "three";
 import type { DeviceScreenSize } from "../device-stream";
+import { createAndroidFoldScene, DEFAULT_FOLD_INNER_ASPECT, isFoldInnerAspect } from "./android-fold-scene";
+import { createDeviceMotion } from "./device-motion";
+import { createDeviceFraming } from "./framing";
+import { buildHandsetModel } from "./hardware-models";
 import { createRenderScheduler } from "./interaction";
-import { createDeviceMotion } from "./motion";
-import { createPhoneScene, phoneDisplayLayout, type PhoneScene } from "./phone-scene";
+import { createModelPhoneScene, disposeDeviceModel, loadDeviceModel, type LoadedDeviceModel } from "./model-scene";
+import type { DeviceModelId } from "./model-registry";
+import {
+  createDeviceModelSlot,
+  type DeviceAccessorySource,
+  type DeviceModelSource,
+} from "./model-source";
+import { createPhoneScene, phoneDisplayLayout } from "./phone-scene";
 import { IOS_PHONE_SHAPE, type DeviceShapeProfile } from "./shape-profile";
+import { nearestDeviceView } from "./view-snap";
+import {
+  browserViewerRuntime,
+  captureCanvas,
+  viewerPixelRatio,
+  type ViewerEnvironment,
+  type ViewerRuntime,
+} from "./viewer-runtime";
 
 export interface PhoneViewer {
+  /** A hardware model by exact simulator name, or null for the family body. Duo bodies use `duo-viewer.ts`. */
+  readonly setModel: (id: DeviceModelId | null) => void;
+  /** A bundled GLB body for this exact device, loaded lazily over the procedural body. */
+  readonly setAsset: (source: DeviceModelSource | null) => void;
+  /** An accessory for the loaded GLB body, such as the iPad's Magic Keyboard. */
+  readonly setAccessory: (source: DeviceAccessorySource | null) => void;
   readonly frameUpdated: () => void;
-  readonly setScreen: (screen: DeviceScreenSize | null, profile: DeviceShapeProfile) => void;
+  readonly setScreen: (screen: DeviceScreenSize | null, profile?: DeviceShapeProfile) => void;
+  /** Android foldables: hinge degrees (0 closed, 180 open), or null for a slab phone. */
+  readonly setFoldAngle: (angle: number | null) => void;
   readonly resize: (width: number, height: number, pixelRatio: number) => void;
   /** Normalized viewport point to normalized device point, or null off the display. */
-  readonly screenPoint: (x: number, y: number, captured: boolean) => { x: number; y: number } | null;
+  readonly screenPoint: (x: number, y: number, captured?: boolean) => { x: number; y: number } | null;
   /** Deltas in viewport fractions. */
   readonly orbit: (deltaX: number, deltaY: number) => void;
-  readonly release: () => void;
+  /** Natural-log zoom step; positive moves closer. */
+  readonly zoomBy: (logDelta: number) => void;
+  readonly setInteractionActive: (active: boolean, mode: "touch" | "orbit") => void;
   readonly resetPose: () => void;
+  /** A PNG of the framed device as currently drawn. */
+  readonly capture: () => Promise<Blob | null>;
   readonly dispose: () => void;
 }
 
-const FIELD_OF_VIEW = 32;
+const ANDROID_ORIENTATION_TURN_MS = 450;
+const ANDROID_FOLD_TURN_MS = 850;
+/** Pinch zoom range, as natural-log steps from the fitted distance. */
+export const PHONE_ZOOM_LIMITS = { closer: 0.9, farther: 0.6 } as const;
 
-/** Camera distance and centre that fit the current pose's bounds, with a small margin. */
-export function fitCamera(bounds: Box3, verticalFovDegrees: number, aspect: number) {
-  const tanY = Math.tan((verticalFovDegrees * Math.PI) / 360);
-  const tanX = tanY * aspect;
-  const size = bounds.getSize(new Vector3());
-  const center = bounds.getCenter(new Vector3());
-  const distance = Math.max(1, Math.max(size.x / tanX, size.y / tanY) * 0.565 + bounds.max.z);
-  return { x: center.x, y: center.y, distance };
-}
+const isAndroid = (profile: DeviceShapeProfile) => profile.id.startsWith("android");
 
 /** Owns only presentation resources. The caller retains the decoded canvas and the stream connection. */
 export function createPhoneViewer(options: {
   readonly canvas: HTMLCanvasElement;
   readonly source: HTMLCanvasElement;
-  readonly profile?: DeviceShapeProfile;
   readonly onUnavailable: () => void;
+  readonly onFramingAspect?: (aspect: number) => void;
+  readonly profile?: DeviceShapeProfile;
+  readonly model?: DeviceModelId | null;
+  readonly asset?: DeviceModelSource | null;
+  readonly accessory?: DeviceAccessorySource | null;
+  readonly foldAngle?: number | null;
+  readonly runtime?: ViewerRuntime;
+  /** Fetches and parses a bundled model; tests pass their own. */
+  readonly loadModel?: (source: DeviceModelSource | DeviceAccessorySource, signal: AbortSignal) => Promise<LoadedDeviceModel>;
+  readonly onModelError?: (cause: unknown) => void;
 }): PhoneViewer {
-  const renderer = new WebGLRenderer({
-    canvas: options.canvas,
-    alpha: true,
-    antialias: true,
-    powerPreference: "low-power",
-  });
-  renderer.outputColorSpace = SRGBColorSpace;
+  const loadModel = options.loadModel ?? ((source, signal) => loadDeviceModel(source, signal));
+  const runtime = options.runtime ?? browserViewerRuntime();
+  const renderer = runtime.createRenderer(options.canvas);
   const makeTexture = () => {
     const next = new CanvasTexture(options.source);
     next.colorSpace = SRGBColorSpace;
@@ -70,51 +103,117 @@ export function createPhoneViewer(options: {
   let textureWidth = options.source.width;
   let textureHeight = options.source.height;
   const scene = new Scene();
-  const camera = new PerspectiveCamera(FIELD_OF_VIEW, 1, 0.1, 30);
+  let environment: ViewerEnvironment | null = null;
+  try {
+    environment = runtime.createEnvironment(renderer);
+  } catch {
+    // Reflections are a nicety; the lights below still show the device.
+  }
+  scene.environment = environment?.texture ?? null;
+  const camera = new PerspectiveCamera(32, 1, 0.1, 30);
   camera.position.z = 5.5;
-  const key = new DirectionalLight(0xe4edff, 5);
+  const key = new DirectionalLight(0xffffff, 3.2);
   key.position.set(-3, 4, 5);
-  const rim = new DirectionalLight(0xffffff, 4);
+  const rim = new DirectionalLight(0xffffff, 2.2);
   rim.position.set(3, 1, -3);
-  const fill = new DirectionalLight(0x9facd4, 2);
+  const fill = new DirectionalLight(0xc7dcff, 1.2);
   fill.position.set(-2, -2, -4);
-  scene.add(new AmbientLight(0xffffff, 2.4), key, rim, fill);
+  const ambient = new AmbientLight(0xffffff, environment ? 0.6 : 2.4);
+  scene.add(ambient, key, rim, fill);
+  /**
+   * T3's GLB bodies were authored for T3's lights alone; the room reflections
+   * the procedural PBR bodies need wash their glossy black parts (the Dynamic
+   * Island, the bezel) out to grey. Each body gets the lighting it was made for.
+   */
+  const lightFor = (bundled: boolean) => {
+    scene.environment = bundled ? null : (environment?.texture ?? null);
+    ambient.intensity = bundled || !environment ? 2.4 : 0.6;
+    key.intensity = bundled ? 5 : 3.2;
+    rim.intensity = bundled ? 4 : 2.2;
+    fill.intensity = bundled ? 2 : 1.2;
+    fill.color.set(bundled ? 0x9facd4 : 0xc7dcff);
+    key.color.set(bundled ? 0xe4edff : 0xffffff);
+  };
 
   let screen: DeviceScreenSize | null = null;
-  let profile = options.profile ?? IOS_PHONE_SHAPE;
   /** The source canvas is 300×150 until the first frame lands; its size means nothing before that. */
   let hasFrame = false;
   const sourceWidth = () => (hasFrame ? options.source.width : 0);
   const sourceHeight = () => (hasFrame ? options.source.height : 0);
   let layout = phoneDisplayLayout(screen, sourceWidth(), sourceHeight());
-  let phone: PhoneScene = createPhoneScene(texture, layout, profile);
+  let profile = options.profile ?? IOS_PHONE_SHAPE;
+  let foldAngle = options.foldAngle ?? null;
+  let orientationAngle = foldAngle !== null && isAndroid(profile) ? 0 : layout.rotation;
+  let orientationTurn: { from: number; to: number; startedAt: number } | null = null;
+  let foldTurn: { from: number; to: number; startedAt: number } | null = null;
+  let modelId: DeviceModelId | null = null;
+  /** The procedural hardware body, owned by this viewer. */
+  let modelAsset: Group | null = null;
+  /** The installed GLB body, owned by its model slot. */
+  let glb: LoadedDeviceModel | null = null;
+  let assetSource: DeviceModelSource | null = null;
+  let accessory: LoadedDeviceModel | null = null;
+  let accessoryBounds: Box3 | null = null;
+  // The inner display's raw width over height. Cover frames leave the last unfolded shape.
+  const rawAspect = () => (hasFrame ? options.source.width / options.source.height : Number.NaN);
+  let foldAspect = isFoldInnerAspect(rawAspect()) ? rawAspect() : DEFAULT_FOLD_INNER_ASPECT;
+  const createFoldScene = (angle: number, displayLayout = layout) =>
+    createAndroidFoldScene(texture, displayLayout, angle, foldAspect);
+  /** The hinge angle currently on screen, including an unfinished turn. */
+  const visibleFoldAngle = (fallback: number) => {
+    if (!foldTurn) return fallback;
+    const progress = Math.min(1, (runtime.now() - foldTurn.startedAt) / ANDROID_FOLD_TURN_MS);
+    const eased = progress * progress * (3 - 2 * progress);
+    return foldTurn.from + (foldTurn.to - foldTurn.from) * eased;
+  };
+  type AnyScene =
+    | ReturnType<typeof createPhoneScene>
+    | ReturnType<typeof createAndroidFoldScene>
+    | ReturnType<typeof createModelPhoneScene>;
+  const familyScene = (): AnyScene =>
+    foldAngle !== null && isAndroid(profile) ? createFoldScene(foldAngle) : createPhoneScene(texture, layout, profile);
+  let phone: AnyScene = familyScene();
   scene.add(phone.root);
-  const motion = createDeviceMotion();
-  const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
   let disposed = false;
   let failed = false;
+  const rest = new Quaternion();
+  const motion = createDeviceMotion({
+    choose: (rotation) => nearestDeviceView(rotation, [{ rotation: new Quaternion(), yawLimit: Math.PI / 3 }])!.rotation,
+  });
+  motion.setPose(rest, runtime.now(), true);
+  const framing = createDeviceFraming();
+  let zoom = 0;
   let viewport = { width: 0, height: 0, pixelRatio: 1 };
   let drawingBuffer = { width: 0, height: 0, pixelRatio: 0 };
-  /** Framing is fitted to the resting pose, so the device holds its size while it turns. */
-  let fit: ReturnType<typeof fitCamera> | null = null;
+  let framingAspect: number | null = null;
 
-  const applyPose = () => {
-    phone.root.rotation.set(motion.pitch(), motion.yaw(), 0, "XYZ");
-    phone.orientation.rotation.z = layout.rotation;
-  };
   const applyCamera = () => {
+    camera.position.set(framing.center.x, framing.center.y, framing.distance() * Math.exp(-zoom));
+    camera.lookAt(framing.center.x, framing.center.y, 0);
+    camera.updateProjectionMatrix();
+  };
+  const fit = (immediate = false) => {
     if (!viewport.width || !viewport.height) return;
-    if (!fit) {
-      camera.aspect = viewport.width / viewport.height;
-      phone.root.rotation.set(0, 0, 0);
-      phone.root.updateMatrixWorld(true);
-      fit = fitCamera(new Box3().setFromObject(phone.root as Object3D), FIELD_OF_VIEW, camera.aspect);
-      applyPose();
-      camera.position.set(fit.x, fit.y, fit.distance);
-      camera.lookAt(fit.x, fit.y, 0);
-      camera.updateProjectionMatrix();
+    camera.aspect = viewport.width / viewport.height;
+    const bounds = new Box3(
+      new Vector3(-phone.width / 2, -phone.height / 2, 0),
+      new Vector3(phone.width / 2, phone.height / 2, 0),
+    );
+    if (glb && accessoryBounds) bounds.union(accessoryBounds);
+    bounds.applyMatrix4(new Matrix4().makeRotationZ(orientationAngle));
+    const size = bounds.getSize(new Vector3());
+    const aspect = size.x / size.y;
+    if (aspect !== framingAspect) {
+      framingAspect = aspect;
+      options.onFramingAspect?.(aspect);
     }
     phone.root.updateMatrixWorld(true);
+    framing.setBounds(new Box3().setFromObject(phone.root), (camera.fov * Math.PI) / 360, camera.aspect, runtime.now(), immediate);
+    applyCamera();
+  };
+  const applyPose = () => {
+    phone.root.quaternion.copy(motion.rotation);
+    phone.orientation.rotation.z = orientationAngle;
   };
   const fail = () => {
     if (disposed || failed) return;
@@ -123,57 +222,184 @@ export function createPhoneViewer(options: {
     scheduler.dispose();
     options.onUnavailable();
   };
-  const scheduler = createRenderScheduler(() => {
-    if (disposed || failed || !viewport.width || !viewport.height) return;
-    try {
-      if (
-        drawingBuffer.width !== viewport.width ||
-        drawingBuffer.height !== viewport.height ||
-        drawingBuffer.pixelRatio !== viewport.pixelRatio
-      ) {
-        renderer.setPixelRatio(viewport.pixelRatio);
-        renderer.setSize(viewport.width, viewport.height, false);
-        drawingBuffer = viewport;
-      }
-      motion.advance(performance.now(), reducedMotion?.matches ?? false);
-      applyPose();
-      applyCamera();
-      renderer.render(scene, camera);
-      if (motion.needsFrame()) scheduler.invalidate();
-    } catch {
-      fail();
+  const draw = () => {
+    if (
+      drawingBuffer.width !== viewport.width ||
+      drawingBuffer.height !== viewport.height ||
+      drawingBuffer.pixelRatio !== viewport.pixelRatio
+    ) {
+      // Canvas allocation clears the previous image. Commit it with the redraw,
+      // rather than exposing an empty buffer between ResizeObserver and the next frame.
+      renderer.setDrawingBufferSize(viewport.width, viewport.height, viewport.pixelRatio);
+      drawingBuffer = viewport;
     }
-  });
-  const updateLayout = (nextProfile: DeviceShapeProfile) => {
+    renderer.render(scene, camera);
+  };
+  const scheduler = createRenderScheduler(
+    () => {
+      if (disposed || failed || !viewport.width || !viewport.height) return;
+      try {
+        const now = runtime.now();
+        const reduced = runtime.reducedMotion();
+        if (motion.advance(now, reduced)) {
+          applyPose();
+          fit(reduced);
+        }
+        if (orientationTurn) {
+          const progress = Math.min(1, (now - orientationTurn.startedAt) / ANDROID_ORIENTATION_TURN_MS);
+          const eased = progress * progress * (3 - 2 * progress);
+          orientationAngle = orientationTurn.from + (orientationTurn.to - orientationTurn.from) * eased;
+          if (progress === 1) orientationTurn = null;
+          applyPose();
+          fit(reduced);
+        }
+        if (foldTurn && "setAngle" in phone) {
+          const progress = Math.min(1, (now - foldTurn.startedAt) / ANDROID_FOLD_TURN_MS);
+          const eased = progress * progress * (3 - 2 * progress);
+          phone.setAngle(foldTurn.from + (foldTurn.to - foldTurn.from) * eased);
+          if (progress === 1) foldTurn = null;
+          fit(reduced);
+        }
+        framing.advance(now, reduced);
+        applyCamera();
+        draw();
+        if (motion.needsFrame() || framing.needsFrame() || orientationTurn || foldTurn) scheduler.invalidate();
+      } catch {
+        fail();
+      }
+    },
+    (callback) => runtime.requestFrame(callback),
+    (id) => runtime.cancelFrame(id),
+  );
+  const updateLayout = (nextProfile = profile) => {
     const next = phoneDisplayLayout(screen, sourceWidth(), sourceHeight());
     const resized = textureWidth !== options.source.width || textureHeight !== options.source.height;
-    if (resized) {
-      // A native resolution change needs a texture of the new size; the scene survives.
-      const previous = texture;
-      texture = makeTexture();
-      textureWidth = options.source.width;
-      textureHeight = options.source.height;
-      phone.setDisplay(texture, next);
-      previous.dispose();
-    }
-    if (nextProfile !== profile || next.aspect !== layout.aspect) {
-      scene.remove(phone.root);
-      phone.dispose();
-      phone = createPhoneScene(texture, next, nextProfile);
-      scene.add(phone.root);
-    } else if (next.rotation !== layout.rotation || next.rawLandscape !== layout.rawLandscape) {
-      phone.setDisplay(texture, next);
-    }
     if (
+      resized ||
       nextProfile !== profile ||
       next.aspect !== layout.aspect ||
+      next.rawLandscape !== layout.rawLandscape ||
       next.rotation !== layout.rotation
     ) {
-      fit = null;
+      // The model and renderer survive framebuffer rotation and native resolution changes.
+      if (resized) {
+        const previous = texture;
+        texture = makeTexture();
+        textureWidth = options.source.width;
+        textureHeight = options.source.height;
+        phone.setDisplay(texture, next);
+        previous.dispose();
+      }
+      // Learn the inner display shape from any unfolded frame, including before fold mode.
+      const frameAspect = rawAspect();
+      const innerChanged = isFoldInnerAspect(frameAspect) && frameAspect !== foldAspect;
+      if (innerChanged) foldAspect = frameAspect;
+      const imported = modelAsset !== null || glb !== null;
+      if (!imported && "setAngle" in phone && innerChanged) {
+        // A new inner display shape resizes the body; the hinge keeps its visible angle.
+        const angle = visibleFoldAngle(foldAngle ?? 180);
+        scene.remove(phone.root);
+        phone.dispose();
+        phone = createFoldScene(angle, next);
+        scene.add(phone.root);
+      } else if (!imported && !("setAngle" in phone) && (nextProfile !== profile || next.aspect !== layout.aspect)) {
+        scene.remove(phone.root);
+        phone.dispose();
+        phone = createPhoneScene(texture, next, nextProfile);
+        scene.add(phone.root);
+      } else {
+        phone.setDisplay(texture, next);
+      }
+      if (next.rotation !== layout.rotation) {
+        if (isAndroid(nextProfile) && !("setAngle" in phone) && !runtime.reducedMotion()) {
+          const difference = Math.atan2(Math.sin(next.rotation - orientationAngle), Math.cos(next.rotation - orientationAngle));
+          orientationTurn = { from: orientationAngle, to: orientationAngle + difference, startedAt: runtime.now() };
+        } else {
+          orientationTurn = null;
+          orientationAngle = "setAngle" in phone ? 0 : next.rotation;
+        }
+      }
+      layout = next;
+      profile = nextProfile;
+      applyPose();
+      fit(!orientationTurn);
     }
-    layout = next;
-    profile = nextProfile;
     applyPose();
+  };
+  /** Replaces the visible body with one already prepared. A procedural body is owned here; a GLB body by its slot. */
+  const swap = (next: AnyScene, procedural: Group | null) => {
+    foldTurn = null;
+    scene.remove(phone.root);
+    phone.dispose();
+    if (modelAsset) disposeDeviceModel(modelAsset);
+    modelAsset = procedural;
+    phone = next;
+    scene.add(phone.root);
+    lightFor(glb !== null);
+    if (accessory) {
+      if (glb) phone.orientation.add(accessory.asset);
+      else accessory.asset.removeFromParent();
+    }
+    applyPose();
+    fit(true);
+    scheduler.invalidate();
+  };
+  /** The procedural body for `modelId`; a model that fails to build keeps the family body. */
+  const installModel = (id: DeviceModelId | null) => {
+    let asset: Group | null = null;
+    let next: AnyScene;
+    try {
+      asset = id && id !== "iphone-duo" ? buildHandsetModel(id) : null;
+      next = asset ? createModelPhoneScene(asset, texture, layout) : familyScene();
+    } catch {
+      if (asset) disposeDeviceModel(asset);
+      asset = null;
+      next = familyScene();
+    }
+    swap(next, asset);
+  };
+  const modelSlot = createDeviceModelSlot<LoadedDeviceModel>({
+    load: loadModel,
+    onError: options.onModelError,
+    install(model) {
+      if (disposed) {
+        glb = null;
+        return;
+      }
+      // Validate and prepare the GLB scene before releasing the visible body; a throw keeps it.
+      const next = model ? createModelPhoneScene(model.asset, texture, layout) : null;
+      const showingGlb = glb !== null;
+      glb = model;
+      if (next) swap(next, null);
+      // Removing a GLB body brings the procedural one back; a refused GLB never replaced it.
+      else if (showingGlb) installModel(modelId);
+    },
+  });
+  const accessorySlot = createDeviceModelSlot<LoadedDeviceModel, DeviceAccessorySource>({
+    load: loadModel,
+    onError: options.onModelError,
+    install(model) {
+      const bounds = model ? new Box3().setFromObject(model.asset) : null;
+      if (bounds && (bounds.isEmpty() || ![...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite))) {
+        throw new Error("Device accessory has invalid bounds");
+      }
+      accessory?.asset.removeFromParent();
+      accessory = model;
+      accessoryBounds = bounds;
+      if (disposed) return;
+      if (glb && accessory) phone.orientation.add(accessory.asset);
+      fit(true);
+      scheduler.invalidate();
+    },
+  });
+  /** An accessory belongs to one model; any other is ignored. */
+  const setAccessory = (source: DeviceAccessorySource | null) => {
+    accessorySlot.set(source?.modelId === assetSource?.id ? source : null);
+  };
+  const setAsset = (source: DeviceModelSource | null) => {
+    if (source?.id !== assetSource?.id || source?.url !== assetSource?.url) accessorySlot.set(null);
+    assetSource = source;
+    modelSlot.set(source);
   };
   const contextLost = (event: Event) => {
     event.preventDefault();
@@ -181,16 +407,63 @@ export function createPhoneViewer(options: {
   };
   options.canvas.addEventListener("webglcontextlost", contextLost);
   applyPose();
+  if (options.model) {
+    modelId = options.model;
+    installModel(modelId);
+  }
+  setAsset(options.asset ?? null);
+  setAccessory(options.accessory ?? null);
 
   return {
+    setModel(id) {
+      if (disposed || id === modelId) return;
+      modelId = id;
+      // A loaded GLB body stays; the procedural one is rebuilt if it is removed.
+      if (!glb) installModel(id);
+    },
+    setAsset(source) {
+      if (!disposed) setAsset(source);
+    },
+    setAccessory(source) {
+      if (!disposed) setAccessory(source);
+    },
+    setFoldAngle(next) {
+      if (disposed || next === foldAngle) return;
+      const previous = foldAngle;
+      foldAngle = next;
+      // A hardware model owns the scene; reinstalling it reads foldAngle if it is removed.
+      if (modelAsset || glb) return;
+      if (next === null || !("setAngle" in phone)) {
+        if (next !== null && !isAndroid(profile)) return;
+        scene.remove(phone.root);
+        phone.dispose();
+        phone = next === null ? createPhoneScene(texture, layout, profile) : createFoldScene(next);
+        scene.add(phone.root);
+        orientationTurn = null;
+        orientationAngle = next === null ? layout.rotation : 0;
+        foldTurn = null;
+        applyPose();
+        fit(true);
+      } else {
+        const from = visibleFoldAngle(previous ?? next);
+        if (runtime.reducedMotion()) {
+          foldTurn = null;
+          phone.setAngle(next);
+          fit(true);
+        } else {
+          foldTurn = { from, to: next, startedAt: runtime.now() };
+        }
+      }
+      scheduler.invalidate();
+    },
     frameUpdated() {
       if (disposed || failed) return;
       hasFrame = true;
-      updateLayout(profile);
+      updateLayout();
       texture.needsUpdate = true;
       scheduler.invalidate();
     },
-    setScreen(next, nextProfile) {
+    setScreen(next, nextProfile = profile) {
       if (disposed) return;
       screen = next;
       updateLayout(nextProfile);
@@ -199,32 +472,53 @@ export function createPhoneViewer(options: {
     resize(width, height, pixelRatio) {
       if (disposed) return;
       if (![width, height, pixelRatio].every(Number.isFinite) || width <= 0 || height <= 0) return;
-      const ratio = Math.min(2, Math.max(1, pixelRatio));
+      const ratio = viewerPixelRatio(pixelRatio);
       if (viewport.width === width && viewport.height === height && viewport.pixelRatio === ratio) return;
-      if (viewport.width !== width || viewport.height !== height) fit = null;
       viewport = { width, height, pixelRatio: ratio };
+      fit(true);
       scheduler.invalidate();
     },
-    screenPoint(x, y, captured) {
+    screenPoint(x, y, captured = false) {
       if (disposed || !viewport.width || !viewport.height) return null;
       applyPose();
-      applyCamera();
       return phone.screenPoint(x, y, camera, captured);
     },
     orbit(deltaX, deltaY) {
       if (disposed) return;
-      motion.orbit(deltaX * viewport.width, deltaY * viewport.height, performance.now());
+      motion.orbit(deltaX * viewport.width, deltaY * viewport.height, runtime.now());
       scheduler.invalidate();
     },
-    release() {
+    zoomBy(logDelta) {
+      if (disposed || !Number.isFinite(logDelta)) return;
+      const next = Math.min(PHONE_ZOOM_LIMITS.closer, Math.max(-PHONE_ZOOM_LIMITS.farther, zoom + logDelta));
+      if (next === zoom) return;
+      zoom = next;
+      applyCamera();
+      scheduler.invalidate();
+    },
+    setInteractionActive(active, mode) {
       if (disposed) return;
-      motion.release(performance.now());
+      const now = runtime.now();
+      if (mode === "orbit") motion.dragActive(active, now);
+      else {
+        motion.hold(active, now);
+        framing.hold(active, now);
+      }
       scheduler.invalidate();
     },
     resetPose() {
       if (disposed) return;
-      motion.reset(performance.now());
+      zoom = 0;
+      motion.reset(rest, runtime.now());
       scheduler.invalidate();
+    },
+    capture() {
+      if (disposed || failed || !viewport.width || !viewport.height) return Promise.resolve(null);
+      return captureCanvas(options.canvas, () => {
+        applyPose();
+        applyCamera();
+        draw();
+      });
     },
     dispose() {
       if (disposed) return;
@@ -233,7 +527,15 @@ export function createPhoneViewer(options: {
       options.canvas.removeEventListener("webglcontextlost", contextLost);
       scene.remove(phone.root);
       phone.dispose();
+      // The slots release the GLB body and accessory once the scene no longer holds them.
+      accessory?.asset.removeFromParent();
+      accessorySlot.dispose();
+      modelSlot.dispose();
+      if (modelAsset) disposeDeviceModel(modelAsset);
+      modelAsset = null;
       texture.dispose();
+      scene.environment = null;
+      environment?.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
     },

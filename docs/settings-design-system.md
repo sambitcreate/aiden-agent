@@ -11,7 +11,7 @@ Settings adapts the Appearance page and the desktop UI references in `chatgpt-de
 
 ## Tokens and adaptation
 
-The `.settings-responsive` container defines `--settings-card-radius`, `--settings-card-fill`, `--settings-row-inset`, and `--settings-row-gap`. They derive from Aiden's semantic theme tokens; Appearance cards use these same variables. Shared heading metrics are 26/32px, with secondary copy and 26px spacing before content. Groups use soft neutral surfaces, neutral borders, inset separators, and restrained elevation. Status appears in semantic labels, icons, and fills, never decorative colored borders.
+The `.settings-responsive` container defines `--settings-card-radius`, `--settings-card-fill`, `--settings-row-inset`, and `--settings-row-gap`. They derive from Aiden's semantic theme tokens; Appearance cards use these same variables. Shared heading metrics are 26/32px, with secondary copy and 26px spacing before content. Groups use soft neutral surfaces, inset separators, and restrained elevation, with no outline (Untitled borderless surfaces). Status appears in semantic labels, icons, and fills, never decorative colored borders.
 
 Rows respond to their allocated content width, not the whole window. Below 540px complex controls stack under descriptions, while switches remain on the right. Grid groups must use `minmax(0, 1fr)` / `grid-cols-1` so long provider names or endpoints cannot force horizontal overflow. Controls and text must stay reachable without horizontal page scrolling.
 
@@ -34,3 +34,12 @@ Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain 
 ## Checks
 
 `npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (window/zoom/panel states, scrolling, keyboard movement, and save). Keep layout assertions tied to rendered geometry rather than only source strings.
+
+## Composer context usage
+
+Appearance → Chat has a trailing “Show context usage in composer” switch,
+backed by `AppearanceConfig.showComposerContextUsage` (default true for new and
+legacy settings). It uses the normal live-preview/save path. This is separate
+from `autoHideComposerContext`, which controls the workspace strip. Hiding the
+meter changes only presentation; Context remains in the workspace launcher and
+the runtime continues context accounting and compaction.

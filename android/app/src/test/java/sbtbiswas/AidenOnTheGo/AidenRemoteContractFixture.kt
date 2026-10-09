@@ -30,62 +30,6 @@ data class AidenBotIdentityQuery(
 )
 
 @Serializable
-data class AidenBotArchiveResponse(
-    val id: String,
-    val name: String,
-    val purpose: String,
-    val instructions: String,
-    val avatar: AidenBotAvatarView,
-    val health: AidenBotHealth,
-    val access: AidenBotAccessView,
-    val createdAt: String,
-    val updatedAt: String,
-    val archivedAt: String? = null,
-    val revision: String
-) {
-    val bot: AidenBotDetail get() = AidenBotDetail(
-        id = id,
-        name = name,
-        purpose = purpose,
-        instructions = instructions,
-        avatar = avatar,
-        health = health,
-        access = access,
-        createdAt = java.time.Instant.parse(createdAt),
-        updatedAt = java.time.Instant.parse(updatedAt),
-        archivedAt = archivedAt?.let { java.time.Instant.parse(it) },
-        revision = revision
-    )
-}
-
-@Serializable
-data class AidenBotRestoreResponse(
-    val id: String,
-    val name: String,
-    val purpose: String,
-    val instructions: String,
-    val avatar: AidenBotAvatarView,
-    val health: AidenBotHealth,
-    val access: AidenBotAccessView,
-    val createdAt: String,
-    val updatedAt: String,
-    val revision: String
-) {
-    val bot: AidenBotDetail get() = AidenBotDetail(
-        id = id,
-        name = name,
-        purpose = purpose,
-        instructions = instructions,
-        avatar = avatar,
-        health = health,
-        access = access,
-        createdAt = java.time.Instant.parse(createdAt),
-        updatedAt = java.time.Instant.parse(updatedAt),
-        revision = revision
-    )
-}
-
-@Serializable
 data class AidenBotChatCreateContractFixture(
     val request: AidenBotChatCreateRequest,
     val response: AidenChatCreateResponse
@@ -130,42 +74,41 @@ data class AidenBotPolicyUpdateFixture(
     val response: AidenBotAccessView
 )
 
+/** Revision 25 request/response pairs. */
 @Serializable
-data class AidenBotChatSubsetUpdateFixture(
-    val request: AidenBotChatAccessUpdate,
-    val response: AidenBotChatAccessView
+data class AidenBotSessionSendFixture(
+    val request: AidenBotSessionSendRequest,
+    val response: AidenBotSessionSendResponse
 )
 
 @Serializable
-data class AidenBotFavoritesUpdateContractFixture(
-    val request: AidenBotFavoritesUpdateRequest,
-    val response: AidenBotFavorites
+data class AidenBotSessionControlFixture(
+    val request: AidenBotEmptyRequest,
+    val response: AidenBotSessionStateView
 )
 
 @Serializable
-data class AidenBotFavoritesUpdateRequest(
-    val botIds: List<String>
+data class AidenBotRoutineCreateFixture(
+    val request: AidenBotRoutineCreateRequest,
+    val response: AidenBotRoutine
 )
 
 @Serializable
-data class AidenBotNoticeAcknowledgementContractFixture(
-    val request: AidenBotNoticeAcknowledgementRequest,
-    val response: AidenBotNoticeAcknowledgementResponse
+data class AidenBotRoutineUpdateFixture(
+    val request: AidenBotRoutineUpdateRequest,
+    val response: AidenBotRoutine
 )
 
 @Serializable
-data class AidenBotNoticeAcknowledgementRequest(
-    val version: String,
-    val decision: String,
-    val confirmedForeground: Boolean = true
+data class AidenBotConnectionRequestFixture(
+    val request: AidenBotConnectionRequest,
+    val response: AidenBotConnectionRequestReceipt
 )
 
 @Serializable
-data class AidenBotNoticeAcknowledgementResponse(
-    val version: String,
-    val requiresAcknowledgement: Boolean,
-    val acceptedAt: String,
-    val acceptedDecision: AidenBotDecision
+data class AidenBotPresetCreateFixture(
+    val request: AidenBotPresetCreateRequest,
+    val response: AidenBotPresetCreateResult
 )
 
 @Serializable
@@ -239,8 +182,6 @@ data class AidenRemoteContractFixture(
     val botAvatar: AidenBotAvatarView,
     val botCreate: AidenBotCreateFixture,
     val botIdentity: AidenBotIdentityContractFixture,
-    val botArchive: AidenBotArchiveResponse,
-    val botRestore: AidenBotRestoreResponse,
     val botConversation: AidenBotConversationItem,
     val botConversations: AidenBotConversationPage,
     val botConversationQuery: AidenBotConversationQuery,
@@ -248,14 +189,20 @@ data class AidenRemoteContractFixture(
     val botCapabilityCatalog: AidenBotCapabilityCatalog,
     val botPolicy: AidenBotAccessView,
     val botPolicyUpdate: AidenBotPolicyUpdateFixture,
-    val botChatSubset: AidenBotChatAccessView,
-    val botChatSubsetUpdate: AidenBotChatSubsetUpdateFixture,
-    val botFavorites: AidenBotFavorites,
-    val botFavoritesUpdate: AidenBotFavoritesUpdateContractFixture,
-    val botNotice: AidenBotNoticeStatus,
-    val botNoticeAcknowledgement: AidenBotNoticeAcknowledgementContractFixture,
     val botAvatarUpload: AidenBotAvatarUploadContractFixture,
     val botAvatarMetadata: AidenBotAvatarAsset,
+    val botSession: AidenBotSession,
+    val botSessionNeedsModel: AidenBotSession,
+    val botSessionEvents: List<AidenBotSessionEvent>,
+    val botSessionSend: AidenBotSessionSendFixture,
+    val botSessionResume: AidenBotSessionControlFixture,
+    val botSessionDismiss: AidenBotSessionControlFixture,
+    val botRoutines: AidenBotRoutineList,
+    val botRoutineCreate: AidenBotRoutineCreateFixture,
+    val botRoutineUpdate: AidenBotRoutineUpdateFixture,
+    val botConnectionRequest: AidenBotConnectionRequestFixture,
+    val botPresets: AidenBotPresetList,
+    val botPresetCreate: AidenBotPresetCreateFixture,
     val taskProgress: AidenChatTaskProgress? = null,
     val agentRoster: AidenChatAgentRoster? = null,
     val agentInterrupt: AidenAgentInterruptFixture? = null,

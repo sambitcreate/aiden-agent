@@ -261,6 +261,28 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Ask a question" };
     case "todo":
       return { label: "Update task list" };
+    // Simulator device tools: compact rows for what the user sees open, close, or get captured.
+    case "device_list":
+      return { label: "List simulators" };
+    case "device_open":
+      return { label: "Open simulator" };
+    case "device_screenshot":
+      return { label: "Screenshot simulator" };
+    case "device_close":
+      return { label: values.shutdown === true ? "Shut down simulator" : "Close simulator" };
+    // Activity an ACP agent (for example, Google Antigravity) ran itself.
+    case "delete_file":
+      return { label: "Delete file", target: path };
+    case "move_file":
+      return { label: "Move file", target: path };
+    case "web_fetch":
+      return { label: "Fetch web page" };
+    case "agent_subagents":
+      return { label: "Run subagents" };
+    case "agent_tool":
+      return { label: "Use agent tool" };
+    case "agent_context_rebuilt":
+      return { label: "Started a fresh agent session from this chat" };
     default:
       return { label: titleCaseToolName(toolName) || "Use tool" };
   }

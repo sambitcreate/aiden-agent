@@ -1,16 +1,3 @@
-/** Legacy avatar ids remain readable so existing bots never lose their identity. */
-export const BOT_AVATARS = ["spark", "orbit", "leaf", "prism", "wave", "ember"] as const;
-export type LegacyBotAvatar = (typeof BOT_AVATARS)[number];
-
-export const BOT_AVATAR_LABELS: Record<LegacyBotAvatar, string> = {
-  spark: "Wisp",
-  orbit: "Orb",
-  leaf: "Drop",
-  prism: "Hex",
-  wave: "Cloud",
-  ember: "Peak",
-};
-
 export const BOT_AVATAR_SHAPES = [
   "wisp",
   "orb",
@@ -43,6 +30,10 @@ export const BOT_AVATAR_COLORS = [
   "coral",
   "peach",
   "aqua",
+  "rose",
+  "lime",
+  "plum",
+  "graphite",
 ] as const;
 export type BotAvatarColor = (typeof BOT_AVATAR_COLORS)[number];
 
@@ -55,65 +46,48 @@ export const BOT_AVATAR_COLOR_LABELS: Record<BotAvatarColor, string> = {
   coral: "Coral",
   peach: "Peach",
   aqua: "Aqua",
+  rose: "Rose",
+  lime: "Lime",
+  plum: "Plum",
+  graphite: "Graphite",
 };
 
-export const BOT_AVATAR_EYES = ["dots", "wide", "happy", "sleepy", "focus", "wink"] as const;
-export type BotAvatarEyes = (typeof BOT_AVATAR_EYES)[number];
-
-export const BOT_AVATAR_EYE_LABELS: Record<BotAvatarEyes, string> = {
-  dots: "Friendly",
-  wide: "Curious",
-  happy: "Bright",
-  sleepy: "Calm",
-  focus: "Focused",
-  wink: "Playful",
+/**
+ * The one colour table for Bot characters, shared with Aiden On The Go: the
+ * `--bot-avatar-*` tokens in `styles.css`, the iOS and Android palettes, and
+ * the `botAvatarPalette` contract fixture all use exactly these values.
+ */
+export const BOT_AVATAR_COLOR_HEX: Record<BotAvatarColor, string> = {
+  lilac: "#C6A9FF",
+  sky: "#83D8FF",
+  mint: "#88E8B1",
+  sun: "#FFDA7B",
+  periwinkle: "#B2BCFF",
+  coral: "#FF9F9B",
+  peach: "#FFC294",
+  aqua: "#78E8DF",
+  rose: "#FFA3C7",
+  lime: "#C6EC7E",
+  plum: "#DDA8F2",
+  graphite: "#C5C5CE",
 };
 
-export const BOT_AVATAR_DETAILS = [
-  "none",
-  "halo",
-  "orbit",
-  "sparkles",
-  "antenna",
-  "bolts",
-] as const;
-export type BotAvatarDetail = (typeof BOT_AVATAR_DETAILS)[number];
+/** The eye mark drawn on every character colour. */
+export const BOT_AVATAR_FACE_HEX = "#292735";
 
-export const BOT_AVATAR_DETAIL_LABELS: Record<BotAvatarDetail, string> = {
-  none: "Clean",
-  halo: "Halo",
-  orbit: "Orbit",
-  sparkles: "Sparkles",
-  antenna: "Antenna",
-  bolts: "Bolts",
-};
-
-/** A bounded, theme-safe vector recipe. Facial features are intentionally eyes only. */
+/** A bounded, theme-safe vector recipe: one colour and one shape, with one fixed eye mark. */
 export interface BotAvatarAppearance {
   version: 1;
   shape: BotAvatarShape;
   color: BotAvatarColor;
-  eyes: BotAvatarEyes;
-  detail: BotAvatarDetail;
 }
 
-export type BotAvatar = LegacyBotAvatar | BotAvatarAppearance;
+export type BotAvatar = BotAvatarAppearance;
 
 export const DEFAULT_BOT_AVATAR: BotAvatarAppearance = {
   version: 1,
   shape: "wisp",
   color: "lilac",
-  eyes: "dots",
-  detail: "sparkles",
-};
-
-const LEGACY_BOT_AVATAR_APPEARANCES: Record<LegacyBotAvatar, BotAvatarAppearance> = {
-  spark: DEFAULT_BOT_AVATAR,
-  orbit: { version: 1, shape: "orb", color: "sky", eyes: "wide", detail: "orbit" },
-  leaf: { version: 1, shape: "drop", color: "mint", eyes: "happy", detail: "none" },
-  prism: { version: 1, shape: "hex", color: "sun", eyes: "focus", detail: "bolts" },
-  wave: { version: 1, shape: "cloud", color: "periwinkle", eyes: "sleepy", detail: "halo" },
-  ember: { version: 1, shape: "peak", color: "coral", eyes: "wink", detail: "antenna" },
 };
 
 export const BOT_LIMITS = {
@@ -122,29 +96,7 @@ export const BOT_LIMITS = {
   descriptionChars: 280,
   instructionsChars: 32_000,
   openingGreetingChars: 2_000,
-  avatarPromptChars: 1_200,
-  avatarRationaleChars: 280,
-  avatarRequestIdChars: 128,
 } as const;
-
-export const BOT_AVATAR_GENERATION_FAILURE_MESSAGES = {
-  busy: "A bot face is already being designed in this window. Wait for it to stop and try again.",
-  cancelled: "Bot face design was cancelled.",
-  provider: "The selected model could not design a bot face. Check its connection and try again.",
-  timeout: "The selected model took too long to design a bot face. Try again.",
-} as const;
-
-export type BotAvatarGenerationFailureKind = keyof typeof BOT_AVATAR_GENERATION_FAILURE_MESSAGES;
-
-/** Strip Electron's IPC wrapper by projecting only main-owned, allowlisted copy. */
-export function botAvatarSuggestionErrorMessage(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return (
-    Object.values(BOT_AVATAR_GENERATION_FAILURE_MESSAGES).find((message) =>
-      raw.includes(message),
-    ) ?? BOT_AVATAR_GENERATION_FAILURE_MESSAGES.provider
-  );
-}
 
 export interface BotDefinition {
   id: string;
@@ -158,7 +110,6 @@ export interface BotDefinition {
   avatar: BotAvatar;
   createdAt: number;
   updatedAt: number;
-  archivedAt?: number;
 }
 
 /** Bounded canonical PNG bytes projected by main without exposing its private asset path. */
@@ -178,19 +129,6 @@ export interface BotCreateInput {
 export interface BotUpdateInput extends BotCreateInput {
   id: string;
   expectedRevision: string;
-}
-
-export interface BotAvatarSuggestionInput {
-  requestId: string;
-  prompt: string;
-  providerId: string;
-  model: string;
-  currentAvatar: BotAvatar;
-}
-
-export interface BotAvatarSuggestion {
-  avatar: BotAvatarAppearance;
-  rationale: string;
 }
 
 export interface TelegramBotBindingView {
@@ -224,30 +162,24 @@ function includes<const Values extends readonly string[]>(
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-export function isLegacyBotAvatar(value: unknown): value is LegacyBotAvatar {
-  return includes(BOT_AVATARS, value);
-}
-
+/** Exact recipe check for new input (IPC, Remote, tools). */
 export function isBotAvatarAppearance(value: unknown): value is BotAvatarAppearance {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const avatar = value as Record<string, unknown>;
   const keys = Object.keys(avatar);
   return (
-    keys.length === 5 &&
-    keys.every((key) => ["version", "shape", "color", "eyes", "detail"].includes(key)) &&
+    keys.length === 3 &&
+    keys.every((key) => ["version", "shape", "color"].includes(key)) &&
     avatar.version === 1 &&
     includes(BOT_AVATAR_SHAPES, avatar.shape) &&
-    includes(BOT_AVATAR_COLORS, avatar.color) &&
-    includes(BOT_AVATAR_EYES, avatar.eyes) &&
-    includes(BOT_AVATAR_DETAILS, avatar.detail)
+    includes(BOT_AVATAR_COLORS, avatar.color)
   );
 }
 
 export function isBotAvatar(value: unknown): value is BotAvatar {
-  return isLegacyBotAvatar(value) || isBotAvatarAppearance(value);
+  return isBotAvatarAppearance(value);
 }
 
 export function resolveBotAvatar(value: BotAvatar): BotAvatarAppearance {
-  const appearance = typeof value === "string" ? LEGACY_BOT_AVATAR_APPEARANCES[value] : value;
-  return { ...appearance };
+  return { version: 1, shape: value.shape, color: value.color };
 }

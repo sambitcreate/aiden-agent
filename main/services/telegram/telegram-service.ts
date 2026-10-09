@@ -80,6 +80,8 @@ import {
 import { createTelegramBotBindingValidator } from "./telegram-bot-binding-validation.js";
 import { telegramProfileMutationFence } from "./telegram-profile-mutation-fence.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
+import { createTelegramBotIngress, type TelegramBotIngress } from "./bot-reply-outbox.js";
+import { isAcpHarnessProvider, unattendedFallbackProviderId } from "../../../renderer/shared/acp-harness.js";
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
 let profileSettingsMutation = Promise.resolve();
@@ -145,13 +147,16 @@ async function resolveProvider(
   if ((requestedProviderId === undefined) !== (requestedModel === undefined)) {
     return null;
   }
-  const providerId = requestedProviderId ?? settings.telegramProviderId ?? settings.lastProviderId;
+  const providerId =
+    requestedProviderId ?? settings.telegramProviderId ?? unattendedFallbackProviderId(settings.lastProviderId);
   if (!providerId) return null;
   const provider =
     (await providerRegistry.selectionProvider(providerId)) ??
     (await configStore.getProvider(providerId));
   if (!provider) return null;
   if (!canUseGeminiChatModel(settings.geminiUsageScope, providerId)) return null;
+  // Telegram turns run unattended; agent harnesses need approvals answered here.
+  if (isAcpHarnessProvider(providerId)) return null;
   const model =
     requestedModel ?? settings.telegramModel ??
     firstVisibleModelForProvider(
@@ -188,7 +193,7 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
   ]);
   const byId = new Map<string, Provider>();
   for (const provider of [...builtin, ...custom]) {
-    if (provider.hasKey || !provider.needsKey) byId.set(provider.id, provider);
+    if ((provider.hasKey || !provider.needsKey) && !isAcpHarnessProvider(provider.id)) byId.set(provider.id, provider);
   }
   if (codex?.configured) {
     byId.set(OPENAI_CODEX_PROVIDER_ID, {
@@ -345,8 +350,40 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     profile,
   });
   let threadProvisioning = Promise.resolve();
+  // Bot-bound messages go to the Bot's durable session; replies leave through
+  // a persisted outbox so a restart never regenerates or silently drops them.
+  const botIngress: TelegramBotIngress | undefined = hostPlatformCapabilities().bots
+    ? createTelegramBotIngress({
+        file: path.join(app.getPath("userData"), "telegram-bot-outbox", profile, "outbox.json"),
+        session: {
+          send: async (botId, input) =>
+            (await import("../bot-runtime/bot-session-main.js")).botSessionRuntime().then((runtime) => runtime.send(botId, input)),
+          awaitReply: async (botId, submissionId, signal) =>
+            (await import("../bot-runtime/bot-session-main.js"))
+              .botSessionRuntime()
+              .then((runtime) => runtime.awaitReply(botId, submissionId, signal)),
+        },
+        deliver: async ({ chatId, threadId, text }) => {
+          for (const chunk of chunkForTelegram(markdownToTelegramHtml(text))) {
+            await api.sendMessage({ chatId, threadId, text: chunk, parseMode: "HTML", disablePreview: true });
+          }
+        },
+        onError: (message, cause) => logger.error("telegram", `[${profile}] ${message}`, cause),
+      })
+    : undefined;
+  if (botIngress) {
+    void import("../bot-runtime/bot-session-main.js")
+      .then(({ initializeBotSessionRuntime, onBotSessionStateChange }) => {
+        // A paused turn resumed from any client delivers its Telegram reply.
+        onBotSessionStateChange((botId, state) => botIngress.botStateChanged(botId, state));
+        return initializeBotSessionRuntime();
+      })
+      .then(() => botIngress.recover())
+      .catch((cause: unknown) => logger.warn("telegram", `[${profile}] Bot reply recovery is waiting for the Bot runtime.`, cause));
+  }
   const core = createTelegramServiceCore({
     profile,
+    ...(botIngress ? { botIngress } : {}),
     assertBotBindingStoreHealthy: () => telegramBotBindings.assertHealthy(),
     resolveBotBinding: async ({
       profile: bindingProfile,

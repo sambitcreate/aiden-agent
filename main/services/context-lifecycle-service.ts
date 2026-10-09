@@ -3,6 +3,7 @@ import { compactionEngineFrom, parseCompactionModelOverrides, resolveCompactionM
 import { randomUUID } from "node:crypto";
 import { type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { estimateTokens } from "./pi-legacy-harness.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 import { createPiCompactionModels, PiCompactionCoordinator } from "./pi-compaction-core.js";
 import {
@@ -55,7 +56,6 @@ export interface ContextLifecycleServiceDeps {
   skillsEnabled?(): Promise<boolean>;
   getChat(chatId: string): Promise<Chat | null>;
   listChatsByBot(botId: string): Promise<readonly ChatMeta[]>;
-  isBotArchived(botId: string): Promise<boolean>;
   beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null;
   /**
    * Opens the durable Pi journal for the chat. Rollout-ineligible chats resolve
@@ -138,6 +138,9 @@ export class ContextLifecycleService {
     try {
       const chat = await this.deps.getChat(chatId);
       if (!chat) return { compacted: false, reason: "archived" };
+      // A chat another feature owns (a Design project's hidden chat) is unavailable
+      // to operator compaction, as no chat surface lists it.
+      if (chatSurface(chat) === "feature") return { compacted: false, reason: "archived" };
       if ((await this.deps.compactionEligible?.(chat)) === false) {
         return { compacted: false, reason: "already_compact" };
       }
@@ -145,9 +148,6 @@ export class ContextLifecycleService {
         return { compacted: false, reason: "context_metadata_invalid" };
       }
       if (chat.botId) {
-        if (await this.deps.isBotArchived(chat.botId)) {
-          return { compacted: false, reason: "archived" };
-        }
         const canonical = selectCanonicalBotChat(await this.deps.listChatsByBot(chat.botId));
         if (canonical?.id !== chat.id) {
           return { compacted: false, reason: "not_canonical" };

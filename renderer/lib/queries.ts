@@ -2,6 +2,7 @@
 
 import {
   queryOptions,
+  replaceEqualDeep,
   useMutation,
   useQueries,
   useQuery,
@@ -35,6 +36,7 @@ import {
   workspacesApi,
 } from "./ipc";
 import { isWindowActive } from "./window-activity";
+import { keepPullRequestWhilePaused, pausedPollInterval } from "./github-pause";
 import type {
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
@@ -42,6 +44,7 @@ import type {
   ModelInsightsStatus,
   Provider,
   Chat,
+  GitHubPullRequestStatus,
   UsageDateRange,
 } from "./types";
 
@@ -51,6 +54,7 @@ export const queryKeys = {
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
+  botSessionState: (id: string | undefined) => ["bot-session-state", id ?? "none"] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -294,14 +298,6 @@ export function useBot(botId: string | undefined) {
   });
 }
 
-export function useBotChats(botId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.botChats(botId),
-    queryFn: () => botsApi.listChats(botId!),
-    enabled: Boolean(botId),
-  });
-}
-
 /** Bot capability catalog for the desktop audience; refreshed after saves. */
 export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
   return useQuery({
@@ -417,15 +413,33 @@ export function gitPullRequestStatusQueryOptions(workspaceId: string | undefined
     queryKey: queryKeys.gitPullRequestStatus(workspaceId),
     queryFn: () => gitApi.pullRequestStatus(workspaceId as string),
     enabled: Boolean(workspaceId) && enabled,
-    // `gh pr view` is a network call. Push, focus and repository-change
-    // events refresh it when stale; the interval only catches remote updates.
-    refetchInterval: gitSafetyPoll(enabled, PULL_REQUEST_POLL_MS),
+    // A GitHub API call. Push, focus and repository-change events refresh it
+    // when stale; the interval only catches remote updates, and waits out a
+    // rate-limit pause instead of polling into it.
+    refetchInterval: enabled
+      ? (query) =>
+          isWindowActive() ? pausedPollInterval(query.state.data, Date.now(), PULL_REQUEST_POLL_MS) : false
+      : false,
     staleTime: PULL_REQUEST_STALE_MS,
+    structuralSharing: (previous, next) =>
+      replaceEqualDeep(
+        previous,
+        keepPullRequestWhilePaused(previous as GitHubPullRequestStatus | undefined, next as GitHubPullRequestStatus),
+      ),
   });
 }
 
 export function useGitPullRequestStatus(workspaceId: string | undefined, enabled = true) {
   return useQuery(gitPullRequestStatusQueryOptions(workspaceId, enabled));
+}
+
+/** Sidebar Refresh: bypass the background PR cache and spend interactive budget. */
+export function refreshGitPullRequestStatus(queryClient: QueryClient, workspaceId: string) {
+  return queryClient.fetchQuery({
+    ...gitPullRequestStatusQueryOptions(workspaceId),
+    queryFn: () => gitApi.pullRequestStatus(workspaceId, { interactive: true }),
+    staleTime: 0,
+  });
 }
 
 export function useGitReview(workspaceId: string | undefined, enabled = true) {

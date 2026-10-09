@@ -12,6 +12,7 @@ import type { ToolOutputStore } from "./tool-output-store.js";
 import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
+import { assertRenameAllowedFromChat } from "./chat-title-policy.js";
 import type { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import type { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import type { subagentRunStore } from "./subagents/subagent-run-store.js";
@@ -29,6 +30,8 @@ export interface ChatApplicationOwner extends WorkspaceOperationDocumentOwner {
 
 export interface ChatApplicationMutationOptions {
   assertCurrent?: (chat: Chat) => void | Promise<void>;
+  /** Renderer-initiated rename/delete refuses feature-owned (Design Studio) chats. */
+  rejectFeatureOwned?: boolean;
   /**
    * Main-owned notification that cross-store deletion has durably installed its
    * subagent tombstone. From this point restart reconciliation can only roll the
@@ -196,7 +199,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
     },
 
     rename(chatId: string, title: string, options: ChatApplicationMutationOptions = {}) {
-      return deps.chatStore.rename(chatId, title, async (chat) => options.assertCurrent?.(chat));
+      return deps.chatStore.rename(chatId, title, async (chat) => {
+        assertRenameAllowedFromChat(chat, options);
+        await options.assertCurrent?.(chat);
+      });
     },
 
     async moveEmptyToWorkspace(
@@ -238,6 +244,13 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       chatId: string,
       options: ChatApplicationMutationOptions = {},
     ): Promise<void> {
+      if (options.rejectFeatureOwned) {
+        // Refuse before the deletion window opens, so a live design run never sees
+        // its chat as deleting. A chat's owner never changes, so this cannot race
+        // the check below.
+        const target = await deps.chatStore.get(chatId);
+        if (target) assertRenameAllowedFromChat(target, options);
+      }
       const finishDeletion = deps.llmClient.beginChatDeletion(chatId);
       let finishAttachmentDeletion: (() => void) | undefined;
       let releaseAdmission = false;
@@ -252,6 +265,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         finishAttachmentDeletion = deps.attachments?.beginChatDeletion(chatId);
         const current = await deps.chatStore.get(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
+        assertRenameAllowedFromChat(current, options);
         await options.assertCurrent?.(current);
         await deps.llmClient.cancelChat(chatId);
         try {
@@ -314,6 +328,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);
+          assertRenameAllowedFromChat(chat, options);
           await options.assertCurrent?.(chat);
         });
         await deps.subagentRunStore.completeChatDeletion(chatId);

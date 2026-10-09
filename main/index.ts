@@ -16,6 +16,7 @@ import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { shutdownDevices } from "./handlers/devices.js";
+import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
@@ -96,10 +97,16 @@ import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { displayImageArtifactStore } from "./services/display-image-artifact-store.js";
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
-import {
-  registerGenerativeUiProtocol,
-  registerGenerativeUiScheme,
-} from "./services/generative-ui-protocol.js";
+import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { registerCustomSchemes } from "./services/custom-schemes.js";
+import { createImagesEnabled, designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { designProjectStore, designRunService } from "./services/design/main.js";
+import { startDesignStudio } from "./services/design/startup-core.js";
+import { createImagesRuntime } from "./services/create-images/main.js";
+import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
+import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
+import { startStudioAssets } from "./services/studio-assets/startup-core.js";
+import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
@@ -141,12 +148,15 @@ import {
   stopAidenRemoteServiceAndSettle,
 } from "./services/aiden-remote-service-main.js";
 import { initializeBotApplicationService } from "./services/bot-application-service-main.js";
+import { trackConnectionSetupFocus } from "./services/bot-connection-setup.js";
+import { startBotApplication } from "./services/bot-startup-core.js";
 import { botSkillContentWatcher } from "./services/bot-capability-services-main.js";
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 
 if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
   process.stdout.write(`${app.getVersion()}\n`);
@@ -159,7 +169,7 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
 
-registerGenerativeUiScheme();
+registerCustomSchemes({ studioAssets: studioAssetsEnabled() });
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -182,6 +192,8 @@ let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
+/** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
+const imageQuitCoverage = new ImageQuitCoverage();
 let installUpdateOnQuit = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
@@ -317,6 +329,23 @@ function cleanupApplication(): void {
   void mcpManager.closeAll();
 }
 
+/** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */
+async function shutdownBotRuntimeWithin(budgetMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const closed = (async () => {
+    const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
+    await shutdownBotSessionRuntime();
+    return true;
+  })();
+  const settled = await Promise.race([
+    closed,
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), budgetMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  if (!settled) logger.warn("bots", "The Bot runtime did not close within the shutdown budget.");
+}
+
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
@@ -415,13 +444,56 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     await Promise.all([
       shutdownProviderAuthFlow(),
       computerUseStatus.shutdown(),
-      scheduleService.stopAndSettle(),
-      telegramService.stopAndSettle(),
+      (async () => {
+        // Stop Bot ingress first so nothing reopens the runtime, then close
+        // every Bot harness: a running turn is left interrupted (Resume on
+        // next start) and the profile lock is released.
+        await Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]);
+        await shutdownBotRuntimeWithin(5_000);
+      })(),
       (async () => {
         await subagentRunStore.flush();
         await subagentRunStore.close();
       })(),
       terminalService.flushHistory(),
+      // Bounded so a wedged queue cannot hold quit; a store that was never
+      // opened (flags off) resolves at once.
+      // Run settlements record their end through the project store, so they drain
+      // first and in-flight store writes after them. Bounded so a wedged write
+      // cannot hold quit; with the flag off both have nothing to drain.
+      Promise.race([
+        designRunService
+          .drain()
+          .then(() => designProjectStore.drain())
+          .then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+      ])
+        .then((drained) => {
+          if (!drained) logger.warn("design", "Design work did not settle within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("design", "Design work did not settle cleanly.", error)),
+      (async () => {
+        // Image runs record their end (and close the run ledger) before the asset store closes.
+        // Bounded like the other stores; a ledger that was never opened (flag off) resolves at once.
+        await Promise.race([
+          createImagesRuntime.shutdown("app-quit").then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+        ])
+          .then((stopped) => {
+            if (!stopped) logger.warn("create-images", "Image runs did not stop within the shutdown budget.");
+          })
+          .catch((error) => logger.warn("create-images", "Image runs did not stop cleanly.", error));
+        await Promise.race([
+          studioAssetStore.close().then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+        ])
+          .then((closed) => {
+            if (!closed) logger.warn("studio", "Studio asset store did not close within the shutdown budget.");
+          })
+          .catch((error) =>
+            logger.warn("studio", "Studio asset store did not close cleanly.", error),
+          );
+      })(),
       browserService.shutdown(),
       shutdownDevices(),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
@@ -456,13 +528,24 @@ async function refreshCloseGuardFromRenderer(
   window: BrowserWindow,
 ): Promise<number | null> {
   try {
+    // Pending debounced saves (Create Images autosave) run first, bounded, so a quit right after an
+    // edit saves it rather than stopping on the unsaved-changes prompt. A failed save stays dirty.
     const latest = (await window.webContents.executeJavaScript(
-      `({
-        dirty: document.documentElement.dataset.aidenDirty === "1",
-        gitBusy: document.documentElement.dataset.aidenGitBusy === "1",
-        revision: Number(document.documentElement.dataset.aidenGuardRevision || "0"),
-        saving: document.documentElement.dataset.aidenSaving === "1"
-      })`,
+      `(async () => {
+        const flush = window.__aidenFlushPendingSaves;
+        if (typeof flush === "function") {
+          await Promise.race([
+            Promise.resolve().then(flush).catch(() => undefined),
+            new Promise((resolve) => setTimeout(resolve, 3000)),
+          ]);
+        }
+        return {
+          dirty: document.documentElement.dataset.aidenDirty === "1",
+          gitBusy: document.documentElement.dataset.aidenGitBusy === "1",
+          revision: Number(document.documentElement.dataset.aidenGuardRevision || "0"),
+          saving: document.documentElement.dataset.aidenSaving === "1"
+        };
+      })()`,
       true,
     )) as {
       dirty?: unknown;
@@ -520,6 +603,26 @@ async function armRendererUnload(
   }
 }
 
+/**
+ * Honest quit copy while paid image requests are on the wire (ADR-CI §2.2). Every path that will quit
+ * the app asks through here, with or without a window to attach the dialog to.
+ */
+function confirmImageRequestsBeforeQuit(
+  window?: BrowserWindow | null,
+  alreadyConfirmedRequests = 0,
+): boolean {
+  return imageRunsAllowQuit(
+    createImagesRuntime.inFlightRequests(),
+    (prompt) => {
+      const options = { type: "warning", noLink: true, ...prompt } as const;
+      return window && !window.isDestroyed()
+        ? dialog.showMessageBoxSync(window, options)
+        : dialog.showMessageBoxSync(options);
+    },
+    alreadyConfirmedRequests,
+  );
+}
+
 async function authorizeProtectedAction(
   window: BrowserWindow,
   action: "close" | "reload",
@@ -560,7 +663,17 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return;
   lifecycleCheckInFlight = true;
   try {
-    if (!(await authorizeProtectedAction(window, "close"))) return;
+    // Closing the last window quits on Linux and Windows. On macOS it does not, and runs continue.
+    // Asked before the renderer unload is armed, so "Keep Aiden Open" leaves no approved revision behind.
+    const closeQuitsApp = shouldQuitAfterAllWindowsClose(process.platform, aidenRemoteServiceKeepsApplicationAlive());
+    // Any earlier confirmation belonged to a close that did not complete.
+    imageQuitCoverage.clear();
+    if (closeQuitsApp && !confirmImageRequestsBeforeQuit(window)) return;
+    imageQuitCoverage.recordWindowCloseConfirmation(closeQuitsApp, createImagesRuntime.inFlightRequests());
+    if (!(await authorizeProtectedAction(window, "close"))) {
+      imageQuitCoverage.clear();
+      return;
+    }
     await persistMainWindowState(window);
     protectedAction = "close";
     window.close();
@@ -595,6 +708,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return false;
   lifecycleCheckInFlight = true;
   try {
+    if (!confirmImageRequestsBeforeQuit(window)) return false;
     if (!(await authorizeProtectedAction(window, "close"))) return false;
     await persistMainWindowState(window);
     try {
@@ -872,7 +986,7 @@ ipcMain.handle(
     ) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
-    if (step !== "profile" && step !== "provider") {
+    if (step !== "profile" && step !== "provider" && step !== "bots") {
       throw new Error("Invalid onboarding step.");
     }
     if (
@@ -1085,6 +1199,7 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
     level: "info",
@@ -1094,6 +1209,8 @@ async function createMainWindow(
   });
   const createdWebContentsId = createdWindow.webContents.id;
   const mainWindowUrl = getWindowUrl("main-window.html");
+  // The Simulator tab's 3D view settles a trackpad orbit when the fingers lift.
+  forwardTrackpadScrollEnd(createdWindow.webContents);
   createdWindow.webContents.on("did-start-loading", () => {
     resetRendererReadiness();
     terminalService.closeForWebContents(createdWebContentsId);
@@ -1304,6 +1421,8 @@ async function createMainWindow(
     // retried against a fresh guard revision instead.
     const interruptedAction = protectedAction;
     protectedAction = null;
+    // The renderer vetoed the unload: the close that was confirmed is retried and asks again.
+    imageQuitCoverage.clear();
     if (interruptedAction === "onboarding-reset") {
       setImmediate(() => void requestOnboardingReset(createdWindow));
     } else if (interruptedAction === "quit") {
@@ -1617,9 +1736,13 @@ if (!ownsSingleInstanceLock) {
     if (forceAppQuit) return;
     event.preventDefault();
     if (shutdownStarted || lifecycleCheckInFlight) return;
+    // The quit a last-window close confirmed takes its coverage here, once.
+    const confirmedByWindowClose = imageQuitCoverage.consume();
     if (mainWindow && !mainWindow.isDestroyed()) {
       void requestApplicationQuit(mainWindow);
-    } else {
+    } else if (confirmImageRequestsBeforeQuit(null, confirmedByWindowClose)) {
+      // No window (macOS keeps running after the last one closes): runs may still be on the wire,
+      // and any beyond what the close confirmed are asked about now.
       void shutdownAndQuit();
     }
   });
@@ -1758,6 +1881,29 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      await startStudioAssets({
+        enabled: studioAssetsEnabled(),
+        store: studioAssetStore,
+        grants: studioAssetGrants,
+        registerProtocol: registerStudioAssetProtocol,
+        onError: (error) =>
+          logger.warn(
+            "studio",
+            "Studio assets are unavailable; Design and Images will report a storage error.",
+            error,
+          ),
+      });
+      // Directly after the studio assets and before startup IPC admission: the ledger's restart sweep
+      // runs here exactly once, before any run can start. With the flag off nothing is created.
+      await createImagesRuntime.initialize({
+        enabled: createImagesEnabled(),
+        onError: (error) =>
+          logger.warn(
+            "create-images",
+            "Create Images storage is unavailable; Images will report a storage error.",
+            error,
+          ),
+      });
       const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
       if (quarantinedImageArtifactPath) {
         logger.warn(
@@ -1804,6 +1950,16 @@ if (!ownsSingleInstanceLock) {
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
+      });
+      await startDesignStudio({
+        enabled: designStudioEnabled(),
+        store: designProjectStore,
+        onError: (error) =>
+          logger.warn(
+            "design",
+            "Design projects could not be restored; Design Studio will report a storage error.",
+            error,
+          ),
       });
       if (displayImageArtifactAvailability.available) {
         try {
@@ -1875,17 +2031,12 @@ if (!ownsSingleInstanceLock) {
           );
         }
       }
-      if (hostPlatformCapabilities().bots) {
-        try {
-          await initializeBotApplicationService();
-        } catch (error) {
-          logger.error(
-            "bots",
-            "Bot storage could not be restored safely; the rest of Aiden will remain available for repair.",
-            error,
-          );
-        }
-      }
+      await startBotApplication({
+        supported: hostPlatformCapabilities().bots,
+        initialize: initializeBotApplicationService,
+        trackConnectionSetupFocus,
+        logError: (message, error) => logger.error("bots", message, error),
+      });
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
       try {
@@ -1896,12 +2047,9 @@ if (!ownsSingleInstanceLock) {
         if (error instanceof EmptyChatMigrationSnapshotError) throw error;
         logger.warn("chat", "Empty-chat migration is incomplete; it will resume on the next launch.", error);
       }
-      const visibleChatIds = new Set(
-        (await chatStore.list()).map((chat) => chat.id),
-      );
-      await Promise.all([
-        piRuntimeEffectStore.reconcileChats(visibleChatIds),
-        piCompactionSessionStore.reconcileChats(visibleChatIds),
+      await reconcileChatScopedStores(chatStore, [
+        piRuntimeEffectStore,
+        piCompactionSessionStore,
       ]);
       await reconcilePendingManagedWorktreeDeletions({
         listWorkspaces: () => configStore.listWorkspaces(),

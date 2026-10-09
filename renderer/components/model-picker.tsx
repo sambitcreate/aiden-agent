@@ -41,6 +41,7 @@ import type { ModelInfo, Provider } from "../lib/types";
 import { Check, Pin, SlidersHorizontal } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
+import { providerDeploymentLabel } from "../shared/provider-deployment";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -101,10 +102,14 @@ function formatCapabilities(info: ModelInfo | undefined): string {
   return hasKnownCapability ? "Standard generation" : "Unknown";
 }
 
+function deploymentSuffix(entry: Pick<ModelEntry, "providerId" | "isLocal">): string {
+  return ` · ${providerDeploymentLabel(entry.providerId, entry.isLocal).tag}`;
+}
+
 function describeModel(entry: ModelEntry): string {
   const details = [
     `Provider ${entry.providerLabel}`,
-    entry.isLocal ? "Deployment local" : "Deployment hosted",
+    providerDeploymentLabel(entry.providerId, entry.isLocal).description,
     `Inputs ${formatInputs(entry.info)}`,
     `Capabilities ${formatCapabilities(entry.info)}`,
   ];
@@ -276,7 +281,7 @@ function ModelHoverDetails({
           </Text>
           <Text variant="small" color="tertiary" as="p" truncate>
             {model.providerLabel}
-            {model.isLocal ? " · Local" : " · Hosted"}
+            {deploymentSuffix(model)}
             {model.format ? ` · ${model.format}` : ""}
           </Text>
         </div>
@@ -690,7 +695,7 @@ export function ModelPicker({
                         <span className="block truncate text-small-strong">{entry.label}</span>
                         <span className="block truncate text-small text-tertiary">
                           {entry.providerLabel}
-                          {entry.isLocal ? " · Local" : " · Hosted"}
+                          {deploymentSuffix(entry)}
                         </span>
                       </span>
                       {entry.format ? (

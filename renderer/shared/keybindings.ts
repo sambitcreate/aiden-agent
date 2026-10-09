@@ -2,6 +2,8 @@
 // Keep this module dependency-free so the main process, React, and node:test can
 // all use the exact same normalization and conflict rules.
 
+import type { StudioFeature } from "./studio-routes.js";
+
 export const COMMAND_IDS = [
   "composer.focus",
   "dictation.toggle",
@@ -24,6 +26,8 @@ export const COMMAND_IDS = [
   "provider.manage",
   "settings.search",
   "settings.open",
+  "design.open",
+  "images.open",
   "workspace.openPreferredEditor",
   "sidebar.toggle",
   "terminal.toggle",
@@ -49,6 +53,8 @@ export interface CommandDefinition {
   allowInEditable?: boolean;
   allowRepeat?: boolean;
   nativeMenu?: boolean;
+  /** Hidden from the palette, and never handled, unless this capability is on. */
+  requiresCapability?: StudioFeature;
   showInPalette: boolean;
   showInSettings: boolean;
 }
@@ -223,6 +229,32 @@ export const COMMANDS = [
     showInSettings: true,
   }),
   command({
+    id: "design.open",
+    title: "Open Design Studio",
+    description: "Open Design Studio projects.",
+    category: "Navigate",
+    keywords: ["design", "prototype", "screens", "studio"],
+    defaultBinding: null,
+    scope: "app",
+    global: false,
+    requiresCapability: "designStudio",
+    showInPalette: true,
+    showInSettings: false,
+  }),
+  command({
+    id: "images.open",
+    title: "Open Create Images",
+    description: "Open image generation workflows.",
+    category: "Navigate",
+    keywords: ["images", "generate", "workflow", "canvas"],
+    defaultBinding: null,
+    scope: "app",
+    global: false,
+    requiresCapability: "createImages",
+    showInPalette: true,
+    showInSettings: false,
+  }),
+  command({
     id: "workspace.openPreferredEditor",
     title: "Open workspace in preferred editor",
     description: "Open the active workspace in its preferred editor.",
@@ -263,7 +295,7 @@ export const COMMANDS = [
   command({
     id: "environment.toggle",
     title: "Toggle Environment",
-    description: "Show or hide Review, Subagents, and Files.",
+    description: "Open the workspace tools launcher or hide the panel.",
     category: "Tools",
     keywords: ["review", "subagents", "files", "git", "changes"],
     defaultBinding: "Command+Shift+E",

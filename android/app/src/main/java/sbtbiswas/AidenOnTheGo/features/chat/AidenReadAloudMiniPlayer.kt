@@ -49,6 +49,8 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 /** Values the mini player shows; retained while it collapses after Read Aloud stops. */
 data class AidenReadAloudMiniPlayerState(
@@ -72,6 +74,7 @@ fun AidenReadAloudMiniPlayer(
     modifier: Modifier = Modifier
 ) {
     val palette = AidenTheme.palette
+    val stopDescription = stringResource(R.string.chat_read_aloud_stop)
     val reduceMotion = aidenReduceMotion()
     val playing = phase == AidenReadAloudPhase.PLAYING
     Surface(
@@ -118,7 +121,7 @@ fun AidenReadAloudMiniPlayer(
                     .tactilePress(interaction)
                     .semantics {
                         role = Role.Button
-                        contentDescription = "Stop reading aloud"
+                        contentDescription = stopDescription
                     }
             ) {
                 Box(contentAlignment = Alignment.Center) {

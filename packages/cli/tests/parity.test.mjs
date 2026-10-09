@@ -453,7 +453,7 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
   const catalog = await app.capabilityCatalog(audienceId);
   const provider = catalog.providers.find((item) => item.label === "cli-test"); assert.ok(provider, JSON.stringify(catalog.providers));
   const custom = { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: catalog.fileScopes.filter((item) => item.kind === "bot_home").map((item) => item.id), shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] };
-  const bot = await app.createBot({ audienceId, bot: { name: "Scoped helper", instructions: "Help in the Bot folder", avatar: "spark" }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom } });
+  const bot = await app.createBot({ audienceId, bot: { name: "Scoped helper", instructions: "Help in the Bot folder", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom } });
   const chat = await app.createChat({ audienceId, botId: bot.id, providerId: "cli-test", model: "test" });
   const lease = await runtime.authority.admit({ audienceId, botId: bot.id, chatId: chat.id });
   const tools = await runtime.tools(lease);

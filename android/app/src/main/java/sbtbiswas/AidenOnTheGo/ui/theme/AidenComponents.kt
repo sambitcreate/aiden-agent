@@ -3,6 +3,7 @@ package sbtbiswas.AidenOnTheGo.ui.theme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,7 +12,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -22,9 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,11 +43,35 @@ object AidenUi {
     const val ScrollableSheetGesturesEnabled = false
 }
 
-/** Tonal, borderless text-field colors used across forms and dialogs. */
+/**
+ * Sheet state for long-form sheets. They open fully expanded: their own scrolling
+ * surface owns vertical gestures, so a half-height detent could never be expanded.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun rememberAidenFullSheetState(): SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+/**
+ * Shared button content padding, matching the desktop Untitled button scale
+ * (medium: 16dp horizontal). Heights stay on Material's 40dp minimum.
+ * Filled, tonal, and outlined buttons keep Material's roomier 24dp default.
+ */
+object AidenButtonDefaults {
+    val TextContentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+}
+
+/**
+ * Filled (tonal) text-field colors used across forms and dialogs.
+ *
+ * Fields rest on a low tonal container and step up one container tone when focused.
+ * No indicator line or accent label/border change on focus; the caret keeps the accent.
+ */
 @Composable
 fun aidenTextFieldColors(): TextFieldColors = TextFieldDefaults.colors(
     focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    focusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
     disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     errorContainerColor = MaterialTheme.colorScheme.errorContainer,
     focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
@@ -66,9 +91,7 @@ fun AidenToolbarAction(
     val palette = AidenTheme.palette
     IconButton(
         onClick = onClick,
-        modifier = modifier
-            .size(AidenUi.MinimumTouchTarget)
-            .semantics { role = Role.Button }
+        modifier = modifier.size(AidenUi.MinimumTouchTarget)
     ) {
         Icon(
             imageVector = icon,

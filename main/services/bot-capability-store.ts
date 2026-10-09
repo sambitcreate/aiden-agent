@@ -267,33 +267,24 @@ export class BotCapabilityStore {
     });
   }
 
-  async archiveBotAuthority(botId: string): Promise<boolean> {
+  /**
+   * Bot delete: fence and hard-remove the Bot policy and its chat reductions.
+   * Idempotent, so an interrupted delete can be retried.
+   */
+  async deleteBotAuthority(botId: string): Promise<boolean> {
     this.requireInitialized();
     return this.serialized(async () => {
       this.leases.invalidateBot(botId);
-      const result = await this.persistence.update((state) => {
-        const changed = this.editor(state).archiveBotAuthority(botId);
-        const policy = state.policies.find((entry) => entry.botId === botId);
-        if (!policy) throw new BotCapabilityUnavailableError();
-        return { changed, policyEpoch: policy.policyEpoch };
-      });
-      this.leases.publishBotEpoch(botId, result.policyEpoch);
+      const state = await this.persistence.load();
+      if (!state.policies.some((entry) => entry.botId === botId) &&
+          !state.chats.some((entry) => entry.botId === botId)) {
+        return false;
+      }
+      const removed = await this.persistence.update((draft) =>
+        this.editor(draft).deleteBotAuthority(botId),
+      );
       this.leases.invalidateBot(botId);
-      return result.changed;
-    });
-  }
-
-  async restoreBotAuthority(botId: string): Promise<boolean> {
-    this.requireInitialized();
-    return this.serialized(async () => {
-      const result = await this.persistence.update((state) => {
-        const changed = this.editor(state).restoreBotAuthority(botId);
-        const policy = state.policies.find((entry) => entry.botId === botId);
-        if (!policy) throw new BotCapabilityUnavailableError();
-        return { changed, policyEpoch: policy.policyEpoch };
-      });
-      this.leases.publishBotEpoch(botId, result.policyEpoch);
-      return result.changed;
+      return removed;
     });
   }
 
@@ -628,7 +619,7 @@ export class BotCapabilityStore {
     });
   }
 
-  /** Archive/global/inventory owners use this immediate process fence. */
+  /** Delete/global/inventory owners use this immediate process fence. */
   invalidateBotAuthority(botId: string): void {
     this.leases.invalidateBot(botId);
   }

@@ -6,7 +6,7 @@ import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
 import { createAgentsInstructionRefresher } from "./agents-instructions.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
-import { assertCustomModelImageLimit, applyCustomModelToolPolicy, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
+import { assertCustomModelImageLimit, applyCustomModelToolPolicy, customModelThinkingLevels, prepareCustomModelToolContext } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "./pi-vcc/recall.js";
 import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
@@ -20,11 +20,13 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { type AgentMessage } from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
-import { access } from "node:fs/promises";
-import { ipcMain, logger } from "../platform.js";
+import { access, mkdir, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { app, ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
 import {
   BROWSER_MUTATION_TOOL_NAMES,
@@ -43,10 +45,10 @@ import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
 import {
-  DEVICE_APPROVAL_TOOL_NAMES,
   canUseDeviceTools,
   createDeviceAgentTools,
   deviceToolApprovalSummary,
+  deviceToolRequiresApproval,
   isDeviceToolName,
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
@@ -157,6 +159,7 @@ import type {
   Chat,
   ChatStartParams,
   WorkspacePermission,
+  StoredProvider,
 } from "./types.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
@@ -190,6 +193,7 @@ import {
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator, type ToolApprovalDecisionPayload } from "./tool-approval.js";
+import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import {
   SCOPED_APPROVAL_OFFER,
   toolApprovalRuleTarget,
@@ -206,6 +210,7 @@ import {
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
+  appendPiMessages,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
@@ -214,6 +219,10 @@ import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
+import { canHostAcpHarness, createAcpGenerationHost } from "./acp/generation-host.js";
+import { acpHosts } from "./acp/hosts.js";
+import { captureRootIdentity } from "./acp/client-files.js";
+import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
@@ -271,6 +280,17 @@ import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
+import {
+  parseSubagentModelSettings,
+  subagentModelToolOptions,
+  type SubagentModelPolicy,
+} from "./subagents/subagent-model-selection.js";
+import {
+  createSubagentChildModelResolver,
+  savedThinkingLevelFor,
+  subagentModelCandidatesFromSettings,
+} from "./subagents/subagent-model-runtime.js";
+import { listConfiguredProviders } from "./provider-list-main.js";
 import {
   subagentsAllowedForGeneration,
   subagentWorkspaceWriteAllowedForGeneration,
@@ -376,6 +396,15 @@ import {
 } from "./generative-ui-extension.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
+import { createGenerationHarness } from "./generation-harness.js";
+import {
+  resolveGenerationProfile,
+  selectRuntimeExtensions,
+  type DesignRunBinding,
+  type GenerationProfile,
+} from "./generation-profile.js";
+import { designGenerationWiring, designRunOutcome } from "./design/design-generation.js";
+import type { DesignRunOutcome } from "./design/store-core.js";
 import {
   createAskUserQuestionExtension,
   resolveAskUserQuestionTimeoutMs,
@@ -446,6 +475,8 @@ export interface GenerationExecutionOptions {
   interactionSurface?: "telegram";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
+  /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
+  designRun?: DesignRunBinding;
 }
 
 interface BotGenerationAuthorityContext {
@@ -474,6 +505,8 @@ interface ActiveGeneration {
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
   releaseBotAuthority: () => void;
+  /** Runs that take no mid-flight input (Design Studio). */
+  inputClosed: boolean;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -734,6 +767,25 @@ function resetGenerationAgent(agent: PiAgentRuntimeHarness, streamId: string): v
   }
 }
 
+function savedGenerationThinkingLevel(
+  settings: Awaited<ReturnType<typeof configStore.getSettings>>,
+  providerId: string,
+  model: string,
+  provider: Pick<StoredProvider, "isBuiltin" | "kind" | "modelMetadata">,
+) {
+  return providerId === GOOGLE_PROVIDER_ID
+    ? settings.googleThinkingByModel?.[model]
+    : providerId === OPENAI_CODEX_PROVIDER_ID
+      ? settings.codexThinkingByModel?.[model]
+      : providerId === ANTHROPIC_PROVIDER_ID
+        ? settings.anthropicThinkingByModel?.[model]
+        : provider.isBuiltin ||
+            (provider.kind === "openai" &&
+              customModelThinkingLevels(provider.modelMetadata?.[model]?.overrides))
+          ? settings.providerThinkingByModel?.[providerId]?.[model]
+          : undefined;
+}
+
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -784,6 +836,55 @@ async function prepareGeneration(
   const runtime =
     botContext?.prepared.runtime ??
     (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
+
+  if (options.designRun) {
+    // A design run composes exactly its binding's extension (designGenerationWiring);
+    // createGenerationHarness refuses any other extension, tool or skill (ADR-DS §4).
+    const designSettings = await configStore.getSettings();
+    const designModel = runtime.model;
+    return {
+      runtime: { ...runtime, model: designModel },
+      agentsInstructions: undefined,
+      agentsInstructionRoots: undefined,
+      browserDiscovery: undefined,
+      browserSelection: { initialized: false } as { initialized: boolean; tabId?: string },
+      browserFileApprovals: new Map<string, PreparedBrowserFile>(),
+      browserActionApprovals: new Map<
+        string,
+        { approval: BrowserToolApproval; args: Record<string, unknown> }
+      >(),
+      permission: "none" as GenerationPermission,
+      folderPath: undefined,
+      git: await generationGitContext(undefined, signal),
+      tools: [] as AgentTool[],
+      generationExtensions,
+      modelImageReferences,
+      mcpServerInstructions: createMcpInstructionCollector().snapshot(),
+      displayedImages,
+      displayedHtmlArtifacts,
+      supportsImages: runtimeSupportsImages(designModel),
+      thinkingLevel: resolveGenerationThinkingLevel(
+        params.providerId,
+        designModel,
+        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model, runtime.provider),
+      ),
+      computerUse: undefined,
+      formFill: undefined,
+      googleWorkspaceSnapshot: undefined,
+      skillSnapshot: undefined,
+      workspaceId: undefined,
+      subagentSupervisor: undefined,
+      showLocalModelReasoning: designSettings.showLocalModelReasoning,
+      compactionEngine: compactionEngineFrom(designSettings.compactionEngine),
+      compactionModelOverrides: designSettings.compactionModelOverrides,
+      cacheWarmingEnabled: false,
+      sharedImages,
+      botContext: undefined,
+      botApprovedRoots: [] as string[],
+      botMutatingToolNames: new Set<string>(),
+      assistantSettingsPermission: designSettings.assistant?.settingsPermission ?? "ask",
+    };
+  }
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -897,14 +998,7 @@ async function prepareGeneration(
   };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
-  const savedThinkingLevel =
-    params.providerId === GOOGLE_PROVIDER_ID
-      ? settings.googleThinkingByModel?.[params.model]
-      : params.providerId === OPENAI_CODEX_PROVIDER_ID
-        ? settings.codexThinkingByModel?.[params.model]
-        : params.providerId === ANTHROPIC_PROVIDER_ID
-          ? settings.anthropicThinkingByModel?.[params.model]
-          : settings.providerThinkingByModel?.[params.providerId]?.[params.model];
+  const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
@@ -951,6 +1045,7 @@ async function prepareGeneration(
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
   const allowSubagents = subagentsAllowedForGeneration({
     assistantMode,
+    providerId: params.providerId,
     allowSubagents:
       options.allowSubagents !== false &&
       (!botContext || botHasOrdinaryCapability(botContext, "subagents")),
@@ -1112,6 +1207,35 @@ async function prepareGeneration(
       },
     });
   }
+  // Bot and Assistant runtimes are bound by their grant, so their children
+  // always run on the parent model. Model choice never reaches capabilities.
+  const subagentModelOverridesAllowed = !botBound && !assistantMode;
+  const subagentModelSettings = subagentModelOverridesAllowed
+    ? parseSubagentModelSettings(settings.subagentModels)
+    : undefined;
+  const subagentModelPolicy: SubagentModelPolicy | undefined =
+    allowSubagents && folderPath && workspace?.id
+      ? {
+          parent: {
+            providerId: runtime.provider.id,
+            providerLabel: runtime.provider.label,
+            modelId: model.id,
+            modelLabel: model.name?.trim() || model.id,
+            effort: thinkingLevel,
+          },
+          candidates: subagentModelOverridesAllowed
+            ? subagentModelCandidatesFromSettings(
+                await listConfiguredProviders().catch(() => []),
+                subagentModelSettings,
+              )
+            : [],
+          overridesAllowed: subagentModelOverridesAllowed,
+          settings: subagentModelSettings,
+        }
+      : undefined;
+  const subagentModelOptions = subagentModelPolicy
+    ? subagentModelToolOptions(subagentModelPolicy)
+    : undefined;
   const subagentSupervisor =
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
@@ -1146,6 +1270,17 @@ async function prepareGeneration(
             return persisted;
           },
           prepareRun: subagentPersistence?.prepareRun,
+          selectChildModel: subagentModelPolicy
+            ? createSubagentChildModelResolver({
+                policy: subagentModelPolicy,
+                parentRuntime: runtime,
+                savedEffort: (providerId, modelId) =>
+                  savedThinkingLevelFor(settings, providerId, modelId),
+                resolveRuntime: (providerId, modelId, modelSignal) =>
+                  resolveModelRuntime(providerId, modelId, modelSignal, chat.id),
+              })
+            : undefined,
+          modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
           projector: subagentProjector,
         })
@@ -1302,6 +1437,11 @@ async function prepareGeneration(
             }
           },
           screenshotDir: () => deviceService.screenshotDir(params.chatId!),
+          // `saveTo` may write only into this chat's workspace or Downloads.
+          saveRoots: async () => ({
+            ...(folderPath && workspace?.permission !== "none" ? { workspace: folderPath } : {}),
+            downloads: (await import("../handlers/devices.js")).deviceDownloadsDir(),
+          }),
         }).filter(({ name }) => !options.excludeToolNames?.has(name))
       : [];
   // PATH gets the pinned agent-device only when the gate held at generation start, and
@@ -1358,6 +1498,7 @@ async function prepareGeneration(
                 : [],
               subagentShellEnabled,
               subagentDelegationEnabled,
+              subagentModelOptions,
             )
         : undefined,
       shareImage: folderPath ? shareImage : undefined,
@@ -1707,6 +1848,30 @@ async function prepareGeneration(
   };
 }
 
+const acpScratchFallbacks = new Map<string, Promise<string>>();
+
+/** Working directory for an agent turn in a chat without a folder. It grants no file access. */
+async function acpScratchDir(chatId: string): Promise<string> {
+  const safe = chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
+  const directory = join(app.getPath("userData"), "acp", "scratch", safe);
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    return directory;
+  } catch (error) {
+    // Never fail a generation over its working directory; this one grants no
+    // file access either way.
+    logger.warn("acp", "Could not prepare the agent scratch directory.", error);
+    // A private directory, never the shared temp folder itself, reused for the
+    // chat so its agent session is not rebuilt on every turn.
+    let fallback = acpScratchFallbacks.get(chatId);
+    if (!fallback) {
+      fallback = mkdtemp(join(tmpdir(), "aiden-acp-scratch-")).catch(() => tmpdir());
+      acpScratchFallbacks.set(chatId, fallback);
+    }
+    return fallback;
+  }
+}
+
 export const llmClient = {
   async start(
     streamId: string,
@@ -1714,6 +1879,8 @@ export const llmClient = {
     owner: ChatGenerationOwner,
     options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
+    const designRun = options.designRun;
+    const designWiring = designRun ? designGenerationWiring(designRun, appendPiMessages) : undefined;
     const turnId = options.turnId;
     const ownsTurn =
       typeof turnId === "string" &&
@@ -1799,6 +1966,7 @@ export const llmClient = {
     let authoritativeBot: BotDefinition | undefined;
     let botContext: BotGenerationAuthorityContext | undefined;
     let authoritativeMode: ChatStartParams["mode"];
+    let generationProfile: GenerationProfile = { kind: "default" };
     const initializationTerminalState = { attempted: false };
     const persistInitializationTerminal = async (
       status: "failed" | "cancelled",
@@ -1830,6 +1998,9 @@ export const llmClient = {
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
+      // A design-owned chat runs only with its own project's main-built binding.
+      // It throws before authoritativeChat is set, so no failure turn is written.
+      generationProfile = resolveGenerationProfile(chat, options);
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
       if (chat.botId && !hostPlatformCapabilities().bots) {
@@ -2037,6 +2208,9 @@ export const llmClient = {
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
     const { model } = runtime;
+    // Agent-backed providers (ACP harnesses) own their conversation context:
+    // Aiden neither trims nor compacts the transcript they receive.
+    const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
     const approvalModelSelection = {
       providerId: runtime.provider.id,
       providerName: runtime.provider.label,
@@ -2119,7 +2293,13 @@ export const llmClient = {
             content,
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
-            pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
+            pi: lastAssistantMessage
+              ? storedPiAssistantMessage(
+                  designWiring
+                    ? designWiring.storedAssistantMessage(lastAssistantMessage)
+                    : lastAssistantMessage,
+                )
+              : undefined,
             providerFailure,
             timeline:
               finalTimeline.steps.length || finalTimeline.status === "cancelled"
@@ -2220,40 +2400,43 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      try {
-        const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
-          development: !isPackagedRuntime(),
-          behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
-        });
-        if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
-        if (!(await memoryEnabledForChat(configStore, generationChat))) {
-          throw new Error("Durable memory is disabled by the current memory policy.");
+      // Design runs never read or write durable memory.
+      if (generationProfile.kind === "default") {
+        try {
+          const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
+            development: !isPackagedRuntime(),
+            behaviorEnabled: piUpgradeBehaviorEnabledAtStartup,
+          });
+          if (!memoryEligible) throw new Error("Durable memory is outside the active rollout stage.");
+          if (!(await memoryEnabledForChat(configStore, generationChat))) {
+            throw new Error("Durable memory is disabled by the current memory policy.");
+          }
+          const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
+            ? undefined
+            : await configStore.getWorkspace(generationChat.workspaceId);
+          const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
+          await memoryStore.replaceChatMetadata(
+            scope,
+            generationChat.id,
+            memoryMetadataForChat(generationChat),
+          );
+          const provenance = memoryProvenanceForGeneration(
+            generationChat,
+            options.turnId,
+            owner.id !== 0,
+          );
+          memoryExtension = await createMemoryExtension({
+            store: memoryStore,
+            enabled: () => memoryEnabledForChat(configStore, generationChat),
+            scope,
+            ...(provenance ? { provenance } : {}),
+          });
+          if (provenance) memoryApprovalContext = { scope, provenance };
+        } catch {
+          // Memory is an optional local context source. Corruption or an
+          // unsupported SQLite build must remove both read and write tools.
+          logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
         }
-        const memoryWorkspace = generationChat.botId || !generationChat.workspaceId
-          ? undefined
-          : await configStore.getWorkspace(generationChat.workspaceId);
-        const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
-        await memoryStore.replaceChatMetadata(
-          scope,
-          generationChat.id,
-          memoryMetadataForChat(generationChat),
-        );
-        const provenance = memoryProvenanceForGeneration(
-          generationChat,
-          options.turnId,
-          owner.id !== 0,
-        );
-        memoryExtension = await createMemoryExtension({
-          store: memoryStore,
-          enabled: () => memoryEnabledForChat(configStore, generationChat),
-          scope,
-          ...(provenance ? { provenance } : {}),
-        });
-        if (provenance) memoryApprovalContext = { scope, provenance };
-      } catch {
-        // Memory is an optional local context source. Corruption or an
-        // unsupported SQLite build must remove both read and write tools.
-        logger.warn("memory", `Disabled durable memory for chat ${params.chatId}.`);
       }
       let todoRuntimeExtension: PiAgentRuntimeExtension | undefined;
       if (
@@ -2301,7 +2484,11 @@ export const llmClient = {
       // Arbitrary runtime extensions remain outside the exact Bot catalog.
       // Only the explicitly admitted task extension and existing memory/recall
       // contributions enter Bot prompts and schemas.
-      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] = preparedBotContext
+      const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
+        generationProfile.kind === "design"
+          ? // Exactly the binding's extension; an empty base fails the composition check.
+            [...(designWiring?.extensions ?? [])]
+          : preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             ...(memoryExtension ? [memoryExtension] : []),
@@ -2336,7 +2523,9 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
-      const advisorExtension = await advisorRuntime.extensionForGeneration({
+      // A design run composes exactly its own extension: no advisor, codemode or
+      // other base extension may join it (ADR-DS §4).
+      const advisorExtension = generationProfile.kind === "design" ? undefined : await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -2387,7 +2576,9 @@ export const llmClient = {
           : {}),
       });
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
-        workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
+        generationProfile.kind === "design"
+          ? undefined
+          : workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
         permission !== "none" && !options.excludeToolNames?.has("codemode")
           ? {
               id: "aiden.workspace-codemode",
@@ -2403,11 +2594,10 @@ export const llmClient = {
               }).toolSearch] : [])],
             }
           : undefined;
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
-        ...baseRuntimeExtensions,
-        ...(advisorExtension ? [advisorExtension] : []),
-        ...(codemodeExtension ? [codemodeExtension] : []),
-      ];
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = selectRuntimeExtensions(
+        generationProfile,
+        { base: baseRuntimeExtensions, advisor: advisorExtension, codemode: codemodeExtension },
+      );
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -2432,7 +2622,9 @@ export const llmClient = {
             };
       const telegramInteractive = options.interactionSurface === "telegram";
       const baseSystemPrompt =
-        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
+        generationProfile.kind === "design"
+          ? (designWiring?.baseSystemPrompt ?? "")
+          : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: devicesEnabled()
                 ? SETTINGS_SECTIONS
@@ -2558,7 +2750,7 @@ export const llmClient = {
         settings: {
           ...DEFAULT_COMPACTION_SETTINGS,
           ...compactionBudget,
-          enabled: piUpgradeCompactionEnabled,
+          enabled: piUpgradeCompactionEnabled && !harnessProvider,
         },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
@@ -2696,7 +2888,7 @@ export const llmClient = {
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
       const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
-      candidate = new PiAgentRuntimeHarness({
+      candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
         models: runtime.models,
@@ -2740,25 +2932,31 @@ export const llmClient = {
               }),
             }
           : {}),
-        transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
-          logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
-            model: model.id,
-            estimatedTokensBefore: result.estimatedTokensBefore,
-            estimatedTokensAfter: result.estimatedTokensAfter,
-            inputBudgetTokens: result.inputBudgetTokens,
-            truncatedToolResults: result.truncatedToolResults,
-            compactedToolResults: result.compactedToolResults,
-            removedHistoryMessages: result.removedHistoryMessages,
-            removedCurrentTurnMessages: result.removedCurrentTurnMessages,
-            usedContextFallback: result.usedContextFallback,
-          });
-        }),
+        ...(harnessProvider
+          ? {}
+          : {
+              transformContext: createGenerationContextTransform(generationContextOptions, (result) => {
+                logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
+                  model: model.id,
+                  estimatedTokensBefore: result.estimatedTokensBefore,
+                  estimatedTokensAfter: result.estimatedTokensAfter,
+                  inputBudgetTokens: result.inputBudgetTokens,
+                  truncatedToolResults: result.truncatedToolResults,
+                  compactedToolResults: result.compactedToolResults,
+                  removedHistoryMessages: result.removedHistoryMessages,
+                  removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+                  usedContextFallback: result.usedContextFallback,
+                });
+              }),
+            }),
         durability: {
           session: promptJournal,
           compaction: compactionOptions,
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
+          // Design HTML lives in the project store, never in the Pi journal (ADR-DS §10).
+          ...(designWiring ? { appendMessages: designWiring.journalAppend } : {}),
           beforeQueuedUser: async (message, signal) => {
             if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
               throw new Error("Queued guidance must contain text.");
@@ -2938,7 +3136,7 @@ export const llmClient = {
               permission === "ask" &&
               (APPROVAL_TOOL_NAMES.has(context.toolCall.name) ||
                 BROWSER_MUTATION_TOOL_NAMES.has(context.toolCall.name) ||
-                DEVICE_APPROVAL_TOOL_NAMES.has(context.toolCall.name));
+                deviceToolRequiresApproval(context.toolCall.name, context.args));
             const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             const memoryApproval =
               context.toolCall.name === REMEMBER_MEMORY_TOOL_NAME ||
@@ -3718,6 +3916,7 @@ export const llmClient = {
       rendererDetached: initialization.rendererDetached,
       computerUse,
       formFill,
+      inputClosed: designWiring?.inputClosed ?? false,
       completion: null,
       loadMonitor: initialization.loadMonitor,
       releaseSkillReservation: initialization.releaseSkillReservation,
@@ -3795,6 +3994,45 @@ export const llmClient = {
     };
     const withUndeliveredGuidance = <T extends object>(payload: T) =>
       undeliveredGuidance.length > 0 ? { ...payload, undeliveredGuidance } : payload;
+    const unregisterAcpHost =
+      harnessProvider &&
+      canHostAcpHarness({
+        rendererOwner: owner.id !== 0,
+        remoteOwner: owner.kind === "remote",
+        bot: preparedBotContext !== undefined,
+        assistant: authoritativeMode !== undefined,
+        usageSource: options.usageSource,
+        interactionSurface: options.interactionSurface,
+      })
+        ? acpHosts.register(
+            createAcpGenerationHost({
+              chatId: params.chatId,
+              streamId,
+              label: runtime.provider.label,
+              folderPath,
+              // Bind file access to this exact directory for the whole turn.
+              ...(folderPath
+                ? {
+                    folderIdentity: await captureRootIdentity(folderPath).catch((error: unknown) => {
+                      // No identity means no agent file access this turn.
+                      logger.warn("acp", "Could not capture the chat folder identity; agent file access is off.", error);
+                      return undefined;
+                    }),
+                  }
+                : {}),
+              scratchDir: await acpScratchDir(params.chatId),
+              permission: () => permission,
+              timeline,
+              requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
+              takeApprovalScope: (approvalStreamId, toolCallId) =>
+                approvals.takeDecisionPayload(approvalStreamId, toolCallId)?.scope,
+              requestQuestion: (toolCallId, questions, questionSignal) =>
+                questionnaires.request({ streamId, toolCallId, questions }, owner.documentId, questionSignal),
+            }),
+          )
+        : undefined;
+    // A throw before the outcome is known is Aiden's failure, not the provider's.
+    let designOutcome: DesignRunOutcome = "host_failed";
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -3864,8 +4102,10 @@ export const llmClient = {
             );
           }
         }
+        const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
+        let replyNotSaved = false;
         const finalError =
-          generationEmergencyUserError(runtimeOutcome.emergencyProjection) ??
+          emergencyError ??
           (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
@@ -3902,7 +4142,8 @@ export const llmClient = {
           !generationHasVisibleOutput(
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
-              displayedHtmlArtifacts.length,
+              displayedHtmlArtifacts.length +
+              (designRun?.acceptedCount() ?? 0),
           ) &&
           !wasCancelled
         ) {
@@ -3929,6 +4170,7 @@ export const llmClient = {
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
+          replyNotSaved = Boolean(persisted.error);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
@@ -3947,6 +4189,14 @@ export const llmClient = {
             }));
           }
         }
+        // Only after persistence: a reply that throws while saving stays host_failed.
+        designOutcome = designRunOutcome({
+          runtimeKind: runtimeOutcome.kind,
+          emergency: Boolean(emergencyError),
+          cancelled: wasCancelled,
+          cancellationOrigin: activeGeneration.cancellationOrigin,
+          persistenceFailed: replyNotSaved,
+        });
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
@@ -3972,6 +4222,7 @@ export const llmClient = {
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
         } finally {
+          unregisterAcpHost?.();
           invalidateChatContextJournal(params.chatId);
           releaseGenerationSkillReservation(activeGeneration);
           releaseGenerationBotAuthority(activeGeneration);
@@ -3985,6 +4236,8 @@ export const llmClient = {
             activeGeneration.workspaceId,
             params.workspaceId,
           );
+          // Exactly once per started run; pre-run failures reach DesignRunService through start().
+          designRun?.onSettled(designOutcome);
         }
       }
     })();
@@ -4000,7 +4253,12 @@ export const llmClient = {
     ownerDocumentId?: string,
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
-    return approvals.decide(approvalId, decision === "allow", ownerDocumentId, payload);
+    return (
+      approvals.decide(approvalId, decision === "allow", ownerDocumentId, payload) ||
+      // Bot approvals are owned by the profile, not a renderer document, and
+      // are identified by their durable `waitId`.
+      botApprovals.decide(approvalId, decision)
+    );
   },
 
   /**
@@ -4013,7 +4271,10 @@ export const llmClient = {
     decision: ApprovalDecision,
     payload?: ToolApprovalDecisionPayload,
   ): boolean {
-    return approvals.decideAsHost(approvalId, decision === "allow", payload);
+    return (
+      approvals.decideAsHost(approvalId, decision === "allow", payload) ||
+      botApprovals.decide(approvalId, decision)
+    );
   },
 
   /** Host-authority questionnaire answer; same one-shot rule as `approveAsHost`. */

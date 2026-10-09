@@ -48,7 +48,6 @@ test("missing, mismatched, and archived Bot identities use fixed unavailable cop
   for (const [name, getBot] of [
     ["missing", async () => null],
     ["mismatched", async () => ({ id: "bot:other" })],
-    ["archived", async () => ({ id: binding.botId, archivedAt: 4 })],
   ] as const) {
     await t.test(name, async () => {
       assert.equal(

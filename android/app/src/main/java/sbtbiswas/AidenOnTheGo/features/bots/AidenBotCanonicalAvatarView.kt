@@ -23,6 +23,8 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
 
 object AidenBotAvatarMemoryCache {
     private val lruCache = object : android.util.LruCache<String, Bitmap>(64) {}
@@ -94,7 +96,7 @@ fun AidenBotCanonicalAvatarView(
         } else {
             Crossfade(
                 targetState = customBitmap,
-                animationSpec = AidenMotion.nonSpatialExpressiveSpring(),
+                animationSpec = AidenMotion.short(),
                 label = "bot_avatar_reveal"
             ) { bmp ->
                 AidenBotAvatarLayer(bmp, avatar, name, size)
@@ -113,7 +115,7 @@ private fun AidenBotAvatarLayer(
     if (bitmap != null) {
         Image(
             bitmap = bitmap.asImageBitmap(),
-            contentDescription = if (name.isNotEmpty()) "$name avatar" else "Bot Avatar",
+            contentDescription = if (name.isNotEmpty()) stringResource(R.string.bots_avatar_cd, name) else stringResource(R.string.bots_avatar_default_cd),
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .size(size)

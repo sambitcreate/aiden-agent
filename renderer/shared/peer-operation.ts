@@ -20,9 +20,7 @@ export type PeerReadOperation =
   | "bots"
   | "bot"
   | "botConversations"
-  | "botCapabilities"
-  | "botChatAccess"
-  | "botFavorites";
+  | "botCapabilities";
 export type PeerWriteOperation =
   | "createChat"
   | "send"
@@ -41,8 +39,6 @@ export type PeerWriteOperation =
   | "runRespondQuestion"
   | "runInputs"
   | "createBotChat"
-  | "updateBotFavorites"
-  | "updateBotChatAccess"
   | "uploadAttachment"
   | "removeAttachment"
   | "forkChat"

@@ -1,17 +1,5 @@
 # Third-party notices
 
-## thinking-orbs
-
-Copyright (c) 2026 Jakub Antalik
-
-MIT License
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 ## Ghostty / libghostty-vt
 
 Aiden's in-app terminal uses a WebAssembly build of Ghostty's `libghostty-vt`
@@ -134,8 +122,61 @@ agent device tools, and agent-device PATH shim (`main/services/devices/`), and
 its stream client, simulator controls, and procedural 3D device frame
 (`renderer/lib/device-3d/`), are adapted from T3 Code at commit
 `1c127066`, under the same MIT license as the T3 Code browser entry above.
-Copyright (c) 2026 T3 Tools Inc. T3's imported device frame models and art are
-not included; the device-motion spring is Aiden's own.
+The 3D viewer code (device motion, view snapping, framing, interaction,
+trackpad, iPhone Duo scene, viewer, controls and display feeds, Android fold
+scene, and the trackpad-scroll-end window hook) is adapted from T3 Code at
+commit `a6ec88f7` under the same license.
+Copyright (c) 2026 T3 Tools Inc. T3's Simulator-derived glyph art is not
+included; Aiden's Duo glyphs and procedural fallback bodies
+(`hardware-models.ts`, `duo-model.ts`) are original work.
+
+### Bundled device models (Apple Inc.)
+
+`renderer/assets/devices/models/` ships T3 Code's device models unchanged:
+`iphone-18-pro.glb`, `iphone-18-pro-max.glb`, `ipad-pro-13-m5.glb`,
+`ipad-pro-13-m5-magic-keyboard.glb` and `iphone-duo.glb`. They were converted
+by T3 Code from Apple Inc.'s public AR Quick Look (USDZ) product files.
+`sources.json` beside them records each source URL, its SHA-256 hash, and the
+conversion steps. Author: Apple Inc. No open-source or redistribution licence
+has been established for these assets; the owner chose on 2026-10-08 to ship
+them as T3 Code does. The models are loaded only when a matching device is
+shown in 3D.
+
+The per-device workspace tabs (`renderer/lib/device-tabs.ts`), the floating
+device player and its layout (`renderer/components/device-mini-player.tsx`,
+`renderer/lib/device-mini-player-layout.ts`), and Quick View docking beside the
+chat (`resolveChatCardInset` in `renderer/lib/environment-panel-layout.ts`) are
+adapted from T3 Code's right-panel device surfaces and commits `8bbe2bf660`
+(floating device streams) and `429c625a85` (workspace card beside chat), under
+the same MIT license. Copyright (c) 2026 T3 Tools Inc.
+
+The accessibility-tree overlay (`renderer/lib/device-ax.ts`,
+`renderer/components/device-ax-overlay.tsx`) and the iOS event log
+(`renderer/lib/device-event-log.ts`, `renderer/components/device-event-log-panel.tsx`)
+are adapted from T3 Code at commit `a6ec88f7`, under the same MIT license.
+
+SSH device hosts (`ssh-device-host.ts`, `ssh-device-script.ts`,
+`local-ssh-target.ts`), locked helper-version maintenance
+(`device-tool-maintenance.ts`), and the SSH hosts, tool-version, and host
+diagnostics UI (`renderer/components/settings/simulator-ssh-hosts.tsx`,
+`renderer/components/device-host-diagnostics.tsx`) are adapted from T3 Code at
+commit `a6ec88f7`, under the same MIT license.
+
+The Android Emulator support (`main/services/devices/android-device-actions.ts`,
+the serve-emu stream path in `renderer/lib/device-stream.ts`, Android SDK
+discovery, the serve-emu proxy routes, and the Android fold controls in
+`renderer/lib/device-fold.ts` and
+`renderer/components/device-android-fold-controls.tsx`) is adapted from T3
+Code at commit `a6ec88f7`, under the same MIT license. The fold glyphs are
+Aiden's own.
+
+The Aiden On The Go simulator viewers (`ios/AidenOnTheGo/Features/Simulators/`,
+`ios/AidenOnTheGo/Networking/AidenSimulatorStream.swift` and
+`AidenMJPEGMultipartParser.swift`, and the Android
+`features/simulators/` and `networking/AidenSimulatorStream.kt`) adapt the
+on-demand controls, shake detector and device picker of T3 Code's
+`apps/mobile/src/features/devices`, under the same MIT license. Both apps ship
+the license as `ThirdPartyNotices/T3Code-LICENSE.txt`.
 
 ## three.js
 
@@ -145,6 +186,85 @@ first shown.
 Copyright (c) 2010-2026 three.js authors
 
 MIT License. https://github.com/mrdoob/three.js/blob/dev/LICENSE
+
+## React Flow (@xyflow/react)
+
+Renders the Design Studio and Create Images canvases. Loaded only when one of
+those experimental surfaces is opened.
+
+Copyright (c) 2019-2026 webkid GmbH
+
+MIT License. https://github.com/xyflow/xyflow/blob/main/LICENSE
+
+## React Flow runtime dependencies
+
+These packages are bundled with React Flow in the same lazily loaded canvas
+chunk, so they are loaded only when the Design Studio or Create Images surface
+is opened.
+
+- `@xyflow/system@0.0.82`: Copyright (c) 2019-2025 webkid GmbH. MIT License.
+  https://github.com/xyflow/xyflow/blob/main/LICENSE
+- `zustand@4.5.7`: Copyright (c) 2019 Paul Henschel. MIT License.
+  https://github.com/pmndrs/zustand/blob/main/LICENSE
+- `classcat@5.0.5`: Copyright (c) Jorge Bucaran. MIT License.
+  https://github.com/jorgebucaran/classcat/blob/main/LICENSE.md
+
+### D3 modules (ISC)
+
+`d3-color@3.1.0` (Copyright 2010-2022 Mike Bostock), `d3-dispatch@3.0.1`,
+`d3-drag@3.0.0`, `d3-interpolate@3.0.1`, `d3-selection@3.0.0`,
+`d3-timer@3.0.1`, `d3-transition@3.0.1` and `d3-zoom@3.0.0` (each Copyright
+2010-2021 Mike Bostock) are licensed under the ISC License. https://d3js.org
+
+```text
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+```
+
+### d3-ease (BSD-3-Clause)
+
+`d3-ease@3.0.1` is licensed under the BSD 3-Clause License.
+https://github.com/d3/d3-ease/blob/main/LICENSE
+
+```text
+Copyright 2010-2021 Mike Bostock
+Copyright 2001 Robert Penner
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the author nor the names of contributors may be used to
+  endorse or promote products derived from this software without specific prior
+  written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
 
 ## expo-device-hub and agent-device (installed on request)
 

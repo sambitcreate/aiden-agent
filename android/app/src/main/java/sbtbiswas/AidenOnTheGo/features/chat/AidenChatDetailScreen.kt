@@ -30,6 +30,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -51,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
@@ -73,25 +76,43 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotChatTopBar
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleteDialog
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleter
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotFilesSheet
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotChatPlaceholder
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotDeleteAvailable
+import sbtbiswas.AidenOnTheGo.features.bots.rememberAidenBotChatIdentity
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenIsCommittedDestination
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenShowsUpNavigation
 import sbtbiswas.AidenOnTheGo.networking.AidenNetworkAvailability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.config.AidenVoiceInputStore
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbSize
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.OrbState
-import sbtbiswas.AidenOnTheGo.features.shared.thinkingorbs.ThinkingOrb
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
+import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import sbtbiswas.AidenOnTheGo.features.shared.aidenModelDisplayLabel
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
+import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.aidenActivityMarkForTool
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.exponentialVerticalScrim
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
 import java.io.File
 import kotlin.math.abs
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.simulators.AidenSimulatorDeviceButton
+import sbtbiswas.AidenOnTheGo.features.simulators.AidenSimulatorViewer
+import sbtbiswas.AidenOnTheGo.features.simulators.AidenSimulatorsViewModel
 
 enum class MessageClusterPosition {
     SINGLE, FIRST, MIDDLE, LAST
@@ -109,9 +130,12 @@ fun AidenChatDetailScreen(
     networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     startVoiceOnOpen: Boolean = false,
     onNavigateToChat: (String) -> Unit = {},
+    onNavigateToBotProfile: (String) -> Unit = {},
+    botDeleter: AidenBotDeleter? = null,
     onNavigateBack: () -> Unit
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -131,6 +155,13 @@ fun AidenChatDetailScreen(
             networkAvailability
         )
     )
+
+    // Shared simulators (contract revision 26): the device button and viewer.
+    val simulators: AidenSimulatorsViewModel = viewModel(
+        key = "simulators:${coordinator.activeInstanceId}:${coordinator.installationStore.activeInstallation?.deviceId}:$chatId",
+        factory = AidenSimulatorsViewModel.factory(chatId, coordinator)
+    )
+    val simulatorDevices by simulators.chatDevices.collectAsStateWithLifecycle()
 
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val chat by viewModel.chat.collectAsStateWithLifecycle()
@@ -159,6 +190,7 @@ fun AidenChatDetailScreen(
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
     val isLoadingEarlierMessages by viewModel.isLoadingEarlierMessages.collectAsStateWithLifecycle()
+    val isLoadingTranscript by viewModel.isLoading.collectAsStateWithLifecycle()
     val voiceInputMode by voiceInputStore.mode.collectAsStateWithLifecycle()
     val taskProgress by viewModel.taskProgress.collectAsStateWithLifecycle()
     val currentAgentRoster by viewModel.agentRoster.collectAsStateWithLifecycle()
@@ -234,12 +266,16 @@ fun AidenChatDetailScreen(
         }
     }
 
+    // Foreground means resumed and committed: a chat revealed under a predictive-back
+    // gesture must not be marked read or have its notification quieted until the pop lands.
+    val isCommittedDestination = LocalAidenIsCommittedDestination.current
+    val committed by rememberUpdatedState(isCommittedDestination)
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> viewModel.startProgressObservation()
                 Lifecycle.Event.ON_STOP -> viewModel.stopProgressObservation()
-                Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(true)
+                Lifecycle.Event.ON_RESUME -> viewModel.setChatForegrounded(committed)
                 Lifecycle.Event.ON_PAUSE -> {
                     viewModel.setChatForegrounded(false)
                     viewModel.flushDraft()
@@ -251,15 +287,31 @@ fun AidenChatDetailScreen(
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             viewModel.startProgressObservation()
         }
-        viewModel.setChatForegrounded(
-            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        )
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.setChatForegrounded(false)
             viewModel.stopProgressObservation()
             viewModel.flushDraft()
         }
+    }
+    LaunchedEffect(viewModel, isCommittedDestination) {
+        viewModel.setChatForegrounded(
+            isCommittedDestination && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        )
+    }
+
+    // Read once when the chat opens or the grant lands, and again on every
+    // return to the foreground. Never polled.
+    LaunchedEffect(simulators, serverInfo) { simulators.refreshChatDevices() }
+    DisposableEffect(lifecycleOwner, simulators) {
+        var skippedInitialResume = false
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            // The first resume is the chat opening, already covered above.
+            if (skippedInitialResume) simulators.refreshChatDevices() else skippedInitialResume = true
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(serverInfo) {
@@ -271,6 +323,8 @@ fun AidenChatDetailScreen(
             viewModel.startProgressObservation()
         }
     }
+
+    AidenSimulatorViewer(simulators)
 
     fun dismissComposerKeyboard() {
         focusManager.clearFocus(force = true)
@@ -408,6 +462,46 @@ fun AidenChatDetailScreen(
         consumedItemCount = itemCount
     }
 
+    val botIdentity = chat?.botId?.let { rememberAidenBotChatIdentity(coordinator, it, chat?.title.orEmpty()) }
+    val canDeleteBot = botIdentity != null && aidenBotDeleteAvailable(serverInfo, botDeleter)
+    var showBotFiles by remember(chatId) { mutableStateOf(false) }
+    var confirmingBotDelete by remember(chatId) { mutableStateOf(false) }
+    var isDeletingBot by remember(chatId) { mutableStateOf(false) }
+
+    if (showBotFiles) {
+        AidenBotFilesSheet(chatId = chatId, coordinator = coordinator, onDismiss = { showBotFiles = false })
+    }
+    if (confirmingBotDelete && botIdentity != null) {
+        AidenBotDeleteDialog(
+            name = botIdentity.name,
+            isDeleting = isDeletingBot,
+            onDismiss = { confirmingBotDelete = false },
+            onConfirm = {
+                val cl = coordinator.client.value
+                val deleter = botDeleter
+                if (cl == null || deleter == null) {
+                    confirmingBotDelete = false
+                    return@AidenBotDeleteDialog
+                }
+                scope.launch {
+                    isDeletingBot = true
+                    try {
+                        deleter.delete(cl, botIdentity.botId)
+                        confirmingBotDelete = false
+                        onNavigateBack()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        confirmingBotDelete = false
+                        coordinator.presentError(resources.getString(R.string.bot_delete_failed))
+                    } finally {
+                        isDeletingBot = false
+                    }
+                }
+            }
+        )
+    }
+
     workspaceFileReference?.let { reference ->
         val workspaceId = chat?.workspaceId
         if (workspaceId != null && chat?.isBotChat != true) {
@@ -422,45 +516,81 @@ fun AidenChatDetailScreen(
     Scaffold(
         contentWindowInsets = WindowInsets.statusBars,
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = chat?.title?.ifEmpty { "Chat" } ?: "Chat",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        chat?.modelId?.let { model ->
+            val botId = chat?.botId
+            if (botId != null && botIdentity != null) {
+                AidenBotChatTopBar(
+                    identity = botIdentity,
+                    coordinator = coordinator,
+                    isStreaming = isStreaming,
+                    canStop = viewModel.canStopCurrentRun && !isStopping,
+                    onStop = { viewModel.cancelTurn() },
+                    onBack = onNavigateBack,
+                    onOpenProfile = { onNavigateToBotProfile(botId) },
+                    onOpenFiles = { showBotFiles = true },
+                    canDelete = canDeleteBot,
+                    onDelete = { confirmingBotDelete = true }
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Column {
                             Text(
-                                text = model,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = palette.secondary,
+                                text = chat?.title?.ifEmpty { stringResource(R.string.chat_title_fallback) } ?: stringResource(R.string.chat_title_fallback),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
+                            // Workspace chats show the model the next turn will use; Bot
+                            // chats keep their Bot-owned model.
+                            val subtitleProviderId = if (chat?.isBotChat == true) chat?.providerId else selectedProviderId ?: chat?.providerId
+                            val subtitleModelId = if (chat?.isBotChat == true) chat?.modelId else selectedModelId ?: chat?.modelId
+                            subtitleModelId?.let { modelId ->
+                                val providers = modelCatalog?.providers.orEmpty()
+                                val provider = providers.firstOrNull { it.id == subtitleProviderId }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (subtitleProviderId != null) {
+                                        AidenProviderIcon(
+                                            providerId = subtitleProviderId,
+                                            providerLabel = provider?.label ?: subtitleProviderId,
+                                            modelId = modelId,
+                                            artwork = provider?.artwork,
+                                            size = 14.dp,
+                                            modifier = Modifier.clearAndSetSemantics {}
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        text = aidenModelDisplayLabel(providers, subtitleProviderId, modelId),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = palette.secondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
                         }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.foreground)
-                    }
-                },
-                actions = {
-                    if (isStreaming) {
-                        IconButton(
-                            onClick = { viewModel.cancelTurn() },
-                            enabled = viewModel.canStopCurrentRun && !isStopping
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = palette.danger)
+                    },
+                    navigationIcon = {
+                        if (LocalAidenShowsUpNavigation.current) IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = palette.canvas,
-                    titleContentColor = palette.foreground
+                    },
+                    actions = {
+                        if (isStreaming) {
+                            IconButton(
+                                onClick = { viewModel.cancelTurn() },
+                                enabled = viewModel.canStopCurrentRun && !isStopping
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.action_stop), tint = palette.danger)
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = palette.canvas,
+                        titleContentColor = palette.foreground
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
             Column(
@@ -471,6 +601,7 @@ fun AidenChatDetailScreen(
                     // Insets consumption contributes only the IME delta beyond the
                     // navigation bar and keeps the whole composer above the keyboard.
                     .imePadding()
+                    .aidenReadableWidth()
                     .zIndex(1f)
             ) {
                 // Pending Approval Banner
@@ -486,9 +617,9 @@ fun AidenChatDetailScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .shadow(elevation = 8.dp, shape = RoundedCornerShape(24.dp)),
+                                .shadow(elevation = 8.dp, shape = MaterialTheme.shapes.extraLarge),
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
-                            shape = RoundedCornerShape(24.dp)
+                            shape = MaterialTheme.shapes.extraLarge
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -515,21 +646,21 @@ fun AidenChatDetailScreen(
                                 if (!approval.canRespond) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "This paired device can review approvals but cannot respond.",
+                                        text = stringResource(R.string.chat_approval_review_only),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
                                 } else if (isAutomation && !approval.hasRequiredWriteCapability) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Schedule write access is required to approve this task.",
+                                        text = stringResource(R.string.chat_approval_schedule_write_required),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
                                 } else if (requiresDesktopConfirmation) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.",
+                                        text = stringResource(R.string.chat_approval_confirm_on_desktop),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = palette.secondary
                                     )
@@ -579,7 +710,7 @@ fun AidenChatDetailScreen(
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 4.dp),
                             colors = CardDefaults.cardColors(containerColor = palette.danger.copy(alpha = 0.12f)),
-                            shape = RoundedCornerShape(12.dp)
+                            shape = MaterialTheme.shapes.medium
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -645,6 +776,33 @@ fun AidenChatDetailScreen(
                     )
                 }
 
+                if (simulatorDevices.isNotEmpty()) {
+                    AidenSimulatorDeviceButton(
+                        count = simulatorDevices.size,
+                        onClick = {
+                            dismissComposerKeyboard()
+                            simulators.openViewer()
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                val macOnlyAgentNotice = chat?.let { currentChat ->
+                    val replyModel = modelCatalog?.providers
+                        ?.firstOrNull { it.id == selectedProviderId }
+                        ?.models?.firstOrNull { it.id == selectedModelId }
+                    AidenChatModelAuthority.macOnlyAgentNotice(currentChat, modelCatalog, replyModel?.label)
+                }
+                if (macOnlyAgentNotice != null) {
+                    Text(
+                        text = macOnlyAgentNotice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                }
+
                 // A pending question occupies the composer without discarding its draft.
                 if (pendingQuestion == null) AidenComposerView(
                     draft = draft,
@@ -689,16 +847,13 @@ fun AidenChatDetailScreen(
                         }
                     },
                     pendingAttachments = pendingAttachments.map {
-                        if (it.kind == AidenAttachmentKind.IMAGE) {
-                            AidenAttachmentUpload.Image(name = it.name, mimeType = it.mimeType, data = "")
-                        } else {
-                            AidenAttachmentUpload.Text(name = it.name, mimeType = it.mimeType, text = "")
-                        }
+                        AidenComposerPendingAttachment(
+                            id = it.id,
+                            name = it.name,
+                            isImage = it.kind == AidenAttachmentKind.IMAGE
+                        )
                     },
-                    onRemoveAttachment = { att ->
-                        val target = pendingAttachments.firstOrNull { it.name == att.name }
-                        if (target != null) viewModel.removePendingAttachment(target.id)
-                    },
+                    onRemoveAttachment = { att -> viewModel.removePendingAttachment(att.id) },
                     onAddImage = {
                         dismissComposerKeyboard()
                         imagePickerLauncher.launch(
@@ -731,7 +886,23 @@ fun AidenChatDetailScreen(
                     onSelectModel = if (chat == null || chat?.isBotChat == true) null else { provider, model, level ->
                         viewModel.selectModel(provider.id, model.id, level)
                     },
-                    placeholder = if (chat?.isBotChat == true) "Message ${chat?.title ?: "Bot"}" else "Message Aiden",
+                    defaultModelRoute = modelCatalog?.defaults?.let { defaults ->
+                        val providerId = defaults["providerId"]
+                        val modelId = defaults["modelId"]
+                        if (providerId != null && modelId != null) AidenModelRoute(providerId, modelId) else null
+                    },
+                    // Recents change only on an explicit pick, which also moves the selection.
+                    recentModelRoutes = remember(selectedProviderId, selectedModelId) {
+                        coordinator.installationStore.activeInstallation?.instanceId
+                            ?.let { coordinator.modelPreferenceStore.recentRoutes(it) }
+                            .orEmpty()
+                            .mapNotNull { recent ->
+                                val providerId = recent.providerId ?: return@mapNotNull null
+                                val modelId = recent.modelId ?: return@mapNotNull null
+                                AidenModelRoute(providerId, modelId)
+                            }
+                    },
+                    placeholder = if (chat?.isBotChat == true) aidenBotChatPlaceholder(botIdentity?.name) else stringResource(R.string.chat_composer_placeholder),
                     isReadOnly = false,
                     voiceErrorMessage = voiceInput.errorMessage,
                     modifier = Modifier.fillMaxWidth()
@@ -791,6 +962,7 @@ fun AidenChatDetailScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .aidenReadableWidth()
                 // Keep the transcript beneath the floating composer. The list's
                 // own bottom inset still makes the latest message fully reachable.
                 .padding(top = padding.calculateTopPadding())
@@ -807,6 +979,12 @@ fun AidenChatDetailScreen(
                     bottom = padding.calculateBottomPadding() + 16.dp
                 )
             ) {
+                // Only a chat with nothing saved previews its transcript; a saved one renders
+                // at once and refreshes underneath.
+                if (chat == null && isLoadingTranscript) {
+                    item(key = "transcript_skeleton") { AidenTranscriptSkeleton() }
+                }
+
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
                 if (isStreaming) {
                     item(key = "live_stream") {
@@ -817,6 +995,7 @@ fun AidenChatDetailScreen(
                         val tools by viewModel.tools.collectAsStateWithLifecycle()
                         val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
                         val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
+                        val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
                         ActiveStreamingCard(
                             liveText = liveText,
                             reasoning = reasoning,
@@ -825,7 +1004,8 @@ fun AidenChatDetailScreen(
                             isBotChat = isBotChat,
                             palette = palette,
                             liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
-                            isWaitingForNetwork = isWaitingForNetwork
+                            isWaitingForNetwork = isWaitingForNetwork,
+                            pendingApprovalToolName = livePendingApproval?.toolName
                         )
                     }
                 }
@@ -1108,7 +1288,7 @@ private fun UserMessageRow(
                                 Text(
                                     text = message.text,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.White
+                                    color = palette.onAccent
                                 )
                             }
                             fallbackAttachments.forEach { att ->
@@ -1117,14 +1297,14 @@ private fun UserMessageRow(
                                     Icon(
                                         Icons.Default.Attachment,
                                         contentDescription = null,
-                                        tint = Color.White,
+                                        tint = palette.onAccent,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = att.name,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = Color.White,
+                                        color = palette.onAccent,
                                         maxLines = 1
                                     )
                                 }
@@ -1220,7 +1400,7 @@ private fun AssistantMessageRow(
         if (progressText.isNotEmpty()) {
             var showProgress by remember { mutableStateOf(false) }
             Text(
-                text = if (showProgress) "Hide progress" else "Show progress",
+                text = if (showProgress) stringResource(R.string.chat_progress_hide) else stringResource(R.string.chat_progress_show),
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.accent,
                 modifier = Modifier
@@ -1230,7 +1410,7 @@ private fun AssistantMessageRow(
             if (showProgress) {
                 Surface(
                     color = palette.raised.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                 ) {
                     Text(
@@ -1281,7 +1461,7 @@ private fun AssistantMessageRow(
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1307,7 +1487,7 @@ private fun AssistantMessageRow(
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Text(
@@ -1317,7 +1497,7 @@ private fun AssistantMessageRow(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Can't view on this device. View in Aiden Agent.",
+                        text = stringResource(R.string.chat_artifact_unsupported),
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary,
                     )
@@ -1346,7 +1526,8 @@ internal fun ActiveStreamingCard(
     isBotChat: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     liveStart: java.time.Instant? = null,
-    isWaitingForNetwork: Boolean = false
+    isWaitingForNetwork: Boolean = false,
+    pendingApprovalToolName: String? = null
 ) {
     val reasoningActive = reasoning.isNotEmpty() && (
         AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
@@ -1359,7 +1540,7 @@ internal fun ActiveStreamingCard(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
     ) {
@@ -1403,7 +1584,7 @@ internal fun ActiveStreamingCard(
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
                     color = palette.canvas.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -1422,7 +1603,16 @@ internal fun ActiveStreamingCard(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (tool in tools) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX16)
+                            AidenActivityMark(
+                                mark = aidenActivityMarkForTool(
+                                    toolName = tool.name,
+                                    awaitingApproval = tool.status == null && tool.name == pendingApprovalToolName
+                                ),
+                                size = 16.dp,
+                                // Finished tools freeze, as terminal marks do on desktop.
+                                active = tool.status == null,
+                                color = palette.foreground
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = tool.name,
@@ -1439,7 +1629,7 @@ internal fun ActiveStreamingCard(
             if (visualizingLabel != null) {
                 Surface(
                     color = palette.raised,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     AidenActivityShimmerLabel(
@@ -1473,10 +1663,14 @@ internal fun ActiveStreamingCard(
             }
             if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ThinkingOrb(state = OrbState.WORKING, size = OrbSize.PX24)
+                    AidenActivityMark(
+                        mark = AidenActivityMarkKind.TRI_STEP,
+                        size = 20.dp,
+                        color = palette.foreground
+                    )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Aiden is working...",
+                        text = stringResource(R.string.chat_working),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = palette.secondary
@@ -1491,10 +1685,11 @@ internal fun ActiveStreamingCard(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 // A paused run, not an error: neutral copy and icon, no banner.
+                val waitingDescription = stringResource(R.string.chat_waiting_network_cd)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.semantics(mergeDescendants = true) {
-                        contentDescription = "Aiden is waiting for the network to return"
+                        contentDescription = waitingDescription
                     }
                 ) {
                     Icon(
@@ -1505,7 +1700,7 @@ internal fun ActiveStreamingCard(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Waiting for network",
+                        text = stringResource(R.string.chat_waiting_network),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = palette.secondary
@@ -1553,7 +1748,7 @@ private fun AidenChronologicalTranscript(
                         )
                     }
                     AidenChronologicalRow.Kind.TOOL -> {
-                        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+                        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
                             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                                 row.steps.forEach { step ->
                                     AidenActivityShimmerLabel(
@@ -1579,9 +1774,9 @@ private fun AidenChronologicalReasoningCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
 ) {
     if (row.text.isBlank()) {
-        Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
             AidenActivityShimmerLabel(
-                label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thinking",
+                label = row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thinking),
                 active = active,
                 style = MaterialTheme.typography.labelMedium,
                 color = palette.secondary,
@@ -1604,7 +1799,7 @@ private fun AidenChronologicalReasoningCard(
         animationSpec = AidenMotion.spatial(reduceMotion),
         label = "reasoning_chevron"
     )
-    Surface(color = palette.raised, shape = RoundedCornerShape(12.dp)) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1614,7 +1809,7 @@ private fun AidenChronologicalReasoningCard(
                 }
             ) {
                 AidenActivityShimmerLabel(
-                    label = if (active) "Thinking" else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: "Thought",
+                    label = if (active) stringResource(R.string.chat_reasoning_thinking) else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thought),
                     active = active,
                     style = MaterialTheme.typography.labelMedium,
                     color = palette.secondary,
@@ -1622,7 +1817,7 @@ private fun AidenChronologicalReasoningCard(
                 )
                 Icon(
                     imageVector = Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse reasoning" else "Expand reasoning",
+                    contentDescription = if (expanded) stringResource(R.string.chat_reasoning_collapse) else stringResource(R.string.chat_reasoning_expand),
                     tint = palette.secondary,
                     modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
                 )
@@ -1697,7 +1892,7 @@ private fun AidenTimelineCollapsibleCard(
 
     Surface(
         color = palette.raised.copy(alpha = 0.7f),
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         modifier = Modifier
             .fillMaxWidth()
             .animateContentSize(AidenMotion.spatialExpressiveSpring<IntSize>())
@@ -1729,7 +1924,7 @@ private fun AidenTimelineCollapsibleCard(
                 if (allowsDisclosure) {
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        contentDescription = if (isExpanded) stringResource(R.string.action_collapse) else stringResource(R.string.action_expand),
                         tint = palette.secondary,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1758,14 +1953,14 @@ private fun AidenTimelineCollapsibleCard(
                                 modifier = Modifier.weight(1f)
                             )
                             step.producedFile?.let { file ->
-                                Text("File ${file.operation} · ${file.relativePath.substringAfterLast('/')}",
+                                Text(stringResource(R.string.chat_timeline_file, file.operation, file.relativePath.substringAfterLast('/')),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.foreground, maxLines = 1)
                             }
                             step.lineChanges?.let { lines ->
                                 Surface(
                                     color = palette.canvas,
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = MaterialTheme.shapes.extraSmall,
                                     modifier = Modifier.padding(start = 4.dp)
                                 ) {
                                     Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {

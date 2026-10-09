@@ -5,6 +5,7 @@ import type {
   AidenRemoteBotConversationPage,
   AidenRemoteBotConversationQuery,
 } from "./aiden-remote-protocol.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import type { ChatMeta } from "./types.js";
 import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 
@@ -379,6 +380,7 @@ function indexBotChats(
   for (const chat of metadata) {
     if (
       typeof chat.botId !== "string" ||
+      chatSurface(chat) !== "bot" ||
       !bots.has(chat.botId) ||
       (botFilter !== undefined && chat.botId !== botFilter) ||
       !SAFE_CHAT_ID.test(chat.id) ||
@@ -442,12 +444,12 @@ function searchableIdentity(bot: BotDefinition): BotSearchIdentity {
  */
 export function projectBotFavoriteOrder(
   storedBotIds: readonly unknown[],
-  bots: readonly Pick<BotDefinition, "id" | "archivedAt">[],
+  bots: readonly Pick<BotDefinition, "id">[],
 ): string[] {
   const active = new Set(
     bots
       .slice(0, BOT_INBOX_PROJECTION_LIMITS.botCount)
-      .filter((bot) => bot.archivedAt === undefined && SAFE_BOT_ID.test(bot.id))
+      .filter((bot) => SAFE_BOT_ID.test(bot.id))
       .map((bot) => bot.id),
   );
   const seen = new Set<string>();

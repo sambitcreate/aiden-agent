@@ -9,7 +9,8 @@ export type ThemePresetId =
   | "calm"
   | "graphite"
   | "dusk"
-  | "midnight";
+  | "midnight"
+  | "monochrome";
 export type ThemeSelection = ThemePresetId | "custom";
 export type UiFontId = "system" | "rounded" | "humanist";
 export type CodeFontId = "sf-mono" | "menlo" | "monaco";
@@ -36,6 +37,7 @@ export interface AppearanceConfig {
   dark: ThemeVariantConfig;
   pointerCursors: boolean;
   autoHideComposerContext: boolean;
+  showComposerContextUsage: boolean;
   showWorkspacePaths: boolean;
   workspacePathFormat: "middle" | "end" | "start";
   dockIcon: DockIconPreference;
@@ -221,22 +223,22 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
     id: "paper",
     label: "Paper",
     light: {
-      canvas: "#F5F3EE",
-      sidebar: "#ECE8E0",
+      canvas: "#FBFBFA",
+      sidebar: "#F5F4F1",
       raised: "#FFFFFF",
-      foreground: "#3E3C38",
-      secondary: "#6F6A60",
+      foreground: "#373329",
+      secondary: "#5A554A",
       accent: "#7E5E2A",
       success: "#3DBF7D",
       warning: "#D4A22A",
       danger: "#E05353",
     },
     dark: {
-      canvas: "#1E1C19",
-      sidebar: "#262320",
-      raised: "#2E2A26",
-      foreground: "#D6D2CA",
-      secondary: "#A39E93",
+      canvas: "#242016",
+      sidebar: "#2F2B21",
+      raised: "#413D33",
+      foreground: "#F5F4F1",
+      secondary: "#B0AB9F",
       accent: "#C9A97C",
       success: "#47D18C",
       warning: "#D9B43A",
@@ -247,22 +249,22 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
     id: "calm",
     label: "Calm",
     light: {
-      canvas: "#F7F3EA",
-      sidebar: "#EFE9DD",
-      raised: "#FFFDF8",
-      foreground: "#44403A",
-      secondary: "#6E685C",
+      canvas: "#F5F4F1",
+      sidebar: "#EAE7E1",
+      raised: "#FBFBFA",
+      foreground: "#373329",
+      secondary: "#5A554A",
       accent: "#7E5B2C",
       success: "#3DBF7D",
       warning: "#D4A22A",
       danger: "#E05353",
     },
     dark: {
-      canvas: "#201D18",
-      sidebar: "#28241E",
-      raised: "#322C25",
-      foreground: "#D8D3C8",
-      secondary: "#A8A091",
+      canvas: "#2F2B21",
+      sidebar: "#242016",
+      raised: "#413D33",
+      foreground: "#F5F4F1",
+      secondary: "#B0AB9F",
       accent: "#D9A86C",
       success: "#47D18C",
       warning: "#D9B43A",
@@ -347,6 +349,32 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
       danger: "#FF5E57",
     },
   },
+  {
+    id: "monochrome",
+    label: "Monochrome",
+    light: {
+      canvas: "#FFFFFF",
+      sidebar: "#F5F5F5",
+      raised: "#FFFFFF",
+      foreground: "#000000",
+      secondary: "#525252",
+      accent: "#000000",
+      success: "#00906C",
+      warning: "#B58A00",
+      danger: "#D70022",
+    },
+    dark: {
+      canvas: "#0A0A0A",
+      sidebar: "#141414",
+      raised: "#1F1F1F",
+      foreground: "#FFFFFF",
+      secondary: "#A3A3A3",
+      accent: "#FFFFFF",
+      success: "#2FBF8F",
+      warning: "#FFD60A",
+      danger: "#FF4D5E",
+    },
+  },
 ];
 
 const PRESETS_BY_ID = Object.fromEntries(
@@ -382,6 +410,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   dark: getPresetVariant("aiden", "dark"),
   pointerCursors: false,
   autoHideComposerContext: true,
+  showComposerContextUsage: true,
   showWorkspacePaths: false,
   workspacePathFormat: "middle",
   dockIcon: "aiden",
@@ -471,6 +500,7 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     autoHideComposerContext: typeof value.autoHideComposerContext === "boolean"
       ? value.autoHideComposerContext
       : fallback.autoHideComposerContext,
+    showComposerContextUsage: typeof value.showComposerContextUsage === "boolean" ? value.showComposerContextUsage : true,
     showWorkspacePaths: typeof value.showWorkspacePaths === "boolean"
       ? value.showWorkspacePaths
       : fallback.showWorkspacePaths,
@@ -530,6 +560,9 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   // Older V1 settings did not contain this preference. Keep them loadable.
   if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
     throw new Error("Composer context preference must be a boolean value.");
+  }
+  if (value.showComposerContextUsage !== undefined && typeof value.showComposerContextUsage !== "boolean") {
+    throw new Error("Composer context usage visibility must be a boolean value.");
   }
   // Older V1 settings and exports predate the chat width preference.
   if (value.chatWidth !== undefined && !isChatWidthPreference(value.chatWidth)) {

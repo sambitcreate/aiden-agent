@@ -123,7 +123,7 @@ export function AskUserQuestionComposer({
 
   const handleCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (submitting || customOpen || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (/^[1-4]$/u.test(event.key)) {
+    if (/^[1-5]$/u.test(event.key)) {
       const option = question.options[Number(event.key) - 1];
       if (!option) return;
       event.preventDefault();
@@ -208,7 +208,7 @@ export function AskUserQuestionComposer({
                   else selectOption(option.label);
                 }}
               >
-                <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45 text-regular text-secondary">
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45 text-regular text-secondary">
                   {selected ? <Check className="size-4" /> : optionIndex + 1}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -279,7 +279,7 @@ export function AskUserQuestionComposer({
                   requestAnimationFrame(() => customRef.current?.focus({ preventScroll: true }));
                 }}
               >
-                <span className="grid size-9 shrink-0 place-items-center rounded-full border border-field bg-control/45">
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45">
                   <Pencil className="size-4" />
                 </span>
                 <span className="truncate text-regular">Type your own answer</span>

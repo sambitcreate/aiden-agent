@@ -44,6 +44,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
+import androidx.compose.ui.res.stringResource
+import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupOrientation
@@ -54,6 +57,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
+import androidx.annotation.StringRes
 
 /**
  * 1:1 Parity iOS Glass Composer for Aiden On-The-Go.
@@ -79,8 +83,8 @@ fun AidenComposerView(
     isVoiceListening: Boolean,
     isVoiceBusy: Boolean = false,
     onToggleVoice: () -> Unit,
-    pendingAttachments: List<AidenMessageAttachmentUpload> = emptyList(),
-    onRemoveAttachment: (AidenMessageAttachmentUpload) -> Unit = {},
+    pendingAttachments: List<AidenComposerPendingAttachment> = emptyList(),
+    onRemoveAttachment: (AidenComposerPendingAttachment) -> Unit = {},
     onAddImage: () -> Unit = {},
     onAddFile: () -> Unit = {},
     selectedSkill: AidenRemoteSkillCatalogEntry? = null,
@@ -92,7 +96,9 @@ fun AidenComposerView(
     selectedThinkingLevel: String? = null,
     availableProviders: List<AidenProvider> = emptyList(),
     onSelectModel: ((AidenProvider, AidenModel, String?) -> Unit)? = null,
-    placeholder: String = "Message Aiden",
+    defaultModelRoute: AidenModelRoute? = null,
+    recentModelRoutes: List<AidenModelRoute> = emptyList(),
+    placeholder: String = stringResource(R.string.chat_composer_placeholder),
     isReadOnly: Boolean = false,
     voiceErrorMessage: String? = null,
     modifier: Modifier = Modifier
@@ -134,14 +140,14 @@ fun AidenComposerView(
                         .fillMaxWidth()
                         .padding(bottom = 8.dp)
                 ) {
-                    items(attachments, key = { it.name }) { attachment ->
+                    items(attachments, key = { it.id }) { attachment ->
                         Surface(
                             color = palette.canvas.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.animateItem(
-                                fadeInSpec = if (reduceMotion) null else AidenMotion.nonSpatialExpressiveSpring(),
+                                fadeInSpec = if (reduceMotion) null else AidenMotion.short(),
                                 placementSpec = if (reduceMotion) null else AidenMotion.spatialExpressiveSpring(),
-                                fadeOutSpec = if (reduceMotion) null else AidenMotion.nonSpatialExpressiveSpring()
+                                fadeOutSpec = if (reduceMotion) null else AidenMotion.short()
                             )
                         ) {
                             Row(
@@ -149,7 +155,7 @@ fun AidenComposerView(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (attachment is AidenAttachmentUpload.Image) Icons.Default.Image else Icons.Default.Description,
+                                    imageVector = if (attachment.isImage) Icons.Default.Image else Icons.Default.Description,
                                     contentDescription = null,
                                     tint = palette.accent,
                                     modifier = Modifier.size(14.dp)
@@ -170,7 +176,7 @@ fun AidenComposerView(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove attachment",
+                                        contentDescription = stringResource(R.string.chat_composer_remove_attachment, attachment.name),
                                         tint = palette.secondary,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -184,6 +190,7 @@ fun AidenComposerView(
             // 2. Selected-skill chip: the palette selection rides the send as
             // an opaque lease the Mac redeems; removing it keeps the draft.
             AidenComposerReveal(value = selectedSkill) { skill ->
+                val removeSkillLabel = stringResource(R.string.chat_composer_remove_skill, skill.name)
                 Surface(
                     color = palette.secondary.copy(alpha = 0.12f),
                     shape = CircleShape,
@@ -212,7 +219,7 @@ fun AidenComposerView(
                             onClick = onClearSkill,
                             modifier = Modifier
                                 .size(AidenUi.MinimumTouchTarget)
-                                .semantics { contentDescription = "Remove skill ${skill.name}" }
+                                .semantics { contentDescription = removeSkillLabel }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
@@ -297,7 +304,7 @@ fun AidenComposerView(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
-                            contentDescription = "Add attachment",
+                            contentDescription = stringResource(R.string.chat_composer_add_attachment),
                             tint = if (!isReadOnly && !isStreaming) palette.foreground else palette.secondary.copy(alpha = 0.4f),
                             modifier = Modifier.size(20.dp)
                         )
@@ -306,11 +313,11 @@ fun AidenComposerView(
                     DropdownMenu(
                         expanded = showAttachmentMenu,
                         onDismissRequest = { showAttachmentMenu = false },
-                        shape = RoundedCornerShape(18.dp),
+                        shape = MaterialTheme.shapes.large,
                         containerColor = MaterialTheme.colorScheme.surfaceContainer
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Photo Library") },
+                            text = { Text(stringResource(R.string.chat_composer_photo_library)) },
                             leadingIcon = {
                                 Icon(
                                     Icons.Default.PhotoLibrary,
@@ -324,7 +331,7 @@ fun AidenComposerView(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Choose File") },
+                            text = { Text(stringResource(R.string.chat_composer_choose_file)) },
                             leadingIcon = {
                                 Icon(
                                     Icons.Default.Description,
@@ -356,7 +363,7 @@ fun AidenComposerView(
                         Surface(
                             onClick = { showModelMenu = true },
                             color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = RoundedCornerShape(24.dp),
+                            shape = MaterialTheme.shapes.extraLarge,
                             interactionSource = pickerInteraction,
                             modifier = Modifier
                                 .heightIn(min = AidenUi.MinimumTouchTarget)
@@ -371,36 +378,38 @@ fun AidenComposerView(
                                     AidenProviderIcon(
                                         providerId = selectedProvider.id,
                                         providerLabel = selectedProvider.label,
+                                        modelId = selectedModel?.id,
                                         artwork = selectedProvider.artwork,
-                                        size = 14.dp
+                                        size = 18.dp,
+                                        modifier = Modifier.clearAndSetSemantics {}
                                     )
-                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                 }
                                 // One label so a narrow picker shortens the name and
                                 // thinking level together, keeping the provider icon
                                 // and chevron visible.
                                 Text(
                                     text = buildAnnotatedString {
-                                        append(selectedModel?.label ?: "Model")
+                                        append(selectedModel?.label ?: stringResource(R.string.model_picker_default))
                                         if (selectedThinkingLevel != null) {
                                             withStyle(SpanStyle(fontWeight = FontWeight.Normal, color = palette.secondary.copy(alpha = 0.8f))) {
                                                 append(" · ${selectedThinkingLevel.replaceFirstChar { it.uppercase() }}")
                                             }
                                         }
                                     },
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Medium,
                                     color = palette.secondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false)
                                 )
-                                Spacer(modifier = Modifier.width(3.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
                                     imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = "Select model",
+                                    contentDescription = stringResource(R.string.model_picker_select),
                                     tint = palette.secondary,
-                                    modifier = Modifier.size(14.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }
@@ -412,7 +421,9 @@ fun AidenComposerView(
                                 selectedModel = selectedModel,
                                 selectedThinkingLevel = selectedThinkingLevel,
                                 onSelectModel = onSelectModel,
-                                onDismiss = { showModelMenu = false }
+                                onDismiss = { showModelMenu = false },
+                                defaultRoute = defaultModelRoute,
+                                recentRoutes = recentModelRoutes
                             )
                         }
                     }
@@ -436,23 +447,24 @@ fun AidenComposerView(
                             if (reduceMotion) {
                                 Icon(
                                     imageVector = Icons.Default.GraphicEq,
-                                    contentDescription = "Stop voice input",
+                                    contentDescription = stringResource(R.string.chat_composer_stop_voice),
                                     tint = palette.accent,
                                     modifier = Modifier.size(20.dp)
                                 )
                             } else {
+                                val stopVoiceLabel = stringResource(R.string.chat_composer_stop_voice)
                                 AidenHarmonicWaveform(
                                     amplitude = 0.8f,
                                     palette = palette,
                                     modifier = Modifier
                                         .size(24.dp, 16.dp)
-                                        .semantics { contentDescription = "Stop voice input" }
+                                        .semantics { contentDescription = stopVoiceLabel }
                                 )
                             }
                         } else {
                             Icon(
                                 imageVector = Icons.Default.Mic,
-                                contentDescription = "Start voice input",
+                                contentDescription = stringResource(R.string.chat_composer_start_voice),
                                 tint = palette.secondary,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -488,7 +500,7 @@ fun AidenComposerView(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Stop,
-                            contentDescription = "Stop generation",
+                            contentDescription = stringResource(R.string.chat_composer_stop_generation),
                             tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
@@ -518,8 +530,8 @@ fun AidenComposerView(
                                 if (reduceMotion) {
                                     EnterTransition.None togetherWith ExitTransition.None
                                 } else {
-                                    (scaleIn(AidenMotion.spatialExpressiveSpring()) + fadeIn(AidenMotion.nonSpatialExpressiveSpring()))
-                                        .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring()) + fadeOut(AidenMotion.nonSpatialExpressiveSpring()))
+                                    (scaleIn(AidenMotion.spatialExpressiveSpring()) + fadeIn(AidenMotion.short()))
+                                        .togetherWith(scaleOut(AidenMotion.spatialExpressiveSpring()) + fadeOut(AidenMotion.short()))
                                 }
                             },
                             label = "send_stop_morph"
@@ -527,15 +539,15 @@ fun AidenComposerView(
                             if (streaming) {
                                 Icon(
                                     imageVector = Icons.Default.Stop,
-                                    contentDescription = "Stop generation",
+                                    contentDescription = stringResource(R.string.chat_composer_stop_generation),
                                     tint = Color.White,
                                     modifier = Modifier.size(18.dp)
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.ArrowUpward,
-                                    contentDescription = "Send message",
-                                    tint = if (canSend) Color.White else palette.secondary.copy(alpha = 0.4f),
+                                    contentDescription = stringResource(R.string.chat_composer_send),
+                                    tint = if (canSend) palette.onAccent else palette.secondary.copy(alpha = 0.4f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -569,15 +581,15 @@ fun AidenComposerView(
 
 private data class AidenRunInputModeOption(
     val mode: AidenStreamInputMode,
-    val label: String,
-    val detail: String,
-    val actionLabel: String
+    @StringRes val label: Int,
+    @StringRes val detail: Int,
+    @StringRes val actionLabel: Int
 )
 
 // Menu order matches desktop and iOS: Steer first, then Queue.
 private val runInputModeOptions = listOf(
-    AidenRunInputModeOption(AidenStreamInputMode.STEER, "Steer", "Add guidance without stopping", "Steer response"),
-    AidenRunInputModeOption(AidenStreamInputMode.QUEUE, "Queue", "Run after this response", "Queue message")
+    AidenRunInputModeOption(AidenStreamInputMode.STEER, R.string.chat_composer_mode_steer, R.string.chat_composer_mode_steer_detail, R.string.chat_composer_mode_steer_action),
+    AidenRunInputModeOption(AidenStreamInputMode.QUEUE, R.string.chat_composer_mode_queue, R.string.chat_composer_mode_queue_detail, R.string.chat_composer_mode_queue_action)
 )
 
 /**
@@ -603,6 +615,8 @@ private fun AidenRunInputSplitButton(
     val palette = AidenTheme.palette
     val reduceMotion = aidenReduceMotion()
     val current = runInputModeOptions.first { it.mode == mode }
+    val currentActionLabel = stringResource(current.actionLabel)
+    val chooseActionLabel = stringResource(R.string.chat_composer_choose_action)
     var showMenu by remember { mutableStateOf(false) }
     val height = AidenUi.MinimumTouchTarget
     val primaryAlpha by animateFloatAsState(
@@ -653,12 +667,12 @@ private fun AidenRunInputSplitButton(
                     indication = ripple(),
                     enabled = canChooseMode,
                     role = Role.Button,
-                    onLongClickLabel = "Choose message action",
+                    onLongClickLabel = chooseActionLabel,
                     onLongClick = { showMenu = true },
                     onClick = { if (canSubmit) onSubmit() }
                 )
                 .semantics {
-                    contentDescription = current.actionLabel
+                    contentDescription = currentActionLabel
                     if (!canSubmit) disabled()
                 }
         ) {
@@ -673,10 +687,10 @@ private fun AidenRunInputSplitButton(
                             EnterTransition.None togetherWith ExitTransition.None
                         } else {
                             (slideInVertically(AidenMotion.spatialExpressiveSpring()) { it / 2 } +
-                                fadeIn(AidenMotion.nonSpatialExpressiveSpring()))
+                                fadeIn(AidenMotion.short()))
                                 .togetherWith(
                                     slideOutVertically(AidenMotion.spatialExpressiveSpring()) { -it / 2 } +
-                                        fadeOut(AidenMotion.nonSpatialExpressiveSpring())
+                                        fadeOut(AidenMotion.short())
                                 )
                                 .using(SizeTransform(clip = true))
                         }
@@ -684,10 +698,10 @@ private fun AidenRunInputSplitButton(
                     label = "run_input_mode_label"
                 ) { label ->
                     Text(
-                        text = label,
+                        text = stringResource(label),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
+                        color = palette.onAccent,
                         maxLines = 1,
                         // The segment announces its action instead.
                         modifier = Modifier.clearAndSetSemantics {}
@@ -708,14 +722,14 @@ private fun AidenRunInputSplitButton(
                     .tactilePress(menuInteraction)
                     .semantics {
                         role = Role.Button
-                        contentDescription = "Choose message action"
+                        contentDescription = chooseActionLabel
                     }
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = palette.onAccent,
                         modifier = Modifier
                             .size(18.dp)
                             .graphicsLayer { rotationZ = chevronRotation }
@@ -725,7 +739,7 @@ private fun AidenRunInputSplitButton(
             DropdownMenu(
                 expanded = showMenu,
                 onDismissRequest = { showMenu = false },
-                shape = RoundedCornerShape(18.dp),
+                shape = MaterialTheme.shapes.large,
                 containerColor = MaterialTheme.colorScheme.surfaceContainer
             ) {
                 runInputModeOptions.forEach { option ->
@@ -734,13 +748,13 @@ private fun AidenRunInputSplitButton(
                         text = {
                             Column {
                                 Text(
-                                    text = option.label,
+                                    text = stringResource(option.label),
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
                                     color = palette.foreground
                                 )
                                 Text(
-                                    text = option.detail,
+                                    text = stringResource(option.detail),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = palette.secondary
                                 )
@@ -778,7 +792,7 @@ private fun AidenComposerSuggestionList(
     val visible = suggestions.take(6)
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         modifier = modifier
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -789,10 +803,10 @@ private fun AidenComposerSuggestionList(
                 }
                 val label = when (suggestion) {
                     is AidenComposerSuggestion.Skill ->
-                        if (suggestion.entry.available) "Skill ${suggestion.entry.name}"
-                        else "Skill ${suggestion.entry.name}, unavailable"
-                    is AidenComposerSuggestion.Agent -> "Mention agent ${suggestion.agent.label}"
-                    is AidenComposerSuggestion.File -> "Mention file ${suggestion.entry.displayPath}"
+                        if (suggestion.entry.available) stringResource(R.string.chat_composer_suggest_skill, suggestion.entry.name)
+                        else stringResource(R.string.chat_composer_suggest_skill_unavailable, suggestion.entry.name)
+                    is AidenComposerSuggestion.Agent -> stringResource(R.string.chat_composer_suggest_agent, suggestion.agent.label)
+                    is AidenComposerSuggestion.File -> stringResource(R.string.chat_composer_suggest_file, suggestion.entry.displayPath)
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -855,7 +869,7 @@ private fun AidenComposerSuggestionList(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "agent",
+                                text = stringResource(R.string.chat_composer_suggest_agent_tag),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.secondary.copy(alpha = 0.85f),
                                 maxLines = 1
@@ -880,7 +894,7 @@ private fun AidenComposerSuggestionList(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "file",
+                                text = stringResource(R.string.chat_composer_suggest_file_tag),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.secondary.copy(alpha = 0.85f),
                                 maxLines = 1

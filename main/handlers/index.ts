@@ -6,6 +6,7 @@
 
 import { appHandlers } from "./app.js";
 import { registerProviderHandlers } from "./providers.js";
+import { registerAcpHarnessHandlers } from "./acp-harnesses.js";
 import { registerChatHistoryHandlers } from "./chats.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
@@ -30,11 +31,14 @@ import { registerAssistantLiveHandlers } from "./assistant-live.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerBotHandlers } from "./bots.js";
+import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
+import { registerDesignHandlers } from "./design/register.js";
+import { registerCreateImagesIpc } from "./create-images/index.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 
@@ -54,6 +58,7 @@ export function registerHandlers(): void {
 
   // AI chat client handlers
   registerProviderHandlers();
+  registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
@@ -70,6 +75,8 @@ export function registerHandlers(): void {
   registerModelInsightsHandlers();
   registerDictationHandlers();
   registerScheduledTaskHandlers();
+  // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
+  if (hostPlatformCapabilities().bots) registerBotRoutineHandlers();
   registerAssistantHandlers();
   registerShortcutHandlers();
   registerTelegramHandlers();
@@ -81,6 +88,9 @@ export function registerHandlers(): void {
   registerBtwHandlers();
   registerTtsHandlers();
   registerDeviceHandlers();
+  // A no-op unless the designStudio capability is on.
+  registerDesignHandlers();
+  registerCreateImagesIpc();
 
   logger.info("handlers", "✓ IPC handlers registered");
 
