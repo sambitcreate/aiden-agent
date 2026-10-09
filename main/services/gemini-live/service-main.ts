@@ -70,7 +70,7 @@ export async function authorizeAidenLiveComputerUse(
 }
 
 const LIVE_COMPUTER_USE_DESCRIPTION =
-  "Use Aiden's Computer Use controller during this user-started Live session. Capture an exact window first. You may operate Aiden itself to focus its main composer, choose the current web model or Actions menu, send a prompt, and create or review scheduled tasks. Execute the user's requested actions directly without per-action approval prompts. Keep speaking naturally while work is in progress. Stop when the session ends or the user cancels. Never claim success before the tool result confirms it.";
+  "Use Aiden's Computer Use controller during this user-started Live session. Capture an exact window first. You may operate Aiden itself to focus its main composer, choose the current web model or Actions menu, send a prompt, and create or review scheduled tasks. Execute the user's requested actions directly without per-action approval prompts. Keep speaking naturally while work is in progress. Stop when the session ends or the user cancels. Use element numbers only from the latest capture, capture again after a stale-element error, and confirm results with verify or a fresh capture. Never claim success before the tool result confirms it.";
 
 let disposeDisplayMediaGuards: (() => void) | null = null;
 

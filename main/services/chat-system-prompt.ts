@@ -3,6 +3,7 @@
 // need the static prompt do not import the generation pipeline.
 
 import { BROWSER_AGENT_GUIDANCE } from "./browser-tools.js";
+import { COMPUTER_USE_AGENT_GUIDANCE } from "./computer-use/tool.js";
 import { DEVICE_AGENT_GUIDANCE } from "./devices/device-tools.js";
 import { PI_CHAT_SYSTEM_PROMPT } from "./response-format-guidance.js";
 import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
@@ -30,8 +31,11 @@ export async function buildSystemPrompt(
     ? `\n\n${BROWSER_AGENT_GUIDANCE}`
     : "";
   const deviceSuffix = availableToolNames?.has("device_open") ? `\n\n${DEVICE_AGENT_GUIDANCE}` : "";
+  const computerUseSuffix = availableToolNames?.has("computer_use")
+    ? `\n\n${COMPUTER_USE_AGENT_GUIDANCE}`
+    : "";
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}`;
+    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}${browserSuffix}${deviceSuffix}${computerUseSuffix}`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -58,6 +62,7 @@ export async function buildSystemPrompt(
     delegation +
     skillsSuffix +
     browserSuffix +
-    deviceSuffix
+    deviceSuffix +
+    computerUseSuffix
   );
 }

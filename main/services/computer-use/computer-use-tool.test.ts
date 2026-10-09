@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import type { CuaDriverToolInfo } from "./contract.js";
+import {
+  CUA_DRIVER_ALLOWED_TOOLS,
+  parseCuaDriverTools,
+  type CuaDriverToolInfo,
+} from "./contract.js";
 import {
   COMPUTER_USE_DISCOVERY_TIMEOUT_MS,
   ComputerUseController,
@@ -10,6 +14,13 @@ import {
 } from "./controller.js";
 import { normalizeComputerUseArgs } from "./safety.js";
 import { createComputerUseAgentTool } from "./tool.js";
+import { buildSystemPrompt } from "../chat-system-prompt.js";
+import {
+  FakeCuaDriver,
+  actionResult,
+  codedRefusal,
+  toolListResult,
+} from "./fixtures/cua-driver-catalog.mjs";
 
 const SCREENSHOT_SENTINEL = Buffer.concat([
   Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -24,51 +35,18 @@ interface Call {
   signal?: AbortSignal;
 }
 
-function toolInfo(name: string, capabilities: string[] = []): CuaDriverToolInfo {
-  const properties: Record<string, unknown> = {
-    delivery_mode: { type: "string" },
-    element_token: { type: "string" },
-    pid: { type: "integer" },
-    window_id: { type: "integer" },
-  };
-  if (name === "drag") {
-    properties.button = { type: "string" };
-    properties.from_element = { type: "integer" };
-    properties.to_element = { type: "integer" };
-    properties.from_x = { type: "number" };
-    properties.from_y = { type: "number" };
-    properties.modifier = { type: "array" };
-    properties.to_x = { type: "number" };
-    properties.to_y = { type: "number" };
-  }
-  return {
-    name,
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties,
-    },
-    capabilities: new Set(capabilities),
-  };
+/** Aiden's allowlisted 0.34.1 catalog, parsed exactly as a live session parses it. */
+function pinnedCatalog(): Map<string, CuaDriverToolInfo> {
+  return parseCuaDriverTools(toolListResult([...CUA_DRIVER_ALLOWED_TOOLS])).tools;
 }
 
 class FakeSession implements CuaDriverSessionLike {
   ready = true;
   closed = false;
   readonly calls: Call[] = [];
-  readonly toolCatalog = new Map<string, CuaDriverToolInfo>([
-    ["get_window_state", toolInfo("get_window_state", ["accessibility.element_tokens"])],
-    ["click", toolInfo("click", ["accessibility.element_tokens"])],
-    ["double_click", toolInfo("double_click", ["accessibility.element_tokens"])],
-    ["right_click", toolInfo("right_click", ["accessibility.element_tokens"])],
-    ["drag", toolInfo("drag")],
-    ["scroll", toolInfo("scroll", ["accessibility.element_tokens"])],
-    ["type_text", toolInfo("type_text")],
-    ["press_key", toolInfo("press_key")],
-    ["hotkey", toolInfo("hotkey")],
-    ["set_value", toolInfo("set_value", ["accessibility.element_tokens"])],
-    ["bring_to_front", toolInfo("bring_to_front")],
-  ]);
+  readonly results: Array<{ name: string; result: unknown }> = [];
+  readonly toolCatalog = pinnedCatalog();
+  readonly driver = new FakeCuaDriver();
   handler?: (call: Call) => unknown | Promise<unknown>;
 
   supports(tool: string, capability: string): boolean {
@@ -82,8 +60,18 @@ class FakeSession implements CuaDriverSessionLike {
   ): Promise<unknown> {
     const call = { name, args, timeoutMs: options.timeoutMs, signal: options.signal };
     this.calls.push(call);
-    if (this.handler) return this.handler(call);
-    return fakeResponse(call);
+    const result = await (this.handler ? this.handler(call) : fakeResponse(call, this.driver));
+    this.results.push({ name, result });
+    return result;
+  }
+
+  /** The element token the driver minted in its latest capture. */
+  latestToken(index: number): string {
+    const captures = this.results.filter((entry) => entry.name === "get_window_state");
+    const capture = captures[captures.length - 1];
+    const elements = (capture?.result as { structuredContent: { elements: { element_token: string }[] } })
+      .structuredContent.elements;
+    return elements[index].element_token;
   }
 
   async close(): Promise<void> {
@@ -122,113 +110,21 @@ class FakeHost implements CuaDriverHostLike {
   }
 }
 
-function fakeResponse(call: Call): unknown {
-  if (call.name === "list_windows") {
-    return {
-      content: [{ type: "text", text: "Found 2 windows." }],
-      structuredContent: {
-        raw_secret: "SHOULD_NOT_LEAK",
-        windows: [
-          {
-            pid: 42,
-            window_id: 7,
-            app_name: "Safari",
-            title: "Example",
-            z_index: 9,
-            is_on_screen: true,
-            bounds: { x: 100, y: 50, width: 200, height: 100 },
-          },
-          {
-            pid: 84,
-            window_id: 8,
-            app_name: "Hidden App",
-            title: "Background",
-            z_index: 1,
-            is_on_screen: false,
-            bounds: { x: 0, y: 0, width: 300, height: 200 },
-          },
-          {
-            pid: 99,
-            window_id: 9,
-            app_name: "Finder",
-            title: "Desktop",
-            z_index: 0,
-            is_on_screen: true,
-            bounds: { x: 0, y: 0, width: 1440, height: 900 },
-          },
-        ],
-      },
-    };
-  }
-  if (call.name === "list_apps") {
-    return {
-      content: [{ type: "text", text: "Found apps." }],
-      structuredContent: {
-        apps: [
-          {
-            pid: 42,
-            name: "Safari",
-            bundle_id: "com.apple.Safari",
-            running: true,
-            active: true,
-          },
-        ],
-      },
-    };
-  }
-  if (call.name === "get_window_state") {
-    const content: Array<Record<string, unknown>> = [{ type: "text", text: "window capture" }];
-    if (call.args.include_screenshot === true) {
-      content.push({ type: "image", data: SCREENSHOT_SENTINEL, mimeType: "image/png" });
-    }
-    return {
-      content,
-      structuredContent: {
-        width: 400,
-        height: 200,
-        element_count: 2,
-        screenshot_b64: "SHOULD_NOT_LEAK",
-        elements: [
-          {
-            element_index: 0,
-            element_token: "snapshot:0",
-            role: "AXButton",
-            label: "First",
-            frame: { x: 110, y: 60, w: 20, h: 20 },
-            depth: 1,
-          },
-          {
-            element_index: 1,
-            element_token: "snapshot:1",
-            role: "AXButton",
-            label: "Second",
-            frame: { x: 250, y: 100, w: 20, h: 20 },
-            depth: 1,
-          },
-        ],
-      },
-    };
-  }
-  if (call.name === "get_accessibility_tree") {
-    return {
-      content: [{ type: "text", text: "desktop accessibility inventory" }],
-      structuredContent: { raw_secret: "SHOULD_NOT_LEAK" },
-    };
-  }
-  if (call.name === "get_desktop_state") {
-    return {
-      content: [
-        { type: "text", text: "desktop capture" },
-        { type: "image", data: SCREENSHOT_SENTINEL, mimeType: "image/png" },
-      ],
-      structuredContent: { screenshot_b64: "SHOULD_NOT_LEAK" },
-    };
-  }
-  return {
-    content: [{ type: "text", text: `${call.name} completed` }],
-    structuredContent: { effect: "verified", raw_secret: "SHOULD_NOT_LEAK" },
+/** The 0.34.1 driver's answer, with extra driver data Aiden must not forward. */
+function fakeResponse(call: Call, driver: FakeCuaDriver): unknown {
+  const result = driver.call(call.name, call.args) as {
+    structuredContent?: Record<string, unknown>;
   };
+  if (call.name === "list_windows" || call.name === "get_window_state") {
+    return {
+      ...result,
+      structuredContent: { ...result.structuredContent, raw_secret: "SHOULD_NOT_LEAK" },
+    };
+  }
+  return result;
 }
+
+const SAFARI_TARGET = { kind: "window", pid: 42, window_id: 7 };
 
 function harness(supportsImages = true, createDelayMs = 0) {
   const session = new FakeSession();
@@ -276,61 +172,19 @@ test("capture without app or exact pid/window_id is rejected", async () => {
   await controller.close();
 });
 
-test("partial drag schema with only from_element is rejected", async () => {
-  const { controller, session } = harness(false);
+test("refuses before approval any argument the pinned closed schema does not declare", async () => {
+  const { controller, session } = harness(true);
+  const drag = session.toolCatalog.get("drag")!;
+  const properties = { ...(drag.inputSchema as { properties: Record<string, unknown> }).properties };
+  delete properties.target;
   session.toolCatalog.set("drag", {
-    name: "drag",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        from_element: { type: "integer" },
-      },
-    },
-    capabilities: new Set(),
+    ...drag,
+    inputSchema: { type: "object", additionalProperties: false, properties },
   });
-  await capture(controller, "ax");
+  await capture(controller, "som");
   await assert.rejects(
-    () =>
-      controller.approvalFor({
-        action: "drag",
-        from_element: 0,
-        to_element: 1,
-      }),
-    /unsupported drag schema|drag schema does not support/u,
-  );
-  assert.equal(
-    session.calls.some((call) => call.name === "drag"),
-    false,
-  );
-  await controller.close();
-});
-
-test("drag rejects a schema missing an argument the controller would send", async () => {
-  const { controller, session } = harness(false);
-  session.toolCatalog.set("drag", {
-    name: "drag",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        pid: { type: "integer" },
-        window_id: { type: "integer" },
-        from_element: { type: "integer" },
-        to_element: { type: "integer" },
-      },
-    },
-    capabilities: new Set(),
-  });
-  await capture(controller, "ax");
-  await assert.rejects(
-    () =>
-      controller.approvalFor({
-        action: "drag",
-        from_element: 0,
-        to_element: 1,
-      }),
-    /drag schema does not support/u,
+    () => controller.approvalFor({ action: "drag", from_coordinate: [1, 1], to_coordinate: [5, 5] }),
+    /drag schema does not accept target/u,
   );
   assert.equal(
     session.calls.some((call) => call.name === "drag"),
@@ -382,9 +236,9 @@ test("focus_app TOCTOU after authorize rejects stale re-resolve without raising 
         structuredContent: { windows: [safariWindow] },
       };
     }
-    if (call.name === "list_apps") return fakeResponse(call);
-    if (call.name === "get_window_state") return fakeResponse(call);
-    return fakeResponse(call);
+    if (call.name === "list_apps") return fakeResponse(call, session.driver);
+    if (call.name === "get_window_state") return fakeResponse(call, session.driver);
+    return fakeResponse(call, session.driver);
   };
   const args = { action: "focus_app", app: "Safari", raise_window: true } as const;
   const approval = await controller.approvalFor(args);
@@ -530,7 +384,7 @@ test("an approval cannot move from its prompted window to a later target", async
     window_id: 11,
     app_name: "App A",
     title: "A",
-    element_token: "A:0",
+    element_token: "s0000000a:0",
   };
   session.handler = (call) => {
     if (call.name === "list_windows") {
@@ -563,7 +417,7 @@ test("an approval cannot move from its prompted window to a later target", async
         },
       };
     }
-    return fakeResponse(call);
+    return fakeResponse(call, session.driver);
   };
   await capture(controller, "ax", { app: "App A" });
   const args = { action: "click", element: 0 } as const;
@@ -576,7 +430,7 @@ test("an approval cannot move from its prompted window to a later target", async
     window_id: 22,
     app_name: "App B",
     title: "B",
-    element_token: "B:0",
+    element_token: "s0000000b:0",
   };
   await capture(controller, "ax", { app: "App B" });
   assert.throws(
@@ -617,7 +471,7 @@ test("ambiguous partial app matches are rejected before approval", async () => {
             ],
           },
         }
-      : fakeResponse(call);
+      : fakeResponse(call, session.driver);
   await assert.rejects(
     () => controller.approvalFor({ action: "focus_app", app: "Safari" }),
     /matched multiple windows/u,
@@ -670,98 +524,63 @@ test("successful mutations invalidate element and screenshot snapshots", async (
   await controller.close();
 });
 
-test("element drag prefers from_element/to_element without requiring screenshot dims", async () => {
-  const { controller, session } = harness(false);
-  await capture(controller, "ax");
-  await approved(controller, "drag-ax", {
-    action: "drag",
-    from_element: 0,
-    to_element: 1,
-  });
-  const drag = session.calls.find((call) => call.name === "drag");
-  assert.ok(drag);
-  assert.deepEqual(drag.args, {
-    pid: 42,
-    window_id: 7,
-    from_element: 0,
-    to_element: 1,
-    button: "left",
-  });
-  await controller.close();
-});
-
-test("element drag falls back to pixels when the driver omits from_element", async () => {
+test("element drag resolves screenshot-frame centres and always delivers in the foreground", async () => {
   const { controller, session } = harness(true);
-  session.toolCatalog.set("drag", {
-    name: "drag",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        button: { type: "string" },
-        from_x: { type: "number" },
-        from_y: { type: "number" },
-        pid: { type: "integer" },
-        to_x: { type: "number" },
-        to_y: { type: "number" },
-        window_id: { type: "integer" },
-      },
-    },
-    capabilities: new Set(),
-  });
   await capture(controller, "som");
-  await approved(controller, "drag-pixels", {
-    action: "drag",
-    from_element: 0,
-    to_element: 1,
-  });
+  const args = { action: "drag", from_element: 0, to_element: 1 } as const;
+  const approval = await controller.approvalFor(args);
+  assert.ok(approval);
+  assert.match(approval.summary, /VISIBLE FOREGROUND/u);
+  controller.authorize("drag-elements", args, approval);
+  const result = await controller.execute("drag-elements", args);
   const drag = session.calls.find((call) => call.name === "drag");
   assert.ok(drag);
+  // Safari's elements sit at screen points (110,60) and (250,100), 20pt
+  // square, in a window at (100,50) captured at 2x: their screenshot-pixel
+  // centres are (40,40) and (320,120).
   assert.deepEqual(drag.args, {
-    pid: 42,
-    window_id: 7,
+    target: SAFARI_TARGET,
     from_x: 40,
     from_y: 40,
     to_x: 320,
     to_y: 120,
     button: "left",
+    delivery_mode: "foreground",
   });
+  assert.equal(result.details.deliveryMode, "foreground");
   await controller.close();
 });
 
-test("element drag without frames still needs screenshot dims on pixel-only drivers", async () => {
+test("element drag without a screenshot frame is refused before approval", async () => {
   const { controller, session } = harness(false);
-  session.toolCatalog.set("drag", {
-    name: "drag",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        button: { type: "string" },
-        from_x: { type: "number" },
-        from_y: { type: "number" },
-        pid: { type: "integer" },
-        to_x: { type: "number" },
-        to_y: { type: "number" },
-        window_id: { type: "integer" },
-      },
-    },
-    capabilities: new Set(),
-  });
   await capture(controller, "ax");
   await assert.rejects(
-    () =>
-      controller.approvalFor({
-        action: "drag",
-        from_element: 0,
-        to_element: 1,
-      }),
-    /mapped into screenshot coordinates|fresh screenshot|no safe frame/u,
+    () => controller.approvalFor({ action: "drag", from_element: 0, to_element: 1 }),
+    /no screenshot frame/u,
   );
   assert.equal(
     session.calls.some((call) => call.name === "drag"),
     false,
   );
+  await controller.close();
+});
+
+test("a driver refusing background drag asks for an approved foreground retry", async () => {
+  const { controller, session } = harness(true);
+  await capture(controller, "som");
+  // A drag the driver still refuses (e.g. a policy that strips foreground).
+  session.handler = (call) =>
+    call.name === "drag"
+      ? codedRefusal("background_unavailable", "Background drag is unavailable on macOS.", {
+          escalation: { recommended: "foreground", reason: "no background drag route" },
+        })
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "drag-refused", { action: "drag", from_coordinate: [1, 1], to_coordinate: [9, 9] }),
+    (error: Error & { code?: string }) =>
+      error.code === "foreground_required" && /delivery_mode "foreground"/u.test(error.message),
+  );
+  assert.equal(controller.lifecycleState, "ready");
   await controller.close();
 });
 
@@ -810,9 +629,25 @@ test("maps capture modes to Pi images only for positively vision-capable models"
   assert.equal(JSON.stringify(som.details).includes(SCREENSHOT_SENTINEL), false);
   assert.equal(JSON.stringify(som.details).includes("SHOULD_NOT_LEAK"), false);
   const captureCall = vision.session.calls.find((call) => call.name === "get_window_state")!;
-  assert.equal(captureCall.args.include_screenshot, true);
-  assert.equal(captureCall.args.capture_mode, undefined);
-  assert.equal(captureCall.args.session, undefined);
+  // 0.34 ignores the deprecated capture_mode, so Aiden never sends it.
+  assert.deepEqual(captureCall.args, {
+    pid: 42,
+    window_id: 7,
+    include_screenshot: true,
+    max_elements: 500,
+  });
+  assert.equal(som.details.elementCount, 2);
+  const pixels = await capture(vision.controller, "vision");
+  assert.equal(pixels.details.mode, "vision");
+  assert.equal(pixels.content[1].type, "image");
+  assert.deepEqual(vision.session.calls[vision.session.calls.length - 1]?.args, {
+    pid: 42,
+    window_id: 7,
+    include_accessibility_tree: false,
+    include_screenshot: true,
+  });
+  // The screenshot-only snapshot still anchors pixel actions.
+  await approved(vision.controller, "vision-click", { action: "click", coordinate: [10, 10] });
   await vision.controller.close();
 
   const textOnly = harness(false);
@@ -821,8 +656,12 @@ test("maps capture modes to Pi images only for positively vision-capable models"
   assert.equal(degraded.details.mode, "ax");
   assert.equal(degraded.details.degradedToAccessibility, true);
   const textCapture = textOnly.session.calls.find((call) => call.name === "get_window_state")!;
-  assert.equal(textCapture.args.include_screenshot, false);
-  assert.equal(textCapture.args.capture_mode, "ax");
+  assert.deepEqual(textCapture.args, {
+    pid: 42,
+    window_id: 7,
+    include_screenshot: false,
+    max_elements: 500,
+  });
   assert.equal(JSON.stringify(degraded).includes(SCREENSHOT_SENTINEL), false);
   await textOnly.controller.close();
 });
@@ -846,7 +685,7 @@ test("desktop capture resolves an actionable shell window without persistent dri
   assert.equal(click.details.target?.pid, 99);
   const driverClick = vision.session.calls[vision.session.calls.length - 1];
   assert.equal(driverClick.name, "click");
-  assert.equal(driverClick.args.window_id, 9);
+  assert.deepEqual(driverClick.args.target, { kind: "window", pid: 99, window_id: 9 });
   await vision.controller.close();
 
   const text = harness(false);
@@ -902,26 +741,18 @@ test("desktop resolution ignores Finder folders and desktop-named third-party ap
     },
   ];
   const exact = harness(true);
-  exact.session.handler = (call) =>
-    call.name === "list_windows"
-      ? {
-          content: [{ type: "text", text: "windows" }],
-          structuredContent: {
-            windows: [
-              ...falsePositiveWindows,
-              {
-                pid: 303,
-                window_id: 33,
-                app_name: "Finder",
-                title: "Desktop",
-                z_index: 1,
-                is_on_screen: true,
-                bounds: { x: 0, y: 0, width: 1440, height: 900 },
-              },
-            ],
-          },
-        }
-      : fakeResponse(call);
+  exact.session.driver.windows = [
+    ...falsePositiveWindows,
+    {
+      pid: 303,
+      window_id: 33,
+      app_name: "Finder",
+      title: "Desktop",
+      z_index: 1,
+      is_on_screen: true,
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+    },
+  ];
   const captured = await exact.controller.execute("desktop-exact", {
     action: "capture",
     app: "desktop",
@@ -932,13 +763,7 @@ test("desktop resolution ignores Finder folders and desktop-named third-party ap
   await exact.controller.close();
 
   const missing = harness(true);
-  missing.session.handler = (call) =>
-    call.name === "list_windows"
-      ? {
-          content: [{ type: "text", text: "windows" }],
-          structuredContent: { windows: falsePositiveWindows },
-        }
-      : fakeResponse(call);
+  missing.session.driver.windows = falsePositiveWindows;
   await assert.rejects(
     () =>
       missing.controller.execute("desktop-missing", {
@@ -955,65 +780,67 @@ test("desktop resolution ignores Finder folders and desktop-named third-party ap
   await missing.controller.close();
 });
 
-test("maps pointer, drag, scroll, keyboard, and value actions to pinned schemas", async () => {
+test("maps every action to arguments the pinned 0.34.1 schemas admit", async () => {
   const { controller, session } = harness(true);
+  const tokens: string[] = [];
   await capture(controller, "som");
-
+  tokens.push(session.latestToken(0));
   await approved(controller, "zero", { action: "click", element: 0 });
   await capture(controller, "som");
   await approved(controller, "middle", { action: "middle_click", coordinate: [3, 4] });
   await capture(controller, "som");
   await approved(controller, "double", { action: "double_click", coordinate: [5, 6] });
   await capture(controller, "som");
-  await approved(controller, "drag", {
-    action: "drag",
-    from_element: 0,
-    to_element: 1,
-  });
+  // The schema's modifier literals are built dynamically, so TypeBox widens them.
+  await approved(controller, "modified", {
+    action: "click",
+    element: 1,
+    modifiers: ["cmd"],
+  } as never);
   await capture(controller, "som");
   await approved(controller, "scroll", {
     action: "scroll",
     direction: "down",
     coordinate: [7, 8],
   });
+  await approved(controller, "type", { action: "type", text: "hello" });
   await approved(controller, "key", { action: "key", keys: "cmd+s" });
+  await approved(controller, "press", { action: "key", keys: "return" });
   await capture(controller, "som");
+  tokens.push(session.latestToken(1));
   await approved(controller, "value", { action: "set_value", element: 1, value: "Blue" });
 
   const calls = session.calls.filter(
     (call) => !call.name.startsWith("list_") && call.name !== "get_window_state",
   );
-  assert.deepEqual(calls[0], {
-    name: "click",
-    args: {
-      pid: 42,
-      window_id: 7,
-      element_index: 0,
-      element_token: "snapshot:0",
-      button: "left",
-    },
-    timeoutMs: 30_000,
-    signal: calls[0].signal,
-  });
-  assert.equal(calls[1].name, "click");
-  assert.equal(calls[1].args.button, "middle");
-  assert.equal(calls[2].name, "double_click");
-  assert.equal(calls[2].args.button, undefined);
-  assert.equal(calls[2].args.modifier, undefined);
-  assert.deepEqual(calls[3].args, {
-    pid: 42,
-    window_id: 7,
-    from_element: 0,
-    to_element: 1,
-    button: "left",
-  });
-  assert.equal(calls[4].name, "scroll");
-  assert.equal(calls[4].args.x, 7);
-  assert.equal(calls[4].args.y, 8);
-  assert.equal(calls[5].name, "hotkey");
-  assert.deepEqual(calls[5].args.keys, ["cmd", "s"]);
-  assert.equal(calls[6].name, "set_value");
-  assert.equal(calls[6].args.element_token, "snapshot:1");
+  assert.deepEqual(
+    calls.map((call) => [call.name, call.args]),
+    [
+      ["click", { target: SAFARI_TARGET, element_token: tokens[0], button: "left" }],
+      ["click", { target: SAFARI_TARGET, x: 3, y: 4, button: "middle" }],
+      ["double_click", { pid: 42, window_id: 7, x: 5, y: 6 }],
+      [
+        "click",
+        {
+          target: SAFARI_TARGET,
+          element_token: calls[3].args.element_token,
+          button: "left",
+          modifier: ["cmd"],
+          delivery_mode: "foreground",
+        },
+      ],
+      ["scroll", { target: SAFARI_TARGET, direction: "down", amount: 3, x: 7, y: 8 }],
+      ["type_text", { target: SAFARI_TARGET, text: "hello" }],
+      ["hotkey", { target: SAFARI_TARGET, keys: ["cmd", "s"] }],
+      ["press_key", { target: SAFARI_TARGET, key: "return" }],
+      ["set_value", { pid: 42, window_id: 7, element_token: tokens[1], value: "Blue" }],
+    ],
+  );
+  // Every call reached the driver and came back as a closed ActionResult.
+  const actionResults = session.results.filter((entry) => calls.some((call) => call.name === entry.name));
+  for (const { result } of actionResults) {
+    assert.equal((result as { isError?: boolean }).isError, undefined);
+  }
   for (const call of calls) assert.equal(call.args.session, undefined);
   await controller.close();
 });
@@ -1072,7 +899,7 @@ test("focus_app reports completed foreground work when only capture_after fails"
             content: [{ type: "text", text: "fronted" }],
             structuredContent: { effect: "brought_to_front" },
           }
-        : fakeResponse(call);
+        : fakeResponse(call, session.driver);
   const result = await approved(controller, "focus-warning", {
     action: "focus_app",
     app: "com.apple.Safari",
@@ -1090,43 +917,191 @@ test("focus_app reports completed foreground work when only capture_after fails"
   await controller.close();
 });
 
-test("surfaces only the sanitized pinned driver verification verdict", async () => {
+test("surfaces the closed action result and drops values outside its enums", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? actionResult("click", {
+          effect: "suspected_noop",
+          route: "accessibility",
+          delivery: { mode: "background" },
+          escalation: { target: "pixel", reason: "suspected_noop" },
+          summary: "AXPress returned but nothing changed.",
+        })
+      : fakeResponse(call, session.driver);
+  const result = await approved(controller, "noop", { action: "click", element: 0 });
+  const payload = JSON.parse((result.content[0] as { text: string }).text) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(payload.effect, "suspected_noop");
+  assert.equal(payload.route, "accessibility");
+  assert.deepEqual(payload.delivery, { mode: "background" });
+  assert.deepEqual(payload.escalation, { target: "pixel", reason: "suspected_noop" });
+  assert.equal(payload.message, "AXPress returned but nothing changed.");
+  assert.equal(result.details.driverEffect, "suspected_noop");
+  assert.equal(result.details.driverRoute, "accessibility");
+  assert.deepEqual(result.details.escalation, { target: "pixel", reason: "suspected_noop" });
+
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "set_value"
+      ? actionResult("set_value", {
+          effect: "confirmed",
+          route: "accessibility",
+          delivery: { mode: "background" },
+          evidence: [
+            { kind: "value_readback", detail: "value read back as Blue" },
+            { kind: "telepathy", detail: "HIDE_ME" },
+          ],
+          escalation: { target: "elsewhere", reason: "HIDE_ME" },
+        })
+      : fakeResponse(call, session.driver);
+  const confirmed = await approved(controller, "value", {
+    action: "set_value",
+    element: 1,
+    value: "Blue",
+  });
+  const confirmedPayload = JSON.parse((confirmed.content[0] as { text: string }).text) as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(confirmedPayload.evidence, [
+    { kind: "value_readback", detail: "value read back as Blue" },
+  ]);
+  assert.equal(confirmedPayload.escalation, undefined);
+  assert.deepEqual(confirmed.details.evidence, ["value_readback"]);
+  assert.equal(JSON.stringify(confirmed).includes("HIDE_ME"), false);
+  await controller.close();
+});
+
+test("a pre-0.15 verified/path result is contract drift and poisons the session", async () => {
   const { controller, session } = harness(false);
   await capture(controller, "ax");
   session.handler = (call) =>
     call.name === "click"
       ? {
-          content: [{ type: "text", text: "action dispatched" }],
+          content: [{ type: "text", text: "clicked" }],
+          structuredContent: { verified: true, path: "ax", effect: "verified" },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "legacy", { action: "click", element: 0 }),
+    /outside the pinned contract/u,
+  );
+  assert.equal(controller.lifecycleState, "poisoned");
+  await controller.close();
+});
+
+test("a stale element token becomes a recapture instruction and clears the capture", async () => {
+  const { controller, session } = harness(true);
+  await capture(controller, "som");
+  const args = { action: "click", element: 0 } as const;
+  const approval = await controller.approvalFor(args);
+  assert.ok(approval);
+  controller.authorize("stale", args, approval);
+  // Another snapshot of the same window replaces Aiden's, staling its tokens.
+  session.driver.call("get_window_state", { pid: 42, window_id: 7 });
+  await assert.rejects(
+    () => controller.execute("stale", args),
+    (error: Error & { code?: string }) =>
+      error.code === "stale_element" && /Capture the window again/u.test(error.message),
+  );
+  assert.equal(controller.lifecycleState, "ready");
+  await assert.rejects(() => controller.approvalFor(args), /latest capture/u);
+  await capture(controller, "som");
+  await approved(controller, "fresh", args);
+  await controller.close();
+});
+
+test("an element without a token is refused locally rather than addressed by index", async () => {
+  const { controller, session } = harness(false);
+  session.handler = (call) => {
+    const result = fakeResponse(call, session.driver) as {
+      structuredContent?: { elements?: Array<Record<string, unknown>> };
+    };
+    if (call.name === "get_window_state") {
+      for (const element of result.structuredContent?.elements ?? []) delete element.element_token;
+    }
+    return result;
+  };
+  await capture(controller, "ax");
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", element: 0 }),
+    /no element token in the latest capture/u,
+  );
+  assert.equal(
+    session.calls.some((call) => call.name === "click"),
+    false,
+  );
+  await controller.close();
+});
+
+test("a pixel action without the driver's same-session screenshot asks for a recapture", async () => {
+  const { controller, session } = harness(true);
+  await capture(controller, "som");
+  const args = { action: "click" as const, coordinate: [10, 10] as [number, number] };
+  const approval = await controller.approvalFor(args);
+  assert.ok(approval);
+  controller.authorize("pixels", args, approval);
+  // A tree-only snapshot replaces the one that carried the screenshot.
+  session.driver.call("get_window_state", { pid: 42, window_id: 7, include_screenshot: false });
+  await assert.rejects(
+    () => controller.execute("pixels", args),
+    (error: Error & { code?: string }) =>
+      error.code === "snapshot_required" && /with a screenshot/u.test(error.message),
+  );
+  await assert.rejects(() => controller.approvalFor(args), /fresh screenshot/u);
+  await controller.close();
+});
+
+for (const code of [
+  "ambiguous_window_target",
+  "window_target_not_found",
+  "window_id_not_found",
+  "window_owner_pid_mismatch",
+]) {
+  test(`${code} drops the active target and asks to recapture an exact window`, async () => {
+    const { controller, session } = harness(false);
+    await capture(controller, "ax");
+    session.handler = (call) =>
+      call.name === "type_text"
+        ? codedRefusal(code, `${code} from driver`, { pid: 42, candidates: [] })
+        : fakeResponse(call, session.driver);
+    await assert.rejects(
+      () => approved(controller, code, { action: "type", text: "hi" }),
+      (error: Error & { code?: string }) =>
+        error.code === "target_unavailable" && /list_windows/u.test(error.message),
+    );
+    assert.equal(controller.lifecycleState, "ready");
+    await assert.rejects(
+      () => controller.approvalFor({ action: "type", text: "hi" }),
+      /No active window/u,
+    );
+    await controller.close();
+  });
+}
+
+test("a refused effect inside a successful result is raised as that refusal", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          content: [{ type: "text", text: "refused" }],
           structuredContent: {
-            verified: false,
-            effect: "suspected_noop",
-            path: "ax",
-            code: "readback_mismatch",
-            degraded: true,
-            escalation: {
-              recommended: "px",
-              reason: "Use a fresh screenshot and retry by pixels.",
-              raw_secret: "HIDE_ME",
-            },
-            raw_secret: "HIDE_ME",
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "stale_element_token", hint: "call get_window_state again" },
           },
         }
-      : fakeResponse(call);
-  const result = await approved(controller, "verdict", { action: "click", element: 0 });
-  const payload = JSON.parse((result.content[0] as { text: string }).text) as Record<
-    string,
-    unknown
-  >;
-  assert.equal(payload.verified, false);
-  assert.equal(payload.effect, "suspected_noop");
-  assert.equal(payload.path, "ax");
-  assert.equal(payload.code, "readback_mismatch");
-  assert.equal(payload.degraded, true);
-  assert.deepEqual(payload.escalation, {
-    recommended: "px",
-    reason: "Use a fresh screenshot and retry by pixels.",
-  });
-  assert.equal(JSON.stringify(result).includes("HIDE_ME"), false);
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "refused", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => error.code === "stale_element",
+  );
+  assert.equal(controller.lifecycleState, "ready");
   await controller.close();
 });
 
@@ -1148,7 +1123,7 @@ test("turns MCP logical errors into thrown tool errors without exposing structur
           content: [{ type: "text", text: "stale element" }],
           structuredContent: { screenshot_b64: SCREENSHOT_SENTINEL },
         }
-      : fakeResponse(call);
+      : fakeResponse(call, session.driver);
   const badArgs = { action: "click", element: 0 } as const;
   const badApproval = await controller.approvalFor(badArgs);
   assert.ok(badApproval);
@@ -1214,7 +1189,7 @@ test("strict close waits for an in-flight driver mutation to unwind after abort"
   const gate = new Promise<void>((resolve) => { release = resolve; });
   session.handler = async (call) => {
     if (call.name === "set_value") { entered(); await gate; }
-    return fakeResponse(call);
+    return fakeResponse(call, session.driver);
   };
   const mutation = approved(controller, "fill", { action: "set_value", element: 1, value: "Blue" });
   const handled = mutation.catch(() => {});
@@ -1227,3 +1202,297 @@ test("strict close waits for an in-flight driver mutation to unwind after abort"
   await Promise.all([handled, close]);
   assert.equal(settled, true);
 });
+
+test("verify is read-only, keeps the capture, and maps verify_state predicates and outcomes", async () => {
+  const { controller, session } = harness(true);
+  session.driver.elements = () => [
+    { role: "AXTextField", label: "Name", value: "Ada", frame: { x: 110, y: 60, w: 20, h: 20 } },
+    { role: "AXButton", label: "Save", enabled: false, frame: { x: 150, y: 60, w: 20, h: 20 } },
+  ];
+  await capture(controller, "som");
+  const revision = controller.targetRevision;
+  const args = {
+    action: "verify" as const,
+    expect: [
+      { element: { label_contains: "name", value_equals: "Ada" } },
+      { window: { exists: true, bounds: { x: 100, y: 50, width: 200, height: 100 } } },
+    ],
+    timeout_ms: 0,
+    include_screenshot: true,
+  };
+  assert.equal(await controller.approvalFor(args), null);
+  const result = await controller.execute("verify", args);
+  const call = session.calls[session.calls.length - 1];
+  assert.equal(call.name, "verify_state");
+  assert.deepEqual(call.args, {
+    pid: 42,
+    window_id: 7,
+    expect: [
+      { element: { selector: { label_contains: "name" }, exists: true, value_equals: "Ada" } },
+      { window: { exists: true, bounds: { x: 100, y: 50, width: 200, height: 100 } } },
+    ],
+    timeout_ms: 0,
+    include_screenshot: true,
+  });
+  const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+    status: string;
+    predicates: Array<{ index: number; status: string; observed?: string }>;
+  };
+  assert.equal(payload.status, "satisfied");
+  assert.deepEqual(
+    payload.predicates.map((predicate) => predicate.status),
+    ["satisfied", "satisfied"],
+  );
+  assert.equal(result.details.verifyStatus, "satisfied");
+  assert.equal(result.content[1]?.type, "image");
+  // Verifying never replaces the capture, so element 0 is still actionable.
+  assert.equal(controller.targetRevision, revision);
+  await approved(controller, "after-verify", { action: "click", element: 0 });
+
+  await capture(controller, "som");
+  const unsatisfied = await controller.execute("verify-disabled", {
+    action: "verify",
+    expect: [{ element: { label_contains: "Save", enabled: true } }],
+  });
+  assert.equal(unsatisfied.details.verifyStatus, "unsatisfied");
+  await controller.close();
+});
+
+test("verify surfaces unknown reasons, including untrusted web content", async () => {
+  const { controller, session } = harness(false);
+  session.driver.elements = () => [
+    { role: "AXStaticText", label: "Order placed", in_web_content: true },
+  ];
+  await capture(controller, "ax");
+  const result = await controller.execute("verify-web", {
+    action: "verify",
+    expect: [{ element: { label_contains: "Order placed" } }],
+    include_screenshot: true,
+  });
+  const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+    status: string;
+    note?: string;
+    predicates: Array<{ unknown_reason?: string }>;
+  };
+  assert.equal(payload.status, "unknown");
+  assert.equal(payload.predicates[0].unknown_reason, "untrusted_source");
+  // A text-only model never asks the driver for the screenshot.
+  assert.equal(session.calls[session.calls.length - 1].args.include_screenshot, undefined);
+  assert.match(String(payload.note), /cannot read images/u);
+  assert.equal(result.content.length, 1);
+  await controller.close();
+});
+
+test("verify requires an active window and a well-formed verification result", async () => {
+  const { controller, session } = harness(false);
+  await assert.rejects(
+    () =>
+      controller.execute("verify-no-target", {
+        action: "verify",
+        expect: [{ window: { exists: true } }],
+      }),
+    /No active window/u,
+  );
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "verify_state"
+      ? { content: [{ type: "text", text: "ok" }], structuredContent: { status: "maybe" } }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () =>
+      controller.execute("verify-drift", {
+        action: "verify",
+        expect: [{ window: { exists: true } }],
+      }),
+    /verification result outside the pinned contract/u,
+  );
+  assert.equal(controller.lifecycleState, "poisoned");
+  await controller.close();
+});
+
+test("menu is an approved foreground invoke_menu on the exact window", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  const args = { action: "menu" as const, menu_path: ["File", " Save As… "] };
+  const approval = await controller.approvalFor(args);
+  assert.ok(approval);
+  assert.ok(approval.summary.includes("File") && approval.summary.includes("Save As…"));
+  assert.match(approval.summary, /VISIBLE FOREGROUND/u);
+  controller.authorize("menu", args, approval);
+  const result = await controller.execute("menu", args);
+  const call = session.calls[session.calls.length - 1];
+  assert.deepEqual([call.name, call.args], [
+    "invoke_menu",
+    { pid: 42, window_id: 7, path: ["File", "Save As…"] },
+  ]);
+  assert.equal(result.details.driverEffect, "unverifiable");
+  assert.equal(result.details.deliveryMode, "foreground");
+  await assert.rejects(() => controller.approvalFor({ action: "click", element: 0 }), /latest capture/u);
+
+  await capture(controller, "ax");
+  session.handler = (next) =>
+    next.name === "invoke_menu"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "invoke_menu: no menu item titled Export" }],
+          structuredContent: {
+            status: "refused",
+            refusal: { code: "menu_path_unavailable", message: "no menu item titled Export" },
+          },
+        }
+      : fakeResponse(next, session.driver);
+  await assert.rejects(
+    () => approved(controller, "menu-missing", { action: "menu", menu_path: ["File", "Export"] }),
+    /no menu item titled Export/u,
+  );
+  assert.equal(controller.lifecycleState, "ready");
+  await controller.close();
+});
+
+test("set_window_frame is an approved background frame change that invalidates the capture", async () => {
+  const { controller, session } = harness(true);
+  await capture(controller, "som");
+  const args = { action: "set_window_frame" as const, x: 10, y: 20, width: 640, height: 480 };
+  const approval = await controller.approvalFor(args);
+  assert.ok(approval);
+  for (const value of ["10", "20", "640", "480"]) assert.ok(approval.summary.includes(value), value);
+  assert.doesNotMatch(approval.summary, /FOREGROUND/u);
+  controller.authorize("frame", args, approval);
+  const result = await controller.execute("frame", args);
+  const call = session.calls[session.calls.length - 1];
+  assert.deepEqual([call.name, call.args], [
+    "set_window_frame",
+    { pid: 42, window_id: 7, x: 10, y: 20, width: 640, height: 480 },
+  ]);
+  assert.equal(result.details.driverEffect, "confirmed");
+  assert.deepEqual(result.details.evidence, ["value_readback"]);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", coordinate: [1, 1] }),
+    /fresh screenshot/u,
+  );
+  // The driver's readback now reports the new frame.
+  await capture(controller, "som");
+  const verified = await controller.execute("frame-check", {
+    action: "verify",
+    expect: [{ window: { bounds: { x: 10, y: 20, width: 640, height: 480 } } }],
+  });
+  assert.equal(verified.details.verifyStatus, "satisfied");
+  await controller.close();
+});
+
+test("capture forwards a bounded max_image_dimension and caps elements locally", async () => {
+  const { controller, session } = harness(true);
+  session.driver.elements = () =>
+    Array.from({ length: 30 }, (_, index) => ({ role: "AXButton", label: `B${index}` }));
+  const result = await controller.execute("small", {
+    action: "capture",
+    app: "Safari",
+    mode: "som",
+    max_elements: 5,
+    max_image_dimension: 512,
+  });
+  const call = session.calls[session.calls.length - 1];
+  assert.equal(call.args.max_image_dimension, 512);
+  // The driver walks a generous AX budget; the model gets only its 5 elements.
+  assert.ok((call.args.max_elements as number) >= 500);
+  assert.equal(result.details.elementCount, 5);
+  await controller.execute("vision-small", {
+    action: "capture",
+    app: "Safari",
+    mode: "vision",
+    max_image_dimension: 256,
+  });
+  assert.equal(session.calls[session.calls.length - 1].args.max_image_dimension, 256);
+  assert.throws(
+    () =>
+      normalizeComputerUseArgs({
+        action: "capture",
+        app: "Safari",
+        max_image_dimension: 64,
+      }),
+    /max_image_dimension/u,
+  );
+  await controller.close();
+});
+
+test("the system prompt carries Computer Use guidance only when the tool is offered", async () => {
+  const withTool = await buildSystemPrompt(
+    "/repo",
+    "main",
+    "full",
+    false,
+    false,
+    undefined,
+    new Set(["computer_use", "shell"]),
+  );
+  const withoutTool = await buildSystemPrompt(
+    "/repo",
+    "main",
+    "full",
+    false,
+    false,
+    undefined,
+    new Set(["shell"]),
+  );
+  const unscoped = await buildSystemPrompt(undefined, undefined, "none", false, false, undefined, new Set(["computer_use"]));
+  assert.doesNotMatch(withoutTool, /computer_use|cua-driver/u);
+  for (const prompt of [withTool, unscoped]) {
+    const guidance = prompt.slice(prompt.indexOf("computer_use"));
+    assert.ok(prompt.includes("computer_use"));
+    // The rules the controller depends on: recapture, verify, untrusted content.
+    assert.match(guidance, /latest capture/iu);
+    assert.match(guidance, /\bverify\b/u);
+    assert.match(guidance, /untrusted/iu);
+    assert.match(guidance, /foreground/iu);
+  }
+});
+
+test("element drag refuses an element whose centre lies outside the captured window", async () => {
+  const { controller, session } = harness(true);
+  session.driver.elements = () => [
+    { role: "AXButton", label: "Visible", frame: { x: 110, y: 60, w: 20, h: 20 } },
+    // Scrolled below the 100pt-tall window: its centre has no screenshot pixel.
+    { role: "AXButton", label: "Below", frame: { x: 110, y: 400, w: 20, h: 20 } },
+  ];
+  await capture(controller, "som");
+  await assert.rejects(
+    () => controller.approvalFor({ action: "drag", from_element: 0, to_element: 1 }),
+    (error: Error & { code?: string }) =>
+      error.code === "drag_frame_unavailable" && /outside the captured window/u.test(error.message),
+  );
+  assert.equal(
+    session.calls.some((call) => call.name === "drag"),
+    false,
+  );
+  await controller.close();
+});
+
+for (const code of ["action_outcome_mismatch", "typed_output_mismatch", "tool_output_invalid"]) {
+  test(`${code} with an unknown execution state asks to observe before any retry`, async () => {
+    const { controller, session } = harness(true);
+    await capture(controller, "som");
+    session.handler = (call) =>
+      call.name === "type_text"
+        ? {
+            isError: true,
+            content: [{ type: "text", text: "internal output mismatch; the tool may have executed." }],
+            structuredContent: { code, execution_state: "unknown" },
+          }
+        : fakeResponse(call, session.driver);
+    await assert.rejects(
+      () => approved(controller, code, { action: "type", text: "hello" }),
+      (error: Error & { code?: string }) =>
+        error.code === "execution_unknown" &&
+        /may already have taken effect/u.test(error.message) &&
+        /never repeat/u.test(error.message),
+    );
+    assert.equal(controller.lifecycleState, "ready");
+    // Nothing captured before the uncertain action is reused.
+    await assert.rejects(() => controller.approvalFor({ action: "click", element: 0 }), /latest capture/u);
+    await assert.rejects(
+      () => controller.approvalFor({ action: "click", coordinate: [1, 1] }),
+      /fresh screenshot/u,
+    );
+    await controller.close();
+  });
+}

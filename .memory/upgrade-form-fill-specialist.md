@@ -23,7 +23,7 @@ Narrow opt-in specialist layered on existing Computer Use. NOT a replacement age
 
 ## Status
 
-**Blocked, not delivered:** pinned cua-driver 0.8.3 has no document-lifetime identity or atomic conditional write. Production specialist tool admission, enabling/downloading, approval capture and batch execution now fail closed. Settings offers cleanup only; the shipped-feature tour tile is removed. Pure extraction/scoring/ledger code remains groundwork, not a usable filling feature.
+**Blocked, not delivered:** pinned cua-driver (0.8.3, and still 0.34.1 after the 2026-10-09 upgrade) has no document-lifetime identity or atomic conditional write. Production specialist tool admission, enabling/downloading, approval capture and batch execution now fail closed. Settings offers cleanup only; the shipped-feature tour tile is removed. Pure extraction/scoring/ledger code remains groundwork, not a usable filling feature.
 
 - All TS suites green (test:form-fill = 76+eval tests; test:computer-use incl. ipc-contract; type-check; eslint).
 - **Verified on macOS**: Swift helper compilation and 17 native tests with real SHA-verified FP16 model (zero skips). Still unverified: helper signing/notarization in a real package and end-to-end acceptance against a live form window.
