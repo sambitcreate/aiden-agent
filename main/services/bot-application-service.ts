@@ -1123,7 +1123,6 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         botId: input.botId,
         providerId,
         model,
-        initialAssistantMessage: bot.openingGreeting,
         assertCurrent,
       });
       operation = await advance(operation, "chat_committed");

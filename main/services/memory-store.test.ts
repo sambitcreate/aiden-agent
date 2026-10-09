@@ -17,7 +17,7 @@ async function fixture(t: TestContext, now: number | (() => number) = 1_000) {
 }
 
 const workspace: MemoryScope = { kind: "workspace", id: "workspace-a" };
-const bot: MemoryScope = { kind: "bot", id: "bot-a" };
+const otherWorkspace: MemoryScope = { kind: "workspace", id: "workspace-b" };
 
 test("memory facts normalize, deduplicate, stay private, and search with scoped FTS5", async (t) => {
   const { root, store } = await fixture(t);
@@ -36,7 +36,7 @@ test("memory facts normalize, deduplicate, stay private, and search with scoped 
   });
   await store.put({
     id: "fact-bot",
-    scope: bot,
+    scope: otherWorkspace,
     text: "Prefer concise release notes for this Bot.",
     provenance: { kind: "user_edit", sourceId: "bot-editor" },
   });
@@ -45,7 +45,7 @@ test("memory facts normalize, deduplicate, stay private, and search with scoped 
   assert.equal(duplicate.id, fact.id);
   assert.deepEqual((await store.alwaysOn(workspace)).map(({ id }) => id), [fact.id]);
   assert.deepEqual((await store.search(workspace, "concise notes")).map(({ id }) => id), [fact.id]);
-  assert.deepEqual((await store.search(bot, "concise notes")).map(({ id }) => id), ["fact-bot"]);
+  assert.deepEqual((await store.search(otherWorkspace, "concise notes")).map(({ id }) => id), ["fact-bot"]);
   assert.equal((await stat(path.join(root, "memory-v1.sqlite"))).mode & 0o777, 0o600);
 });
 
@@ -130,23 +130,23 @@ test("fact deletion is exact-scope and cannot delete a same-id foreign record", 
   const { store } = await fixture(t);
   await store.put({
     id: "fact-a",
-    scope: bot,
+    scope: otherWorkspace,
     text: "Use the Bot-specific deployment checklist.",
     provenance: { kind: "user_edit", sourceId: "bot-editor" },
   });
   await store.put({
     id: "fact-b",
-    scope: bot,
+    scope: otherWorkspace,
     text: "Use the replacement Bot deployment checklist.",
     provenance: { kind: "user_edit", sourceId: "bot-editor-2" },
     supersedesId: "fact-a",
   });
 
   assert.equal(await store.remove(workspace, "fact-a"), false);
-  assert.equal((await store.list(bot)).length, 2);
-  assert.equal((await store.list(bot)).find(({ id }) => id === "fact-b")?.supersedesId, "fact-a");
-  assert.equal(await store.remove(bot, "fact-a"), true);
-  const remaining = await store.list(bot);
+  assert.equal((await store.list(otherWorkspace)).length, 2);
+  assert.equal((await store.list(otherWorkspace)).find(({ id }) => id === "fact-b")?.supersedesId, "fact-a");
+  assert.equal(await store.remove(otherWorkspace, "fact-a"), true);
+  const remaining = await store.list(otherWorkspace);
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0]?.supersedesId, undefined);
 });
@@ -259,7 +259,7 @@ test("bounded transcript and artifact metadata recall is scoped and source-cited
     { id: "doc-artifact", kind: "artifact", text: "Artifact release-cobalt.html type text/html.", chatId: "chat-a", sourceId: "artifact-a" },
     { id: "doc-secret", kind: "transcript", text: "api_key = do-not-index", chatId: "chat-a", sourceId: "message-secret" },
   ]);
-  await store.replaceChatMetadata(bot, "chat-b", [
+  await store.replaceChatMetadata(otherWorkspace, "chat-b", [
     { id: "doc-bot", kind: "transcript", text: "Cobalt belongs only to the Bot.", chatId: "chat-b", sourceId: "message-b" },
   ]);
 
@@ -287,7 +287,7 @@ test("re-approving expired text stores fresh metadata and restores recall at the
   });
   const foreign = await store.put({
     id: "foreign",
-    scope: bot,
+    scope: otherWorkspace,
     text: original.text,
     provenance: { kind: "user_edit", sourceId: "bot-editor" },
     expiresAt: 2_000,
@@ -317,7 +317,7 @@ test("re-approving expired text stores fresh metadata and restores recall at the
   assert.deepEqual((await store.list(workspace)).find(({ id }) => id === original.id), {
     ...original, state: "superseded", updatedAt: now,
   });
-  assert.deepEqual(await store.list(bot), [foreign]);
+  assert.deepEqual(await store.list(otherWorkspace), [foreign]);
 
   // Reopening preserves the renewal; deleting old provenance cannot remove it.
   await store.close();
@@ -449,13 +449,13 @@ test("renewal does not retire an expired ID reused by a competing writer in anot
   now = 3_000;
   await withCompetingWrite(t, root, (writer) => {
     writer.prepare("DELETE FROM memory_facts WHERE id = ?").run("reused-id");
-    insertCompetingFact(writer, "reused-id", bot, "Prefer concise release notes.");
+    insertCompetingFact(writer, "reused-id", otherWorkspace, "Prefer concise release notes.");
   }, () => store.put({
     id: "renewed", scope: workspace, text: "Prefer concise release notes.",
     provenance: { kind: "user_edit", sourceId: "new-editor" },
   }));
-  assert.equal((await store.list(bot))[0]?.state, "active");
-  assert.deepEqual((await store.search(bot, "release")).map(({ id }) => id), ["reused-id"]);
+  assert.equal((await store.list(otherWorkspace))[0]?.state, "active");
+  assert.deepEqual((await store.search(otherWorkspace, "release")).map(({ id }) => id), ["reused-id"]);
   assert.deepEqual((await store.search(workspace, "release")).map(({ id }) => id), ["renewed"]);
 });
 
@@ -558,4 +558,37 @@ test("requested expiry elapsed before BEGIN rejects without superseding the prio
     ...input, id: "valid", text: "Deploy on Wednesday.", expiresAt: 3_000, supersedesId: prior.id,
   });
   assert.equal(replacement.createdAt, 2_000);
+});
+
+test("legacy Bot-scope rows are purged when the store opens; workspace rows stay", async (t) => {
+  const { root, store } = await fixture(t);
+  await store.put({ id: "kept", scope: workspace, text: "Prefer concise release notes.", provenance: { kind: "user_edit", sourceId: "editor" } });
+  await store.close();
+  const writer = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  try {
+    writer.prepare(`
+      INSERT INTO memory_facts (
+        id, scope_kind, scope_id, normalized_text, provenance_kind, source_id,
+        created_at, updated_at, confidence, review_state, state, always_on
+      ) VALUES ('legacy-bot-fact', 'bot', 'bot-a', 'Bot memory from before.', 'user_edit', 'editor', 1, 1, 1, 'approved', 'active', 1)
+    `).run();
+    writer.prepare(`
+      INSERT INTO memory_documents (id, scope_kind, scope_id, kind, normalized_text, source_chat_id, source_id, updated_at)
+      VALUES ('legacy-bot-doc', 'bot', 'bot-a', 'transcript', 'Old Bot transcript.', 'chat-b', 'message-b', 1)
+    `).run();
+  } finally {
+    writer.close();
+  }
+
+  const reopened = new MemoryStore({ root: () => root, now: () => 1_000 });
+  t.after(() => reopened.close());
+  assert.deepEqual((await reopened.list(workspace)).map(({ id }) => id), ["kept"]);
+  const reader = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  try {
+    const count = (table: string) =>
+      (reader.prepare(`SELECT count(*) AS count FROM ${table} WHERE scope_kind = 'bot'`).get() as { count: number }).count;
+    assert.deepEqual([count("memory_facts"), count("memory_documents")], [0, 0]);
+  } finally {
+    reader.close();
+  }
 });

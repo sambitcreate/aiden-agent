@@ -96,9 +96,6 @@ function projectBot(value: unknown): StoredBotDefinition | null {
           cleanText(bot.description, BOT_LIMITS.descriptionChars, false) !== undefined)) &&
       typeof bot.instructions === "string" &&
       cleanText(bot.instructions, BOT_LIMITS.instructionsChars, true) !== undefined &&
-      (bot.openingGreeting === undefined ||
-        (typeof bot.openingGreeting === "string" &&
-          cleanText(bot.openingGreeting, BOT_LIMITS.openingGreetingChars, false) !== undefined)) &&
       typeof bot.createdAt === "number" &&
       Number.isSafeInteger(bot.createdAt) &&
       typeof bot.updatedAt === "number" &&
@@ -118,9 +115,7 @@ function projectBot(value: unknown): StoredBotDefinition | null {
       ? { description: bot.description.trim() }
       : {}),
     instructions: (bot.instructions as string).trim(),
-    ...(typeof bot.openingGreeting === "string"
-      ? { openingGreeting: bot.openingGreeting.trim() }
-      : {}),
+    // A retired `openingGreeting` key is ignored here and dropped on the next write.
     avatar,
     createdAt: bot.createdAt as number,
     updatedAt: bot.updatedAt as number,
@@ -167,23 +162,15 @@ function normalizeInput(input: BotCreateInput): BotCreateInput {
   const name = cleanText(input.name, BOT_LIMITS.nameChars, true);
   const description = cleanText(input.description ?? "", BOT_LIMITS.descriptionChars, false);
   const instructions = cleanText(input.instructions, BOT_LIMITS.instructionsChars, true);
-  const openingGreeting = cleanText(
-    input.openingGreeting ?? "",
-    BOT_LIMITS.openingGreetingChars,
-    false,
-  );
   if (!name) throw new Error("Give this bot a name.");
   if (input.description !== undefined && input.description.trim() && !description)
     throw new Error("Bot description is too long.");
   if (!instructions) throw new Error("Give this bot instructions.");
-  if (input.openingGreeting !== undefined && input.openingGreeting.trim() && !openingGreeting)
-    throw new Error("Bot opening greeting is too long.");
   if (!isBotAvatar(input.avatar)) throw new Error("Choose a valid bot avatar.");
   return {
     name,
     description,
     instructions,
-    ...(openingGreeting ? { openingGreeting } : {}),
     avatar: input.avatar,
   };
 }
@@ -234,9 +221,6 @@ export function createBotStore(options: {
         name: normalized.name,
         ...(normalized.description ? { description: normalized.description } : {}),
         instructions: normalized.instructions,
-        ...(normalized.openingGreeting
-          ? { openingGreeting: normalized.openingGreeting }
-          : {}),
         avatar: { version: 1, shape: normalized.avatar.shape, color: normalized.avatar.color },
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -281,8 +265,8 @@ export function createBotStore(options: {
           }
           bot.name = normalized.name;
           bot.instructions = normalized.instructions;
-          if (normalized.openingGreeting) bot.openingGreeting = normalized.openingGreeting;
-          else delete bot.openingGreeting;
+          // The retired opening greeting never survives a save.
+          delete (bot as { openingGreeting?: unknown }).openingGreeting;
           if (normalized.description) bot.description = normalized.description;
           else delete bot.description;
           bot.avatar = { version: 1, shape: normalized.avatar.shape, color: normalized.avatar.color };

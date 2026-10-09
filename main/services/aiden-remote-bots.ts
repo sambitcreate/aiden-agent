@@ -469,7 +469,6 @@ export class AidenRemoteBotService {
     return parseAidenRemoteBotDetail({
       ...summary,
       instructions: bot.instructions,
-      ...(bot.openingGreeting === undefined ? {} : { openingGreeting: bot.openingGreeting }),
       access: parseAidenRemoteBotAccessView(access),
       ...(modelSelection ? { modelSelection } : {}),
       ...(visionModelSelection ? { visionModelSelection } : {}),
@@ -636,7 +635,6 @@ export class AidenRemoteBotService {
               name: parsed.name,
               ...(parsed.purpose ? { description: parsed.purpose } : {}),
               instructions: parsed.instructions,
-              ...(parsed.openingGreeting ? { openingGreeting: parsed.openingGreeting } : {}),
               avatar: recipe(parsed.avatar),
             },
             // Omitted access is Full; a missing AI model leaves the Bot in `needs_model`.
@@ -672,6 +670,19 @@ export class AidenRemoteBotService {
       "The Bot identity update is invalid.",
     );
     const existing = await this.bot(botId);
+    // A patch that carried only the retired greeting changes nothing (revision 27).
+    if (Object.keys(parsed).length === 0) {
+      if (expectedRevision !== existing.revision) {
+        throw new AidenRemoteServiceError(
+          "revision_conflict",
+          "This Bot changed. Refresh it before trying again.",
+          409,
+          false,
+          { currentRevision: existing.revision },
+        );
+      }
+      return this.detail(existing, audienceId);
+    }
     try {
       const updated = await this.options.application.updateBot({
         id: existing.id,
@@ -681,9 +692,6 @@ export class AidenRemoteBotService {
           ? parsed.purpose ? { description: parsed.purpose } : {}
           : existing.description ? { description: existing.description } : {}),
         instructions: parsed.instructions ?? existing.instructions,
-        ...(parsed.openingGreeting !== undefined
-          ? parsed.openingGreeting ? { openingGreeting: parsed.openingGreeting } : {}
-          : existing.openingGreeting ? { openingGreeting: existing.openingGreeting } : {}),
         avatar: recipe(parsed.avatar ?? existing.avatar),
       });
       this.options.notifyBotsChanged?.(updated.id);

@@ -160,6 +160,12 @@ export interface BotSessionRuntime extends BotSessionService {
   initialize(): Promise<{ removedOrphans: string[]; interrupted: string[] }>;
   /** The Bot's conversation, opened lazily (for live projection). */
   conversation(botId: string): Promise<Conversation>;
+  /**
+   * Compact the Bot's one conversation now (Telegram `/new`), focused on what
+   * the person shared and what the Bot promised (`compactionInstructions`).
+   * Resolves once the compaction is admitted; it summarizes in the background.
+   */
+  compact(botId: string): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -185,6 +191,13 @@ export interface BotSessionServiceDeps {
    * be idempotent: a failed or interrupted delete is retried from the start.
    */
   deleteEffects?: ReadonlyArray<(botId: string) => Promise<void>>;
+  /**
+   * A harness opened for this Bot (first use, or after the idle close): a new
+   * session starts, so per-session state such as the memory snapshot resets.
+   */
+  onSessionOpen?(botId: string): void;
+  /** The focus a manual compaction (`compact`) asks the summary to keep. */
+  compactionInstructions?: string;
   settings?: HarnessSettings;
   idleCloseMs?: number;
   now?: () => number;
@@ -258,6 +271,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     buildRegistry: (botId) => {
       const registry = createBotRegistry(botId, deps.extension);
       registries.set(botId, registry);
+      deps.onSessionOpen?.(botId);
       return registry;
     },
     ...(deps.settings === undefined ? {} : { settings: deps.settings }),
@@ -536,6 +550,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       }
       if (settled.reason === "aborted") return { kind: "interrupted", settled: true };
       return { kind: "failed", error: settled.reason ?? "The reply failed." };
+    },
+
+    compact(botId) {
+      return serialize(botId, async () => {
+        const { conversation, registry } = await openBot(botId);
+        await prepareToRun(botId, conversation, registry);
+        await conversation.compact(deps.compactionInstructions, ctx);
+        requireHost().touch(botId);
+      });
     },
 
     async markSilent(botId, submissionId) {

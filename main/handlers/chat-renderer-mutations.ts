@@ -14,7 +14,6 @@ import {
 import type { createChatApplicationService } from "../services/chat-application-service.js";
 import type { createChatStore } from "../services/chat-store-core.js";
 import type { ChatTurnLease } from "../services/chat-turn-admission.js";
-import type { MemoryScope } from "../services/memory-store.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   commitSkillInvocationForAppend,
@@ -40,7 +39,6 @@ export interface RendererChatMutationDeps {
   };
   botApplicationService: { deleteChat(input: { botId: string; chatId: string }): Promise<unknown> };
   hostPlatformCapabilities(): { bots: boolean };
-  memoryStore: { deleteScope(scope: MemoryScope): Promise<unknown> };
   closeDeviceSessionsForChat(chatId: string): void;
   chatReadMarkers: { remove(chatId: string): Promise<unknown> };
   rendererDocumentOwner(event: IpcMainInvokeEvent, invalidRequest: () => Error): RendererDocumentOwner;
@@ -63,7 +61,6 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     chatTitleService,
     botApplicationService,
     hostPlatformCapabilities,
-    memoryStore,
     closeDeviceSessionsForChat,
     chatReadMarkers,
     rendererDocumentOwner,
@@ -89,7 +86,6 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       const result = chat?.botId && hostPlatformCapabilities().bots
         ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
         : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
-      if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
       closeDeviceSessionsForChat(chatId);
       void chatReadMarkers.remove(chatId).catch(() => undefined);
       return result;

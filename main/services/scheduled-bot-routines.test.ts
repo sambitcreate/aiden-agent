@@ -9,10 +9,14 @@ import type {
 import { createScheduleServiceCore, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import {
+  BOT_ROUTINE_CATCH_UP_WINDOW_MS,
+  createBotRoutineCatchUp,
+  createBotRoutineCatchUpTrigger,
   createBotRoutineExecutor,
   createBotRoutineService,
   parseBotRoutineCreate,
   parseBotRoutineUpdate,
+  type BotRoutineResultDelivery,
 } from "./scheduled-bot-routines.js";
 import type { ScheduledTask } from "./types.js";
 
@@ -44,7 +48,7 @@ class MemoryPersistence<T> {
 class FakeBotSession implements BotRoutinePorts {
   states = new Map<string, BotSessionState>();
   replies: Array<BotRoutineSubmissionOutcome | Promise<BotRoutineSubmissionOutcome>> = [];
-  sends: Array<{ botId: string; text: string; requestId: string }> = [];
+  sends: Array<{ botId: string; text: string; requestId: string; label?: string }> = [];
   silenced: Array<{ botId: string; submissionId: string }> = [];
   resumeCalls = 0;
   dismissCalls = 0;
@@ -54,7 +58,7 @@ class FakeBotSession implements BotRoutinePorts {
     return this.states.get(botId) ?? { kind: "idle" };
   }
 
-  async send(botId: string, input: { text: string; requestId: string }) {
+  async send(botId: string, input: { text: string; requestId: string; label?: string }) {
     const existing = this.submissions.get(input.requestId);
     if (existing) return { submissionId: existing, deduped: true };
     const submissionId = `sub-${this.submissions.size + 1}`;
@@ -69,6 +73,13 @@ class FakeBotSession implements BotRoutinePorts {
 
   async markSilent(botId: string, submissionId: string): Promise<void> {
     this.silenced.push({ botId, submissionId });
+  }
+
+  /** What the routine handed to the Bot's other surfaces (its Telegram chat). */
+  deliveries: BotRoutineResultDelivery[] = [];
+
+  async deliverResult(delivery: BotRoutineResultDelivery): Promise<void> {
+    this.deliveries.push(delivery);
   }
 
   // The session's recovery actions exist on the real service; a routine must
@@ -493,4 +504,131 @@ test("routine IPC payloads are parsed strictly", () => {
     expectedUpdatedAt: 5,
     enabled: false,
   });
+});
+
+/** A routine whose scheduled fire was skipped because its Bot was paused. */
+async function missedWhilePaused(h: ReturnType<typeof harness>, fires = 1) {
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Weekly meal prep",
+    schedule: { kind: "weekly", days: [0], time: "08:41" },
+    prompt: "Plan this week's dinners.",
+  });
+  h.session.states.set("bot-chef", { kind: "interrupted", submissionId: "sub-paused" });
+  const task = (await h.store.get(routine.id))!;
+  for (let fire = 0; fire < fires; fire += 1) {
+    // Real fires are minutes apart; keep their records' start times distinct.
+    if (fire > 0) await new Promise((resolve) => setTimeout(resolve, 3));
+    await h.run(task, undefined, { kind: "automatic", fireTime: 1_800_000_000_000 + fire * 60_000 });
+  }
+  const [skipped] = await h.store.runs(routine.id);
+  assert.equal(skipped?.reason, "bot_paused");
+  h.session.states.set("bot-chef", { kind: "idle" });
+  return { routine, task, skipped: skipped! };
+}
+
+async function settle(dispatched: Array<{ completion: Promise<unknown> }>) {
+  await Promise.all(dispatched.map(({ completion }) => completion));
+}
+
+test("after Resume the newest fire missed while paused runs once, under the missed fire's own request id", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const { routine } = await missedWhilePaused(h, 3);
+  await h.scheduler.start();
+  h.session.replies.push({ kind: "completed", text: "Monday: lentil soup." });
+  const catchUp = createBotRoutineCatchUp({ store: h.store, scheduler: h.scheduler });
+
+  await settle(await catchUp.catchUp("bot-chef"));
+
+  // Three misses coalesce into one run of the newest.
+  assert.deepEqual(
+    h.session.sends.map(({ requestId, label }) => ({ requestId, label })),
+    [{ requestId: `routine:${routine.id}:${1_800_000_000_000 + 2 * 60_000}`, label: "Weekly meal prep (missed while paused)" }],
+  );
+  assert.deepEqual(h.notifications.map(({ body }) => body), ["Monday: lentil soup."]);
+
+  // The catch-up ran, so another state change finds nothing to catch up.
+  await settle(await catchUp.catchUp("bot-chef"));
+  assert.equal(h.session.sends.length, 1);
+});
+
+test("a repeated catch-up of the same miss submits once", async () => {
+  const h = harness();
+  const { task, skipped } = await missedWhilePaused(h);
+  const trigger = { kind: "catch_up", missedRunId: skipped.id, missedAt: skipped.startedAt } as const;
+
+  const first = await h.run(task, undefined, trigger);
+  const second = await h.run(task, undefined, trigger);
+
+  assert.equal(first.result, "success");
+  assert.equal(second.result, "skipped");
+  assert.equal(second.reason, "duplicate");
+  assert.equal(h.session.sends.length, 1);
+});
+
+test("a miss older than 7 days, or followed by a later run, is not caught up", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const { task, skipped } = await missedWhilePaused(h);
+  await h.scheduler.start();
+  const late = createBotRoutineCatchUp({
+    store: h.store,
+    scheduler: h.scheduler,
+    now: () => skipped.startedAt + BOT_ROUTINE_CATCH_UP_WINDOW_MS + 1,
+  });
+  assert.deepEqual(await late.catchUp("bot-chef"), []);
+
+  await h.run(task, undefined, { kind: "manual", key: "person-ran-it" });
+  const sendsBefore = h.session.sends.length;
+  const current = createBotRoutineCatchUp({ store: h.store, scheduler: h.scheduler });
+  assert.deepEqual(await current.catchUp("bot-chef"), [], "a later run supersedes the miss");
+  assert.equal(h.session.sends.length, sendsBefore);
+});
+
+test("catch-up starts when a Bot leaves its paused state, not on ordinary state changes", () => {
+  const caughtUp: string[] = [];
+  const onState = createBotRoutineCatchUpTrigger((botId) => caughtUp.push(botId));
+
+  onState("bot-chef", { kind: "interrupted" });
+  assert.deepEqual(caughtUp, []);
+  onState("bot-chef", { kind: "running" });
+  assert.deepEqual(caughtUp, ["bot-chef"], "Resume");
+  onState("bot-chef", { kind: "idle" });
+  onState("bot-chef", { kind: "running" });
+  assert.deepEqual(caughtUp, ["bot-chef"], "ordinary turns never catch up");
+  onState("bot-chef", { kind: "interrupted" });
+  onState("bot-chef", { kind: "unavailable" });
+  onState("bot-chef", { kind: "idle" });
+  assert.deepEqual(caughtUp, ["bot-chef", "bot-chef"], "Dismiss");
+  // A Bot first seen running may have been paused before this listener existed.
+  onState("bot-scout", { kind: "idle" });
+  assert.deepEqual(caughtUp, ["bot-chef", "bot-chef", "bot-scout"]);
+});
+
+test("a visible reply or a failure reaches the Bot's other surfaces once; silence and skips do not", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  const task = (await h.store.get(routine.id))!;
+
+  h.session.replies.push({ kind: "completed", text: "Rent is due Friday." });
+  await h.run(task, undefined, { kind: "automatic", fireTime: 1 });
+  h.session.replies.push({ kind: "completed", text: "[SILENT]" });
+  await h.run(task, undefined, { kind: "automatic", fireTime: 2 });
+  await h.run(task, undefined, { kind: "automatic", fireTime: 1 });
+  h.session.replies.push({ kind: "failed", error: "The AI service at /Users/sam is unreachable." });
+  await h.run(task, undefined, { kind: "automatic", fireTime: 3 });
+  h.session.states.set("bot-scout", { kind: "interrupted", submissionId: "sub-paused" });
+  await h.run(task, undefined, { kind: "automatic", fireTime: 4 });
+
+  assert.deepEqual(h.session.deliveries, [
+    { botId: "bot-scout", requestId: `routine:${routine.id}:1`, routineName: "Inbox sweep", text: "Rent is due Friday." },
+    // The failure's own text stays on the Mac.
+    { botId: "bot-scout", requestId: `routine:${routine.id}:3`, routineName: "Inbox sweep", text: "I couldn't finish this routine." },
+  ]);
 });

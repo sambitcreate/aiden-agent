@@ -1,10 +1,12 @@
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
 //
-// - System prompt: the Bot's sections in the order base, persona, authority,
-//   then connection guidance, rendered verbatim (Aiden already escapes and
-//   tags their content). Sections are built after the tools, so the base
-//   prompt and MCP guidance describe exactly the tools offered.
+// - System prompt: the Bot's sections in the order base, persona (the soul),
+//   authority, connection guidance, then memory, rendered verbatim (Aiden
+//   already escapes and tags their content). Sections are built after the
+//   tools, so the base prompt and MCP guidance describe exactly the tools
+//   offered. Memory renders before every request from the memory service's
+//   frozen snapshot and goes last, because it changes most often.
 // - Tools: Aiden tools adapted by `tool-adapter.ts`, rebuilt from the current
 //   inventory on every `refresh()` (each submit and Resume). MCP tools are
 //   never replay-safe; the caller declares replay for the rest.
@@ -22,6 +24,9 @@
 //   approval instead of minting a new one.
 // - Authority: the first request after the harness opens re-admits the Bot and
 //   fails closed (no provider request) when its access changed.
+// - Memory: a final answer notifies the background review (`afterReply`)
+//   without waiting for it; a compaction asks `beforeCompact` first, which
+//   flushes memory and may supply a steered summary.
 
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
@@ -29,6 +34,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
+  CompactionTask,
   createRegistry,
   defineExtension,
   GenerationTask,
@@ -36,9 +42,11 @@ import {
   LiveDoc,
   section,
   ToolTask,
+  type CompactionHooks,
+  type ConversationId,
+  type DocumentReader,
   type Extension,
   type Harness,
-  type HookApi,
   type Registry,
 } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
@@ -47,7 +55,9 @@ import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } f
 
 export const BOT_EXTENSION_NAME = "aiden-bot";
 /** Section keys, in render order. */
-export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority", "aiden-guidance"] as const;
+export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority", "aiden-guidance", "aiden-memory"] as const;
+/** The tool whose offer decides how the memory section reads. */
+const MEMORY_TOOL_NAME = "bot_memory";
 const APPROVAL_MEMO = "aiden.approval";
 
 export interface BotApprovalRequirement {
@@ -105,11 +115,31 @@ export interface BotTurnContext {
   requestId?: string;
 }
 
+/** What a compaction is about to summarize (Pi Durable's `beforeCompact` input). */
+export type BotCompaction = Parameters<CompactionHooks["beforeCompact"]>[0];
+
 export interface BotExtensionDeps {
   /** Re-read on every refresh. */
   loadBot(botId: string): Promise<BotDefinition>;
   /** Base, persona, authority and guidance sections, in this order. Built after `currentTools`. */
   systemSections(bot: BotDefinition, offered: BotOfferedTools): Promise<string[]>;
+  /**
+   * The `aiden-memory` section, rendered before every request. `memoryOffered`
+   * says whether this request offers `bot_memory`. Absent or "": no section.
+   */
+  memorySection?(botId: string, offer: { memoryOffered: boolean }): Promise<string>;
+  /** The Bot gave a final answer. Called without waiting; must not throw. */
+  afterReply?(botId: string): void;
+  /**
+   * A compaction is about to summarize. Return a summary to use instead of Pi
+   * Durable's own, or `undefined` to let it summarize. Errors fall back too.
+   */
+  beforeCompact?(
+    botId: string,
+    compaction: BotCompaction,
+    offer: { memoryOffered: boolean },
+    context: Context,
+  ): Promise<{ summary: string } | undefined>;
   currentTools(bot: BotDefinition, turn: BotTurnContext): Promise<BotToolEntry[]>;
   checkPolicy(botId: string, toolName: string, call?: BotToolCallCheck): Promise<BotPolicyDecision>;
   /**
@@ -198,14 +228,29 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     throw error;
   }
 
+  let installedToolNames = new Set<string>();
+
   /** Request ids of the inputs the current run of this conversation serves, read from durable state. */
-  async function runRequestIds(api: HookApi, context: Context): Promise<(string | undefined)[]> {
+  async function runRequestIds(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
+    context: Context,
+  ): Promise<(string | undefined)[]> {
     const live = await api.snapshot(LiveDoc, api.conversationId, context);
     const inputs = live?.run?.inputs ?? [];
     if (inputs.length === 0) return [];
     if (harness === undefined) throw new Error("The Bot harness is not attached.");
     const { submissions } = await harness.inspect(context);
     return inputs.map((id) => submissions.find((submission) => submission.id === id)?.requestId);
+  }
+
+  /** Whether the run being served may use `bot_memory`. */
+  async function memoryOffered(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
+    context: Context,
+  ): Promise<boolean> {
+    if (!installedToolNames.has(MEMORY_TOOL_NAME)) return false;
+    if (deps.turnAllows === undefined) return true;
+    return deps.turnAllows(MEMORY_TOOL_NAME, await runRequestIds(api, context));
   }
 
   const hooks = [
@@ -228,6 +273,22 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         }
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
         return messages === request.messages ? undefined : { messages };
+      },
+      onYield: () => {
+        // The review decides later whether to run; the answer never waits on it.
+        try {
+          deps.afterReply?.(botId);
+        } catch {
+          // A review that cannot be scheduled must never affect the reply.
+        }
+        return undefined;
+      },
+    }),
+    hook(CompactionTask, {
+      beforeCompact: async (compaction, api, context) => {
+        if (deps.beforeCompact === undefined) return undefined;
+        const offered = await memoryOffered(api, context).catch(() => false);
+        return deps.beforeCompact(botId, compaction, { memoryOffered: offered }, context);
       },
     }),
     hook(ToolTask, {
@@ -274,10 +335,24 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       name: BOT_EXTENSION_NAME,
       tools,
       sections: BOT_SECTION_KEYS.map((key, index) =>
-        section(key, () => {
-          const text = sections[index];
-          return text === undefined || text.length === 0 ? undefined : text;
-        }, { tag: false }),
+        key === "aiden-memory"
+          ? section(
+              key,
+              async (input, context) => {
+                if (deps.memorySection === undefined) return undefined;
+                const offered = await memoryOffered(
+                  { snapshot: input.read.snapshot.bind(input.read), conversationId: input.conversationId },
+                  context,
+                );
+                const text = await deps.memorySection(botId, { memoryOffered: offered });
+                return text.length === 0 ? undefined : text;
+              },
+              { tag: false },
+            )
+          : section(key, () => {
+              const text = sections[index];
+              return text === undefined || text.length === 0 ? undefined : text;
+            }, { tag: false }),
       ),
       hooks,
     });
@@ -290,7 +365,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       const bot = await deps.loadBot(botId);
       const entries = await deps.currentTools(bot, turn);
       const nextSections = await deps.systemSections(bot, { toolNames: entries.map(({ tool }) => tool.name) });
-      sections = nextSections.slice(0, BOT_SECTION_KEYS.length);
+      // The memory section renders per request; the rest are fixed per refresh.
+      sections = nextSections.slice(0, BOT_SECTION_KEYS.length - 1);
+      installedToolNames = new Set(entries.map(({ tool }) => tool.name));
       const tools = entries.map(({ tool, replay, mcp, bind }) =>
         adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind }) }),
       );

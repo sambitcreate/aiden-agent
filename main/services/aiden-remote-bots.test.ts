@@ -73,7 +73,6 @@ function bot(id: string, overrides: Partial<BotDefinition> = {}): BotDefinition 
     name: "Planner",
     description: "Keeps projects moving",
     instructions: "Help plan projects.",
-    openingGreeting: "What should we plan?",
     avatar: { version: 1, shape: "orb", color: "sky" },
     createdAt: 1_000,
     updatedAt: 2_000,
@@ -146,7 +145,6 @@ function fixture(
       const updated = bot(existing.id, {
         ...input,
         description: input.description,
-        openingGreeting: input.openingGreeting,
         revision: `${existing.revision}_next`,
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt + 1,
@@ -438,12 +436,23 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
   assert.equal(app.createCalls(), 1);
   assert.equal(created.instructions, "Research carefully.");
 
+  // Older phones still send the retired greeting: it is accepted, ignored and never emitted.
+  assert.equal("openingGreeting" in created, false);
   const updated = await app.service.updateIdentity(created.id, created.revision, {
     purpose: "Researches selected topics",
     openingGreeting: "",
   });
   assert.equal(updated.purpose, "Researches selected topics");
-  assert.equal(updated.openingGreeting, undefined);
+  assert.equal("openingGreeting" in updated, false);
+  const greetingOnly = await app.service.updateIdentity(created.id, updated.revision, {
+    openingGreeting: "Hi there!",
+  });
+  assert.equal(greetingOnly.revision, updated.revision, "a greeting-only patch changes nothing");
+  assert.equal("openingGreeting" in greetingOnly, false);
+  await assert.rejects(
+    app.service.updateIdentity(created.id, updated.revision, { openingGreeting: 42 }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
 
   const chat = await app.service.createChat(
     "device_1",

@@ -19,11 +19,9 @@ test("bot store persists create and edit, and delete erases the record", async (
       name: "  Reviewer  ",
       description: "Checks changes",
       instructions: "Review carefully.",
-      openingGreeting: "  What should we review?  ",
       avatar: { version: 1, shape: "hex", color: "sun" },
     });
     assert.equal(created.name, "Reviewer");
-    assert.equal(created.openingGreeting, "What should we review?");
     assert.deepEqual(
       (await store.list()).map((bot) => bot.id),
       [created.id],
@@ -34,11 +32,9 @@ test("bot store persists create and edit, and delete erases the record", async (
       name: "Reviewer",
       description: "Finds regressions",
       instructions: "Review carefully and cite evidence.",
-      openingGreeting: "Start with the changed files.",
       avatar: { version: 1, shape: "orb", color: "sky" },
     });
     assert.deepEqual(updated.avatar, { version: 1, shape: "orb", color: "sky" });
-    assert.equal(updated.openingGreeting, "Start with the changed files.");
     assert.equal(updated.createdAt, created.createdAt);
     const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as {
       version: number;
@@ -234,6 +230,40 @@ test("a stored avatar that is not a current recipe reads as the default and is r
     assert.deepEqual(written.avatar, { version: 1, shape: "drop", color: "rose" });
     assert.equal("avatarAppearance" in written, false);
     await assert.rejects(readFile(join(root, "bot-avatar-appearances.json"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a legacy record with an opening greeting loads, and the next save drops the greeting", async () => {
+  const { root } = await fixture();
+  try {
+    await writeFile(
+      join(root, "bots.json"),
+      JSON.stringify({
+        version: 1,
+        bots: [
+          { id: "bot:greeter", name: "Greeter", instructions: "x", openingGreeting: "Hi! What should we plan?", avatar: { version: 1, shape: "orb", color: "sky" }, createdAt: 1, updatedAt: 2 },
+          // Over the old 2,000-character bound: once a reason to drop the whole Bot.
+          { id: "bot:long", name: "Long", instructions: "x", openingGreeting: "h".repeat(3_000), avatar: { version: 1, shape: "orb", color: "sky" }, createdAt: 1, updatedAt: 1 },
+        ],
+      }),
+    );
+    const store = createBotStore({ root: () => root, now: () => 50 });
+    const bots = await store.list();
+    assert.deepEqual(bots.map((bot) => bot.id), ["bot:greeter", "bot:long"]);
+    assert.ok(bots.every((bot) => !("openingGreeting" in bot)), "the greeting is never read back");
+
+    const greeter = bots[0]!;
+    await store.update({
+      id: greeter.id,
+      expectedRevision: greeter.revision,
+      name: greeter.name,
+      instructions: "Plan meals.",
+      avatar: greeter.avatar,
+    });
+    const disk = JSON.parse(await readFile(join(root, "bots.json"), "utf8")) as { bots: Array<Record<string, unknown>> };
+    assert.equal("openingGreeting" in disk.bots.find((bot) => bot.id === "bot:greeter")!, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

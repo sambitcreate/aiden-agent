@@ -57,7 +57,6 @@ import {
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
-import { memoryStore } from "../services/memory-store-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
 import {
   chatContextPressure,
@@ -75,7 +74,6 @@ export function registerChatHistoryHandlers(): void {
       deleteChat: (input) => botApplicationService.deleteChat(input),
     },
     hostPlatformCapabilities,
-    memoryStore,
     closeDeviceSessionsForChat,
     chatReadMarkers,
     rendererDocumentOwner,

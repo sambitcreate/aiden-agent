@@ -41,15 +41,12 @@ function chat(overrides: Partial<Chat> = {}): Chat {
   };
 }
 
-test("memory scope derives only from authoritative Bot/workspace identity", () => {
+test("memory scope derives only from the authoritative workspace; Bot chats have none", () => {
   assert.deepEqual(memoryScopeForChat(chat({ title: "bot:fake" })), {
     kind: "workspace",
     id: "workspace-a",
   });
-  assert.deepEqual(memoryScopeForChat(chat({ botId: "bot-a", title: "Workspace" })), {
-    kind: "bot",
-    id: "bot-a",
-  });
+  assert.throws(() => memoryScopeForChat(chat({ botId: "bot-a", title: "Workspace" })), /do not use workspace memory/u);
 });
 
 test("always-on memory is a bounded escaped volatile data block", () => {
@@ -85,7 +82,7 @@ test("recall is exact-scope and remember writes only after its tool executes", a
   });
   await store.put({
     id: "bot-fact",
-    scope: { kind: "bot", id: "bot-a" },
+    scope: { kind: "workspace", id: "workspace-b" },
     text: "Use verbose release notes.",
     provenance: { kind: "user_edit", sourceId: "bot-editor" },
   });
@@ -202,7 +199,7 @@ test("memory proposal approval copy freezes exact scope, provenance, expiry, and
   );
   const summary = memoryApprovalSummary(
     proposal,
-    { kind: "bot", id: "bot-a" },
+    { kind: "workspace", id: "workspace-b" },
     {
       kind: "model_proposal",
       chatId: "chat-a",
@@ -211,7 +208,7 @@ test("memory proposal approval copy freezes exact scope, provenance, expiry, and
     },
   );
   assert.match(summary, /Remember exactly: “Use the Wednesday release window\.”/u);
-  assert.match(summary, /Scope: bot:bot-a/u);
+  assert.match(summary, /Scope: workspace:workspace-b/u);
   assert.match(summary, /Source: model_proposal:chat-a\/turn:turn-a\/anchor:message-a/u);
   assert.match(summary, /Always on: yes/u);
   assert.match(summary, /Replacement: fact-old/u);

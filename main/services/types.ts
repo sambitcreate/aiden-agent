@@ -510,6 +510,8 @@ export interface ScheduledTask {
   botId?: string;
   /** Frequency-first schedule a Bot routine was created from; `cron` is derived from it. */
   routineSchedule?: BotRoutineSchedule;
+  /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
+  sourceProposalId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -557,6 +559,8 @@ export interface ScheduledTaskInput {
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
   routineSchedule?: BotRoutineSchedule;
+  /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
+  sourceProposalId?: string;
   notify?: boolean;
 }
 

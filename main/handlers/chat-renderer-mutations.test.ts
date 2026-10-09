@@ -100,7 +100,6 @@ async function fixture(t: TestContext) {
     },
     botApplicationService: { deleteChat: async () => assert.fail("no Bot chat is deleted here") },
     hostPlatformCapabilities: () => ({ bots: false }),
-    memoryStore: { deleteScope: async () => assert.fail("no Bot memory is deleted here") },
     closeDeviceSessionsForChat: () => undefined,
     chatReadMarkers: { remove: async () => undefined },
     rendererDocumentOwner: () => owner,

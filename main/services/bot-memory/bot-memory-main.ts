@@ -1,9 +1,43 @@
-// Placeholder until Track A lands the real service (plan Step 0).
-import type { BotMemoryEditInput, BotMemoryEditResult, BotMemoryView, BotMemoryChangedEvent } from "../../../renderer/shared/bot-memory.js";
-export interface BotMemoryService {
-  view(botId: string): Promise<BotMemoryView>;
-  edit(input: BotMemoryEditInput): Promise<BotMemoryEditResult>;
-  onChanged(listener: (event: BotMemoryChangedEvent) => void): () => void;
+// The process-wide Bot memory service (spec 2026-10-09 §6–§8).
+//
+// Memory lives in each Bot's private session directory,
+// `<userData>/bots/<dir>/memory/`. Every successful write, whoever made it
+// (the person, the Bot's own tool, background review, compaction flush), is
+// pushed to desktop windows as `bots:memory:changed`; Remote subscribes to
+// `onChanged` itself.
+
+import { app, ipcMain, logger } from "../../platform.js";
+import { BOT_MEMORY_CHANNELS } from "../../../renderer/shared/bot-memory.js";
+import { createBotMemoryService, type BotMemoryRuntime, type BotMemoryService } from "./service.js";
+import { createBotMemoryStore } from "./store.js";
+
+export type { BotMemoryRuntime, BotMemoryService };
+
+let runtime: BotMemoryRuntime | undefined;
+
+/** Created on first use, once the profile directory is known. */
+export function botMemoryRuntime(): BotMemoryRuntime {
+  if (runtime === undefined) {
+    runtime = createBotMemoryService({
+      store: createBotMemoryStore({ profileDir: app.getPath("userData") }),
+      onReport: (botId, error) => logger.warn("bots", `Bot ${botId} memory listener failed.`, error),
+    });
+    runtime.onChanged((event) => ipcMain.broadcast(BOT_MEMORY_CHANNELS.changed, event));
+  }
+  return runtime;
 }
-const unavailable = () => Promise.reject(new Error("Bot memory is not available yet."));
-export const botMemoryService: BotMemoryService = { view: unavailable, edit: unavailable, onChanged: () => () => {} };
+
+/** The process-wide service, resolved on first call (safe to import before the app is ready). */
+export const botMemory: BotMemoryRuntime = {
+  view: (botId) => botMemoryRuntime().view(botId),
+  edit: (input) => botMemoryRuntime().edit(input),
+  apply: (botId, target, operations, options) => botMemoryRuntime().apply(botId, target, operations, options),
+  snapshot: (botId) => botMemoryRuntime().snapshot(botId),
+  beginSession: (botId) => botMemoryRuntime().beginSession(botId),
+  markStale: (botId) => botMemoryRuntime().markStale(botId),
+  forgetBot: (botId) => botMemoryRuntime().forgetBot(botId),
+  onChanged: (listener) => botMemoryRuntime().onChanged(listener),
+};
+
+/** The Step 0 contract Remote and IPC use. */
+export const botMemoryService: BotMemoryService = botMemory;

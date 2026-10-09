@@ -29,35 +29,6 @@ test("bot chats are durable chats excluded only from regular lists", async () =>
   }
 });
 
-test("a main-owned Bot opening greeting is copied once into a new chat", async () => {
-  const root = await mkdtemp(join(tmpdir(), "aiden-bot-greeting-"));
-  try {
-    const store = createChatStore(async () => root);
-    const chat = await store.create({
-      workspaceId: "managed-home-1",
-      botId: "bot-1",
-      title: "Researcher",
-      initialAssistantMessage: "  What should we explore?  ",
-    });
-    assert.equal(chat.messages.length, 1);
-    assert.equal(chat.messages[0]?.role, "assistant");
-    assert.equal(chat.messages[0]?.content, "What should we explore?");
-    const persisted = await store.get(chat.id);
-    assert.equal(persisted?.messages[0]?.content, "What should we explore?");
-    await assert.rejects(
-      store.create({
-        workspaceId: "managed-home-1",
-        botId: "bot-1",
-        initialAssistantMessage: "bad-\ud800-tail",
-      }),
-      /Invalid initial Bot greeting/u,
-    );
-    assert.equal((await store.listByBot("bot-1")).length, 1);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test("Bot list metadata maintains only one bounded visible-message preview", async () => {
   const root = await mkdtemp(join(tmpdir(), "aiden-bot-preview-"));
   try {
@@ -65,8 +36,8 @@ test("Bot list metadata maintains only one bounded visible-message preview", asy
     const chat = await store.create({
       workspaceId: "managed-home-1",
       botId: "bot-1",
-      initialAssistantMessage: "How can I help?",
     });
+    await store.appendMessage(chat.id, { role: "assistant", content: "How can I help?" });
     assert.equal((await store.listByBot("bot-1"))[0]?.preview, "How can I help?");
 
     await store.appendMessage(chat.id, {

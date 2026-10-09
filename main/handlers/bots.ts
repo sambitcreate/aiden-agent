@@ -23,6 +23,8 @@ import {
 } from "../services/aiden-remote-protocol.js";
 import { registerBotLiveHandlers } from "./bot-live.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
+import { registerBotMemoryHandlers } from "./bot-memory.js";
+import { botMemoryService } from "../services/bot-memory/bot-memory-main.js";
 import { registerBotFileHandlers } from "./bot-files.js";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
 import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
@@ -250,6 +252,12 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
   registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
+  // Profile → Memory: view, edit, delete and erase what the Bot remembers.
+  registerBotMemoryHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    memory: botMemoryService,
+    botExists: async (botId) => (await botApplicationService.get(botId)) !== undefined,
+  });
   // Read-only Files: the Bot's own folder.
   registerBotFileHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

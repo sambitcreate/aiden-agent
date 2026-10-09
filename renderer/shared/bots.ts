@@ -95,7 +95,6 @@ export const BOT_LIMITS = {
   nameChars: 80,
   descriptionChars: 280,
   instructionsChars: 32_000,
-  openingGreetingChars: 2_000,
 } as const;
 
 export interface BotDefinition {
@@ -104,9 +103,8 @@ export interface BotDefinition {
   revision: string;
   name: string;
   description?: string;
+  /** The Bot's soul: person-authored personality and how it helps (Profile → Instructions). */
   instructions: string;
-  /** Copied into a newly created Bot chat once; editing never rewrites history. */
-  openingGreeting?: string;
   avatar: BotAvatar;
   createdAt: number;
   updatedAt: number;
@@ -122,7 +120,6 @@ export interface BotCreateInput {
   name: string;
   description?: string;
   instructions: string;
-  openingGreeting?: string;
   avatar: BotAvatar;
 }
 

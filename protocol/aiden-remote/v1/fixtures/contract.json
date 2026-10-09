@@ -1,5 +1,5 @@
 {
-  "contractRevision": 26,
+  "contractRevision": 27,
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
@@ -98,7 +98,9 @@
       "bot-durable-session-v1",
       "bot-routines-v1",
       "bot-connection-requests-v1",
-      "bot-presets-v1"
+      "bot-presets-v1",
+      "bot-memory-v1",
+      "bot-proactive-v1"
     ],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
@@ -418,7 +420,6 @@
     "id": "bot_fixture_01",
     "name": "Scout",
     "purpose": "Finds the signal in a busy week",
-    "openingGreeting": "What should I help you sort out?",
     "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
     "avatar": {
       "semantic": {
@@ -473,7 +474,6 @@
     "request": {
       "name": "Scout",
       "purpose": "Finds the signal in a busy week",
-      "openingGreeting": "What should I help you sort out?",
       "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
       "avatar": {
         "version": 1,
@@ -485,7 +485,6 @@
       "id": "bot_fixture_01",
       "name": "Scout",
       "purpose": "Finds the signal in a busy week",
-      "openingGreeting": "What should I help you sort out?",
       "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
       "avatar": {
         "semantic": {
@@ -510,7 +509,7 @@
   },
   "botIdentity": {
     "request": {
-      "openingGreeting": ""
+      "purpose": "Finds the signal in a busy week"
     },
     "response": {
       "id": "bot_fixture_01",
@@ -1472,7 +1471,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 26,
+    "contractRevision": 27,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2051,7 +2050,6 @@
     "seq": 3,
     "state": "idle",
     "interrupted": false,
-    "partial": null,
     "entries": [
       {
         "type": "memory_update",

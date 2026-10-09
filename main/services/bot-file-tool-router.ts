@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -32,6 +33,61 @@ export interface BotFileToolRouterOptions {
   /** Omission of `location` always resolves to this exact enabled location. */
   readonly defaultLocation: BotFileToolLocation;
   readonly additionalLocations?: readonly BotFileToolLocation[];
+  /**
+   * Absolute directories no write may land in, whatever location is used.
+   * Defaults to the process-wide roots (`setBotFileToolProtectedRoots`).
+   */
+  readonly protectedRoots?: () => readonly string[];
+}
+
+/** File tools that change a file; only these are fenced from protected roots. */
+const WRITING_TOOLS = new Set<string>(["write_file", "edit_file"]);
+
+let processProtectedRoots: () => readonly string[] = () => [];
+
+/**
+ * Directories no Bot file tool may write under, resolved at each call. Main
+ * registers `<profile>/bots/`, which holds every Bot's session database and
+ * memory files: those are written only by Aiden itself (spec 2026-10-09 §13).
+ */
+export function setBotFileToolProtectedRoots(roots: () => readonly string[]): void {
+  processProtectedRoots = roots;
+}
+
+/** The real path `target` resolves to, following links through its nearest existing ancestor. */
+async function realTarget(target: string): Promise<string> {
+  const missing: string[] = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...missing.reverse());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isWithin(child: string, root: string): boolean {
+  const relative = path.relative(root, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function writesIntoProtectedRoot(
+  locationRoot: string,
+  params: Record<string, unknown>,
+  roots: readonly string[],
+): Promise<boolean> {
+  if (roots.length === 0 || typeof params.path !== "string") return false;
+  const target = await realTarget(path.resolve(locationRoot, params.path));
+  for (const root of roots) {
+    if (isWithin(target, await realTarget(root))) return true;
+  }
+  return false;
 }
 
 type ToolParameterObject = TSchema & {
@@ -222,6 +278,12 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
         if (!selected) throw unknownLocationError();
         const underlying = selected.tools.get(name);
         if (!underlying) throw unknownLocationError();
+        if (
+          WRITING_TOOLS.has(name) &&
+          (await writesIntoProtectedRoot(selected.root, underlyingParams, (options.protectedRoots ?? processProtectedRoots)()))
+        ) {
+          throw new Error("Aiden manages this Bot's own session and memory files; file tools cannot change them.");
+        }
         try {
           return await underlying.execute(toolCallId, underlyingParams, signal, onUpdate);
         } catch (error) {

@@ -16,7 +16,6 @@ test("bot mutation and conversation envelopes are exact and bounded", () => {
     name: "Reviewer",
     description: "Checks work",
     instructions: "Be precise.",
-    openingGreeting: "What should I check?",
     avatar: { version: 1 as const, shape: "hex" as const, color: "sun" as const },
   };
   assert.deepEqual(parseBotCreate(fields), fields);
