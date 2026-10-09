@@ -62,9 +62,11 @@ function menuPolicyTitle(title: string): string {
 
 function assertMenuPathAllowed(path: readonly string[]): void {
   const titles = path.map(menuPolicyTitle);
+  // invoke_menu presses every intermediate segment before resolving the next,
+  // so a blocked command anywhere in the path runs even if a suffix is invalid.
   if (
     APPLE_MENU_TITLES.has(titles[0]) ||
-    BLOCKED_MENU_LEAVES.some((pattern) => pattern.test(titles[titles.length - 1]))
+    titles.some((title) => BLOCKED_MENU_LEAVES.some((pattern) => pattern.test(title)))
   ) {
     fail("blocked_menu", "That system or destructive menu command is blocked by Aiden.");
   }

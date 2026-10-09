@@ -125,6 +125,8 @@ export function buildCuaDriverEnvironment(
     CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
     CUA_TELEMETRY_ENABLED: "0",
     CUA_DRIVER_RS_UPDATE_CHECK: "false",
+    // Upstream's cross-tool opt-out; it overrides every other telemetry switch.
+    DO_NOT_TRACK: "1",
     NO_COLOR: "1",
   };
   for (const key of [

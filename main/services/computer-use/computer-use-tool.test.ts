@@ -1329,7 +1329,7 @@ test("menu is an approved foreground invoke_menu on the exact window", async () 
   assert.equal(result.details.deliveryMode, "foreground");
   await assert.rejects(() => controller.approvalFor({ action: "click", element: 0 }), /latest capture/u);
 
-  await capture(controller, "ax");
+  await capture(controller, "som");
   session.handler = (next) =>
     next.name === "invoke_menu"
       ? {
@@ -1346,6 +1346,13 @@ test("menu is an approved foreground invoke_menu on the exact window", async () 
     /no menu item titled Export/u,
   );
   assert.equal(controller.lifecycleState, "ready");
+  // The refused path still focused the app and pressed "File", so the pre-menu
+  // elements and pixels no longer describe the window.
+  await assert.rejects(() => controller.approvalFor({ action: "click", element: 0 }), /latest capture/u);
+  await assert.rejects(
+    () => controller.approvalFor({ action: "click", coordinate: [5, 5] }),
+    /fresh screenshot/u,
+  );
   await controller.close();
 });
 

@@ -1575,11 +1575,24 @@ export class ComputerUseController {
         signal,
       );
     }
-    const result = await this.callDriver(call.tool, call.args, signal);
+    // invoke_menu focuses the app and presses earlier segments before it can
+    // refuse a later one, and may leave a menu open, so a menu failure still
+    // changes the UI the current snapshot describes.
+    const invalidateAfterMenuFailure = () => {
+      if (call.tool === "invoke_menu") this.invalidateTargetSnapshot(target);
+    };
+    let result: Awaited<ReturnType<typeof this.callDriver>>;
+    try {
+      result = await this.callDriver(call.tool, call.args, signal);
+    } catch (error) {
+      invalidateAfterMenuFailure();
+      throw error;
+    }
     let outcome: DriverActionOutcome;
     try {
       outcome = parseActionResult(result.structured);
     } catch (error) {
+      invalidateAfterMenuFailure();
       if (!(error instanceof ComputerUseDriverActionError)) throw error;
       if (error.poisonsSession) this.poison();
       throw this.refusalError(error);

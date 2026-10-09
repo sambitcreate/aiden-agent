@@ -831,6 +831,9 @@ test("menu needs approval, is foreground-only, and shows its exact path", () => 
     ["X", "Sleep"],
     ["X", "Lock Screen"],
     ["X", "Force Quit…"],
+    // invoke_menu presses intermediate segments, so a trailing suffix must not hide them.
+    ["Safari", "Quit Safari", "anything"],
+    ["Finder", "Empty Trash…", "Now"],
   ]) {
     assertSafetyError("blocked_menu", () =>
       normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never),
@@ -840,6 +843,7 @@ test("menu needs approval, is foreground-only, and shows its exact path", () => 
     ["File", "Save As…"],
     ["Edit", "Quite Useful Item"],
     ["View", "Enter Full Screen"],
+    ["Format", "Font", "Show Fonts"],
   ]) {
     assert.deepEqual(
       (normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never) as Record<
