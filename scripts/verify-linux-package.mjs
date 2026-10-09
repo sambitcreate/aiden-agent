@@ -11,7 +11,8 @@ import { listPackage } from "@electron/asar";
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
 import {
   verifyPackagedModelCatalogResources,
-  verifyPackagedParakeetWorker,
+  verifyPackagedLocalSpeechWorker,
+  verifyPackagedSpeechResources,
   verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
 } from "./verify-macos-package.mjs";
@@ -298,7 +299,8 @@ export async function verifyLinuxPackage(appDirectory) {
   await verifyPackagedModelCatalogResources(asar);
   await verifyPackagedSlimness(asar);
   await verifyPackagedSubagentInferenceWorker(asar);
-  await verifyPackagedParakeetWorker(asar);
+  await verifyPackagedLocalSpeechWorker(asar);
+  await verifyPackagedSpeechResources(resources);
 
   const architecture = process.arch === "arm64" ? "arm64" : "x64";
   const unpackedModules = path.join(resources, "app.asar.unpacked", "node_modules");

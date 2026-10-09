@@ -3,7 +3,7 @@
 - `packages/cli` is its own npm package. It is not included in the desktop
   electron-builder `files` (`build/**` only), so desktop packaging is unaffected.
 - Several desktop services are split into portable `*-core.ts` modules
-  (schedule-store, subagent-supervisor, vision-analysis-tool, local-models,
+  (schedule-store, subagent-supervisor, vision-analysis-tool, local-speech-downloads,
   aiden-remote-speech, subagent-mcp-mutation-host). When main changes one of
   the thin desktop wrappers, port the behavior into the core too. The 2026-09-26
   merge ported: schedule `isCurrent` fencing, subagent `compactionEngine` and

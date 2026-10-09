@@ -110,7 +110,7 @@
     <string name="voice_group_transcription">Transcription</string>
     <string name="voice_transcription_footer">Paired desktop sends microphone audio over Aiden\'s encrypted pinned connection and doesn\'t retain it.</string>
     <string name="voice_mode_on_device_description">Android speech recognition; speech stays on this device.</string>
-    <string name="voice_mode_paired_description">Parakeet on your connected Aiden Agent desktop; text appears after you stop.</string>
+    <string name="voice_mode_paired_description">Processed on-device by your connected Aiden Agent desktop; text appears after you stop.</string>
     <string name="voice_group_on_device">On-device recognition</string>
     <string name="voice_on_device_status">Status</string>
     <string name="voice_on_device_ready">Ready</string>

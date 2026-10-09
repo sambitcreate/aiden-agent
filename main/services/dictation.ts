@@ -21,10 +21,16 @@ import {
 import { DictationCoordinator } from "./dictation-coordinator.js";
 import { applyDictationDictionary, parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { resolveDictationActivationMode } from "../../renderer/shared/dictation-preferences.js";
+import { createPressVoiceCheck } from "./dictation-voice-check.js";
 
 import { activeLinuxDictationHoldShortcut, initLinuxDictationSessionLost, subscribeLinuxDictationRelease } from "./shortcut.js";
 
 let lastPressAt = 0;
+// One resolution per press, shared by the provider check and the warm-up.
+const pressVoice = createPressVoiceCheck({
+  resolve: async () => (await import("./voice-provider-resolution.js")).resolveVoiceProviderNow(),
+  warmLocal: async (modelId) => (await import("./local-speech.js")).warmLocalVoice(modelId),
+});
 
 function livePasteDeps(): PasteDeps {
   const behavior = dictationPlatformBehavior();
@@ -81,12 +87,9 @@ const coordinator = new DictationCoordinator({
       releaseCapable,
     );
   },
-  warmUp: async () => {
-    const settings = await configStore.getSettings();
-    if (settings.voiceProvider !== "local" || !settings.localVoiceModel) return;
-    const { warmLocalVoice } = await import("./parakeet.js");
-    await warmLocalVoice(settings.localVoiceModel);
-  },
+  resolveVoice: pressVoice.resolveVoice,
+  // Warm only the on-device model this press resolved; cloud needs no preload.
+  warmUp: pressVoice.warmUp,
   applyDictionary: async (text) =>
     applyDictationDictionary(text, parseDictationDictionary((await configStore.getSettings()).dictationDictionary)),
   shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
@@ -130,8 +133,9 @@ export async function handleDictationError(message: unknown, operationId: unknow
 export async function handleDictationProgress(
   progress: unknown,
   operationId: unknown,
+  audioSeconds?: unknown,
 ): Promise<void> {
-  await coordinator.progress(progress, operationId);
+  await coordinator.progress(progress, operationId, audioSeconds);
 }
 
 /** Pill cancel button. */

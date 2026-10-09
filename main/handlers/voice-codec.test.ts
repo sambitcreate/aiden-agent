@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { asString, pcmToFloat32 } from "./voice-codec.js";
+import { asString, pcm16FromIpc } from "./voice-codec.js";
 
 test("asString returns the string when non-empty", () => {
   assert.equal(asString("hello", "x"), "hello");
@@ -16,36 +16,26 @@ test("asString rejects empty and non-string input but preserves whitespace-only 
   assert.equal(asString("   ", "x"), "   ");
 });
 
-test("pcmToFloat32 decodes little-endian Float32 samples in order", () => {
-  // Build a buffer of three Float32 values: 1.0, -0.5, 0.25
-  const source = new Float32Array([1.0, -0.5, 0.25]);
-  const buf = Buffer.alloc(source.length * 4);
-  for (let i = 0; i < source.length; i++) buf.writeFloatLE(source[i], i * 4);
-  const decoded = pcmToFloat32(buf.toString("base64"));
-  assert.ok(decoded instanceof Float32Array);
-  assert.equal(decoded.length, 3);
-  assert.deepEqual(Array.from(decoded), [1.0, -0.5, 0.25]);
+test("pcm16FromIpc reads ArrayBuffer and Uint8Array audio as Int16 samples", () => {
+  const source = new Int16Array([-32_768, -1, 0, 1, 32_767]);
+  for (const payload of [source.buffer.slice(0), new Uint8Array(source.buffer.slice(0)), Buffer.from(source.buffer)]) {
+    const decoded = pcm16FromIpc(payload);
+    assert.ok(decoded instanceof Int16Array);
+    assert.deepEqual(Array.from(decoded), Array.from(source));
+  }
 });
 
-test("pcmToFloat32 returns an empty array for empty input", () => {
-  const decoded = pcmToFloat32("");
-  assert.equal(decoded.length, 0);
+test("pcm16FromIpc copies unaligned byte views instead of throwing", () => {
+  const backing = new Uint8Array(5);
+  backing.set(new Uint8Array(new Int16Array([7, -7]).buffer), 1);
+  assert.deepEqual(Array.from(pcm16FromIpc(backing.subarray(1, 5))), [7, -7]);
 });
 
-test("pcmToFloat32 truncates a trailing partial sample (length not multiple of 4)", () => {
-  const source = new Float32Array([0.5, 0.75]);
-  const buf = Buffer.alloc(source.length * 4 + 2); // 2 trailing junk bytes
-  for (let i = 0; i < source.length; i++) buf.writeFloatLE(source[i], i * 4);
-  buf.writeUInt16LE(0xffff, source.length * 4);
-  const decoded = pcmToFloat32(buf.toString("base64"));
-  assert.equal(decoded.length, 2); // floor(10 / 4) = 2, partial dropped
-  assert.deepEqual(Array.from(decoded), [0.5, 0.75]);
-});
-
-test("pcmToFloat32 preserves Float32 precision (including denormal-ish values)", () => {
-  const source = new Float32Array([1e-38, 1.5e-39]);
-  const buf = Buffer.alloc(source.length * 4);
-  for (let i = 0; i < source.length; i++) buf.writeFloatLE(source[i], i * 4);
-  const decoded = pcmToFloat32(buf.toString("base64"));
-  assert.deepEqual(Array.from(decoded), Array.from(source));
+test("pcm16FromIpc rejects non-binary, empty, odd-length and over-long audio", () => {
+  for (const invalid of ["AAA=", [1, 2], null, new Float32Array(2), new ArrayBuffer(0)]) {
+    assert.throws(() => pcm16FromIpc(invalid), /Invalid on-device audio/);
+  }
+  assert.throws(() => pcm16FromIpc(new ArrayBuffer(3)), /Invalid on-device audio/);
+  assert.throws(() => pcm16FromIpc(new ArrayBuffer(8), 3), /too long/);
+  assert.equal(pcm16FromIpc(new ArrayBuffer(6), 3).length, 3);
 });

@@ -1,7 +1,7 @@
-// Idle unload policy for the on-device Parakeet recognizer. Electron-free so
+// Idle unload policy for the on-device speech recognizer. Electron-free so
 // the timer/in-flight rules are testable without a utility process.
 
-export interface ParakeetIdleUnloaderDeps<Timer> {
+export interface LocalSpeechIdleUnloaderDeps<Timer> {
   setTimer: (callback: () => void, delayMs: number) => Timer;
   clearTimer: (timer: Timer) => void;
   /** Current idle period, or null to keep the model loaded indefinitely. */
@@ -17,13 +17,13 @@ export interface ParakeetIdleUnloaderDeps<Timer> {
  * the last lease ends, and any new lease cancels a pending unload — even one
  * whose idle period is still being read.
  */
-export class ParakeetIdleUnloader<Timer = NodeJS.Timeout> {
+export class LocalSpeechIdleUnloader<Timer = NodeJS.Timeout> {
   private active = 0;
   private loaded = false;
   private timer: Timer | null = null;
   private revision = 0;
 
-  constructor(private readonly deps: ParakeetIdleUnloaderDeps<Timer>) {}
+  constructor(private readonly deps: LocalSpeechIdleUnloaderDeps<Timer>) {}
 
   get inFlight(): number {
     return this.active;

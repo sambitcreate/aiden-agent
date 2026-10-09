@@ -12,6 +12,7 @@ test("pill preload exposes only capture, transcription, settings read, and dicta
     "dictation:stop",
     "settings:get",
     "settings:getAppearance",
+    "voice:resolveProvider",
     "voice:streamCancel",
     "voice:streamFinish",
     "voice:streamPush",
@@ -23,7 +24,7 @@ test("pill preload exposes only capture, transcription, settings read, and dicta
   ]);
   assert.deepEqual(
     [...PILL_NOTIFICATION_CHANNELS],
-    ["dictation:state", "settings:appearance-changed", "voice:stream-text"],
+    ["dictation:state", "localVoice:state", "settings:appearance-changed", "voice:stream-text"],
   );
   for (const forbidden of ["providers:setKey", "mcp:setPresetKey", "settings:set", "git:push"]) {
     assert.equal(PILL_INVOKE_CHANNELS.has(forbidden), false);

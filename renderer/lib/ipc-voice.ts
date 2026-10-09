@@ -2,12 +2,18 @@
 // dictation pill. Type-only imports keep this module parser-free so the pill
 // chunk does not pull in the rest of `ipc.ts`.
 
-import type { AppSettings } from "./types";
+import type { AppSettings, VoiceProvider } from "./types";
+import type { VoiceProviderResolution } from "../shared/voice-provider";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
+import type { LocalSpeechState } from "../shared/local-speech-state";
 import { invoke, onNotification } from "./ipc-bridge";
+
+export type SettingsPatch = Partial<Omit<AppSettings, "voiceProvider">> & {
+  voiceProvider?: VoiceProvider | null;
+};
 
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
@@ -15,7 +21,8 @@ export const settingsApi = {
   getAppearanceState: () => invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
   previewAppearance: (appearance: AppearanceConfig) =>
     invoke<AppearanceConfig>("settings:previewAppearance", appearance),
-  set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
+  /** `voiceProvider: null` clears the explicit choice (Automatic). */
+  set: (patch: SettingsPatch) => invoke<AppSettings>("settings:set", patch),
   setGeminiVoiceSetup: (scope: NonNullable<AppSettings["geminiUsageScope"]>, model: string) =>
     invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
   setGeminiUsageScope: (scope: NonNullable<AppSettings["geminiUsageScope"]>) =>
@@ -42,12 +49,20 @@ export const settingsApi = {
 };
 
 export const voiceApi = {
-  transcribe: (audioBase64: string, mimeType: string, model?: string, operationId?: string) =>
-    invoke<string>("voice:transcribe", audioBase64, mimeType, model, operationId),
+  /** Cloud transcription of recorded audio with the provider resolved at mic press. */
+  transcribe: (
+    audioBase64: string,
+    mimeType: string,
+    provider: "openai" | "gemini",
+    model?: string,
+    operationId?: string,
+  ) => invoke<string>("voice:transcribe", audioBase64, mimeType, model, operationId, provider),
+  /** Local-first provider resolution; main checks key presence and installed models. */
+  resolveProvider: () => invoke<VoiceProviderResolution>("voice:resolveProvider"),
   cancelTranscription: (operationId: string) => invoke<void>("voice:transcribeCancel", operationId),
-  /** On-device transcription: base64 raw 16 kHz mono Float32 PCM + downloaded model id. */
-  transcribeLocal: (pcmBase64: string, modelId: string, operationId: string) =>
-    invoke<string>("voice:transcribeLocal", pcmBase64, modelId, operationId),
+  /** On-device transcription: raw 16 kHz mono PCM16 samples + downloaded model id. */
+  transcribeLocal: (pcm: ArrayBuffer, modelId: string, operationId: string) =>
+    invoke<string>("voice:transcribeLocal", pcm, modelId, operationId),
   cancelLocalTranscription: (operationId: string) =>
     invoke<void>("voice:transcribeLocalCancel", operationId),
   streamStart: () => invoke<{ sessionId: string }>("voice:streamStart"),
@@ -55,6 +70,9 @@ export const voiceApi = {
     invoke<void>("voice:streamPush", sessionId, pcmBase64),
   streamFinish: (sessionId: string) => invoke<string>("voice:streamFinish", sessionId),
   streamCancel: (sessionId: string) => invoke<void>("voice:streamCancel", sessionId),
+  /** On-device model lifecycle (loading → ready/failed, unloaded) from the speech host. */
+  onState: (handler: (state: LocalSpeechState) => void) =>
+    onNotification("localVoice:state", handler),
   onStreamText: (
     handler: (payload: { sessionId: string; committed: string; tentative: string }) => void,
   ) => onNotification("voice:stream-text", handler),
@@ -68,9 +86,18 @@ export const dictationApi = {
   /** Pill reports a capture/transcription failure. */
   reportError: (operationId: string, message: string) =>
     invoke<void>("dictation:error", operationId, message),
-  /** Pill reports finalization/consent/fallback progress for accurate UI and diagnostics. */
-  reportProgress: (operationId: string, progress: "finalizing" | "fallback-consent" | "fallback") =>
-    invoke<void>("dictation:progress", operationId, progress),
+  /**
+   * Pill reports finalization/consent/fallback progress for accurate UI and
+   * diagnostics. `audioSeconds` (recording length) scales main's watchdog.
+   */
+  reportProgress: (
+    operationId: string,
+    progress: "finalizing" | "fallback-consent" | "fallback",
+    audioSeconds?: number,
+  ) =>
+    audioSeconds === undefined
+      ? invoke<void>("dictation:progress", operationId, progress)
+      : invoke<void>("dictation:progress", operationId, progress, audioSeconds),
   /** Pill cancel button: discard the in-flight recording/transcription. */
   cancel: () => invoke<void>("dictation:cancel"),
   /** Pill renderer is mounted and subscribed to dictation state broadcasts. */

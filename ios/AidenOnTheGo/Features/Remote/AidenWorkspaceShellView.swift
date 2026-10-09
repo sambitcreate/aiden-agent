@@ -3325,7 +3325,7 @@ private struct AidenAppSettingsView: View {
                 } footer: {
                     Text(
                         voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed by Parakeet on your paired desktop, and not retained. Text appears after you stop recording."
+                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired Mac, and not retained. Text appears after you stop recording."
                             : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
                     )
                 }

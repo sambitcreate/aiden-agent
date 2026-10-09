@@ -27,20 +27,20 @@ function waitForTurn(turn: Promise<void>, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export interface ParakeetTranscriptionLaneOptions {
+export interface LocalSpeechLaneOptions {
   signal?: AbortSignal;
   onCancelActive?: () => void;
 }
 
 /**
- * Serializes every consumer of the single Parakeet worker. A queued abort only
+ * Serializes every consumer of the single local speech worker. A queued abort only
  * removes that request; an active abort may terminate the worker without
  * affecting work that has not started yet.
  */
-export class ParakeetTranscriptionLane {
+export class LocalSpeechLane {
   private tail: Promise<void> = Promise.resolve();
 
-  run<T>(operation: () => Promise<T>, options: ParakeetTranscriptionLaneOptions = {}): Promise<T> {
+  run<T>(operation: () => Promise<T>, options: LocalSpeechLaneOptions = {}): Promise<T> {
     const predecessor = this.tail;
     let release!: () => void;
     const slot = new Promise<void>((resolve) => {

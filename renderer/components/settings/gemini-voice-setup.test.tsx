@@ -6,7 +6,6 @@ const dialogSource = readFileSync(
   new URL("./gemini-voice-setup-dialog.tsx", import.meta.url),
   "utf8",
 );
-const voiceSource = readFileSync(new URL("./voice-settings.tsx", import.meta.url), "utf8");
 const providerSource = readFileSync(new URL("./providers-settings.tsx", import.meta.url), "utf8");
 const editorSource = readFileSync(
   new URL("./builtin-provider-editor.tsx", import.meta.url),
@@ -31,17 +30,10 @@ test("Gemini setup offers accessible borderless radio cards and a concrete priva
   assert.doesNotMatch(dialogSource, /className="sr-only"[\s\S]*?type="radio"/u);
 });
 
-test("Voice defers Gemini selection until disclosure and managed auth complete", () => {
-  const changeProvider = voiceSource.slice(
-    voiceSource.indexOf("const changeProvider"),
-    voiceSource.indexOf("  return ("),
-  );
-  assert.match(changeProvider, /if \(p === "gemini"\)[\s\S]*?openGeminiSetup\(\);[\s\S]*?return;/u);
-  assert.match(voiceSource, /settingsApi\.setGeminiVoiceSetup/u);
-  assert.match(voiceSource, /<BuiltinProviderEditor[\s\S]*?requireChatModel=\{false\}/u);
-  assert.match(voiceSource, /Privacy & access/u);
-  assert.doesNotMatch(changeProvider, /voiceProvider: cloudProvider[\s\S]*?gemini/u);
-});
+// Voice-page Gemini deferral (disclosure before any settings write, the keyless
+// path through the voice-only key editor, and Privacy & access) is covered
+// behaviorally in voice-settings.test.tsx: "choosing Gemini waits for the privacy
+// disclosure…" and "Gemini without a key collects one…".
 
 test("Providers routes Google through the same purpose dialog and voice-only auth readiness", () => {
   assert.match(providerSource, /provider\.id !== GOOGLE_PROVIDER_ID/u);

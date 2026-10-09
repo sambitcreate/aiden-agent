@@ -1,24 +1,26 @@
-// IPC handlers for on-device voice: sherpa-onnx (Parakeet) engine status, model
-// download management, and local transcription. Thin — logic lives in
-// services/parakeet.ts and services/local-models.ts.
+// IPC handlers for on-device voice: sherpa-onnx engine status, model download
+// management, and local transcription. Thin — logic lives in
+// services/local-speech.ts and services/local-speech-models.ts.
 
 import { ipcMain } from "../platform.js";
 import {
   engineStatus,
-  transcribePcmBase64,
+  onLocalSpeechState,
+  transcribeLocalPcm16,
   releaseRecognizer,
   warmLocalVoice,
-} from "../services/parakeet.js";
+} from "../services/local-speech.js";
 import {
   listModels,
   downloadModel,
   cancelDownload,
   deleteModel,
-} from "../services/local-models.js";
+} from "../services/local-speech-models.js";
 import { configStore } from "../services/config-store.js";
+import { resolveVoiceProviderNow } from "../services/voice-provider-resolution.js";
 import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";
-import { asString, pcmToFloat32 } from "./voice-codec.js";
+import { asString, pcm16FromIpc } from "./voice-codec.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 
 const activeLocalTranscriptions = new Map<
@@ -35,11 +37,13 @@ function localOperationKey(ownerId: number, documentId: string, value: unknown):
 }
 
 // Re-exported so the IPC contract surface stays queryable from one module.
-export { asString, pcmToFloat32 };
+export { asString, pcm16FromIpc };
 
 export function registerLocalVoiceHandlers(): void {
   // ── Engine ───────────────────────────────────────────────────────────
   ipcMain.handle("localVoice:status", async () => engineStatus());
+  // Model lifecycle for the pill and composer "Loading model…" notice.
+  onLocalSpeechState((state) => ipcMain.broadcast("localVoice:state", state));
   // Preload the recognizer when the composer mic starts. Best effort: a failed
   // warm-up is reported by the transcription that follows, not here.
   ipcMain.handle("localVoice:warm", async (_event, id: unknown) => {
@@ -50,6 +54,9 @@ export function registerLocalVoiceHandlers(): void {
       // Ignored: transcription surfaces the actionable error.
     }
   });
+
+  // Local-first provider resolution for the composer, pill and Settings.
+  ipcMain.handle("voice:resolveProvider", async () => resolveVoiceProviderNow());
 
   // ── Model management ─────────────────────────────────────────────────
   ipcMain.handle("localModels:list", async () => listModels());
@@ -71,12 +78,14 @@ export function registerLocalVoiceHandlers(): void {
   // ── Local transcription ──────────────────────────────────────────────
   ipcMain.handle(
     "voice:transcribeLocal",
-    async (event, pcmBase64: unknown, modelId: unknown, operationId: unknown) => {
+    async (event, pcm: unknown, modelId: unknown, operationId: unknown) => {
       const owner = rendererDocumentOwner(
         event,
         () => new Error("On-device transcription must come from the active application document."),
       );
       const key = localOperationKey(owner.id, owner.documentId, operationId);
+      const parsedModelId = asString(modelId, "modelId");
+      const samples = pcm16FromIpc(pcm);
       const previous = activeLocalTranscriptions.get(key);
       previous?.controller.abort();
       previous?.removeOwnerInvalidation();
@@ -85,10 +94,8 @@ export function registerLocalVoiceHandlers(): void {
         controller.abort();
       });
       activeLocalTranscriptions.set(key, { controller, removeOwnerInvalidation });
-      const parsedModelId = asString(modelId, "modelId");
-      const encoded = asString(pcmBase64, "pcmBase64");
       try {
-        const transcript = await transcribePcmBase64(encoded, parsedModelId, controller.signal);
+        const transcript = await transcribeLocalPcm16(samples, parsedModelId, controller.signal);
         await usageStore.record(
           unreportedUsageRecord({
             source: "voice-transcription",

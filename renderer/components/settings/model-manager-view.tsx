@@ -1,6 +1,6 @@
 // On-device model management subview: search, download/delete, and activate
-// Parakeet transcription models. Downloaded models sit above available ones,
-// each showing accuracy/speed, size, quant, and languages.
+// speech models. Downloaded models sit above available ones, each showing
+// accuracy/speed, languages and size, capabilities, and its licence.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -26,7 +26,13 @@ function Meter({ label, value }: { label: string; value: number }) {
   );
 }
 
-function DownloadProgress({ percentage, phase }: { percentage: number; phase: "download" | "extract" }) {
+const PHASE_LABEL: Record<ModelDownloadProgress["phase"], string> = {
+  download: "Downloading…",
+  verify: "Verifying…",
+  extract: "Installing…",
+};
+
+function DownloadProgress({ percentage, phase }: { percentage: number; phase: ModelDownloadProgress["phase"] }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="h-1.5 w-full overflow-hidden rounded-pill bg-well">
@@ -36,7 +42,8 @@ function DownloadProgress({ percentage, phase }: { percentage: number; phase: "d
         />
       </div>
       <Text variant="small" color="tertiary" className="tabular-nums">
-        {phase === "extract" ? "Extracting…" : "Downloading…"} {percentage}%
+        {PHASE_LABEL[phase]}
+        {phase === "download" ? ` ${percentage}%` : null}
       </Text>
     </div>
   );
@@ -56,6 +63,8 @@ interface CardProps {
 function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDelete, onActivate }: CardProps) {
   return (
     <div
+      role="group"
+      aria-label={model.name}
       className={cn(
         "flex flex-col gap-2.5 rounded-card bg-popover p-3 transition-colors",
         active && "bg-list-selection",
@@ -76,6 +85,12 @@ function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDele
           <Text variant="small" color="tertiary">
             {model.description}
           </Text>
+          <Text as="p" variant="small" color="secondary" className="mt-1 flex items-center gap-1 tabular-nums">
+            <Globe className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
+            <span className="min-w-0">
+              {model.languagesLabel} · {model.sizeLabel}
+            </span>
+          </Text>
         </div>
         <div className="flex w-36 shrink-0 flex-col gap-1">
           <Meter label="accuracy" value={model.accuracy} />
@@ -86,16 +101,9 @@ function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDele
       <Separator />
 
       <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="inline-flex items-center gap-1">
-            <Globe className="size-3.5 text-tertiary" />
-            <Text variant="small" color="tertiary">
-              {model.languagesLabel}
-            </Text>
-          </span>
-          <Text variant="small" color="tertiary" className="tabular-nums">
-            {model.sizeLabel} · {model.quant}
-          </Text>
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {model.capabilities.autoDetect ? <Badge>Auto-detect</Badge> : null}
+          {model.capabilities.translateToEnglish ? <Badge>Translate</Badge> : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -130,6 +138,11 @@ function ModelCard({ model, active, progress, busy, onDownload, onCancel, onDele
         </div>
       </div>
 
+      <Text variant="small" color="tertiary">
+        License: {model.license.name}
+        {model.license.attribution ? ` — ${model.license.attribution}` : null}
+      </Text>
+
       {busy === "download" ? (
         <DownloadProgress percentage={progress?.percentage ?? 0} phase={progress?.phase ?? "download"} />
       ) : null}
@@ -161,8 +174,10 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
     });
 
   const activate = async (id: string) => {
-    await settingsApi.set({ localVoiceModel: id, voiceProvider: "local" });
+    // Choosing a model never changes the provider choice (Automatic stays Automatic).
+    await settingsApi.set({ localVoiceModel: id });
     await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
   };
 
   const download = async (id: string) => {
@@ -171,8 +186,8 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
     try {
       await localVoiceApi.downloadModel(id);
       await qc.invalidateQueries({ queryKey: queryKeys.localModels });
-      // Auto-select the first model the user installs.
-      if (!activeModel) await activate(id);
+      // Automatic voice resolution picks the download up; settings stay as chosen.
+      await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
       toast.success("Model downloaded.");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -194,6 +209,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.localModels }),
         qc.invalidateQueries({ queryKey: queryKeys.settings }),
+        qc.invalidateQueries({ queryKey: queryKeys.voiceResolution }),
       ]);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));

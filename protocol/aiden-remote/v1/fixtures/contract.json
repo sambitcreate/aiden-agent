@@ -317,14 +317,33 @@
       {
         "id": "parakeet-v3",
         "name": "Parakeet TDT 0.6B v3",
-        "description": "Fast and accurate. Supports 25 European languages.",
-        "sizeLabel": "620 MB",
+        "description": "Fast and accurate across 25 European languages.",
+        "sizeLabel": "487 MB",
         "quant": "int8",
         "languagesLabel": "25 languages",
-        "accuracy": 0.8,
-        "speed": 0.85,
+        "accuracy": 0.88,
+        "speed": 0.79,
         "recommended": true,
-        "installed": true
+        "installed": true,
+        "languages": ["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
+        "capabilities": { "autoDetect": true, "languageHint": false, "translateToEnglish": false, "maxWindowSeconds": null },
+        "license": { "name": "CC-BY-4.0 (NVIDIA)", "url": "https://creativecommons.org/licenses/by/4.0/" }
+      },
+      {
+        "id": "whisper-turbo",
+        "name": "Whisper Large v3 Turbo",
+        "description": "Broadest language coverage. Slower than the others.",
+        "sizeLabel": "564 MB",
+        "quant": "int8",
+        "languagesLabel": "99 languages",
+        "accuracy": 0.88,
+        "speed": 0.35,
+        "recommended": false,
+        "installed": false,
+        "languages": ["en", "zh", "de"],
+        "capabilities": { "autoDetect": true, "languageHint": true, "translateToEnglish": false, "maxWindowSeconds": 30 },
+        "license": { "name": "MIT (OpenAI Whisper)", "url": "https://github.com/openai/whisper/blob/main/LICENSE" },
+        "download": { "id": "whisper-turbo", "percentage": 90, "phase": "verify", "status": "downloading" }
       }
     ],
     "input": {

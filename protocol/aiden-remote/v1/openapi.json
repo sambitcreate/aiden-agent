@@ -7204,6 +7204,65 @@
                 "installed": {
                   "type": "boolean"
                 },
+                "languages": {
+                  "type": "array",
+                  "maxItems": 128,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z]{2,3}$"
+                  }
+                },
+                "capabilities": {
+                  "type": "object",
+                  "required": [
+                    "autoDetect",
+                    "languageHint",
+                    "translateToEnglish",
+                    "maxWindowSeconds"
+                  ],
+                  "properties": {
+                    "autoDetect": {
+                      "type": "boolean"
+                    },
+                    "languageHint": {
+                      "type": "boolean"
+                    },
+                    "translateToEnglish": {
+                      "type": "boolean"
+                    },
+                    "maxWindowSeconds": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 1
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "license": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "url"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "url": {
+                      "type": "string",
+                      "format": "uri",
+                      "maxLength": 1000
+                    },
+                    "attribution": {
+                      "type": "string",
+                      "maxLength": 200
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "download": {
                   "type": "object",
                   "required": [
@@ -7224,6 +7283,7 @@
                     "phase": {
                       "enum": [
                         "download",
+                        "verify",
                         "extract"
                       ]
                     },

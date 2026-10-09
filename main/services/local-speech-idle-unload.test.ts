@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ParakeetIdleUnloader } from "./parakeet-idle-unload.js";
+import { LocalSpeechIdleUnloader } from "./local-speech-idle-unload.js";
 
 interface FakeTimer {
   callback: () => void;
@@ -12,7 +12,7 @@ function harness(initialIdleMs: number | null | (() => Promise<number | null>) =
   const timers: FakeTimer[] = [];
   let unloads = 0;
   let idle = initialIdleMs;
-  const unloader = new ParakeetIdleUnloader<FakeTimer>({
+  const unloader = new LocalSpeechIdleUnloader<FakeTimer>({
     setTimer: (callback, delayMs) => {
       const timer = { callback, delayMs, cleared: false };
       timers.push(timer);

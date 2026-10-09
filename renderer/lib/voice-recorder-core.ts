@@ -25,6 +25,8 @@ export interface TranscribeOptions {
   operationId?: string;
   /** Invalidates expensive conversion before an IPC request begins. */
   signal?: AbortSignal;
+  /** Recording length (capture start to stop); scales the on-device budget. */
+  audioSeconds?: number;
 }
 
 export const MICROPHONE_PERMISSION_OFF_MESSAGE =
@@ -66,17 +68,17 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-function float32ToBase64(samples: Float32Array): string {
-  const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+/** Float samples in [-1, 1] → signed 16-bit PCM (out-of-range samples clamp). */
+export function float32ToPcm16(samples: Float32Array): Int16Array<ArrayBuffer> {
+  const pcm = new Int16Array(samples.length);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]!));
+    pcm[index] = Math.round(sample * 32_767);
   }
-  return btoa(binary);
+  return pcm;
 }
 
-/** Decode recorded audio and resample to 16 kHz mono Float32 PCM (base64) for the on-device engine. */
+/** Decode recorded audio and resample to 16 kHz mono Float32 PCM. */
 async function blobToMono16k(blob: Blob): Promise<Float32Array> {
   const arrayBuf = await blob.arrayBuffer();
   const decodeCtx = new AudioContext();
@@ -94,7 +96,7 @@ async function blobToMono16k(blob: Blob): Promise<Float32Array> {
   source.connect(offline.destination);
   source.start();
   const rendered = await offline.startRendering();
-  // Copy into a standalone Float32Array so the base64 covers exactly the samples.
+  // Copy into a standalone Float32Array detached from the rendering context.
   return Float32Array.from(rendered.getChannelData(0));
 }
 
@@ -120,7 +122,7 @@ export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Pr
   const signal = options.signal
     ? AbortSignal.any([options.signal, timeoutController.signal])
     : timeoutController.signal;
-  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider), () =>
+  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider, options.audioSeconds), () =>
     performance.now(),
   );
   const onTimeout = () => {
@@ -155,9 +157,9 @@ async function convertAndTranscribeBlob(
     if (!options.localModel) {
       throw new Error("Download and select an on-device model in Settings → Voice.");
     }
-    const pcm = float32ToBase64(await blobToMono16k(blob));
+    const pcm = float32ToPcm16(await blobToMono16k(blob));
     beforeDispatch();
-    return (await voiceApi.transcribeLocal(pcm, options.localModel, operationId)).trim();
+    return (await voiceApi.transcribeLocal(pcm.buffer, options.localModel, operationId)).trim();
   }
   if (options.provider === "gemini") {
     const samples = await blobToMono16k(blob);
@@ -165,12 +167,12 @@ async function convertAndTranscribeBlob(
     const wav = bytesToBase64(encodeMonoPcm16Wav(samples, 16_000));
     beforeDispatch();
     return (
-      await voiceApi.transcribe(wav, "audio/wav", GEMINI_TRANSCRIPTION_MODEL, operationId)
+      await voiceApi.transcribe(wav, "audio/wav", "gemini", GEMINI_TRANSCRIPTION_MODEL, operationId)
     ).trim();
   }
   const base64 = await blobToBase64(blob);
   beforeDispatch();
-  return (await voiceApi.transcribe(base64, blob.type, options.model, operationId)).trim();
+  return (await voiceApi.transcribe(base64, blob.type, "openai", options.model, operationId)).trim();
 }
 
 export function cancelTranscription(provider: VoiceProvider, operationId: string): Promise<void> {

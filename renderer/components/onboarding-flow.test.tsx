@@ -394,7 +394,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);
   assert.match(featurePresentation, /ordinary browsing stays offline/u);
-  assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
+  assert.match(featurePresentation, /On-device models keep audio on this computer/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
   assert.match(featurePresentation, /Browser & Annotations/u);
   assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);
