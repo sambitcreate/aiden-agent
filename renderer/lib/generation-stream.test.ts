@@ -129,3 +129,33 @@ test("dispose stops delivery before any terminal event", () => {
     bridge.restore();
   }
 });
+
+test("native visuals ride the stream projection so a detached view keeps them", () => {
+  const bridge = installFakeBridge();
+  try {
+    const stream = subscribeGenerationStream("generation-ui", { chatId: "chat-1" }, {
+      onDelta: () => undefined,
+      onDone: () => undefined,
+      onError: (message) => assert.fail(message),
+      onArtifactEvent: () => undefined,
+    });
+    const visual = {
+      version: 1,
+      kind: "ui",
+      id: "ui-1",
+      toolCallId: "call-1",
+      title: "Board",
+      catalogVersion: 1,
+      tree: { t: "Visual", k: "0" },
+      fallbackText: "Board",
+    };
+    bridge.emit("chat:artifact", { streamId: "generation-ui", event: { version: 1, operation: "ui", visual } });
+    bridge.emit("chat:artifact", { streamId: "generation-ui", event: { version: 1, operation: "ui", visual: { ...visual, fallbackText: "Revised" } } });
+    assert.deepEqual(stream.projection().uiVisuals?.map((entry) => entry.fallbackText), ["Revised"]);
+    bridge.emit("chat:artifact", { streamId: "generation-ui", event: { version: 1, operation: "reset" } });
+    assert.deepEqual(stream.projection().uiVisuals, []);
+    stream.dispose();
+  } finally {
+    bridge.restore();
+  }
+});

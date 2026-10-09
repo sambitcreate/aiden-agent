@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
@@ -154,4 +154,92 @@ test("a live visual keeps its node when a later tool step outruns the buffered t
   // Compare identities as booleans: printing happy-dom nodes in a diff hangs.
   assert.equal(during === before, true, "the live visual was remounted");
   assert.equal(view.container.querySelectorAll('[data-html-artifact="media-live"]').length, 1);
+});
+
+const NATIVE = {
+  version: 1 as const,
+  kind: "ui" as const,
+  id: "ui-board",
+  toolCallId: "call-ui",
+  title: "Board",
+  catalogVersion: 1,
+  tree: {
+    t: "Visual",
+    k: "0",
+    c: [
+      { t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Native body" }] },
+      {
+        t: "Button",
+        k: "0.1",
+        p: { action: { act: "send" as const, text: { op: "lit" as const, v: "Tell me more" } } },
+        c: [{ t: "#text", k: "0.1.0", s: "More" }],
+      },
+    ],
+  },
+  fallbackText: "Native body",
+};
+
+test("a saved native visual renders after its tool row and sends follow-ups through the shared handler", async () => {
+  const intro = "Before the board.";
+  const step = { ...toolStep("tool-1", "call-ui", "render_ui", intro.length), status: "completed" as const, finishedAt: 2 };
+  const prompts: string[] = [];
+  const view = render(
+    <MessageList
+      chatId="chat-saved"
+      messages={[
+        {
+          id: "m-1",
+          role: "assistant",
+          content: `${intro} After the board.`,
+          createdAt: 1,
+          timeline: { version: 3, generationId: "g", status: "completed", startedAt: 1, finishedAt: 3, steps: [step] },
+          uiVisuals: [NATIVE],
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      onVisualPrompt={(text) => prompts.push(text)}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  const html = view.container.innerHTML;
+  const activityAt = html.indexOf("render_ui");
+  const visualAt = html.indexOf('data-aiden-ui="ui-board"');
+  const afterAt = html.indexOf("After the board.");
+  assert.ok(activityAt >= 0 && visualAt > activityAt && afterAt > visualAt, "tool row → visual → later prose");
+  fireEvent.click(view.getByRole("button", { name: "More" }));
+  assert.deepEqual(prompts, ["Tell me more"]);
+});
+
+test("a streaming native draft is inert in its row and the presented visual replaces it", () => {
+  const step = toolStep("tool-1", "call-ui", "render_ui", 0);
+  const timeline: GenerationTimeline = { version: 3, generationId: "g", status: "running", startedAt: 1, steps: [step] };
+  const list = (presented: boolean) => (
+    <MessageList
+      chatId="chat-live"
+      messages={[]}
+      streamingText="Board."
+      streamingReasoning={null}
+      streamingUiVisuals={presented ? [NATIVE] : []}
+      streamingUiDrafts={presented ? new Map() : new Map([["call-ui", { ...NATIVE, id: "draft-call-ui" }]])}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />
+  );
+  const view = render(list(false));
+  const draft = view.container.querySelector('[data-aiden-ui="draft-call-ui"]');
+  assert.ok(draft);
+  assert.equal(draft.getAttribute("aria-busy"), "true");
+  view.rerender(list(true));
+  assert.equal(view.container.querySelector('[data-aiden-ui="draft-call-ui"]'), null);
+  assert.ok(view.container.querySelector('[data-aiden-ui="ui-board"]'));
 });
