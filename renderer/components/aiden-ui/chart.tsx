@@ -155,7 +155,6 @@ export function AidenUiChart({ kind, data, x = "", y, series, height = 220, stac
       chart?.destroy();
     };
     // configKey captures every input the chart is built from.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey, themeVersion]);
 
   return (
