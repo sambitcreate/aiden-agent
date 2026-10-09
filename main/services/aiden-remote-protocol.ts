@@ -33,7 +33,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 26 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 27 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -281,6 +281,12 @@ export const AIDEN_REMOTE_CHAT_FORK_FEATURE = "chat-fork-v1" as const;
  * (contract revision 21). Advertised only by a host that can summarize.
  */
 export const AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1" as const;
+/**
+ * Server feature token for inline visuals on chat messages (contract revision
+ * 27): each message's `visuals` list, with a snapshot image attachment and
+ * fallback text for clients that cannot draw the visual itself.
+ */
+export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
 
 /** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
 export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
@@ -2469,6 +2475,47 @@ function parseChatHtmlArtifactsProjection(
   });
 }
 
+const CHAT_VISUAL_KEYS = new Set(["id", "kind", "title", "toolCallId", "fallbackText", "snapshotAttachmentId", "layout"]);
+
+/**
+ * Additive in contract revision 27. Lenient per entry, like every client:
+ * one malformed visual is dropped rather than failing the whole chat.
+ */
+function parseChatVisualsProjection(
+  value: unknown,
+  label: string,
+  attachments: readonly { id: string }[] | undefined,
+): NonNullable<AidenRemoteChatProjection["messages"][number]["visuals"]> {
+  if (!Array.isArray(value) || value.length > 40) {
+    throw new Error(`${label} visuals must contain at most 40 items.`);
+  }
+  const attachmentIds = new Set((attachments ?? []).map((attachment) => attachment.id));
+  const ids = new Set<string>();
+  const visuals: NonNullable<AidenRemoteChatProjection["messages"][number]["visuals"]> = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || Object.keys(entry).some((key) => !CHAT_VISUAL_KEYS.has(key))) continue;
+    const { id, kind, title, toolCallId, fallbackText, snapshotAttachmentId, layout } = entry;
+    if (typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,256}$/u.test(id) || ids.has(id)) continue;
+    if (kind !== "ui" && kind !== "html") continue;
+    if (typeof title !== "string" || !title || title.trim() !== title || characterLength(title) > 120) continue;
+    if (toolCallId !== undefined && (typeof toolCallId !== "string" || !/^call-[1-9]\d*$/u.test(toolCallId))) continue;
+    if (fallbackText !== undefined && (typeof fallbackText !== "string" || !fallbackText || characterLength(fallbackText) > 4_000)) continue;
+    if (snapshotAttachmentId !== undefined && (typeof snapshotAttachmentId !== "string" || !attachmentIds.has(snapshotAttachmentId))) continue;
+    if (layout !== undefined && layout !== "wide") continue;
+    ids.add(id);
+    visuals.push({
+      id,
+      kind,
+      title,
+      ...(toolCallId !== undefined ? { toolCallId } : {}),
+      ...(fallbackText !== undefined ? { fallbackText } : {}),
+      ...(snapshotAttachmentId !== undefined ? { snapshotAttachmentId } : {}),
+      ...(layout !== undefined ? { layout } : {}),
+    });
+  }
+  return visuals;
+}
+
 function parseChatMessageAttachments(
   value: unknown,
   label: string,
@@ -2732,6 +2779,15 @@ export function parseAidenRemoteChatProjection(
               htmlArtifacts: parseChatHtmlArtifactsProjection(
                 entry.htmlArtifacts,
                 `${label} message ${index}`,
+              ),
+            }
+          : {}),
+        ...(hasOwn(entry, "visuals")
+          ? {
+              visuals: parseChatVisualsProjection(
+                entry.visuals,
+                `${label} message ${index}`,
+                Array.isArray(entry.attachments) ? entry.attachments.filter(isRecord) as { id: string }[] : undefined,
               ),
             }
           : {}),
@@ -5825,6 +5881,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   if (value.mobileSimulators !== undefined) {
     if (contractRevision < 26) throw new Error("Mobile simulator fixtures require contract revision 26.");
     parseMobileSimulatorsFixture(value.mobileSimulators);
+  }
+  if (chat.messages.some((message) => message.visuals?.length) && contractRevision < 27) {
+    throw new Error("Chat visuals fixtures require contract revision 27.");
   }
   assertNoForbiddenWireKeys(value);
   return {

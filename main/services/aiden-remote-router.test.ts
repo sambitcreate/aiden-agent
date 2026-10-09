@@ -3955,7 +3955,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 26,
+      contractRevision: 27,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });
@@ -4310,6 +4310,8 @@ test("the messages window is offered to every device and validates its query", a
     const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
     assert.equal(server.features.includes("chat-messages-window-v1"), true);
     assert.equal(server.features.includes("chat-messages-window-metadata-v1"), true);
+    // Every host that serves chats projects their inline visuals.
+    assert.equal(server.features.includes("chat-visuals-v1"), true);
 
     const page = await fetch(`${phone.base}/chats/chat-1/messages?before=message-9&limit=20`, { headers: HOST_HEADERS });
     assert.equal(page.status, 200);

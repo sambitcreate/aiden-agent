@@ -14,6 +14,9 @@ import {
   type GenerationTimeline,
 } from "../../renderer/shared/generation-timeline.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
+import { parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   parseChatForkLineageV1,
@@ -129,8 +132,27 @@ export interface AidenRemoteMessageProjection {
   createdAt: string;
   attachments?: AidenRemoteMessageAttachmentProjection[];
   htmlArtifacts?: AidenRemoteHtmlArtifactProjection[];
+  /** Additive (contract revision 27): inline visuals, in reply order. */
+  visuals?: AidenRemoteVisualProjection[];
   outcome?: AidenRemoteMessageOutcomeProjection;
   timeline?: GenerationTimeline;
+}
+
+/**
+ * An inline visual as a paired device sees it: where it sits in the reply,
+ * a snapshot image to show, and text for when there is no image. The
+ * markup, data, and saved state stay on the Mac.
+ */
+export interface AidenRemoteVisualProjection {
+  id: string;
+  kind: "ui" | "html";
+  title: string;
+  /** The timeline tool step that drew it. */
+  toolCallId?: string;
+  fallbackText?: string;
+  /** A projected attachment id on the same message. */
+  snapshotAttachmentId?: string;
+  layout?: "wide";
 }
 
 export interface AidenRemoteHtmlArtifactProjection {
@@ -352,6 +374,74 @@ function projectMessageAttachments(value: unknown): AidenRemoteMessageAttachment
   }));
 }
 
+const MAX_PROJECTED_VISUALS = 40;
+const VISUAL_TOOL_CALL_ID = /^call-[1-9]\d*$/u;
+const VISUAL_ID = /^[A-Za-z0-9._:-]{1,256}$/u;
+
+function projectedVisualTitle(value: string): string {
+  return boundedUnicodeScalarPrefix(value.replace(/\s+/gu, " ").trim(), 120).trim() || "Visual";
+}
+
+function projectMessageVisuals(
+  message: ChatMessage,
+  attachments: readonly AidenRemoteMessageAttachmentProjection[],
+): AidenRemoteVisualProjection[] {
+  if (message.role !== "assistant") return [];
+  const attachmentIds = new Set(attachments.map((attachment) => attachment.id));
+  const snapshots = new Map<string, string>();
+  for (const ref of parseVisualSnapshots(message.visualSnapshots) ?? []) {
+    const projected = projectedAttachmentId(ref.attachmentId);
+    if (attachmentIds.has(projected)) snapshots.set(ref.visualId, projected);
+  }
+  const placements = new Map(
+    (parseHtmlArtifactPlacements(message.htmlArtifactPlacements) ?? []).map((placement) => [placement.mediaId, placement]),
+  );
+  const visuals: AidenRemoteVisualProjection[] = [];
+  const seen = new Set<string>();
+  const add = (visual: AidenRemoteVisualProjection) => {
+    if (!VISUAL_ID.test(visual.id) || seen.has(visual.id)) return;
+    seen.add(visual.id);
+    visuals.push(visual);
+  };
+  for (const artifact of Array.isArray(message.htmlArtifacts) ? message.htmlArtifacts : []) {
+    if (!artifact || typeof artifact.mediaId !== "string" || typeof artifact.title !== "string") continue;
+    const placement = placements.get(artifact.mediaId);
+    const snapshot = snapshots.get(artifact.mediaId);
+    add({
+      id: artifact.mediaId,
+      kind: "html",
+      title: projectedVisualTitle(artifact.title),
+      ...(placement && VISUAL_TOOL_CALL_ID.test(placement.toolCallId) ? { toolCallId: placement.toolCallId } : {}),
+      ...(snapshot ? { snapshotAttachmentId: snapshot } : {}),
+      ...(placement?.layout === "wide" ? { layout: "wide" as const } : {}),
+    });
+  }
+  for (const visual of parseChatUiVisuals(message.uiVisuals) ?? []) {
+    const snapshot = snapshots.get(visual.id);
+    const fallbackText = boundedUnicodeScalarPrefix(visual.fallbackText.trim(), 4_000).trim();
+    add({
+      id: visual.id,
+      kind: "ui",
+      title: projectedVisualTitle(visual.title),
+      ...(visual.toolCallId && VISUAL_TOOL_CALL_ID.test(visual.toolCallId) ? { toolCallId: visual.toolCallId } : {}),
+      ...(fallbackText ? { fallbackText } : {}),
+      ...(snapshot ? { snapshotAttachmentId: snapshot } : {}),
+      ...(visual.layout === "wide" ? { layout: "wide" as const } : {}),
+    });
+  }
+  // Reply order: the order their tool calls ran in, when the timeline knows it.
+  const order = new Map<string, number>();
+  const timeline = parseGenerationTimeline(message.timeline, message.content.length);
+  timeline?.steps.forEach((step, index) => {
+    if (step.kind === "tool") order.set(step.toolCallId, index);
+  });
+  return visuals
+    .map((visual, index) => ({ visual, index, at: visual.toolCallId ? order.get(visual.toolCallId) : undefined }))
+    .sort((left, right) => (left.at ?? Number.MAX_SAFE_INTEGER) - (right.at ?? Number.MAX_SAFE_INTEGER) || left.index - right.index)
+    .slice(0, MAX_PROJECTED_VISUALS)
+    .map((entry) => entry.visual);
+}
+
 function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeProjection | undefined {
   const failure = parseProviderFailureV1(message.providerFailure);
   if (failure) {
@@ -438,6 +528,7 @@ function chatRevision(chat: Chat): string {
           id: artifact.mediaId,
           title: artifact.title,
         })),
+        visuals: projectMessageVisuals(message, projectMessageAttachments(message.attachments)),
         outcome: projectMessageOutcome(message) ?? null,
         timeline: projectMessageTimeline(message) ?? null,
       })),
@@ -491,6 +582,7 @@ function projectMessage(
   message: ChatMessage & { role: "user" | "assistant" },
 ): AidenRemoteMessageProjection {
   const attachments = projectMessageAttachments(message.attachments);
+  const visuals = projectMessageVisuals(message, attachments);
   const outcome = projectMessageOutcome(message);
   const text = boundedUnicodeScalarPrefix(message.content, 200_000);
   const reasoning = !chat.botId && message.role === "assistant" && message.reasoning &&
@@ -524,6 +616,7 @@ function projectMessage(
           })),
         }
       : {}),
+    ...(visuals.length > 0 ? { visuals } : {}),
     ...(outcome ? { outcome } : {}),
     ...(timeline ? { timeline } : {}),
   };
