@@ -552,6 +552,52 @@
     <string name="bot_routine_update_failed">Aiden couldn’t update this routine. Try again.</string>
     <string name="bot_routine_delete_failed">Aiden couldn’t delete this routine. Try again.</string>
     <string name="bot_routine_save_failed">Aiden couldn’t save this routine. Try again.</string>
+    <string name="bot_routine_suggestion_title">Try a daily check-in</string>
+
+    <!-- Bots: memory (copy shared with desktop and iOS) -->
+    <string name="bot_memory_title">Memory</string>
+    <string name="bot_memory_description">What %1$s remembers about you and its work. It’s stored on this Mac, and %1$s uses it in every chat.</string>
+    <string name="bot_memory_about_you">About you</string>
+    <string name="bot_memory_notes">%1$s’s notes</string>
+    <string name="bot_memory_empty_user">Nothing yet. Tell %1$s something to remember, like “I’m vegetarian.”</string>
+    <string name="bot_memory_empty_notes">Nothing yet. %1$s keeps notes here as it helps you.</string>
+    <string name="bot_memory_usage_cd">%1$s of %2$s characters</string>
+    <string name="bot_memory_entry_options">Options for this memory</string>
+    <string name="bot_memory_edit_title">Edit memory</string>
+    <string name="bot_memory_edit_count">%1$d/%2$d</string>
+    <string name="bot_memory_error_blocked">This can’t be saved because it looks like a password or an instruction to the Bot.</string>
+    <string name="bot_memory_error_over_budget">That would make “%1$s” too long. Shorten it, or delete something else first.</string>
+    <string name="bot_memory_error_not_found">This memory changed since you opened it. Close this and try again.</string>
+    <string name="bot_memory_error_failed">Aiden couldn’t save this memory. Try again.</string>
+    <string name="bot_memory_delete_failed">Aiden couldn’t delete this memory. Try again.</string>
+    <string name="bot_memory_load_failed">Aiden couldn’t load this memory. Make sure your Mac is on and nearby.</string>
+    <string name="bot_memory_connect">Connect to your Mac to see this memory.</string>
+    <string name="bot_memory_loading">Loading memory</string>
+    <string name="bot_memory_erase">Erase memory</string>
+    <string name="bot_memory_erase_title">Erase everything %1$s remembers?</string>
+    <string name="bot_memory_erase_body">This can’t be undone.</string>
+    <string name="bot_memory_erase_failed">Aiden couldn’t erase this memory. Try again.</string>
+    <string name="bot_memory_unreadable_title">Memory couldn’t be read</string>
+    <string name="bot_memory_unreadable_body">Its files may be damaged. Erasing starts %1$s’s memory fresh.</string>
+    <plurals name="bot_memory_count">
+        <item quantity="one">%d thing</item>
+        <item quantity="other">%d things</item>
+    </plurals>
+    <string name="bot_memory_count_empty">Nothing yet</string>
+    <string name="bot_memory_count_unreadable">Couldn’t be read</string>
+    <string name="bot_memory_updated">Memory updated</string>
+
+    <!-- Bots: routine proposal cards -->
+    <string name="bot_proposal_title">Add a routine?</string>
+    <string name="bot_proposal_subtitle">%1$s · %2$s</string>
+    <string name="bot_proposal_add">Add routine</string>
+    <string name="bot_proposal_not_now">Not now</string>
+    <string name="bot_proposal_added">Added ✓ · %1$s</string>
+    <string name="bot_proposal_not_added">Not added</string>
+    <string name="bot_proposal_failed">Aiden couldn’t reach your Mac. Try again.</string>
+
+    <!-- Bots: routine notifications -->
+    <string name="notification_bot_routine_body">%1$s: %2$s</string>
 
     <!-- Bots: advanced -->
     <string name="bot_advanced_title">Advanced</string>
@@ -566,8 +612,6 @@
     <string name="bot_advanced_access_custom_footer">It can only use what you turn on here.</string>
     <string name="bot_access_choice_full">Everything</string>
     <string name="bot_access_choice_custom">Only what I pick</string>
-    <string name="bot_advanced_greeting">Opening greeting</string>
-    <string name="bot_advanced_greeting_footer">The first thing it says in a new chat. Leave empty for none.</string>
     <string name="bot_advanced_folders">Folders</string>
     <string name="bot_advanced_run_commands">Run commands on your Mac</string>
     <string name="bot_advanced_connected_apps">Connected apps</string>

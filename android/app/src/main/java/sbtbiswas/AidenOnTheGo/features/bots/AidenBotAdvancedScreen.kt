@@ -32,7 +32,6 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
-import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 
 /** The Custom access choices, seeded from the Mac's current catalog. */
 data class AidenBotCustomAccessDraft(
@@ -105,11 +104,10 @@ fun aidenBotAccessUpdate(
     return AidenBotAccessUpdate.custom(catalog.revision, selection)
 }
 
-/** Everything on the Advanced page: model, what the Bot can use, and its opening greeting. */
+/** Everything on the Advanced page: the model and what the Bot can use. */
 data class AidenBotAdvancedDraft(
     val usesFullAccess: Boolean,
-    val customAccess: AidenBotCustomAccessDraft,
-    val openingGreeting: String
+    val customAccess: AidenBotCustomAccessDraft
 ) {
     companion object {
         fun fromDetail(detail: AidenBotDetail, catalog: AidenBotCapabilityCatalog): AidenBotAdvancedDraft? {
@@ -122,8 +120,7 @@ data class AidenBotAdvancedDraft(
             }
             return AidenBotAdvancedDraft(
                 usesFullAccess = detail.access.accessMode == AidenBotAccessMode.FULL,
-                customAccess = custom,
-                openingGreeting = detail.openingGreeting.orEmpty()
+                customAccess = custom
             )
         }
     }
@@ -146,18 +143,11 @@ data class AidenBotAdvancedDraft(
         }
     }
 
-    fun greetingPatch(bot: AidenBotDetail): AidenBotIdentityPatch? {
-        val next = openingGreeting.trim().ifEmpty { null }
-        if (next == bot.openingGreeting?.trim()?.ifEmpty { null }) return null
-        // An empty greeting clears it on the Mac.
-        return AidenBotIdentityPatch(openingGreeting = next ?: "")
-    }
-
     fun isSaveable(catalog: AidenBotCapabilityCatalog): Boolean =
         try { accessUpdate(catalog); true } catch (_: Exception) { false }
 }
 
-/** Saves an Advanced draft: the greeting first, then access, and returns the fresh Bot. */
+/** Saves an Advanced draft's access and returns the fresh Bot. */
 suspend fun aidenBotSaveAdvanced(
     client: AidenRemoteClient,
     bot: AidenBotDetail,
@@ -165,7 +155,6 @@ suspend fun aidenBotSaveAdvanced(
     catalog: AidenBotCapabilityCatalog
 ): AidenBotDetail {
     var current = bot
-    draft.greetingPatch(current)?.let { current = client.updateBotIdentity(current.id, current.revision, it) }
     if (draft.changesAccess(bot, catalog)) {
         client.updateBotAccess(current.id, current.access.revision, draft.accessUpdate(catalog))
         current = client.bot(current.id)
@@ -337,21 +326,6 @@ fun AidenBotAdvancedSheet(
                                     onChange = { draft = current.copy(customAccess = it) }
                                 )
                             }
-                        }
-
-                        AidenBotAdvancedSection(
-                            title = stringResource(R.string.bot_advanced_greeting),
-                            footer = stringResource(R.string.bot_advanced_greeting_footer)
-                        ) {
-                            TextField(
-                                value = current.openingGreeting,
-                                onValueChange = { draft = current.copy(openingGreeting = it.take(AidenBotWire.MAX_GREETING_LENGTH)) },
-                                colors = aidenTextFieldColors(),
-                                minLines = 2,
-                                maxLines = 5,
-                                shape = MaterialTheme.shapes.large,
-                                modifier = Modifier.fillMaxWidth()
-                            )
                         }
 
                         saveError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }

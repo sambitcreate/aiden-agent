@@ -41,7 +41,9 @@ fun AidenBotChatRoute(
     onNavigateToBotProfile: (String) -> Unit,
     onNavigateBack: () -> Unit,
     /** After a Delete from this chat; defaults to going back. */
-    onBotDeleted: () -> Unit = onNavigateBack
+    onBotDeleted: () -> Unit = onNavigateBack,
+    /** The "Memory updated" caption opens Profile → Memory. */
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
 ) {
     val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
     val client by coordinator.client.collectAsStateWithLifecycle()
@@ -52,7 +54,8 @@ fun AidenBotChatRoute(
             coordinator = coordinator,
             onNavigateBack = onNavigateBack,
             onNavigateToBotProfile = onNavigateToBotProfile,
-            onBotDeleted = onBotDeleted
+            onBotDeleted = onBotDeleted,
+            onNavigateToBotMemory = onNavigateToBotMemory
         )
         return
     }

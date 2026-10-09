@@ -259,6 +259,13 @@ class AidenRemoteCoordinator(
                     if (!installation.hasNegotiatedAccess(capability)) add(capability)
                 }
             }
+            // Contract revision 27: this phone renders memory and routine proposal
+            // cards. Older Macs never advertise the features and are never asked.
+            if (server.offersBotCards) {
+                for (capability in AidenRemoteCapability.PHONE_BOT_CARDS) {
+                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
+                }
+            }
         }
         if (requested.isEmpty()) return server
         return try {

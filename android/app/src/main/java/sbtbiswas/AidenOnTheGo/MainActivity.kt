@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotEditorScreen
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotMemoryScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotProfileScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
 import sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter
@@ -33,6 +34,10 @@ import sbtbiswas.AidenOnTheGo.navigation.AidenScreen
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductArea
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 
 class MainActivity : ComponentActivity() {
     private val pendingNavigationRequest = mutableStateOf<AidenNavigationRequest?>(null)
@@ -73,6 +78,19 @@ class MainActivity : ComponentActivity() {
             val botsViewModel: AidenBotsViewModel = viewModel(
                 factory = AidenBotsViewModel.factory(coordinator)
             )
+            // Revision 27: finished Bot routine runs are posted when the app comes to the
+            // foreground (there is no push), and once a Mac that offers them connects.
+            val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
+            val routineNotifier = remember { AidenScheduledRunNotifier(applicationContext) }
+            val foregroundScope = rememberCoroutineScope()
+            LifecycleEventEffect(Lifecycle.Event.ON_START) {
+                foregroundScope.launch { routineNotifier.deliverBotRoutines(coordinator) }
+            }
+            LaunchedEffect(connectionState, serverInfo) {
+                if (connectionState == sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState.CONNECTED) {
+                    routineNotifier.deliverBotRoutines(coordinator)
+                }
+            }
 
             LaunchedEffect(
                 pendingNavigationRequest.value,
@@ -257,7 +275,15 @@ class MainActivity : ComponentActivity() {
                                     onBotDeleted = {
                                         botsViewModel.loadBots(force = true)
                                         navigator.navigate(AidenNavigationStack.Root)
-                                    }
+                                    },
+                                    onNavigateToBotMemory = { botId -> push(AidenScreen.BotMemory(botId)) }
+                                )
+                            }
+                            is AidenScreen.BotMemory -> {
+                                AidenBotMemoryScreen(
+                                    botId = screen.botId,
+                                    coordinator = coordinator,
+                                    onNavigateBack = navigator::back
                                 )
                             }
                             is AidenScreen.BotProfile -> {
@@ -267,6 +293,7 @@ class MainActivity : ComponentActivity() {
                                     onNavigateBack = navigator::back,
                                     onNavigateToChat = { chatId -> push(AidenScreen.ChatDetail(chatId)) },
                                     onNavigateToEditBot = { botId -> push(AidenScreen.BotEditor(botId)) },
+                                    onNavigateToMemory = { botId -> push(AidenScreen.BotMemory(botId)) },
                                     onBotMutated = { botsViewModel.loadBots(force = true) },
                                     botDeleter = AidenRemoteBotDeleter,
                                     onBotDeleted = {

@@ -1612,6 +1612,92 @@ class AidenRemoteClient(
         decodeBotWire(AidenBotPresetCreateResult.serializer(), String(bytes, Charsets.UTF_8))
     }
 
+    // --- Revision 27: memory (`bot-memory-v1`) ---
+
+    suspend fun botMemory(botId: String): AidenBotMemory {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        return executeRequest(
+            "/bots/$botId/memory",
+            botScope = AidenBotPrivateResponseScope.Root("botMemory")
+        ) { bytes ->
+            val view = decodeBotWire(AidenBotMemory.serializer(), String(bytes, Charsets.UTF_8))
+            if (view.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+            view
+        }
+    }
+
+    /**
+     * One person edit. A failed edit answers with an error and no view (`memory_entry_not_found`,
+     * `memory_over_budget`, `memory_blocked`, `invalid_request`): refetch [botMemory] after it.
+     */
+    suspend fun editBotMemory(botId: String, edit: AidenBotMemoryEdit, idempotencyKey: UUID): AidenBotMemory {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        return executeRequest(
+            "/bots/$botId/memory/edits",
+            method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotMemoryEditRequest.serializer(), AidenBotMemoryEditRequest(edit)),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botMemoryEdit")
+        ) { bytes ->
+            val response = decodeBotWire(AidenBotMemoryEditResponse.serializer(), String(bytes, Charsets.UTF_8))
+            if (response.view.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+            response.view
+        }
+    }
+
+    // --- Revision 27: proactivity (`bot-proactive-v1`) ---
+
+    /** Adds or declines a routine the Bot suggested. A repeated answer returns the settled status. */
+    suspend fun respondToBotRoutineProposal(
+        botId: String,
+        proposalId: String,
+        decision: AidenBotRoutineProposalDecision,
+        idempotencyKey: UUID
+    ): AidenBotRoutineProposalRespondResult {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotSessionWire.validateProposalId(proposalId, "proposalId")
+        return executeRequest(
+            "/bots/$botId/routine-proposals/$proposalId/respond",
+            method = "POST",
+            bodyJson = botJson.encodeToString(
+                AidenBotRoutineProposalRespondRequest.serializer(),
+                AidenBotRoutineProposalRespondRequest(decision)
+            ),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botRoutineProposalRespond")
+        ) { bytes ->
+            decodeBotWire(AidenBotRoutineProposalRespondResult.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
+    /** The daily check-in suggestion; an empty list once the Bot has any routine. */
+    suspend fun botRoutineSuggestions(botId: String): AidenBotRoutineSuggestionList {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        return executeRequest(
+            "/bots/$botId/routine-suggestions",
+            botScope = AidenBotPrivateResponseScope.Root("botRoutineSuggestions")
+        ) { bytes ->
+            decodeBotWire(AidenBotRoutineSuggestionList.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
+    /** Finished Bot routine runs to post as local notifications; pass the previous `now` as [since]. */
+    suspend fun botRoutineNotifications(since: Instant? = null): AidenBotRoutineNotificationList {
+        val query = since?.let {
+            "?since=" + java.net.URLEncoder.encode(InstantIso8601Serializer.millisecondFormat.format(it), "UTF-8")
+        } ?: ""
+        return executeRequest(
+            "/bots/routine-notifications$query",
+            botScope = AidenBotPrivateResponseScope.Root("botRoutineNotifications")
+        ) { bytes ->
+            decodeBotWire(AidenBotRoutineNotificationList.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
     suspend fun botConversations(
         spec: AidenBotConversationQuery
     ): AidenBotConversationPage {

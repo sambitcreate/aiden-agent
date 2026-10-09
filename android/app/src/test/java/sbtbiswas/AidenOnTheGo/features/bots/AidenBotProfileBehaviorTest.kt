@@ -1,6 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -106,7 +108,9 @@ class AidenBotProfileBehaviorTest {
         assertNull(patch.name)
         assertNull(patch.purpose)
         assertNull(patch.instructions)
-        assertNull(patch.openingGreeting)
+        // Revision 27: the greeting is retired, so the wire body is the avatar alone.
+        val wire = AidenBotWireJson.json.encodeToJsonElement(AidenBotIdentityPatch.serializer(), patch).jsonObject
+        assertEquals(setOf("avatar"), wire.keys)
     }
 
     @Test
@@ -213,12 +217,79 @@ class AidenBotProfileBehaviorTest {
     // Advanced
 
     @Test
-    fun advancedGreetingClearsWithAnEmptyStringAndSkipsUnchangedText() {
-        val bot = fixture.botDetail
-        val draft = requireNotNull(AidenBotAdvancedDraft.fromDetail(bot, fixture.botCapabilityCatalog))
-        assertNull(draft.greetingPatch(bot))
-        assertEquals("", draft.copy(openingGreeting = "  ").greetingPatch(bot)?.openingGreeting)
-        assertEquals("Hi!", draft.copy(openingGreeting = " Hi! ").greetingPatch(bot)?.openingGreeting)
+    fun advancedFromAnOlderMacsGreetingHasNothingToSave() {
+        // A revision-26 Mac still sends the retired greeting on the Bot.
+        val raw = AidenBotWireJson.json.encodeToJsonElement(AidenBotDetail.serializer(), fixture.botDetail).jsonObject
+        val legacy = JsonObject(raw + ("openingGreeting" to JsonPrimitive("Hi! I'm Scout.")))
+        val bot = AidenBotWireJson.json.decodeFromJsonElement(AidenBotDetail.serializer(), legacy)
+        assertEquals(fixture.botDetail, bot)
+
+        val catalog = fixture.botCapabilityCatalog
+        val draft = requireNotNull(AidenBotAdvancedDraft.fromDetail(bot, catalog))
+        // Opening Advanced and saving without a change sends nothing to the Mac.
+        assertFalse(draft.changesAccess(bot, catalog))
+    }
+
+    // Routines: the daily check-in suggestion
+
+    @Test
+    fun theDailyCheckInOpensTheEditorPrefilledAndOnlySaveCreatesIt() {
+        val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json missing" }
+            .bufferedReader().use { it.readText() }
+        val suggestion = AidenBotWireJson.json.decodeFromJsonElement(
+            AidenBotRoutineSuggestionList.serializer(),
+            json.parseToJsonElement(text).jsonObject.getValue("botRoutineSuggestions")
+        ).suggestions.single()
+
+        val draft = AidenBotRoutineDraft.from(suggestion)
+        assertEquals(AidenBotRoutineFrequency.DAILY, draft.frequency)
+        assertEquals("09:00", draft.time)
+        assertTrue(draft.canSave)
+        // Save sends exactly the suggestion, in the phone's own time zone.
+        assertEquals(
+            AidenBotRoutineCreateRequest(
+                name = "Daily check-in",
+                schedule = AidenBotRoutineSchedule.Daily("09:00"),
+                message = suggestion.prompt,
+                timezone = "Europe/Paris"
+            ),
+            draft.createRequest("Europe/Paris")
+        )
+        // The person can change it before saving.
+        assertEquals(AidenBotRoutineSchedule.Daily("07:30"), draft.copy(hour = 7, minute = 30).createRequest("UTC")?.schedule)
+    }
+
+    // Memory row
+
+    private fun memoryView(user: Int, notes: Int, readable: Boolean = true): AidenBotMemory {
+        fun store(count: Int, seed: Int) = AidenBotMemoryStore(
+            entries = (0 until count).map { AidenBotMemoryEntry("%016x".format(seed + it), "Entry $it") },
+            usedChars = count * 7,
+            limitChars = 1_375,
+            overBudget = false
+        )
+        return AidenBotMemory("bot_fixture_01", "9f2c1a0b7d3e4f51", readable, store(notes, 100), store(user, 0), null)
+    }
+
+    @Test
+    fun memoryRowCountsEverythingBothGroupsHold() {
+        val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json missing" }
+            .bufferedReader().use { it.readText() }
+        val fixtureView = AidenBotWireJson.json.decodeFromJsonElement(
+            AidenBotMemory.serializer(),
+            json.parseToJsonElement(text).jsonObject.getValue("botMemory")
+        )
+        // Two things about the person and one note.
+        assertEquals(AidenBotMemorySummary.Things(3), AidenBotMemorySummary.of(fixtureView))
+        assertEquals(AidenBotMemorySummary.Things(1), AidenBotMemorySummary.of(memoryView(user = 1, notes = 0)))
+        assertEquals(AidenBotMemorySummary.Things(6), AidenBotMemorySummary.of(memoryView(user = 2, notes = 4)))
+    }
+
+    @Test
+    fun memoryRowSaysNothingYetWhenEmptyAndFlagsUnreadableFiles() {
+        assertEquals(AidenBotMemorySummary.Empty, AidenBotMemorySummary.of(memoryView(user = 0, notes = 0)))
+        // Unreadable wins over whatever the stores happen to list.
+        assertEquals(AidenBotMemorySummary.Unreadable, AidenBotMemorySummary.of(memoryView(user = 0, notes = 0, readable = false)))
     }
 
     @Test

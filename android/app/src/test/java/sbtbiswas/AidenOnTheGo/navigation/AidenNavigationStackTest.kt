@@ -104,6 +104,19 @@ class AidenNavigationStackTest {
     }
 
     @Test
+    fun aBotsMemoryPageSurvivesRestoreAboveItsProfile() {
+        val stack = root.push(AidenScreen.BotProfile("bot-1")).push(AidenScreen.BotMemory("bot-1"))
+
+        val saved = with(AidenNavigationStack.Saver) { SaverScope { true }.save(stack) }!!
+        val restored = AidenNavigationStack.Saver.restore(saved)!!
+
+        assertEquals(stack, restored)
+        // Back from Memory lands on the same Bot's profile, and each keeps its own saved state.
+        assertEquals(AidenScreen.BotProfile("bot-1"), restored.pop()!!.current)
+        assertEquals(stack.entries.size, stack.entries.map { it.stateKey }.toSet().size)
+    }
+
+    @Test
     fun unknownSettingsPagesAreDroppedOnRestore() {
         val restored = AidenNavigationStack.decode(listOf("settings", "settings|retired-page", "settings|voice"))
         assertEquals(root.push(AidenScreen.Settings()).push(AidenScreen.Settings(AidenSettingsPage.VOICE)), restored)

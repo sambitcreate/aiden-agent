@@ -1,6 +1,8 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -14,7 +16,9 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonTransformingSerializer
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -28,7 +32,6 @@ import java.util.Base64
 object AidenBotWire {
     const val MAX_NAME_LENGTH = 80
     const val MAX_PURPOSE_LENGTH = 280
-    const val MAX_GREETING_LENGTH = 2_000
     const val MAX_INSTRUCTIONS_LENGTH = 32_000
     const val MAX_SUMMARY_LENGTH = 280
     const val MAX_PREVIEW_LENGTH = 500
@@ -288,12 +291,45 @@ data class AidenBotModelSelection(
     }
 }
 
-@Serializable
+/**
+ * Contract revision 27 retired `openingGreeting`. An older Mac may still send it on a Bot,
+ * and an older request shape may still carry it, so a strict decode accepts a bounded string
+ * there and drops it; nothing this build encodes ever names it.
+ */
+object AidenBotRetiredGreeting {
+    const val KEY = "openingGreeting"
+    private const val MAX_LENGTH = 2_000
+
+    fun strip(element: JsonElement): JsonElement {
+        val obj = element as? JsonObject ?: return element
+        val legacy = obj[KEY] ?: return element
+        if (legacy !is JsonNull) {
+            if (legacy !is JsonPrimitive || !legacy.isString ||
+                legacy.content.codePointCount(0, legacy.content.length) > MAX_LENGTH
+            ) {
+                throw AidenBotContractException.InvalidField(KEY)
+            }
+        }
+        return JsonObject(obj - KEY)
+    }
+}
+
+/** Decodes [base] strictly after dropping a retired `openingGreeting`. */
+open class AidenBotRetiredGreetingSerializer<T : Any>(base: KSerializer<T>) : JsonTransformingSerializer<T>(base) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = AidenBotRetiredGreeting.strip(element)
+}
+
+object AidenBotDetailSerializer : AidenBotRetiredGreetingSerializer<AidenBotDetail>(AidenBotDetail.generatedSerializer())
+object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer())
+object AidenBotIdentityPatchSerializer : AidenBotRetiredGreetingSerializer<AidenBotIdentityPatch>(AidenBotIdentityPatch.generatedSerializer())
+
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotDetailSerializer::class)
 data class AidenBotDetail(
     val id: String,
     val name: String,
     val purpose: String,
-    val openingGreeting: String? = null,
     val instructions: String,
     val avatar: AidenBotAvatarView,
     val health: AidenBotHealth,
@@ -310,7 +346,6 @@ data class AidenBotDetail(
         AidenBotWire.validateIdentifier(id, "id", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         AidenBotWire.validateString(name, "name", AidenBotWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(purpose, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true)
-        openingGreeting?.let { AidenBotWire.validateString(it, "openingGreeting", AidenBotWire.MAX_GREETING_LENGTH, allowEmpty = true) }
         AidenBotWire.validateString(instructions, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH)
         AidenBotWire.validateString(revision, "revision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
         if (access.botId != id) {
@@ -322,11 +357,12 @@ data class AidenBotDetail(
     }
 }
 
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotCreateRequestSerializer::class)
 data class AidenBotCreateRequest(
     val name: String,
     val purpose: String,
-    val openingGreeting: String? = null,
     val instructions: String,
     val avatar: AidenBotSemanticAvatar,
     /** Optional since revision 25: omitted means Full access. */
@@ -335,26 +371,25 @@ data class AidenBotCreateRequest(
     init {
         AidenBotWire.validateString(name, "name", AidenBotWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(purpose, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true)
-        openingGreeting?.let { AidenBotWire.validateString(it, "openingGreeting", AidenBotWire.MAX_GREETING_LENGTH, allowEmpty = true) }
         AidenBotWire.validateString(instructions, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH)
     }
 }
 
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotIdentityPatchSerializer::class)
 data class AidenBotIdentityPatch(
     val name: String? = null,
     val purpose: String? = null,
-    val openingGreeting: String? = null,
     val instructions: String? = null,
     val avatar: AidenBotSemanticAvatar? = null
 ) {
     init {
-        if (name == null && purpose == null && openingGreeting == null && instructions == null && avatar == null) {
+        if (name == null && purpose == null && instructions == null && avatar == null) {
             throw AidenBotContractException.InvalidCombination("empty identity patch")
         }
         name?.let { AidenBotWire.validateString(it, "name", AidenBotWire.MAX_NAME_LENGTH) }
         purpose?.let { AidenBotWire.validateString(it, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true) }
-        openingGreeting?.let { AidenBotWire.validateString(it, "openingGreeting", AidenBotWire.MAX_GREETING_LENGTH, allowEmpty = true) }
         instructions?.let { AidenBotWire.validateString(it, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH) }
     }
 }
