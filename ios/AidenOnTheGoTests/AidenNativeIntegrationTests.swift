@@ -791,10 +791,6 @@ final class AidenNativeIntegrationTests: XCTestCase {
 
     func testMobileOnboardingMirrorsMacCapabilityGroups() {
         XCTAssertEqual(AidenMobileOnboardingPhase.allCases, [.build, .extend, .control])
-        XCTAssertEqual(
-            AidenMobileOnboardingPhase.allCases.map(\.imageName),
-            ["OnboardingBuild", "OnboardingExtend", "OnboardingControl"]
-        )
         XCTAssertEqual(AidenMobileOnboardingPhase.build.eyebrow, "BOTS AND WORKSPACES")
         XCTAssertEqual(AidenMobileOnboardingPhase.extend.eyebrow, "CHOOSE AND EXTEND")
         XCTAssertEqual(
@@ -821,6 +817,20 @@ final class AidenNativeIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(AidenMobileOnboardingLayout.actionHorizontalPadding, 24)
         XCTAssertEqual(AidenMobileOnboardingLayout.actionBottomPadding, 12)
+
+        // The art tile fills a phone page between the gutters, stops growing on
+        // iPad, and keeps the vignette canvas's shape so nothing extra is cropped.
+        let canvas = AidenOnboardingArtwork.canvas
+        let phone = AidenMobileOnboardingLayout.artworkSize(for: 320)
+        XCTAssertEqual(phone.width, 272)
+        let iPad = AidenMobileOnboardingLayout.artworkSize(
+            for: AidenMobileOnboardingLayout.contentWidth(for: 834)
+        )
+        XCTAssertEqual(iPad.width, AidenMobileOnboardingLayout.maximumArtworkWidth)
+        for size in [phone, iPad] {
+            XCTAssertEqual(size.width / size.height, canvas.width / canvas.height, accuracy: 0.0001)
+        }
+        XCTAssertEqual(AidenMobileOnboardingLayout.artworkSize(for: 20), .zero)
     }
 
     func testVoiceInputModeDefaultsAndLabelsRemainStable() {
