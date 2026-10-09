@@ -10,6 +10,16 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
 
 - [Design Studio + Create Images rebuild](design-studio-create-images-rebuild-plan.md) — Active (2026-10-08). Track F (Studio Foundation) merged in [#375](https://github.com/sambitcreate/aiden-agent/pull/375) and [#376](https://github.com/sambitcreate/aiden-agent/pull/376). Create Images CI-1 merged in [#382](https://github.com/sambitcreate/aiden-agent/pull/382) (headless core) and [#383](https://github.com/sambitcreate/aiden-agent/pull/383) (UI and Playwright); CI-1.10 live OpenRouter acceptance passed (owner, 2026-10-08). Design Studio DS-1a (headless core: projects, design runs, partial publish + Resume, preview resolver, IPC) is in [#385](https://github.com/sambitcreate/aiden-agent/pull/385); DS-1b (UI) is next. Both features stay behind `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` / `AIDEN_EXPERIMENTAL_CREATE_IMAGES` (default off). Haiku-built tasks were independently audited on Opus 5.5 and fixed before merge.
 
+- [On-device speech engine foundation (STT sub-project 1)](stt-engine-foundation-spec.md) — Spec (2026-10-09), awaiting written-spec review. First of four Handy-informed speech-to-text sub-projects (engine foundation, live and accuracy, dictation UX, consistency and onboarding). It stays on sherpa-onnx (pinned 1.13.8) and covers:
+  - a curated six-model offline catalog (Parakeet v3/v2, Canary 180M Flash, Whisper turbo, SenseVoice, Moonshine base EN) with pinned SHA-256 and resumable downloads;
+  - language selection and translate;
+  - Silero VAD trimming and segmentation;
+  - worker supervision;
+  - local-first provider resolution;
+  - Telegram on-device routing.
+
+  A transcribe.cpp Metal spike is tracked separately.
+
 - [Peer and mobile reliability; subagent result delivery](peer-mobile-reliability-plan.md) — Active (2026-10-05). Approved seven-slice series; mobile ancestry navigation is implemented on iOS and Android, including scoped saved paths, parent/child actions and native Back; 235 iOS chat tests, 25 Android progress tests, 10 emulator UI tests, Android lint/test compilation and 55 CI-policy tests pass. Physical-device acceptance remains open. Retry correlation, cross-route CA bootstrap, and background wake authority/delivery gates are required before their respective implementations ship. Background launches remain disabled.
 
 - [Pi 1.0.3 upgrade and stack reconciliation](pi-1.0.3-upgrade-plan.md) — Active (2026-10-05); integrated replacement preserves #299–#307 ancestry on `feature/pi-1.0.3-upgrade`. Main 5c094875c integrated with focused native/desktop acceptance. Exact 1.0.3 pins, Azure state migration and sampling support implemented; full local acceptance complete (6,991 unit cases plus preserved modes and 79 CLI tests); [PR #357](https://github.com/sambitcreate/aiden-agent/pull/357) tracks exact-head CI and authorized auto-merge. Frozen 0.87.1 journal adapter remains. Release/rollout gates are separate.
