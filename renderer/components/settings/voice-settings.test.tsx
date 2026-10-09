@@ -109,9 +109,49 @@ test("Translate to English appears only for a model that can translate", async (
   assert.equal(screen.queryByRole("switch", { name: "Translate to English" }), null);
 });
 
+test("Automatic on a model that can't detect the language says it uses English", async () => {
+  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), ["canary-180m-flash"]);
+  await screen.findByText(
+    "Canary 180M Flash can't detect the language, so Automatic uses English. Choose the language you speak.",
+  );
+  assert.equal(screen.queryByText(/Automatic lets Canary 180M Flash decide/), null);
+});
+
+test("Automatic on a model that detects the language lets the model decide", async () => {
+  mount({ localVoiceModel: "parakeet-v3" }, localReady("parakeet-v3", true), ["parakeet-v3"]);
+  await screen.findByText(/Automatic lets Parakeet TDT 0\.6B v3 decide/);
+  assert.equal(screen.queryByText(/can't detect the language/), null);
+});
+
+test("Translate to English is unavailable until a non-English source language is chosen", async () => {
+  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), ["canary-180m-flash"]);
+  const automatic = await screen.findByRole("switch", { name: "Translate to English" });
+  assert.equal((automatic as HTMLButtonElement).disabled, true);
+  await screen.findByText("Choose a language other than English to translate.");
+  cleanup();
+
+  mount(
+    { localVoiceModel: "canary-180m-flash", voiceLanguage: "en" },
+    localReady("canary-180m-flash", true),
+    ["canary-180m-flash"],
+  );
+  const english = await screen.findByRole("switch", { name: "Translate to English" });
+  assert.equal((english as HTMLButtonElement).disabled, true);
+  cleanup();
+
+  mount(
+    { localVoiceModel: "canary-180m-flash", voiceLanguage: "de" },
+    localReady("canary-180m-flash", true),
+    ["canary-180m-flash"],
+  );
+  const german = await screen.findByRole("switch", { name: "Translate to English" });
+  assert.equal((german as HTMLButtonElement).disabled, false);
+  assert.equal(screen.queryByText("Choose a language other than English to translate."), null);
+});
+
 test("turning on Translate to English saves the preference", async () => {
   const { patches } = mount(
-    { localVoiceModel: "canary-180m-flash" },
+    { localVoiceModel: "canary-180m-flash", voiceLanguage: "de" },
     localReady("canary-180m-flash", true),
     ["canary-180m-flash"],
   );

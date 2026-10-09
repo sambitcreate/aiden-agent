@@ -43,7 +43,7 @@ import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { LocalVoiceSettings } from "./local-voice-settings";
 import { automaticVoiceCaption, effectiveLocalModelId } from "../../shared/voice-provider";
-import { effectiveLanguage, normalizeLanguageIntent } from "../../shared/voice-language";
+import { effectiveLanguage, effectiveTask, normalizeLanguageIntent } from "../../shared/voice-language";
 
 const AUTOMATIC = "automatic";
 const AUTO_LANGUAGE = "auto";
@@ -137,6 +137,17 @@ export function VoiceInputSettings() {
   const languageCaption =
     activeLocal && language !== AUTO_LANGUAGE ? languageFallbackCaption(activeLocal, language) : null;
   const canTranslate = activeLocal?.capabilities.translateToEnglish === true;
+  // Translation runs only from a known non-English source, exactly as the worker decides.
+  const translateApplies =
+    activeLocal !== undefined &&
+    effectiveTask(activeLocal, true, effectiveLanguage(activeLocal, language).language) === "translate";
+  const languageDescription = !activeLocal
+    ? "The language you speak. Automatic lets the provider detect it."
+    : activeLocal.capabilities.autoDetect
+      ? `The language you speak. Automatic lets ${activeLocal.name} decide.`
+      : `${activeLocal.name} can't detect the language, so Automatic uses ${languageName(
+          effectiveLanguage(activeLocal, AUTO_LANGUAGE).language ?? "en",
+        )}. Choose the language you speak.`;
   const [geminiDialogOpen, setGeminiDialogOpen] = React.useState(false);
   const [geminiAuthOpen, setGeminiAuthOpen] = React.useState(false);
   const [geminiScope, setGeminiScope] = React.useState<GeminiUsageScope>("transcription_only");
@@ -277,11 +288,7 @@ export function VoiceInputSettings() {
         </Field>
         <Field
           label="Language"
-          description={
-            activeLocal
-              ? `The language you speak. Automatic lets ${activeLocal.name} decide.`
-              : "The language you speak. Automatic lets the provider detect it."
-          }
+          description={languageDescription}
         >
           <div className="flex w-full flex-col">
             <Select
@@ -312,10 +319,15 @@ export function VoiceInputSettings() {
         {canTranslate ? (
           <Field
             label="Translate to English"
-            description="Writes what you say in other languages as English text."
+            description={
+              translateApplies
+                ? "Writes what you say in other languages as English text."
+                : "Choose a language other than English to translate."
+            }
           >
             <Switch
               aria-label="Translate to English"
+              disabled={!translateApplies}
               checked={settings.data?.voiceTranslateToEnglish === true}
               onCheckedChange={(value) =>
                 void savePreference(
