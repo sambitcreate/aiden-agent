@@ -7,6 +7,7 @@ import { mountWithBotRouter } from "../main/bots/test-providers";
 import { modelOptionId } from "../lib/model-picker-data";
 import type { AppSettings, Provider } from "../lib/types";
 import { ModelPicker } from "./model-picker";
+import { Toaster } from "./ui";
 
 afterEach(cleanup);
 
@@ -22,11 +23,12 @@ const provider: Provider = {
   hasKey: true,
 };
 
-function settingsServer(initial: AppSettings) {
+function settingsServer(initial: AppSettings, options: { failWrites?: boolean } = {}) {
   let current = structuredClone(initial);
   const calls = installBotTestIpc({
     "settings:get": () => structuredClone(current),
     "settings:set": (patch: unknown) => {
+      if (options.failWrites) throw new Error("disk full");
       current = { ...current, ...(patch as Partial<AppSettings>) };
       return structuredClone(current);
     },
@@ -42,18 +44,21 @@ const placedSettings: AppSettings = {
   },
 };
 
-async function openPicker(
+async function mountPicker(
   server: ReturnType<typeof settingsServer>,
   options: { hidden?: string[] } = {},
 ) {
   await mountWithBotRouter(
-    <ModelPicker
-      providers={[provider]}
-      providerId="acme"
-      model="current-model"
-      onChange={() => {}}
-      hiddenModelsByProvider={options.hidden ? { acme: options.hidden } : undefined}
-    />,
+    <>
+      <ModelPicker
+        providers={[provider]}
+        providerId="acme"
+        model="current-model"
+        onChange={() => {}}
+        hiddenModelsByProvider={options.hidden ? { acme: options.hidden } : undefined}
+      />
+      <Toaster />
+    </>,
   );
   // The picker opens on the Pad once the saved placements have loaded.
   await act(async () => {
@@ -63,6 +68,13 @@ async function openPicker(
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   fireEvent.click(screen.getByRole("button", { name: /Choose a model/u }));
+}
+
+async function openPicker(
+  server: ReturnType<typeof settingsServer>,
+  options: { hidden?: string[] } = {},
+) {
+  await mountPicker(server, options);
   return screen.findByRole("listbox", { name: /Model pad/u });
 }
 
@@ -75,7 +87,7 @@ test("a current model that is not on the Pad is not shown as selected and can be
     assert.equal(option.getAttribute("aria-selected"), "false");
   }
   const panel = screen.getByRole("tabpanel");
-  assert.match(panel.textContent ?? "", /Current Model isn’t on your Pad/u);
+  assert.match(panel.textContent ?? "", /Current Model\sisn’t on your Pad/u);
   // The side card describes the current model rather than the first Pad model.
   const card = screen.getByRole("complementary");
   assert.match(card.textContent ?? "", /Current Model/u);
@@ -112,4 +124,42 @@ test("a current model hidden from the picker is not offered for the Pad", async 
   assert.equal(pad.getAttribute("aria-activedescendant"), null);
   assert.equal(screen.queryByRole("button", { name: "Add to Pad" }), null);
   assert.doesNotMatch(screen.getByRole("tabpanel").textContent ?? "", /isn’t on your Pad/u);
+});
+
+test("an empty Pad offers the current model and shows it on the Pad once added", async () => {
+  const server = settingsServer({});
+  await mountPicker(server);
+  // With nothing placed the picker opens on the list; switch to the Pad tab.
+  fireEvent.click(await screen.findByRole("tab", { name: "Personal Model Pad" }));
+
+  const panel = screen.getByRole("tabpanel");
+  assert.match(panel.textContent ?? "", /Current Model\sisn’t on your Pad/u);
+  assert.ok(screen.getByRole("button", { name: "Customize Model Pad" }));
+  assert.equal(screen.queryByRole("listbox", { name: /Model pad/u }), null);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add to Pad" }));
+
+  const pad = await screen.findByRole("listbox", { name: /Model pad/u });
+  await waitFor(() =>
+    assert.equal(pad.getAttribute("aria-activedescendant"), modelOptionId("acme::current-model")),
+  );
+  const writes = server.calls.filter((call) => call.channel === "settings:set");
+  assert.equal(writes.length, 1);
+  assert.deepEqual(Object.keys((writes[0].args[0] as AppSettings).modelPadPlacements ?? {}), [
+    "acme::current-model",
+  ]);
+  assert.equal(screen.queryByRole("button", { name: "Add to Pad" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Customize Model Pad" }), null);
+});
+
+test("a failed Add to Pad says why and keeps offering the model", async () => {
+  const server = settingsServer(placedSettings, { failWrites: true });
+  const pad = await openPicker(server);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add to Pad" }));
+
+  await screen.findByText(/disk full/u);
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add to Pad" })));
+  assert.equal(pad.getAttribute("aria-activedescendant"), null);
+  assert.equal(within(pad).getAllByRole("option").length, 2);
 });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { positionSavedModels, type ModelEntry } from "../lib/model-picker-data";
+import { modelOptionId, positionSavedModels, type ModelEntry } from "../lib/model-picker-data";
 import { ModelPickerPad } from "./model-picker-pad";
 
 afterEach(cleanup);
@@ -212,4 +212,18 @@ test("the first arrow press on an unplaced current model starts at the model nea
     assert.deepEqual(previews, ["middle"], `${key} starts at the center model`);
     unmount();
   }
+});
+
+test("leaving the Pad after previewing returns to no active model when the current one is unplaced", () => {
+  const { container } = render(<ControlledPad selectedValue="elsewhere" />);
+  const listbox = screen.getByRole("listbox");
+  fireEvent.keyDown(listbox, { key: "ArrowRight" });
+  assert.equal(listbox.getAttribute("aria-activedescendant"), modelOptionId("middle"));
+  assert.ok(container.querySelector(".model-pad-knob"));
+
+  fireEvent.pointerLeave(listbox);
+
+  assert.equal(listbox.getAttribute("aria-activedescendant"), null);
+  assert.equal(container.querySelector(".model-pad-knob"), null);
+  assert.equal(container.querySelector("[data-model-pad-knob-tag]"), null);
 });

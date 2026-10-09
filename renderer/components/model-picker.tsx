@@ -411,21 +411,25 @@ export function ModelPicker({
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = allEntries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
-  // The current model is available but not placed: the Pad shows no active model
-  // and offers to add it. A model hidden from the picker could not appear, so it
-  // is not offered.
-  const selectedOffPad =
-    hasPadModels && !selectedPosition
-      ? entries.find((entry) => entry.value === selectedValue)
-      : undefined;
+  // The current model is available but not placed (the Pad may be empty): the Pad
+  // shows no active model and offers to add it. A model hidden from the picker
+  // could not appear, so it is not offered.
+  const selectedOffPad = selectedPosition
+    ? undefined
+    : entries.find((entry) => entry.value === selectedValue);
   const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
   const activePosition: ModelEntry | undefined = !open
     ? undefined
     : view === "pad"
-      ? (positioned.find((entry) => entry.value === previewValue) ??
-        selectedPosition ??
-        selected ??
-        positioned[0])
+      ? // The empty Pad has no detail card. Otherwise an unplaced current model is
+        // described as itself, and an unavailable one leaves the card empty rather
+        // than describing a different model.
+        hasPadModels
+        ? (positioned.find((entry) => entry.value === previewValue) ??
+          selectedPosition ??
+          selected ??
+          (selectedValue ? undefined : positioned[0]))
+        : undefined
       : (detailPosition ??
         detailPositions.find((entry) => entry.value === selectedValue) ??
         detailPositions[0]);
@@ -461,6 +465,12 @@ export function ModelPicker({
     [saveModelPadPreferences],
   );
 
+  const focusPad = React.useCallback(() => {
+    contentRef.current
+      ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
+      ?.focus();
+  }, []);
+
   const focusPadAfterAddRef = React.useRef(false);
   const addSelectedToPad = () => {
     if (!selectedOffPad) return;
@@ -481,10 +491,8 @@ export function ModelPicker({
   React.useEffect(() => {
     if (!selectedPosition || !focusPadAfterAddRef.current) return;
     focusPadAfterAddRef.current = false;
-    contentRef.current
-      ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
-      ?.focus();
-  }, [selectedPosition]);
+    focusPad();
+  }, [selectedPosition, focusPad]);
 
   const commit = React.useCallback(
     (entry: ModelEntry, close = false) => {
@@ -518,9 +526,7 @@ export function ModelPicker({
         contentRef.current?.querySelector<HTMLElement>("[data-model-pad-settings]")?.focus();
         return;
       }
-      contentRef.current
-        ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
-        ?.focus();
+      focusPad();
     });
   };
 
@@ -603,10 +609,7 @@ export function ModelPicker({
               searchRef.current?.focus();
               return;
             }
-            const pad = contentRef.current?.querySelector<HTMLElement>(
-              '[aria-roledescription="two-dimensional model picker"]',
-            );
-            pad?.focus();
+            focusPad();
           });
         }}
       >
@@ -664,8 +667,11 @@ export function ModelPicker({
           >
             {selectedOffPad ? (
               <div className="mb-2 flex min-w-0 items-center gap-2 rounded-control bg-control/60 py-1 pr-1 pl-2.5">
-                <Text variant="small" color="secondary" as="p" truncate className="min-w-0 flex-1">
-                  {selectedOffPad.label} isn’t on your Pad
+                <Text variant="small" color="secondary" as="p" className="flex min-w-0 flex-1">
+                  <span className="min-w-0 truncate" title={selectedOffPad.label}>
+                    {selectedOffPad.label}
+                  </span>
+                  <span className="shrink-0">{"\u00a0"}isn’t on your Pad</span>
                 </Text>
                 <Button size="small" className="shrink-0" onClick={addSelectedToPad}>
                   Add to Pad
