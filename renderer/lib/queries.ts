@@ -1,6 +1,7 @@
 // React Query hooks for providers, chats, and settings.
 
 import {
+  keepPreviousData,
   queryOptions,
   replaceEqualDeep,
   useMutation,
@@ -101,6 +102,8 @@ export const queryKeys = {
     ["chat-pull-requests", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatPullRequestsSidebar: (chatIds: readonly string[]) =>
+    ["chat-pull-requests-sidebar", ...chatIds] as const,
   chatPullRequestCandidates: (chatId: string | undefined) =>
     ["chat-pull-request-candidates", chatId ?? "none"] as const,
   chatPullRequestPending: (chatId: string | undefined) =>
@@ -433,15 +436,6 @@ export function useGitPullRequestStatus(workspaceId: string | undefined, enabled
   return useQuery(gitPullRequestStatusQueryOptions(workspaceId, enabled));
 }
 
-/** Sidebar Refresh: bypass the background PR cache and spend interactive budget. */
-export function refreshGitPullRequestStatus(queryClient: QueryClient, workspaceId: string) {
-  return queryClient.fetchQuery({
-    ...gitPullRequestStatusQueryOptions(workspaceId),
-    queryFn: () => gitApi.pullRequestStatus(workspaceId, { interactive: true }),
-    staleTime: 0,
-  });
-}
-
 export function useGitReview(workspaceId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.gitReview(workspaceId),
@@ -512,6 +506,20 @@ export function useChatCurrentPullRequest(chatId: string | undefined, enabled = 
     queryFn: () => pullRequestsApi.current(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * Sidebar rows' linked PRs and dismissed refs, read from local stores in one IPC call. It
+ * never reaches GitHub; `chats:pull-requests-changed` invalidates it.
+ */
+export function useSidebarChatPullRequests(chatIds: readonly string[]) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequestsSidebar(chatIds),
+    queryFn: () => pullRequestsApi.sidebar(chatIds),
+    enabled: chatIds.length > 0,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
   });
 }
 
