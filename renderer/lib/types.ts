@@ -903,6 +903,9 @@ export interface AppSettings {
   voiceModel?: string;
   geminiUsageScope?: GeminiUsageScope;
   localVoiceModel?: string;
+  voiceLanguage?: string;
+  voiceTranslateToEnglish?: boolean;
+  voiceTrimSilence?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;

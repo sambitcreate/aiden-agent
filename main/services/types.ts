@@ -702,6 +702,12 @@ export interface AppSettings {
   geminiUsageScope?: GeminiUsageScope;
   /** Selected on-device speech model id (see local-speech-catalog). */
   localVoiceModel?: string;
+  /** "auto" or a base language code; resolved per model at use (see renderer/shared/voice-language.ts). */
+  voiceLanguage?: string;
+  /** Translate speech to English when the active on-device model can. */
+  voiceTranslateToEnglish?: boolean;
+  /** Trim silence and segment long audio with Silero VAD before on-device decode (default on). */
+  voiceTrimSilence?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */

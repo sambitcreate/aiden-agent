@@ -4,6 +4,7 @@ import { parseCustomModelOptions } from "../../renderer/shared/custom-model-opti
 import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
+import { normalizeLanguageIntent } from "../../renderer/shared/voice-language.js";
 // Splits Aiden's persisted configuration into a portable half and a
 // machine-local half, and migrates existing installs into that layout once.
 //
@@ -578,6 +579,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "lastModel",
     "voiceModel",
     "localVoiceModel",
+    "voiceLanguage",
     "shortcutAccelerator",
     "dictationAccelerator",
     "scheduledDefaultTimezone",
@@ -599,6 +601,8 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationSilenceStop",
     "dictationCleanup",
     "dictationSounds",
+    "voiceTranslateToEnglish",
+    "voiceTrimSilence",
     "showLocalModelReasoning",
     "memoryEnabled",
     "skillsEnabled",
@@ -719,6 +723,11 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     !isLocalVoiceIdleUnloadMinutes(settings.localVoiceIdleUnloadMinutes)
   ) {
     delete runtime.localVoiceIdleUnloadMinutes;
+  }
+  if (settings.voiceLanguage !== undefined) {
+    const voiceLanguage = normalizeLanguageIntent(settings.voiceLanguage);
+    if (voiceLanguage) runtime.voiceLanguage = voiceLanguage;
+    else delete runtime.voiceLanguage;
   }
   if (!Number.isSafeInteger(settings.telegramAllowedUserId)) delete runtime.telegramAllowedUserId;
   if (!isGenerationThinkingLevel(settings.telegramThinkingLevel))
