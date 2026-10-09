@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
-import { createSpeechModelManager, diskFailureMessage } from "./local-speech-downloads.js";
+import { createSpeechModelManager, diskFailureMessage, partialDownloadBytes } from "./local-speech-downloads.js";
 
 type Mode = "normal" | "ignore-range" | "wrong-offset" | "cut-after-half" | "stall" | "oversize" | "unsatisfiable" | "short";
 
@@ -265,6 +265,27 @@ test("a partial that cannot be written reports a disk error, not an interruption
   assert.doesNotMatch(error.message, /free up space/i);
   assert.match(error.message, /Check that Aiden can write to its data folder and try again\./);
   assert.equal(manager.isModelInstalled("fixture"), false);
+});
+
+test("a non-regular entry at the partial path is a disk failure whatever its size", async () => {
+  const root = mkdtempSync(join(tmpdir(), "speech-root-"));
+  const partial = join(root, "fixture.tar.bz2.part");
+  mkdirSync(partial);
+  // The directory's own size varies by platform, so the check must not depend on it.
+  const error = await partialDownloadBytes(partial).then(() => undefined, (reason: unknown) => reason as Error);
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /disk.*EISDIR|EISDIR.*disk/i);
+  assert.doesNotMatch(error.message, /interrupted/i);
+  // Left in place: it is not download bytes, and removing it is not ours to do.
+  assert.equal(statSync(partial).isDirectory(), true);
+});
+
+test("a regular partial reports its byte count and a missing one reports zero", async () => {
+  const root = mkdtempSync(join(tmpdir(), "speech-root-"));
+  const partial = join(root, "fixture.tar.bz2.part");
+  assert.equal(await partialDownloadBytes(partial), 0);
+  writeFileSync(partial, "12345");
+  assert.equal(await partialDownloadBytes(partial), 5);
 });
 
 test("only a full disk or exhausted quota asks the user to free up space", () => {
