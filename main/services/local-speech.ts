@@ -187,16 +187,19 @@ export async function warmLocalVoice(modelId: string): Promise<void> {
     withModelLease(async () => {
       if (modelState.loaded === modelId && host.current()) return;
       const request = modelState.request(modelId);
+      // The language a transcription would use, so the warm-up builds the same recognizer and the first dictation reuses it.
+      const { configStore } = await import("./config-store.js");
+      const language = effectiveLanguage(model.spec, (await configStore.getSettings()).voiceLanguage).language;
       try {
         try {
           // The worker is chosen before the load is announced, so a retired model reports unloaded first.
-          const worker = await host.prepare({ modelId, family: model.spec.family, language: null });
+          const worker = await host.prepare({ modelId, family: model.spec.family, language });
           request.announceLoad();
-          await worker.load(modelId, model.directory, model.spec);
+          await worker.load(modelId, model.directory, model.spec, language);
         } catch (error) {
           if (!isolationUnavailable(error)) throw error;
           request.announceLoad();
-          speechEngine.load(model.spec, model.directory);
+          speechEngine.load(model.spec, model.directory, language);
         }
         request.succeed();
       } catch (error) {
