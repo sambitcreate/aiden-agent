@@ -3,6 +3,7 @@
 // offline recognizer config. Electron-free so it can run in an isolated
 // utility process or the CLI worker.
 
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
@@ -14,9 +15,16 @@ const MIN_SAMPLES = SAMPLE_RATE;
 const PADDED_SAMPLES = 20_000;
 const VAD_WINDOW = 512;
 
+/** Thrown when an installed model is missing files; workers can map it by `name`. */
+export class ModelMissingError extends Error {
+  override name = "ModelMissingError";
+  constructor() {
+    super("The selected voice model isn't downloaded. Download it in Settings → Voice.");
+  }
+}
+
 interface SherpaStream {
   acceptWaveform(input: { sampleRate: number; samples: Float32Array }): void;
-  setOption(key: string, value: string): void;
 }
 interface SherpaRecognizer {
   createStream(): SherpaStream;
@@ -88,7 +96,9 @@ export function buildRecognizerConfig(spec: SpeechModelSpec, dir: string, opts: 
   };
 }
 
-const CJK = /[぀-ヿ㐀-鿿가-힯]/;
+// Scripts written without spaces between words: CJK punctuation, kana,
+// Han ideographs and full-width forms. Hangul is spaced like Latin text.
+const NO_SPACE_SCRIPT = /[\u3000-\u30ff\u3400-\u9fff\uff00-\uffef]/;
 
 export function joinSegmentTexts(texts: readonly string[]): string {
   let joined = "";
@@ -96,7 +106,7 @@ export function joinSegmentTexts(texts: readonly string[]): string {
     const text = raw.trim();
     if (!text) continue;
     if (!joined) joined = text;
-    else if (CJK.test(joined[joined.length - 1]!) && CJK.test(text[0]!)) joined += text;
+    else if (NO_SPACE_SCRIPT.test(joined[joined.length - 1]!) && NO_SPACE_SCRIPT.test(text[0]!)) joined += text;
     else joined += ` ${text}`;
   }
   return joined;
@@ -110,47 +120,74 @@ function detectedLanguage(lang: unknown): string | null {
   return match ? (match[1] ?? match[2] ?? null) : null;
 }
 
-/** Families whose language/task is baked into the recognizer config rather than set per stream. */
-function bakesLanguage(spec: SpeechModelSpec): boolean {
-  return spec.family === "nemo-canary" || spec.family === "sense-voice";
+// How a language/task change reaches a loaded recognizer. sherpa-onnx 1.13.8
+// implements SetConfig only for Canary and Whisper; every other recognizer's
+// SetConfig is a silent no-op, so SenseVoice must be rebuilt.
+type LanguageUpdate = "setConfig" | "rebuild" | "none";
+
+function languageUpdate(spec: SpeechModelSpec): LanguageUpdate {
+  if (spec.family === "nemo-canary" || spec.family === "whisper") return "setConfig";
+  if (spec.family === "sense-voice") return "rebuild";
+  return "none";
 }
 
 function configOptions(spec: SpeechModelSpec, language: string | null, task: ConfigOptions["task"]): ConfigOptions {
-  // Whisper's language is applied per stream so the recognizer stays on auto-detect.
-  return bakesLanguage(spec) ? { language, task } : { language: null, task: "transcribe" };
+  if (spec.family === "nemo-canary") return { language, task };
+  if (spec.family === "whisper" || spec.family === "sense-voice") return { language, task: "transcribe" };
+  return { language: null, task: "transcribe" };
 }
 
 function configKey(spec: SpeechModelSpec, options: ConfigOptions): string {
-  return bakesLanguage(spec) ? JSON.stringify(options) : "";
+  return languageUpdate(spec) === "none" ? "" : JSON.stringify(options);
 }
 
-interface Slot { id: string; configKey: string; recognizer: SherpaRecognizer }
+/** Recognizers misbehave on sub-second input, so short audio is zero-padded to 1.25 s. */
+function atLeastOneSecond(samples: Float32Array): Float32Array {
+  if (samples.length >= MIN_SAMPLES) return samples;
+  const padded = new Float32Array(PADDED_SAMPLES);
+  padded.set(samples);
+  return padded;
+}
 
-export function createSpeechEngine(load: () => SherpaModule) {
+interface Slot { id: string; directory: string; configKey: string; recognizer: SherpaRecognizer }
+
+export interface SpeechEngineDeps {
+  /** File probe used before building a recognizer (defaults to `existsSync`). */
+  exists?: (filePath: string) => boolean;
+}
+
+export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineDeps = {}) {
+  const exists = deps.exists ?? existsSync;
   let slot: Slot | null = null;
 
+  function holds(spec: SpeechModelSpec, dir: string): boolean {
+    return slot !== null && slot.id === spec.id && slot.directory === dir;
+  }
+
   function build(spec: SpeechModelSpec, dir: string, options: ConfigOptions): Slot {
+    slot = null;
+    for (const relative of Object.values(spec.files)) {
+      if (!exists(path.join(dir, relative))) throw new ModelMissingError();
+    }
     const recognizer = new (load().OfflineRecognizer)(buildRecognizerConfig(spec, dir, options));
-    slot = { id: spec.id, configKey: configKey(spec, options), recognizer };
+    slot = { id: spec.id, directory: dir, configKey: configKey(spec, options), recognizer };
     return slot;
   }
 
   function ensure(spec: SpeechModelSpec, dir: string, options: ConfigOptions): SherpaRecognizer {
-    if (!slot || slot.id !== spec.id) {
-      slot = null;
-      return build(spec, dir, options).recognizer;
-    }
+    if (!slot || !holds(spec, dir)) return build(spec, dir, options).recognizer;
     const key = configKey(spec, options);
-    if (slot.configKey !== key) {
+    if (slot.configKey === key) return slot.recognizer;
+    if (languageUpdate(spec) === "setConfig") {
       try {
         slot.recognizer.setConfig(buildRecognizerConfig(spec, dir, options));
         slot.configKey = key;
+        return slot.recognizer;
       } catch {
-        slot = null;
-        return build(spec, dir, options).recognizer;
+        // Fall through to a rebuild with the new language.
       }
     }
-    return slot.recognizer;
+    return build(spec, dir, options).recognizer;
   }
 
   function vadRegions(samples: Float32Array, vadModelPath: string): SampleRange[] | null {
@@ -198,10 +235,7 @@ export function createSpeechEngine(load: () => SherpaModule) {
 
     load(spec: SpeechModelSpec, dir: string): { loadMs: number } {
       const started = performance.now();
-      if (!slot || slot.id !== spec.id) {
-        slot = null;
-        build(spec, dir, configOptions(spec, null, "transcribe"));
-      }
+      if (!holds(spec, dir)) build(spec, dir, configOptions(spec, null, "transcribe"));
       return { loadMs: performance.now() - started };
     },
 
@@ -210,12 +244,7 @@ export function createSpeechEngine(load: () => SherpaModule) {
       if (request.samples.length === 0) return { text: "", language: null, decodeMs: 0 };
       const recognizer = ensure(spec, request.modelDirectory, configOptions(spec, language, task));
       const started = performance.now();
-      let samples = request.samples;
-      if (samples.length < MIN_SAMPLES) {
-        const padded = new Float32Array(PADDED_SAMPLES);
-        padded.set(samples);
-        samples = padded;
-      }
+      const samples = atLeastOneSecond(request.samples);
       const maxWindow = spec.capabilities.maxWindowSeconds;
       const regions = request.trimSilence ? vadRegions(samples, request.vadModelPath) : null;
       const ranges = regions ? planSegments(regions, samples.length, maxWindow) : fixedChunks(samples.length, maxWindow);
@@ -223,8 +252,7 @@ export function createSpeechEngine(load: () => SherpaModule) {
       let detected: string | null = null;
       for (const range of ranges) {
         const stream = recognizer.createStream();
-        if (spec.family === "whisper" && language !== null) stream.setOption("language", language);
-        stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples: samples.subarray(range.start, range.end) });
+        stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples: atLeastOneSecond(samples.subarray(range.start, range.end)) });
         recognizer.decode(stream);
         const result = recognizer.getResult(stream);
         texts.push(result.text);

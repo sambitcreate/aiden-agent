@@ -1,27 +1,35 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SPEECH_MODELS, speechModel } from "./local-speech-catalog.js";
 import { VAD_PAD_SAMPLES, type SampleRange } from "./local-speech-vad.js";
-import { buildRecognizerConfig, createSpeechEngine, joinSegmentTexts, type SherpaModule } from "./local-speech-engine.js";
+import { buildRecognizerConfig, createSpeechEngine, joinSegmentTexts, ModelMissingError, type SherpaModule } from "./local-speech-engine.js";
+
+type FakeConfig = { modelConfig: Record<string, Record<string, unknown>> };
 
 function fakeSherpa(options: { regions?: Array<[number, number]>; setConfigThrows?: boolean; text?: (n: number) => string } = {}) {
-  const created: unknown[] = [];
-  const released: number[] = [];
+  const created: FakeConfig[] = [];
+  const setConfigs: FakeConfig[] = [];
+  const decodedLengths: number[] = [];
   let decodes = 0;
-  const streamOptions: Array<[string, string]> = [];
   class OfflineRecognizer {
-    id = created.length;
-    constructor(public config: unknown) { created.push(config); }
-    createStream() { return { samples: 0, acceptWaveform: function (this: { samples: number }, i: { samples: Float32Array }) { this.samples = i.samples.length; }, setOption: (k: string, v: string) => streamOptions.push([k, v]) }; }
-    setConfig(config: unknown) { if (options.setConfigThrows) throw new Error("unsupported"); this.config = config; }
-    decode() { decodes += 1; }
-    getResult(stream: { samples: number }) { return { text: options.text?.(decodes) ?? ` part${decodes} `, lang: "<|de|>", samples: stream.samples }; }
+    constructor(public config: FakeConfig) { created.push(config); }
+    createStream() { return { samples: 0, acceptWaveform: function (this: { samples: number }, i: { samples: Float32Array }) { this.samples = i.samples.length; } }; }
+    // Mirrors sherpa-onnx 1.13.8: only Canary and Whisper implement SetConfig;
+    // every other recognizer silently ignores it.
+    setConfig(config: FakeConfig) {
+      if (options.setConfigThrows) throw new Error("unsupported");
+      if (!("canary" in this.config.modelConfig) && !("whisper" in this.config.modelConfig)) return;
+      setConfigs.push(config);
+      this.config = config;
+    }
+    decode(stream: { samples: number }) { decodes += 1; decodedLengths.push(stream.samples); }
+    getResult() { return { text: options.text?.(decodes) ?? ` part${decodes} `, lang: "<|de|>" }; }
   }
   class Vad {
     queue: Array<{ start: number; samples: Float32Array }> = [];
@@ -32,8 +40,11 @@ function fakeSherpa(options: { regions?: Array<[number, number]>; setConfigThrow
     front() { return this.queue[0]!; }
     pop() { this.queue.shift(); }
   }
-  return { module: { OfflineRecognizer, Vad } as unknown as SherpaModule, created, released, streamOptions, decodes: () => decodes };
+  return { module: { OfflineRecognizer, Vad } as unknown as SherpaModule, created, setConfigs, decodedLengths, decodes: () => decodes };
 }
+
+/** An engine over a fake module whose model files all "exist". */
+const newEngine = (module: SherpaModule) => createSpeechEngine(() => module, { exists: () => true });
 
 const v3 = speechModel("parakeet-v3")!;
 const canary = speechModel("canary-180m-flash")!;
@@ -71,7 +82,7 @@ test("whisper auto passes an empty language and sense-voice uses auto", () => {
 
 test("one model slot: loading another model replaces the recognizer", () => {
   const fake = fakeSherpa();
-  const engine = createSpeechEngine(() => fake.module);
+  const engine = newEngine(fake.module);
   engine.load(v3, "/a");
   engine.load(v3, "/a");
   assert.equal(fake.created.length, 1);
@@ -80,35 +91,92 @@ test("one model slot: loading another model replaces the recognizer", () => {
   assert.equal(engine.loadedModelId(), "canary-180m-flash");
 });
 
-test("a language change uses setConfig, and rebuilds when setConfig throws", () => {
-  const ok = fakeSherpa();
-  const engine = createSpeechEngine(() => ok.module);
+test("canary applies a language or task change through setConfig", () => {
+  const fake = fakeSherpa();
+  const engine = newEngine(fake.module);
   engine.transcribe(req(canary, { language: "de" }));
-  engine.transcribe(req(canary, { language: "fr" }));
-  assert.equal(ok.created.length, 1);
-  const broken = fakeSherpa({ setConfigThrows: true });
-  const engine2 = createSpeechEngine(() => broken.module);
-  engine2.transcribe(req(canary, { language: "de" }));
-  engine2.transcribe(req(canary, { language: "fr" }));
-  assert.equal(broken.created.length, 2);
+  engine.transcribe(req(canary, { language: "fr", task: "translate" }));
+  assert.equal(fake.created.length, 1);
+  assert.equal(fake.setConfigs.length, 1);
+  assert.deepEqual(fake.setConfigs[0]!.modelConfig.canary!.srcLang, "fr");
+  assert.deepEqual(fake.setConfigs[0]!.modelConfig.canary!.tgtLang, "en");
 });
 
-test("whisper language is applied per stream", () => {
+test("a setConfig that throws falls back to rebuilding the recognizer", () => {
+  const broken = fakeSherpa({ setConfigThrows: true });
+  const engine = newEngine(broken.module);
+  engine.transcribe(req(canary, { language: "de" }));
+  engine.transcribe(req(canary, { language: "fr" }));
+  assert.equal(broken.created.length, 2);
+  assert.equal(broken.created[1]!.modelConfig.canary!.srcLang, "fr");
+});
+
+test("sense-voice rebuilds on a language change because its setConfig is a no-op", () => {
   const fake = fakeSherpa();
-  createSpeechEngine(() => fake.module).transcribe(req(whisper, { language: "de" }));
-  assert.deepEqual(fake.streamOptions, [["language", "de"]]);
+  const engine = newEngine(fake.module);
+  engine.transcribe(req(sense, { language: "ja" }));
+  engine.transcribe(req(sense, { language: "ja" }));
+  assert.equal(fake.created.length, 1);
+  engine.transcribe(req(sense, { language: "ko" }));
+  assert.equal(fake.created.length, 2);
+  assert.equal(fake.created[1]!.modelConfig.senseVoice!.language, "ko");
+});
+
+test("whisper returns to auto-detect after a language hint", () => {
+  const fake = fakeSherpa();
+  const engine = newEngine(fake.module);
+  engine.transcribe(req(whisper, { language: "de" }));
+  assert.equal(fake.created[0]!.modelConfig.whisper!.language, "de");
+  engine.transcribe(req(whisper, { language: null }));
+  assert.equal(fake.created.length, 1);
+  assert.equal(fake.setConfigs[fake.setConfigs.length - 1]!.modelConfig.whisper!.language, "");
+});
+
+test("the slot is keyed on model and directory", () => {
+  const fake = fakeSherpa();
+  const engine = newEngine(fake.module);
+  engine.load(v3, "/a");
+  engine.load(v3, "/b");
+  assert.equal(fake.created.length, 2);
+  assert.ok(JSON.stringify(fake.created[1]).includes("/b/"));
+});
+
+test("missing model files fail with a friendly, mappable error", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "aiden-model-"));
+  try {
+    const fake = fakeSherpa();
+    const engine = createSpeechEngine(() => fake.module);
+    const roles = Object.values(v3.files);
+    for (const file of roles.slice(1)) writeFileSync(path.join(dir, file), "");
+    const missing = { name: "ModelMissingError", message: "The selected voice model isn't downloaded. Download it in Settings → Voice." };
+    assert.throws(() => engine.load(v3, dir), missing);
+    assert.throws(() => engine.transcribe(req(v3, { modelDirectory: dir })), (error) => error instanceof ModelMissingError);
+    assert.equal(fake.created.length, 0);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, roles[0]!), "");
+    engine.load(v3, dir);
+    assert.equal(engine.loadedModelId(), "parakeet-v3");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a sub-second tail window is padded to 1.25 s before decode", () => {
+  const fake = fakeSherpa();
+  newEngine(fake.module).transcribe(req(whisper, { samples: new Float32Array(16_000 * 28 + 1_600) }));
+  assert.deepEqual(fake.decodedLengths, [16_000 * 28, 20_000]);
 });
 
 test("trimmed silence decodes nothing and returns empty text", () => {
   const fake = fakeSherpa({ regions: [] });
-  const result = createSpeechEngine(() => fake.module).transcribe(req(whisper, { trimSilence: true }));
+  const result = newEngine(fake.module).transcribe(req(whisper, { trimSilence: true }));
   assert.equal(result.text, "");
   assert.equal(fake.decodes(), 0);
 });
 
 test("long whisper audio is decoded in ≤28 s windows and joined", () => {
   const fake = fakeSherpa({ regions: [[0, 16_000 * 25], [16_000 * 30, 16_000 * 55], [16_000 * 60, 16_000 * 85]] });
-  const result = createSpeechEngine(() => fake.module).transcribe(req(whisper, { trimSilence: true, samples: new Float32Array(16_000 * 90) }));
+  const result = newEngine(fake.module).transcribe(req(whisper, { trimSilence: true, samples: new Float32Array(16_000 * 90) }));
   assert.equal(fake.decodes(), 3);
   assert.equal(result.text, "part1 part2 part3");
   assert.equal(result.language, "de");
@@ -116,23 +184,29 @@ test("long whisper audio is decoded in ≤28 s windows and joined", () => {
 
 test("short clips are padded to 1.25 s before decode", () => {
   const fake = fakeSherpa({ text: () => "hi" });
-  const engine = createSpeechEngine(() => fake.module);
+  const engine = newEngine(fake.module);
   const result = engine.transcribe(req(v3, { samples: new Float32Array(4000) }));
   assert.equal(result.text, "hi");
+  assert.deepEqual(fake.decodedLengths, [20_000]);
 });
 
 test("CJK segments join without spaces; others with one space", () => {
   assert.equal(joinSegmentTexts(["你好", "世界"]), "你好世界");
   assert.equal(joinSegmentTexts(["hello", "world"]), "hello world");
   assert.equal(joinSegmentTexts(["hello", "", "  world "]), "hello world");
+  assert.equal(joinSegmentTexts(["안녕하세요", "세계"]), "안녕하세요 세계");
+  assert.equal(joinSegmentTexts(["你好。", "世界"]), "你好。世界");
+  assert.equal(joinSegmentTexts(["こんにちは！", "「世界」"]), "こんにちは！「世界」");
 });
 
-test("VAD failure fails open to decoding the clip", () => {
+test("VAD failure fails open to decoding the clip", (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
   const fake = fakeSherpa();
   (fake.module as unknown as { Vad: unknown }).Vad = class { constructor() { throw new Error("no vad"); } };
-  const result = createSpeechEngine(() => fake.module).transcribe(req(v3, { trimSilence: true }));
+  const result = newEngine(fake.module).transcribe(req(v3, { trimSilence: true }));
   assert.equal(fake.decodes(), 1);
   assert.ok(result.text.length > 0);
+  assert.equal(warn.mock.callCount(), 1);
 });
 
 // ---- Real sherpa-onnx-node Silero VAD against the bundled model ----
@@ -202,14 +276,14 @@ test("real Silero VAD finds speech after a second of silence and ignores pure si
   const samples = new Float32Array(sr + speech.length + sr);
   samples.set(speech, sr);
   const decoded: SampleRange[] = [];
-  const result = createSpeechEngine(() => withRealVad(real, decoded)).transcribe({ ...req(whisper, { trimSilence: true, samples }), vadModelPath: VAD_MODEL });
+  const result = createSpeechEngine(() => withRealVad(real, decoded), { exists: () => true }).transcribe({ ...req(whisper, { trimSilence: true, samples }), vadModelPath: VAD_MODEL });
   assert.equal(result.text, "speech");
   assert.equal(decoded.length, 1);
   const regionStart = (decoded[0]!.start + VAD_PAD_SAMPLES) / sr;
   assert.ok(regionStart >= 0.8 && regionStart <= 1.3, `speech region starts at ${regionStart}s`);
 
   const silent: SampleRange[] = [];
-  const quiet = createSpeechEngine(() => withRealVad(real, silent)).transcribe({ ...req(whisper, { trimSilence: true, samples: new Float32Array(sr * 3) }), vadModelPath: VAD_MODEL });
+  const quiet = createSpeechEngine(() => withRealVad(real, silent), { exists: () => true }).transcribe({ ...req(whisper, { trimSilence: true, samples: new Float32Array(sr * 3) }), vadModelPath: VAD_MODEL });
   assert.equal(quiet.text, "");
   assert.equal(silent.length, 0);
 });

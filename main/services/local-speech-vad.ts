@@ -59,7 +59,7 @@ export function planSegments(
 ): SampleRange[] {
   const bounds = paddedBounds(regions, totalSamples, Math.round(VAD_PAD_SAMPLES * (sampleRate / DEFAULT_RATE)));
   if (bounds.length === 0) return [];
-  if (maxWindowSeconds === null) return [{ start: bounds[0]!.start, end: bounds[bounds.length - 1]!.end }];
+  if (maxWindowSeconds === null || !Number.isFinite(maxWindowSeconds)) return [{ start: bounds[0]!.start, end: bounds[bounds.length - 1]!.end }];
   const limit = windowLimit(maxWindowSeconds, sampleRate);
   const windows: SampleRange[] = [];
   for (const range of bounds.flatMap((r) => (r.end - r.start > limit ? split(r, limit) : [r]))) {
@@ -72,6 +72,6 @@ export function planSegments(
 
 export function fixedChunks(totalSamples: number, maxWindowSeconds: number | null, sampleRate = DEFAULT_RATE): SampleRange[] {
   if (totalSamples <= 0) return [];
-  if (maxWindowSeconds === null) return [{ start: 0, end: totalSamples }];
+  if (maxWindowSeconds === null || !Number.isFinite(maxWindowSeconds)) return [{ start: 0, end: totalSamples }];
   return split({ start: 0, end: totalSamples }, windowLimit(maxWindowSeconds, sampleRate));
 }

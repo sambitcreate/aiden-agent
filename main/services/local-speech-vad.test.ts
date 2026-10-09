@@ -71,3 +71,11 @@ test("overlapping and nested regions are merged so no audio is dropped", () => {
   const covered = touching.filter((r) => r.start <= s(1) && r.end >= s(6));
   assert.equal(covered.length, 1, JSON.stringify(touching));
 });
+
+test("non-finite window limits plan like an unwindowed model", () => {
+  const regions = [{ start: s(1), end: s(40) }];
+  for (const maxWindow of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.deepEqual(planSegments(regions, s(45), maxWindow), planSegments(regions, s(45), null));
+    assert.deepEqual(fixedChunks(s(45), maxWindow), [{ start: 0, end: s(45) }]);
+  }
+});
