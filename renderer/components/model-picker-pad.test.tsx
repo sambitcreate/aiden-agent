@@ -227,3 +227,16 @@ test("leaving the Pad after previewing returns to no active model when the curre
   assert.equal(container.querySelector(".model-pad-knob"), null);
   assert.equal(container.querySelector("[data-model-pad-knob-tag]"), null);
 });
+
+test("the Pad captions its axes without exposing them to assistive tech", () => {
+  const { container } = renderSelected("middle");
+  const listbox = screen.getByRole("listbox");
+  for (const caption of ["More capable", "Faster", "More deliberate"]) {
+    const element = Array.from(container.querySelectorAll<HTMLElement>("*")).find(
+      (node) => node.textContent === caption && node.children.length === 0,
+    );
+    assert.ok(element, `${caption} is shown on the Pad`);
+    assert.ok(listbox.contains(element), `${caption} sits inside the Pad`);
+    assert.ok(element.closest('[aria-hidden="true"]'), `${caption} is hidden from assistive tech`);
+  }
+});

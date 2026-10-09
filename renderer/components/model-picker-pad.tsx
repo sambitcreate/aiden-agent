@@ -341,6 +341,14 @@ export function ModelPickerPad({
           style={{ left: "50%", top: "50%" }}
         />
 
+        {/* Axis captions sit in the inset margin outside the lattice; the knob and its
+            tag render above them. */}
+        <span aria-hidden="true" className="model-pad-axis-captions">
+          <span data-axis="capability">More capable</span>
+          <span data-axis="faster">Faster</span>
+          <span data-axis="deliberate">More deliberate</span>
+        </span>
+
         {Array.from({ length: gridSize * gridSize }, (_, index) => {
           const column = index % gridSize;
           const row = Math.floor(index / gridSize);

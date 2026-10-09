@@ -1293,6 +1293,45 @@ textarea {
   box-shadow: 0 0 0 2px var(--surface-popover);
 }
 
+/* Composer Pad axis captions, in the 8% inset margin outside the lattice. They are
+   dropped on a Pad too small for the margin to clear the edge markers. */
+.model-pad-axis-captions {
+  position: absolute;
+  inset: 0;
+  container-type: size;
+  pointer-events: none;
+}
+
+.model-pad-axis-captions > span {
+  position: absolute;
+  color: var(--text-tertiary);
+  font-size: var(--text-mini);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.model-pad-axis-captions > [data-axis="capability"] {
+  top: 2px;
+  left: 50%;
+  translate: -50% 0;
+}
+
+.model-pad-axis-captions > [data-axis="faster"] {
+  bottom: 2px;
+  left: 8%;
+}
+
+.model-pad-axis-captions > [data-axis="deliberate"] {
+  right: 8%;
+  bottom: 2px;
+}
+
+@container (max-width: 255px) {
+  .model-pad-axis-captions > span {
+    display: none;
+  }
+}
+
 .model-pad-knob {
   color: var(--model-pad-knob-foreground);
   transition:
