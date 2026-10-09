@@ -1794,3 +1794,4 @@ npm run test:stt-smoke 2>&1 | tee /tmp/stt-smoke.log
 (Executors append dated facts here: computed digests, Electron structured-clone result, Gemini batch language finding, Opus package delta, smoke-run table.)
 
 - whisper-turbo sha256 computed 2026-10-09: b11acbbcd660b44a8e0df33724feb5aaa709cf65668f2823d59f656312544f22 (563790207 bytes; archive contains sherpa-onnx-whisper-turbo/turbo-encoder.int8.onnx, turbo-decoder.int8.onnx, turbo-tokens.txt)
+- Real Silero VAD integration audio, 2026-10-09 (sherpa-onnx-node 1.13.8, bundled silero_vad.onnx, threshold 0.3): the synthetic 220 Hz tone gated 100 ms on/off DOES trigger Silero but its region starts at 1.38 s (outside 0.8–1.3 s), so the test uses macOS `say "hello world"` + `afconvert -d LEI16@16000` (region 1.028–1.822 s) and skips off darwin. 3 s of pure silence yields no regions.

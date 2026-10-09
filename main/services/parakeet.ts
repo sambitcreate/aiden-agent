@@ -6,16 +6,31 @@ import type { UtilityProcess } from "electron";
 import { pcmToFloat32 } from "../handlers/voice-codec.js";
 import { decodeAidenRemotePcm16 } from "./aiden-remote-speech-codec.js";
 import { isModelInstalled, modelDir } from "./local-speech-models.js";
-import {
-  engineStatus as engineStatusInProcess,
-  releaseRecognizer as releaseRecognizerInProcess,
-  transcribePcm as transcribePcmInProcess,
-  warmRecognizer as warmRecognizerInProcess,
-} from "./parakeet-engine.js";
+import { speechModel, type SpeechModelSpec } from "./local-speech-catalog.js";
+import { speechEngine } from "./local-speech-engine.js";
 import { ParakeetIdleUnloader } from "./parakeet-idle-unload.js";
 import { ParakeetProcessClient } from "./parakeet-process-core.js";
 import { ParakeetTranscriptionLane } from "./parakeet-transcription-lane.js";
 import { localVoiceIdleUnloadMs } from "../../renderer/shared/dictation-preferences.js";
+
+// Interim bridge until Task 6 moves the worker protocol onto the speech engine.
+function engineSpec(modelId: string): SpeechModelSpec {
+  const spec = speechModel(modelId);
+  if (!spec) throw new Error(`Unknown voice model: ${modelId}`);
+  return spec;
+}
+function transcribePcmInProcess(samples: Float32Array, modelId: string, modelDirectory: string): string {
+  return speechEngine.transcribe({
+    spec: engineSpec(modelId), modelDirectory, samples,
+    language: null, task: "transcribe", trimSilence: false, vadModelPath: "",
+  }).text;
+}
+function warmRecognizerInProcess(modelId: string, modelDirectory: string): void {
+  speechEngine.load(engineSpec(modelId), modelDirectory);
+}
+function releaseRecognizerInProcess(modelId: string): void {
+  if (speechEngine.loadedModelId() === modelId) speechEngine.release();
+}
 
 let client: ParakeetProcessClient | null = null;
 let child: UtilityProcess | null = null;
@@ -151,7 +166,7 @@ export async function engineStatus(): Promise<{ ready: boolean; error: string | 
       return knownEngineStatus;
     } catch (error) {
       if (isolationUnavailable(error)) {
-        knownEngineStatus = engineStatusInProcess();
+        knownEngineStatus = speechEngine.status();
         return knownEngineStatus;
       }
       // A failed launch may be transient; do not remember it.
