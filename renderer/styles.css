@@ -864,6 +864,18 @@ textarea {
   opacity: 1;
 }
 
+/* A visual's suggested follow-up waits here, in Aiden's own UI, for the
+   user's click; a soft well fill, no border. */
+.aiden-inline-visual-followup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-card);
+  background: var(--surface-well);
+}
+
 /* A drafting visual names itself above the frame; it never overlays content. */
 .aiden-inline-visual-status {
   display: flex;

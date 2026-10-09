@@ -4,8 +4,8 @@ import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import { GENERATIVE_UI_IFRAME_SANDBOX } from "../shared/generative-ui";
 import {
   GENERATIVE_UI_THEME_MESSAGE,
+  admitGuestPrompt,
   clampInlineVisualHeight,
-  USER_ACTIVATION_WINDOW_MS,
   parseGuestBridgeMessage,
 } from "../shared/generative-ui-bridge";
 import { chatsApi } from "../lib/ipc";
@@ -16,7 +16,6 @@ import {
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { Button, Callout, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
-import { createFrameGestureTracker } from "../shared/generative-ui-gesture";
 
 /** Height before the guest first reports its content size. */
 const INITIAL_VISUAL_HEIGHT = 160;
@@ -87,52 +86,11 @@ function postThemeTo(guest: Window): void {
   );
 }
 
-export type GuestPromptHandler = (
-  text: string,
-  focus: GuestPromptFocus,
-  mediaId: string,
-) => void;
-
-export interface GuestPromptFocus {
-  frameFocused: boolean;
-  /** The user's own input reached this frame (see createFrameGestureTracker). */
-  userActivated: boolean;
-}
-
-/** Last pointer or key input on the app page itself (not inside a frame). */
-let lastParentInputAt: number | undefined;
-let parentInputTrackerInstalled = false;
-
-/** True only inside the app page's own Tab keydown and its default focus move. */
-let inParentTabDefault = false;
-
-function installParentInputTracker(): void {
-  if (parentInputTrackerInstalled) return;
-  parentInputTrackerInstalled = true;
-  const note = (event: Event) => {
-    lastParentInputAt = performance.now();
-    if (event instanceof KeyboardEvent && event.key === "Tab") {
-      // The default action (moving focus, which blurs the window when focus
-      // enters a frame) runs before this timeout; a guest's own later
-      // focus() arrives as a separate task.
-      inParentTabDefault = true;
-      setTimeout(() => {
-        inParentTabDefault = false;
-      }, 0);
-    }
-  };
-  for (const type of ["pointerdown", "keydown"] as const) {
-    document.addEventListener(type, note, { capture: true, passive: true });
-  }
-}
-
-function pageActivation(): boolean {
-  return navigator.userActivation?.isActive === true;
-}
-
-function parentInputRecent(now: number): boolean {
-  return lastParentInputAt !== undefined && now - lastParentInputAt <= USER_ACTIVATION_WINDOW_MS;
-}
+/**
+ * The user confirmed a visual's follow-up on Aiden's own chip. Called only
+ * from a click on app UI; a visual's request alone never reaches this.
+ */
+export type GuestPromptHandler = (text: string, mediaId: string) => void;
 
 interface HtmlArtifactFrameError {
   kind: "preview" | "export";
@@ -185,74 +143,40 @@ function HtmlArtifactIframe({
   onHeight,
   onPrompt,
   onGuestFocus,
-  expanded,
 }: {
   src: string;
   title: string;
   className?: string;
   onEscape?: () => void;
   onHeight?: (height: number) => void;
-  onPrompt?: (text: string, focus: GuestPromptFocus) => void;
+  /** The guest asked for a follow-up; the host only ever offers a confirmation. */
+  onPrompt?: (text: string) => void;
   /** Focus moved into (true) or out of (false) the guest document. */
   onGuestFocus?: (focused: boolean) => void;
-  /** The frame is the expanded top-layer view (every other visual is inert). */
-  expanded?: boolean;
 }) {
   const frameRef = React.useRef<HTMLIFrameElement | null>(null);
-  const handlers = React.useRef({ onEscape, onHeight, onPrompt, onGuestFocus, expanded });
+  const handlers = React.useRef({ onEscape, onHeight, onPrompt, onGuestFocus });
   React.useLayoutEffect(() => {
-    handlers.current = { onEscape, onHeight, onPrompt, onGuestFocus, expanded };
-  }, [onEscape, onHeight, onPrompt, onGuestFocus, expanded]);
+    handlers.current = { onEscape, onHeight, onPrompt, onGuestFocus };
+  }, [onEscape, onHeight, onPrompt, onGuestFocus]);
 
   React.useEffect(() => {
-    // Focus entering a cross-origin frame blurs this window, for a click or
-    // Tab into it but also when the guest calls focus() itself. Page
-    // activation is page-wide, so a gesture is attributed to this frame by
-    // createFrameGestureTracker; nothing else lets a visual send as the user.
-    // The iframe never matches :focus-visible, so focus is also reported for
-    // the host to draw a ring.
-    installParentInputTracker();
-    const frameElement = frameRef.current;
-    const gesture = createFrameGestureTracker();
-    let hovered = false;
+    // Focus entering a cross-origin frame blurs this window. The iframe never
+    // matches :focus-visible, so focus is reported for the host to draw a
+    // ring. Focus authorizes nothing: guests can focus themselves.
     let guestFocused = false;
-    let sampler = 0;
-    const sample = () => ({ active: pageActivation(), focused: document.activeElement === frameRef.current });
-    const runSampler = () => {
-      gesture.tick(sample());
-      sampler = guestFocused ? requestAnimationFrame(runSampler) : 0;
-    };
     const setGuestFocused = (next: boolean) => {
       if (guestFocused === next) return;
       guestFocused = next;
-      if (next && !sampler) sampler = requestAnimationFrame(runSampler);
-      if (!next) gesture.focusLeft();
       handlers.current.onGuestFocus?.(next);
     };
     const noteFocusEntry = () => {
-      if (document.activeElement !== frameRef.current) return;
-      const now = performance.now();
-      gesture.focusEntered({
-        active: pageActivation(),
-        hovered,
-        expanded: handlers.current.expanded === true,
-        duringTabDefault: inParentTabDefault,
-        parentInputRecent: parentInputRecent(now),
-      });
-      setGuestFocused(true);
+      if (document.activeElement === frameRef.current) setGuestFocused(true);
     };
     const noteFocusReturn = () => setGuestFocused(false);
     const noteParentFocus = (event: FocusEvent) => {
       if (event.target !== frameRef.current) setGuestFocused(false);
     };
-    const noteHover = () => {
-      hovered = true;
-    };
-    const noteUnhover = () => {
-      hovered = false;
-    };
-    frameElement?.addEventListener("pointerenter", noteHover);
-    frameElement?.addEventListener("pointerleave", noteUnhover);
     const receiveMessage = (event: MessageEvent) => {
       const frame = frameRef.current;
       const guest = frame?.contentWindow;
@@ -265,14 +189,7 @@ function HtmlArtifactIframe({
       // announces itself so the guest is themed from its first paint.
       else if (message.type === "ready") postThemeTo(guest);
       else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
-      else {
-        const now = sample();
-        gesture.tick(now);
-        handlers.current.onPrompt?.(message.text, {
-          frameFocused: now.focused,
-          userActivated: gesture.gestured(now),
-        });
-      }
+      else handlers.current.onPrompt?.(message.text);
     };
     window.addEventListener("blur", noteFocusEntry);
     window.addEventListener("focus", noteFocusReturn);
@@ -283,9 +200,6 @@ function HtmlArtifactIframe({
       window.removeEventListener("focus", noteFocusReturn);
       document.removeEventListener("focusin", noteParentFocus);
       window.removeEventListener("message", receiveMessage);
-      frameElement?.removeEventListener("pointerenter", noteHover);
-      frameElement?.removeEventListener("pointerleave", noteUnhover);
-      if (sampler) cancelAnimationFrame(sampler);
     };
   }, []);
 
@@ -319,6 +233,7 @@ function HtmlArtifactFrameImpl({
   chatId,
   artifact,
   onGuestPrompt,
+  followUpBusy = false,
   placementCallId,
 }: {
   chatId: string;
@@ -327,6 +242,8 @@ function HtmlArtifactFrameImpl({
   onGuestPrompt?: GuestPromptHandler;
   /** The render_artifact call it came from; its draft's height seeds this frame. */
   placementCallId?: string;
+  /** A reply is running: confirming adds the follow-up to the draft instead of sending. */
+  followUpBusy?: boolean;
 }) {
   const [src, setSrc] = React.useState<string | null>(
     () => cachedPreview(chatId, artifact)?.src ?? null,
@@ -352,11 +269,22 @@ function HtmlArtifactFrameImpl({
     setExpanded(false);
   }, []);
 
-  const relayPrompt = React.useCallback(
-    (text: string, focus: GuestPromptFocus) =>
-      onGuestPrompt?.(text, focus, artifact.mediaId),
-    [artifact.mediaId, onGuestPrompt],
-  );
+  // A visual's follow-up is only ever an offer: Aiden draws a confirmation
+  // under the visual and the user's click on it is what sends.
+  const [pendingFollowUp, setPendingFollowUp] = React.useState<string | null>(null);
+  const lastFollowUpAtRef = React.useRef<number | undefined>(undefined);
+  const offerFollowUp = React.useCallback((text: string) => {
+    const now = performance.now();
+    const decision = admitGuestPrompt({ text, now, lastAcceptedAt: lastFollowUpAtRef.current });
+    if (decision.action !== "confirm") return;
+    lastFollowUpAtRef.current = now;
+    setPendingFollowUp(decision.text);
+  }, []);
+  const confirmFollowUp = React.useCallback(() => {
+    if (pendingFollowUp === null) return;
+    onGuestPrompt?.(pendingFollowUp, artifact.mediaId);
+    setPendingFollowUp(null);
+  }, [artifact.mediaId, onGuestPrompt, pendingFollowUp]);
 
   const recordHeight = React.useCallback(
     (next: number) => {
@@ -534,9 +462,8 @@ function HtmlArtifactFrameImpl({
             title={artifact.title}
             onEscape={expanded ? closeExpanded : undefined}
             onHeight={recordHeight}
-            onPrompt={relayPrompt}
+            onPrompt={onGuestPrompt ? offerFollowUp : undefined}
             onGuestFocus={setGuestFocused}
-            expanded={expanded}
           />
         ) : error ? (
           <div className="flex h-full items-center justify-center px-4 text-center">
@@ -550,6 +477,34 @@ function HtmlArtifactFrameImpl({
           </div>
         )}
       </div>
+      {pendingFollowUp !== null ? (
+        // Aiden's own UI, outside the guest: the only way a visual's text is sent.
+        <div
+          role="group"
+          aria-label={`Follow-up suggested by ${artifact.title}`}
+          className="aiden-inline-visual-followup"
+          data-inline-visual-followup=""
+        >
+          <Text variant="small" color="secondary" className="min-w-0 flex-1" aria-live="polite">
+            <span className="sr-only">Suggested follow-up: </span>
+            <span className="line-clamp-3 break-words" title={pendingFollowUp}>
+              “{pendingFollowUp}”
+            </span>
+          </Text>
+          <Button size="small" variant="accent" onClick={confirmFollowUp}>
+            {followUpBusy ? "Add to draft" : "Send"}
+          </Button>
+          <Button
+            iconOnly
+            size="small"
+            variant="transparent"
+            aria-label="Dismiss follow-up"
+            onClick={() => setPendingFollowUp(null)}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        </div>
+      ) : null}
       {expanded ? null : (
         // A caption below the content, so no control ever covers the guest.
         <div className="aiden-inline-visual-caption" data-inline-visual-caption="">

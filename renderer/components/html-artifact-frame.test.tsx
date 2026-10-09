@@ -185,65 +185,50 @@ test("a guest announcing ready receives the current theme before its document fi
   assert.equal(typeof themeMessage?.vars, "object");
 });
 
-function setParentActivation(isActive: boolean): void {
-  Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive, hasBeenActive: isActive } });
-}
-
-test("a visual's prompts count as the user's only when the gesture reached that visual", async (t) => {
-  t.after(() => setParentActivation(false));
-  const prompts: Array<[string, boolean, boolean]> = [];
-  const { iframe, guest } = await mountedFrame((text, focus) =>
-    prompts.push([text, focus.frameFocused, focus.userActivated]));
-  const prompt = (text: string) => postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text });
-  const enter = () => act(() => {
-    iframe.focus();
-    window.dispatchEvent(new Event("blur"));
-  });
-  const leave = () => act(() => window.dispatchEvent(new Event("focus")));
-  const hover = (over: boolean) =>
-    act(() => iframe.dispatchEvent(new Event(over ? "pointerenter" : "pointerleave")));
-
-  setParentActivation(false);
-  prompt("Unfocused");
+test("a visual's follow-up waits on an Aiden-drawn confirmation and only its button sends", async () => {
+  const sent: Array<[string, string]> = [];
+  const { view, guest } = await mountedFrame((text, mediaId) => sent.push([text, mediaId]));
   postFrom(window, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "spoofed" });
+  assert.equal(screen.queryByRole("group", { name: /follow-up/iu }), null);
 
-  // The guest focuses itself from a timer: focus moves in, but no gesture.
-  enter();
-  prompt("Scripted");
-  // Then the user clicks inside it while it holds focus: activation starts here.
-  setParentActivation(true);
-  prompt("ClickedWhileFocused");
-  leave();
-
-  // The user clicks another visual (page activates, pointer elsewhere) and this
-  // one steals focus: the activation is not its own.
-  enter();
-  prompt("StoleAfterOtherClick");
-  leave();
-
-  // A click straight into this visual: pointer over it, focus and activation together.
-  hover(true);
-  enter();
-  prompt("ClickedInto");
-  leave();
-
-  // Typing in the composer, then this visual steals focus under the resting pointer.
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Drill into EMEA" });
+  // Nothing reaches the chat on the visual's say-so.
+  assert.deepEqual(sent, []);
+  const chip = screen.getByRole("group", { name: /follow-up/iu });
+  assert.ok(within(chip).getByText(/Drill into EMEA/u));
   act(() => {
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    within(chip).getByRole("button", { name: "Send" }).click();
   });
-  enter();
-  prompt("StoleWhileTyping");
-
-  assert.deepEqual(prompts, [
-    ["Unfocused", false, false],
-    ["Scripted", true, false],
-    ["ClickedWhileFocused", true, true],
-    ["StoleAfterOtherClick", true, false],
-    ["ClickedInto", true, true],
-    ["StoleWhileTyping", true, false],
-  ]);
+  const mediaId = view.container.querySelector("[data-inline-visual]")!.getAttribute("data-inline-visual");
+  assert.deepEqual(sent, [["Drill into EMEA", mediaId]]);
+  assert.equal(screen.queryByRole("group", { name: /follow-up/iu }), null);
 });
 
+test("dismissing a visual's follow-up discards it", async () => {
+  const sent: string[] = [];
+  const { guest } = await mountedFrame((text) => sent.push(text));
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Delete my files" });
+  act(() => {
+    within(screen.getByRole("group", { name: /follow-up/iu })).getByRole("button", { name: /Dismiss/u }).click();
+  });
+  assert.equal(screen.queryByRole("group", { name: /follow-up/iu }), null);
+  assert.deepEqual(sent, []);
+});
+
+test("while a reply runs, the confirmation adds the follow-up to the draft instead", async () => {
+  const sent: string[] = [];
+  const view = render(
+    <HtmlArtifactFrame chatId="chat-1" artifact={artifact()} onGuestPrompt={(text) => sent.push(text)} followUpBusy />,
+  );
+  const guest = attachGuest(await waitForFrame(view.container));
+  postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Later" });
+  const chip = screen.getByRole("group", { name: /follow-up/iu });
+  assert.equal(within(chip).queryByRole("button", { name: "Send" }), null);
+  act(() => {
+    within(chip).getByRole("button", { name: "Add to draft" }).click();
+  });
+  assert.deepEqual(sent, ["Later"]);
+});
 
 /** happy-dom lacks the Popover API; Chromium top-layer behavior is covered in tests/generative-ui. */
 function stubPopoverApi(): () => void {

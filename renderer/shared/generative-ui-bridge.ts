@@ -47,36 +47,28 @@ export function clampInlineVisualHeight(height: number): number {
 
 export interface GuestPromptInput {
   text: string;
-  /** `document.activeElement` is this frame. Necessary, not sufficient: a guest can focus itself. */
-  frameFocused: boolean;
-  /** The user's own input reached this frame (`createFrameGestureTracker`). */
-  userActivated: boolean;
-  /** This visual already staged an ungestured suggestion since the user last sent. */
-  alreadyStaged: boolean;
-  chatBusy: boolean;
   /** Monotonic milliseconds (performance.now), so wall-clock jumps can't lock prompts out. */
   now: number;
   lastAcceptedAt?: number;
 }
 
 export type GuestPromptDecision =
-  | { action: "send" | "stage"; text: string }
-  | { action: "reject"; reason: "unfocused" | "empty" | "too_long" | "cooldown" | "repeat" };
+  | { action: "confirm"; text: string }
+  | { action: "reject"; reason: "empty" | "too_long" | "cooldown" };
 
-export function decideGuestPrompt(input: GuestPromptInput): GuestPromptDecision {
-  if (!input.frameFocused) return { action: "reject", reason: "unfocused" };
+/**
+ * A visual can never send as the user. Browser focus and activation signals
+ * cannot prove which frame the user acted in (sandboxed guests focus
+ * themselves; activation is page-wide; out-of-process frames hide hover), so
+ * an admitted follow-up only ever becomes an Aiden-drawn confirmation under
+ * the visual, and the user's click on that app UI sends it.
+ */
+export function admitGuestPrompt(input: GuestPromptInput): GuestPromptDecision {
   if (input.text.length > MAX_GUEST_PROMPT_CHARS) return { action: "reject", reason: "too_long" };
   const text = input.text.trim();
   if (!text) return { action: "reject", reason: "empty" };
   if (input.lastAcceptedAt !== undefined && input.now - input.lastAcceptedAt < GUEST_PROMPT_COOLDOWN_MS) {
     return { action: "reject", reason: "cooldown" };
   }
-  if (input.userActivated) return { action: input.chatBusy ? "stage" : "send", text };
-  // Without a gesture the guest may suggest one follow-up, into the composer
-  // for the user to review, until the user next sends; it can never send or
-  // flood (focus cycling cannot reset this).
-  return input.alreadyStaged ? { action: "reject", reason: "repeat" } : { action: "stage", text };
+  return { action: "confirm", text };
 }
-
-/** Chromium's transient user activation lifetime. */
-export const USER_ACTIVATION_WINDOW_MS = 5000;

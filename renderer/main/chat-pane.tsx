@@ -14,7 +14,6 @@ import {
   seedComposerAttachments,
   stageComposerText,
 } from "../lib/composer-draft-store";
-import { decideGuestPrompt } from "../shared/generative-ui-bridge";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { primeInlineVisualPreview, type GuestPromptHandler } from "../components/html-artifact-frame";
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
@@ -1570,8 +1569,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
-  /** Visuals whose one ungestured suggestion was staged since the user last sent. */
-  const stagedVisualsRef = React.useRef(new Set<string>());
   const handleSend = React.useCallback(
     async (
       text: string,
@@ -1610,8 +1607,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         return;
       }
-      // A new turn lets each visual suggest one ungestured follow-up again.
-      stagedVisualsRef.current.clear();
       if (chatMessageQueue(chatId).getSnapshot().messages.length === 0)
         chatMessageQueue(chatId).resume();
       // A new turn revokes any active read-aloud job for this chat.
@@ -1724,32 +1719,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
-  const lastVisualPromptAtRef = React.useRef(new Map<string, number>());
   /** Anything that makes an immediate send unsafe; refreshed below once the queue is known. */
   const visualPromptBusyRef = React.useRef(false);
+  /** The user clicked Send (or Add to draft) on a visual's follow-up chip. */
   const handleVisualPrompt = React.useCallback<GuestPromptHandler>(
-    (text, focus, mediaId) => {
-      const now = performance.now();
-      const decision = decideGuestPrompt({
-        text,
-        frameFocused: focus.frameFocused,
-        userActivated: focus.userActivated,
-        alreadyStaged: stagedVisualsRef.current.has(mediaId),
-        chatBusy: visualPromptBusyRef.current,
-        now,
-        lastAcceptedAt: lastVisualPromptAtRef.current.get(mediaId),
-      });
-      if (decision.action === "reject") return;
-      lastVisualPromptAtRef.current.set(mediaId, now);
-      if (decision.action === "stage") {
-        if (!focus.userActivated) stagedVisualsRef.current.add(mediaId);
-        stageComposerText(chatId, decision.text);
+    (text) => {
+      if (visualPromptBusyRef.current) {
+        stageComposerText(chatId, text);
         return;
       }
       // Same path as typed input: queue/steer rules, permissions, and a
       // visible user bubble all apply.
-      void handleSend(decision.text, []).catch((error: unknown) => {
-        stageComposerText(chatId, decision.text);
+      void handleSend(text, []).catch((error: unknown) => {
+        stageComposerText(chatId, text);
         toast.error(error instanceof Error ? error.message : "Could not send the visual's follow-up.");
       });
     },
@@ -3051,6 +3033,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingArtifacts={displayedStreamingArtifacts}
             streamingArtifactPlacements={streamingArtifactPlacements}
             onVisualPrompt={handleVisualPrompt}
+            visualFollowUpBusy={visualPromptBusy}
             streamingVisualDrafts={visualDrafts}
             streamComplete={streamComplete || visibleDetachedProjection !== null}
             persistedHandoffMessageId={persistedHandoffMessageId}

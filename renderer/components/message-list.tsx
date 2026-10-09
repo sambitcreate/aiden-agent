@@ -64,6 +64,8 @@ interface MessageListProps {
   streamingVisualDrafts?: VisualDrafts;
   /** A visual asked to send a follow-up; the chat applies the admission policy. */
   onVisualPrompt?: GuestPromptHandler;
+  /** A reply is running: visual follow-ups go to the draft when confirmed. */
+  visualFollowUpBusy?: boolean;
   streamComplete?: boolean;
   /** Persisted assistant message that duplicates the completed streaming row during handoff. */
   persistedHandoffMessageId?: string | null;
@@ -410,6 +412,7 @@ export function MessageList({
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
   streamingVisualDrafts,
   onVisualPrompt,
+  visualFollowUpBusy = false,
   streamComplete,
   persistedHandoffMessageId = null,
   onStreamHandoffComplete,
@@ -510,7 +513,7 @@ export function MessageList({
     onVisualPromptRef.current = onVisualPrompt;
   }, [onVisualPrompt]);
   const stableVisualPrompt = React.useCallback<GuestPromptHandler>(
-    (text, focus, mediaId) => onVisualPromptRef.current?.(text, focus, mediaId),
+    (text, mediaId) => onVisualPromptRef.current?.(text, mediaId),
     [],
   );
   const renderVisual = React.useCallback(
@@ -520,10 +523,11 @@ export function MessageList({
         chatId={chatId}
         artifact={artifact}
         onGuestPrompt={stableVisualPrompt}
+        followUpBusy={visualFollowUpBusy}
         placementCallId={placementCallId}
       />
     ),
-    [chatId, stableVisualPrompt],
+    [chatId, stableVisualPrompt, visualFollowUpBusy],
   );
 
   React.useEffect(() => {

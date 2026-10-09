@@ -23,7 +23,7 @@ const MODULES: Record<GenerativeUiGuideModule, string> = {
 - Label axes and units, and keep the key number visible as text (for example a \`.aiden-stat\`) beside the chart.`,
   interactive: `## Interactivity
 - Keep local state in plain JavaScript variables; tabs, toggles, sliders, and filters should update the visual without asking the model.
-- When a control should ask a follow-up question, call \`window.aiden.sendPrompt("…")\` from a click handler. It sends a normal, visible message. Never call it on load or from a timer.
+- When a control should ask a follow-up question, call \`window.aiden.sendPrompt("…")\` from a click handler. Aiden shows the text under the visual for the user to confirm before it is sent, so phrase it as the message the user would send. Never call it on load or from a timer.
 - Every control needs a visible label and keyboard support; buttons must be \`<button>\` elements.`,
 };
 

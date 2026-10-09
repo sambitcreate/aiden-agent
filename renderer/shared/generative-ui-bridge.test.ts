@@ -7,7 +7,7 @@ import {
   MAX_INLINE_VISUAL_HEIGHT,
   MIN_INLINE_VISUAL_HEIGHT,
   clampInlineVisualHeight,
-  decideGuestPrompt,
+  admitGuestPrompt,
   parseGuestBridgeMessage,
 } from "./generative-ui-bridge.js";
 
@@ -45,57 +45,24 @@ test("inline visual height clamps hostile values into the visible range", () => 
   assert.equal(clampInlineVisualHeight(300.4), 301);
 });
 
-test("only a gesture attributed to the visual may auto-send; ungestured prompts stage once until the user sends", () => {
-  // A guest can focus itself from a timer, so focus alone proves nothing.
-  const base = {
-    text: "Again", frameFocused: true, userActivated: false, alreadyStaged: false, chatBusy: false, now: 10_000,
-  };
-  assert.deepEqual(decideGuestPrompt(base), { action: "stage", text: "Again" });
-  assert.deepEqual(decideGuestPrompt({ ...base, alreadyStaged: true }), { action: "reject", reason: "repeat" });
-  assert.deepEqual(decideGuestPrompt({ ...base, userActivated: true }), { action: "send", text: "Again" });
-  assert.deepEqual(decideGuestPrompt({ ...base, userActivated: true, alreadyStaged: true }), {
-    action: "send",
-    text: "Again",
-  });
+test("a visual's follow-up only ever becomes a confirmation request, never a send", () => {
+  const base = { text: "Explain the spike", now: 10_000 };
+  assert.deepEqual(admitGuestPrompt(base), { action: "confirm", text: "Explain the spike" });
+  assert.deepEqual(admitGuestPrompt({ ...base, text: "  trim me \n" }), { action: "confirm", text: "trim me" });
+  assert.deepEqual(admitGuestPrompt({ ...base, text: "   " }), { action: "reject", reason: "empty" });
 });
 
-test("prompt length is checked before any trimming and the limit itself is accepted", () => {
-  const base = { frameFocused: true, userActivated: true, alreadyStaged: false, chatBusy: false, now: 10_000 };
-  assert.equal(decideGuestPrompt({ ...base, text: "x".repeat(MAX_GUEST_PROMPT_CHARS) }).action, "send");
+test("follow-up text is bounded before trimming and requests are rate-limited per visual", () => {
+  const base = { text: "Again", now: 10_000 };
+  assert.equal(admitGuestPrompt({ ...base, text: "x".repeat(MAX_GUEST_PROMPT_CHARS) }).action, "confirm");
   assert.deepEqual(
-    decideGuestPrompt({ ...base, text: `${" ".repeat(MAX_GUEST_PROMPT_CHARS)}x` }),
+    admitGuestPrompt({ ...base, text: `${" ".repeat(MAX_GUEST_PROMPT_CHARS)}x` }),
     { action: "reject", reason: "too_long" },
   );
-});
-
-test("guest prompts need focus, content, size, and cooldown; busy chats stage", () => {
-  const base = {
-    text: "Explain the spike", frameFocused: true, userActivated: true, alreadyStaged: false, chatBusy: false, now: 10_000,
-  };
-  assert.deepEqual(decideGuestPrompt(base), { action: "send", text: "Explain the spike" });
-  assert.deepEqual(decideGuestPrompt({ ...base, chatBusy: true }), {
-    action: "stage",
-    text: "Explain the spike",
-  });
-  assert.deepEqual(decideGuestPrompt({ ...base, frameFocused: false }), {
-    action: "reject",
-    reason: "unfocused",
-  });
-  assert.deepEqual(decideGuestPrompt({ ...base, text: "   " }), { action: "reject", reason: "empty" });
-  assert.deepEqual(decideGuestPrompt({ ...base, text: "x".repeat(MAX_GUEST_PROMPT_CHARS + 1) }), {
-    action: "reject",
-    reason: "too_long",
-  });
   assert.deepEqual(
-    decideGuestPrompt({ ...base, lastAcceptedAt: base.now - GUEST_PROMPT_COOLDOWN_MS + 1 }),
+    admitGuestPrompt({ ...base, lastAcceptedAt: base.now - GUEST_PROMPT_COOLDOWN_MS + 1 }),
     { action: "reject", reason: "cooldown" },
   );
-  assert.equal(
-    decideGuestPrompt({ ...base, lastAcceptedAt: base.now - GUEST_PROMPT_COOLDOWN_MS }).action,
-    "send",
-  );
-  assert.deepEqual(decideGuestPrompt({ ...base, text: "  trim me \n" }), {
-    action: "send",
-    text: "trim me",
-  });
+  assert.equal(admitGuestPrompt({ ...base, lastAcceptedAt: base.now - GUEST_PROMPT_COOLDOWN_MS }).action, "confirm");
 });
+
