@@ -2396,6 +2396,14 @@ export function Composer({
                     <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
                     <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
                   </span>
+                ) : voice.transcribing && voice.loadingModel ? (
+                  <span
+                    className="max-w-56 truncate text-small text-secondary"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    Loading model…
+                  </span>
                 ) : null}
                 {contextMeter}
                 {thinkingControl}

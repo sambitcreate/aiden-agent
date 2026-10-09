@@ -10,6 +10,13 @@ import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 import { invoke, onNotification } from "./ipc-bridge";
 
+/** Mirrors main's LocalSpeechState broadcast on `localVoice:state`. */
+export interface LocalSpeechState {
+  modelId: string;
+  state: "loading" | "ready" | "failed" | "unloaded";
+  error?: string;
+}
+
 export type SettingsPatch = Partial<Omit<AppSettings, "voiceProvider">> & {
   voiceProvider?: VoiceProvider | null;
 };
@@ -69,6 +76,9 @@ export const voiceApi = {
     invoke<void>("voice:streamPush", sessionId, pcmBase64),
   streamFinish: (sessionId: string) => invoke<string>("voice:streamFinish", sessionId),
   streamCancel: (sessionId: string) => invoke<void>("voice:streamCancel", sessionId),
+  /** On-device model lifecycle (loading → ready/failed, unloaded) from the speech host. */
+  onState: (handler: (state: LocalSpeechState) => void) =>
+    onNotification("localVoice:state", handler),
   onStreamText: (
     handler: (payload: { sessionId: string; committed: string; tentative: string }) => void,
   ) => onNotification("voice:stream-text", handler),
@@ -82,9 +92,18 @@ export const dictationApi = {
   /** Pill reports a capture/transcription failure. */
   reportError: (operationId: string, message: string) =>
     invoke<void>("dictation:error", operationId, message),
-  /** Pill reports finalization/consent/fallback progress for accurate UI and diagnostics. */
-  reportProgress: (operationId: string, progress: "finalizing" | "fallback-consent" | "fallback") =>
-    invoke<void>("dictation:progress", operationId, progress),
+  /**
+   * Pill reports finalization/consent/fallback progress for accurate UI and
+   * diagnostics. `audioSeconds` (recording length) scales main's watchdog.
+   */
+  reportProgress: (
+    operationId: string,
+    progress: "finalizing" | "fallback-consent" | "fallback",
+    audioSeconds?: number,
+  ) =>
+    audioSeconds === undefined
+      ? invoke<void>("dictation:progress", operationId, progress)
+      : invoke<void>("dictation:progress", operationId, progress, audioSeconds),
   /** Pill cancel button: discard the in-flight recording/transcription. */
   cancel: () => invoke<void>("dictation:cancel"),
   /** Pill renderer is mounted and subscribed to dictation state broadcasts. */

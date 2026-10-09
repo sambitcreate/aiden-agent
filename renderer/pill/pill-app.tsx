@@ -8,7 +8,8 @@ import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import { PillCopiedNotice, type PillCopiedNoticeProps } from "./pill-copied-notice";
 import { onNotification } from "../lib/ipc-bridge";
-import { dictationApi, settingsApi, voiceApi } from "../lib/ipc-voice";
+import { dictationApi, settingsApi, voiceApi, type LocalSpeechState } from "../lib/ipc-voice";
+import { SlowModelLoadNotice } from "../lib/slow-model-load";
 import { voiceSetupMessage, type VoiceProviderResolution } from "../shared/voice-provider";
 import type { DictationStatePayload } from "../shared/dictation";
 import {
@@ -61,6 +62,10 @@ interface ActiveRecording {
   liveStart?: Promise<GeminiLiveCapture | undefined>;
   batchOperationId?: string;
   batchProvider?: "openai" | "gemini" | "local";
+  /** performance.now() when capture started; sizes the transcription budget. */
+  startedAt: number;
+  /** Shows "Loading model…" when an on-device load outlasts the grace period. */
+  slowLoad?: SlowModelLoadNotice;
 }
 
 function formatElapsed(totalSeconds: number): string {
@@ -75,6 +80,7 @@ export function PillApp() {
   const [recordingHint, setRecordingHint] = React.useState("");
   const [copiedNotice, setCopiedNotice] = React.useState<PillCopiedNoticeProps>({});
   const [elapsed, setElapsed] = React.useState(0);
+  const [loadingModel, setLoadingModel] = React.useState(false);
   const [liveTranscript, setLiveTranscript] = React.useState<LiveTranscriptSnapshot>({
     committed: "",
     tentative: "",
@@ -94,10 +100,34 @@ export function PillApp() {
   const soundsEnabledRef = React.useRef(false);
   const silenceDetectorRef = React.useRef<SilenceStopDetector | null>(null);
   const recordedRetryConsentRef = React.useRef<GeminiRecordedRetryConsent | null>(null);
+  /** Latest lifecycle state per on-device model; a warm-up may start before capture. */
+  const modelStatesRef = React.useRef(new Map<string, LocalSpeechState["state"]>());
+  const slowLoadRef = React.useRef<{ modelId: string; notice: SlowModelLoadNotice } | null>(null);
   if (recordedRetryConsentRef.current === null) {
     recordedRetryConsentRef.current = new GeminiRecordedRetryConsent();
   }
   const recordedRetryConsent = recordedRetryConsentRef.current;
+
+  React.useEffect(
+    () =>
+      voiceApi.onState((event) => {
+        modelStatesRef.current.set(event.modelId, event.state);
+        const watch = slowLoadRef.current;
+        if (watch && watch.modelId === event.modelId) watch.notice.observe(event.state);
+      }),
+    [],
+  );
+
+  const endSlowLoad = React.useCallback((active: ActiveRecording) => {
+    const notice = active.slowLoad;
+    if (!notice) return;
+    active.slowLoad = undefined;
+    notice.dispose();
+    if (slowLoadRef.current?.notice === notice) {
+      slowLoadRef.current = null;
+      setLoadingModel(false);
+    }
+  }, []);
 
   React.useEffect(() => {
     const sync = startPillAppearanceSync();
@@ -214,6 +244,7 @@ export function PillApp() {
           analyser,
           cancelled: false,
           transcriptionController: new AbortController(),
+          startedAt: performance.now(),
         };
         const publishLiveTranscript = (snapshot: LiveTranscriptSnapshot) => {
           liveTranscriptRef.current = snapshot;
@@ -237,9 +268,22 @@ export function PillApp() {
           if (active.cancelled || (blob.size === 0 && !active.liveStart)) return;
           transcriptionRef.current = active;
           setPhase("finalizing");
+          const audioSeconds = Math.max(0, (performance.now() - active.startedAt) / 1_000);
+          if (voice.provider === "local") {
+            const notice = new SlowModelLoadNotice({
+              setTimer: (callback, ms) => setTimeout(callback, ms),
+              clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+              onShow: () => {
+                if (active.slowLoad === notice) setLoadingModel(true);
+              },
+            });
+            active.slowLoad = notice;
+            slowLoadRef.current = { modelId: voice.modelId, notice };
+            if (modelStatesRef.current.get(voice.modelId) === "loading") notice.observe("loading");
+          }
           void (async () => {
             const deadline = new DictationDeadline(
-              transcriptionBudgetMs(voice.provider),
+              transcriptionBudgetMs(voice.provider, audioSeconds),
             );
             try {
               let text = "";
@@ -281,8 +325,13 @@ export function PillApp() {
                 return;
               }
               if (!text) {
-                setPhase("fallback");
-                await dictationApi.reportProgress(operationId, "fallback");
+                if (active.liveStart) {
+                  setPhase("fallback");
+                  await dictationApi.reportProgress(operationId, "fallback", audioSeconds);
+                } else {
+                  // Batch transcription is the first attempt, not a retry.
+                  await dictationApi.reportProgress(operationId, "finalizing", audioSeconds);
+                }
                 active.batchOperationId = `${operationId}-batch`;
                 active.batchProvider = voice.provider;
                 text = await transcribeBlob(blob, {
@@ -291,6 +340,7 @@ export function PillApp() {
                   model: settings.voiceModel,
                   operationId: active.batchOperationId,
                   signal: active.transcriptionController.signal,
+                  audioSeconds,
                 });
               }
               if (!operationGateRef.current.isCurrent(token)) return;
@@ -302,6 +352,7 @@ export function PillApp() {
               setPhase("error");
               await dictationApi.reportError(operationId, message).catch(() => {});
             } finally {
+              endSlowLoad(active);
               active.batchOperationId = undefined;
               active.batchProvider = undefined;
               if (transcriptionRef.current === active) transcriptionRef.current = null;
@@ -358,7 +409,7 @@ export function PillApp() {
           .catch(() => {});
       }
     },
-    [recordedRetryConsent, releaseRecording, startWaveform],
+    [endSlowLoad, recordedRetryConsent, releaseRecording, startWaveform],
   );
 
   const stopRecording = React.useCallback(() => {
@@ -385,6 +436,8 @@ export function PillApp() {
       else releaseRecording(active);
     }
     const transcribing = transcriptionRef.current;
+    if (active) endSlowLoad(active);
+    if (transcribing) endSlowLoad(transcribing);
     if (transcribing && transcribing !== active) {
       transcribing.cancelled = true;
       transcribing.transcriptionController.abort();
@@ -397,7 +450,7 @@ export function PillApp() {
     operationIdRef.current = null;
     stopWaveform();
     setPhase("idle");
-  }, [clearStopTimer, recordedRetryConsent, releaseRecording, stopWaveform]);
+  }, [clearStopTimer, endSlowLoad, recordedRetryConsent, releaseRecording, stopWaveform]);
 
   React.useEffect(() => {
     let active = true;
@@ -476,6 +529,8 @@ export function PillApp() {
         releaseRecording(active);
       }
       const transcribing = transcriptionRef.current;
+      slowLoadRef.current?.notice.dispose();
+      slowLoadRef.current = null;
       if (transcribing) {
         transcribing.cancelled = true;
         transcribing.transcriptionController.abort();
@@ -559,7 +614,9 @@ export function PillApp() {
             <>
               <Loader2 className="size-4 animate-spin text-secondary" />
               <span className="text-small text-secondary">
-                {phase === "finalizing"
+                {loadingModel && phase !== "delivering"
+                  ? "Loading model…"
+                  : phase === "finalizing"
                   ? "Finishing transcript…"
                   : phase === "fallback"
                     ? "Retrying with recorded audio…"

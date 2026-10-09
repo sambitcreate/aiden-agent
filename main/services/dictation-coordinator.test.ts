@@ -675,3 +675,92 @@ test("hybrid unmappable shortcut latches toggle and ignores release", async () =
   await subject.coordinator.press();
   assert.equal(subject.coordinator.currentStage, "transcribing");
 });
+
+const SETUP_MESSAGE = "Download a voice model in Settings → Voice.";
+
+test("needs-setup never starts recording and shows the setup message", async () => {
+  let shows = 0;
+  let warmups = 0;
+  let setupReady = false;
+  const subject = harness({
+    showPill: async () => {
+      shows += 1;
+      return false;
+    },
+    warmUp: () => {
+      warmups += 1;
+    },
+    resolveVoice: async () =>
+      setupReady ? { ok: true, provider: "local" } : { ok: false, message: SETUP_MESSAGE },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(shows, 1);
+  assert.deepEqual(
+    subject.events.map((event) => ({ state: event.state, message: event.message })),
+    [{ state: "error", message: SETUP_MESSAGE }],
+  );
+  assert.equal(warmups, 0);
+  assert.equal(subject.coordinator.currentStage, "idle");
+  assert.equal(subject.coordinator.currentOperationId, null);
+
+  // Once a model is available, the next press records normally.
+  setupReady = true;
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  assert.equal(warmups, 1);
+  assert.equal(subject.events[subject.events.length - 1]?.state, "recording");
+});
+
+test("a freshly created pill still receives the setup message once it is ready", async () => {
+  const subject = harness({
+    showPill: async () => true,
+    resolveVoice: async () => ({ ok: false, message: SETUP_MESSAGE }),
+  });
+  await subject.coordinator.press();
+  await subject.coordinator.ready();
+  const errors = subject.events.filter((event) => event.state === "error");
+  assert.ok(errors.length >= 1);
+  assert.equal(errors[errors.length - 1]?.message, SETUP_MESSAGE);
+  assert.equal(subject.events.some((event) => event.state === "recording"), false);
+  assert.equal(subject.coordinator.currentStage, "idle");
+});
+
+test("the watchdog grows with long on-device recordings so it never preempts the worker", async () => {
+  const fences: number[] = [];
+  const subject = harness({
+    resolveVoice: async () => ({ ok: true, provider: "local" }),
+    setTimer: (_callback, delayMs) => {
+      fences.push(delayMs);
+      return dormantTimer();
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  assert.equal(fences[fences.length - 1], TRANSCRIPTION_WATCHDOG_MS);
+  const operationId = subject.coordinator.currentOperationId!;
+  // Ten minutes of audio: the worker may take 20× real time.
+  await subject.coordinator.progress("finalizing", operationId, 600);
+  const fence = fences[fences.length - 1]!;
+  assert.ok(fence > 20_000 * 600, `fence ${fence} must outlast the worker's 20× real-time deadline`);
+  // A short clip keeps the floor.
+  await subject.coordinator.progress("finalizing", operationId, 3);
+  assert.equal(fences[fences.length - 1], TRANSCRIPTION_WATCHDOG_MS);
+});
+
+test("cloud recordings keep the fixed watchdog regardless of length", async () => {
+  const fences: number[] = [];
+  const subject = harness({
+    resolveVoice: async () => ({ ok: true, provider: "openai" }),
+    setTimer: (_callback, delayMs) => {
+      fences.push(delayMs);
+      return dormantTimer();
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  await subject.coordinator.progress("finalizing", subject.coordinator.currentOperationId!, 600);
+  assert.equal(fences[fences.length - 1], TRANSCRIPTION_WATCHDOG_MS);
+});

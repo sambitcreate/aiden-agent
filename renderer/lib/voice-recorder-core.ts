@@ -25,6 +25,8 @@ export interface TranscribeOptions {
   operationId?: string;
   /** Invalidates expensive conversion before an IPC request begins. */
   signal?: AbortSignal;
+  /** Recording length (capture start to stop); scales the on-device budget. */
+  audioSeconds?: number;
 }
 
 export const MICROPHONE_PERMISSION_OFF_MESSAGE =
@@ -120,7 +122,7 @@ export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Pr
   const signal = options.signal
     ? AbortSignal.any([options.signal, timeoutController.signal])
     : timeoutController.signal;
-  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider), () =>
+  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider, options.audioSeconds), () =>
     performance.now(),
   );
   const onTimeout = () => {

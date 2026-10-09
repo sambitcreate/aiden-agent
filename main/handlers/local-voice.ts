@@ -5,6 +5,7 @@
 import { ipcMain } from "../platform.js";
 import {
   engineStatus,
+  onLocalSpeechState,
   transcribeLocalPcm16,
   releaseRecognizer,
   warmLocalVoice,
@@ -41,6 +42,8 @@ export { asString, pcm16FromIpc };
 export function registerLocalVoiceHandlers(): void {
   // ── Engine ───────────────────────────────────────────────────────────
   ipcMain.handle("localVoice:status", async () => engineStatus());
+  // Model lifecycle for the pill and composer "Loading model…" notice.
+  onLocalSpeechState((state) => ipcMain.broadcast("localVoice:state", state));
   // Preload the recognizer when the composer mic starts. Best effort: a failed
   // warm-up is reported by the transcription that follows, not here.
   ipcMain.handle("localVoice:warm", async (_event, id: unknown) => {

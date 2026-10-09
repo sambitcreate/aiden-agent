@@ -21,10 +21,13 @@ import {
 import { DictationCoordinator } from "./dictation-coordinator.js";
 import { applyDictationDictionary, parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { resolveDictationActivationMode } from "../../renderer/shared/dictation-preferences.js";
+import { voiceSetupMessage, type VoiceProviderResolution } from "../../renderer/shared/voice-provider.js";
 
 import { activeLinuxDictationHoldShortcut, initLinuxDictationSessionLost, subscribeLinuxDictationRelease } from "./shortcut.js";
 
 let lastPressAt = 0;
+/** The resolution captured by the coordinator's press, reused for warm-up. */
+let pressResolution: VoiceProviderResolution | null = null;
 
 function livePasteDeps(): PasteDeps {
   const behavior = dictationPlatformBehavior();
@@ -81,10 +84,18 @@ const coordinator = new DictationCoordinator({
       releaseCapable,
     );
   },
-  warmUp: async () => {
+  resolveVoice: async () => {
     const { resolveVoiceProviderNow } = await import("./voice-provider-resolution.js");
     const resolution = await resolveVoiceProviderNow();
-    if (resolution.kind !== "ready" || resolution.provider !== "local") return;
+    pressResolution = resolution;
+    return resolution.kind === "ready"
+      ? { ok: true, provider: resolution.provider }
+      : { ok: false, message: voiceSetupMessage(resolution.reason) };
+  },
+  // Warm only the on-device model this press resolved; cloud needs no preload.
+  warmUp: async () => {
+    const resolution = pressResolution;
+    if (resolution?.kind !== "ready" || resolution.provider !== "local") return;
     const { warmLocalVoice } = await import("./local-speech.js");
     await warmLocalVoice(resolution.modelId);
   },
@@ -131,8 +142,9 @@ export async function handleDictationError(message: unknown, operationId: unknow
 export async function handleDictationProgress(
   progress: unknown,
   operationId: unknown,
+  audioSeconds?: unknown,
 ): Promise<void> {
-  await coordinator.progress(progress, operationId);
+  await coordinator.progress(progress, operationId, audioSeconds);
 }
 
 /** Pill cancel button. */

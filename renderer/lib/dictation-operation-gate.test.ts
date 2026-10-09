@@ -49,6 +49,13 @@ test("on-device transcription keeps headroom around the worker's minimum deadlin
   assert.equal(transcriptionBudgetMs("local"), 125_000);
 });
 
+test("on-device budgets scale with the recording length; cloud budgets do not", () => {
+  assert.equal(transcriptionBudgetMs("local", 5), 125_000);
+  assert.equal(transcriptionBudgetMs("local", 600), 12_015_000);
+  assert.equal(transcriptionBudgetMs("openai", 600), 45_000);
+  assert.equal(transcriptionBudgetMs("gemini", 600), 45_000);
+});
+
 test("a stuck cancellation request cannot extend the transcription deadline", async () => {
   const deadline = new DictationDeadline(1);
   await assert.rejects(

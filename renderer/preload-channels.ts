@@ -106,6 +106,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "dictation:state",
   "formFill:progress",
   "localModels:progress",
+  "localVoice:state",
   "providers:auth:done",
   "providers:auth:error",
   "providers:auth:event",

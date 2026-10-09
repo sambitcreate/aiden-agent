@@ -29,9 +29,15 @@ export class DictationOperationGate {
 export const CLOUD_TRANSCRIPTION_BUDGET_MS = 45_000;
 export const LOCAL_TRANSCRIPTION_BUDGET_MS = 125_000;
 
-/** The speech worker's shortest transcribe deadline is 120 s; leave IPC settlement headroom. */
-export function transcriptionBudgetMs(provider: string): number {
-  return provider === "local" ? LOCAL_TRANSCRIPTION_BUDGET_MS : CLOUD_TRANSCRIPTION_BUDGET_MS;
+/**
+ * The speech worker allows max(120 s, 20× real time) per transcription; the
+ * renderer budget adds IPC settlement headroom on top. `audioSeconds` is the
+ * recording length measured from capture start to stop.
+ */
+export function transcriptionBudgetMs(provider: string, audioSeconds?: number): number {
+  if (provider !== "local") return CLOUD_TRANSCRIPTION_BUDGET_MS;
+  const seconds = typeof audioSeconds === "number" && Number.isFinite(audioSeconds) ? Math.max(0, audioSeconds) : 0;
+  return Math.max(LOCAL_TRANSCRIPTION_BUDGET_MS, 20_000 * seconds + 15_000);
 }
 
 export async function withDictationTimeout<T>(

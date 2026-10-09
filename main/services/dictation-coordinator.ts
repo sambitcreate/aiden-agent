@@ -3,6 +3,7 @@ import {
   HYBRID_TAP_THRESHOLD_MS,
   type DictationActivationMode,
 } from "../../renderer/shared/dictation-preferences.js";
+import { transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
 import type { PasteDeliveryResult, PasteOutcome } from "./dictation-paste.js";
 
 export type DictationStage = "idle" | "starting" | "recording" | "transcribing" | "delivering";
@@ -21,6 +22,11 @@ export interface DictationCoordinatorDeps {
   isHoldToTalk?: () => boolean | Promise<boolean>;
   /** Preferred over isHoldToTalk; `hybrid` treats a quick tap as toggle and a hold as push-to-talk. */
   getActivationMode?: () => DictationActivationMode | Promise<DictationActivationMode>;
+  /**
+   * Local-first provider check before the microphone opens. A failure shows its
+   * setup message and never starts recording; `provider` sizes the watchdog.
+   */
+  resolveVoice?: () => Promise<VoiceResolutionCheck>;
   /** Best-effort preload of the transcription model when a recording starts. */
   warmUp?: () => void | Promise<void>;
   /** User dictionary applied to the final transcript before delivery. */
@@ -37,6 +43,8 @@ export interface DictationCoordinatorDeps {
     onFailed?: () => void,
   ) => (() => void) | null | undefined;
 }
+
+export type VoiceResolutionCheck = { ok: true; provider?: string } | { ok: false; message: string };
 
 const RESULT_HIDE_DELAY_MS = 1_200;
 // The pill window cannot take focus, so an error is readable only while it is
@@ -58,6 +66,12 @@ export const HOLD_RELEASE_GRACE_MS = 50;
 // Cloud renderers fail within 45 seconds. The local speech worker allows at least
 // 120 seconds per request, so the coordinator's last-resort fence must not preempt local work.
 export const TRANSCRIPTION_WATCHDOG_MS = 135_000;
+const WATCHDOG_HEADROOM_MS = 10_000;
+
+/** The last-resort fence must outlast the renderer's own audio-scaled budget. */
+export function transcriptionWatchdogMs(provider: string, audioSeconds?: number): number {
+  return Math.max(TRANSCRIPTION_WATCHDOG_MS, transcriptionBudgetMs(provider, audioSeconds) + WATCHDOG_HEADROOM_MS);
+}
 
 /**
  * Serialized dictation lifecycle. Every external event enters the same queue,
@@ -82,6 +96,10 @@ export class DictationCoordinator {
   private operationSequence = 0;
   private operationId: string | null = null;
   private stopHoldWatch: (() => void) | null = null;
+  /** Provider resolved at press; unknown means the most lenient (on-device) fence. */
+  private provider = "local";
+  /** A setup error a freshly created pill missed because it was not subscribed yet. */
+  private replayOnReady: DictationStatePayload | null = null;
 
   constructor(private readonly deps: DictationCoordinatorDeps) {}
 
@@ -144,7 +162,7 @@ export class DictationCoordinator {
     this.watchdogTimer = null;
   }
 
-  private armWatchdog(): void {
+  private armWatchdog(delayMs: number = TRANSCRIPTION_WATCHDOG_MS): void {
     this.clearWatchdogTimer();
     const operationId = this.operationId;
     if (!operationId) return;
@@ -159,7 +177,7 @@ export class DictationCoordinator {
           "Transcription took too long. Your recording was stopped safely; try again.",
         );
       });
-    }, TRANSCRIPTION_WATCHDOG_MS);
+    }, delayMs);
   }
 
   private endHoldWatch(): void {
@@ -291,14 +309,23 @@ export class DictationCoordinator {
       this.clearHideTimer();
       this.clearReleaseTimer();
       if (this.stage === "idle") {
+        this.replayOnReady = null;
         // Freeze the activation behavior for this operation. A Settings edit
         // takes effect on the next recording, never halfway through this one.
         await this.refreshHoldMode();
-        this.stage = "starting";
         this.pendingRelease = false;
         this.pressedAt = pressedAt;
         this.operationSequence += 1;
         this.operationId = `${this.now()}-${this.operationSequence}`;
+        // No usable provider: explain the setup step instead of opening the
+        // microphone or warming a model.
+        const check = await this.checkVoice();
+        if (!check.ok) {
+          await this.showSetupError(check.message);
+          return;
+        }
+        this.provider = check.provider ?? "local";
+        this.stage = "starting";
         this.startWarmUp();
         // Hybrid must observe the key-up from the start to tell a tap from a
         // hold; plain hold keeps watching only once capture is live.
@@ -357,6 +384,32 @@ export class DictationCoordinator {
     });
   }
 
+  private async checkVoice(): Promise<VoiceResolutionCheck> {
+    if (!this.deps.resolveVoice) return { ok: true };
+    try {
+      return await this.deps.resolveVoice();
+    } catch (error) {
+      // The pill resolves again before capture and reports its own error.
+      this.deps.logError("Could not resolve the voice provider.", error);
+      return { ok: true };
+    }
+  }
+
+  private async showSetupError(message: string): Promise<void> {
+    const operationId = this.operationId ?? undefined;
+    try {
+      const created = await this.deps.showPill();
+      if (created) this.pillReady = false;
+    } catch (error) {
+      this.deps.logError("Could not show the dictation pill.", error);
+    }
+    this.stage = "idle";
+    this.operationId = null;
+    this.broadcastError(operationId, message);
+    // A cold pill subscribes only after it loads; replay the message then.
+    if (!this.pillReady) this.replayOnReady = { state: "error", operationId, message };
+  }
+
   /** Backward-compatible alias for press(). */
   toggle(): Promise<void> {
     return this.press();
@@ -408,6 +461,12 @@ export class DictationCoordinator {
   ready(): Promise<void> {
     return this.enqueue(() => {
       this.pillReady = true;
+      const replay = this.replayOnReady;
+      this.replayOnReady = null;
+      if (replay && this.stage === "idle" && replay.message) {
+        this.broadcastError(replay.operationId, replay.message);
+        return;
+      }
       if (this.stage === "starting") {
         this.stage = "recording";
         this.deps.broadcast({
@@ -423,7 +482,8 @@ export class DictationCoordinator {
     });
   }
 
-  progress(value: unknown, operationId?: unknown): Promise<void> {
+  /** `audioSeconds` (recording length) lets long on-device clips extend the watchdog. */
+  progress(value: unknown, operationId?: unknown, audioSeconds?: unknown): Promise<void> {
     return this.enqueue(() => {
       if (
         this.stage !== "transcribing" ||
@@ -432,6 +492,9 @@ export class DictationCoordinator {
         (value !== "finalizing" && value !== "fallback-consent" && value !== "fallback")
       ) {
         return;
+      }
+      if (typeof audioSeconds === "number" && Number.isFinite(audioSeconds) && audioSeconds >= 0) {
+        this.armWatchdog(transcriptionWatchdogMs(this.provider, audioSeconds));
       }
       this.deps.broadcast({ state: value as DictationProgress, operationId });
     });

@@ -24,12 +24,7 @@ import {
 } from "./local-speech-process-core.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechAudio } from "./local-speech-protocol.js";
 import { handleLocalSpeechMessage } from "./local-speech-worker-core.js";
-
-export interface LocalSpeechState {
-  modelId: string;
-  state: "loading" | "ready" | "failed" | "unloaded";
-  error?: string;
-}
+import { LocalSpeechModelState, type LocalSpeechState } from "./local-speech-model-state.js";
 
 const MODEL_MISSING_MESSAGE = "The selected voice model isn't downloaded. Download it in Settings → Voice.";
 
@@ -37,10 +32,10 @@ let client: LocalSpeechProcessClient | null = null;
 let child: UtilityProcess | null = null;
 let launching: Promise<LocalSpeechProcessClient> | null = null;
 let processGeneration = 0;
-/** The model the worker (or the in-process fallback) currently holds. */
-let loadedModelId: string | null = null;
 const lane = new LocalSpeechLane();
 const stateListeners = new Set<(state: LocalSpeechState) => void>();
+/** The model the worker (or the in-process fallback) currently holds. */
+const modelState = new LocalSpeechModelState(emitState);
 
 export function onLocalSpeechState(listener: (state: LocalSpeechState) => void): () => void {
   stateListeners.add(listener);
@@ -64,9 +59,7 @@ function errorMessage(error: unknown): string {
 }
 
 function markUnloaded(): void {
-  const previous = loadedModelId;
-  loadedModelId = null;
-  if (previous) emitState({ modelId: previous, state: "unloaded" });
+  modelState.markUnloaded();
 }
 
 // Terminating the utility process is the only way to return the native
@@ -169,7 +162,8 @@ async function launchClient(generation: number): Promise<LocalSpeechProcessClien
     if (child === launched) child = null;
     if (client === created) {
       client = null;
-      loadedModelId = null;
+      // A crash exit drops the model; say so before any retry reloads it.
+      markUnloaded();
       if (idleUnloader.inFlight === 0) idleUnloader.forget();
     }
   });
@@ -197,7 +191,7 @@ function isolationUnavailable(error: unknown): boolean {
 function disposeClientIfCurrent(expected: LocalSpeechProcessClient): void {
   if (client !== expected) return;
   shutDownWorker();
-  loadedModelId = null;
+  markUnloaded();
 }
 
 async function vadModelPath(): Promise<string> {
@@ -259,8 +253,9 @@ export async function warmLocalVoice(modelId: string): Promise<void> {
   if (!model) return;
   await lane.run(() =>
     withModelLease(async () => {
-      if (loadedModelId === modelId && client) return;
-      emitState({ modelId, state: "loading" });
+      if (modelState.loaded === modelId && client) return;
+      const request = modelState.request(modelId);
+      request.announceLoad();
       try {
         try {
           await (await getClient()).load(modelId, model.directory, model.spec);
@@ -268,10 +263,9 @@ export async function warmLocalVoice(modelId: string): Promise<void> {
           if (!isolationUnavailable(error)) throw error;
           speechEngine.load(model.spec, model.directory);
         }
-        loadedModelId = modelId;
-        emitState({ modelId, state: "ready" });
+        request.succeed();
       } catch (error) {
-        emitState({ modelId, state: "failed", error: errorMessage(error) });
+        request.fail(error, { aborted: false });
         throw error;
       }
     }),
@@ -285,7 +279,7 @@ export function reconfigureLocalSpeechIdleUnload(): Promise<void> {
 
 export async function releaseRecognizer(modelId: string): Promise<void> {
   await lane.run(async () => {
-    if (loadedModelId !== modelId) return;
+    if (modelState.loaded !== modelId) return;
     if (client) await client.release();
     else speechEngine.release();
     markUnloaded();
@@ -312,11 +306,13 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
   return lane.run(
     () =>
       withModelLease(async () => {
-        const willLoad = loadedModelId !== modelId;
-        if (willLoad) emitState({ modelId, state: "loading" });
+        const load = modelState.request(modelId);
         try {
           const result = await runWithCrashRetry(
             async () => {
+              // Each attempt re-checks: a crash drops a loaded model, so the
+              // retry's reload is announced too.
+              load.announceLoad();
               activeClient = await getClient();
               if (signal?.aborted) {
                 disposeClientIfCurrent(activeClient);
@@ -338,12 +334,12 @@ async function transcribeAudio(audio: LocalSpeechAudio, modelId: string, signal?
             signal?.throwIfAborted();
             return inProcess({ ...request, kind: "transcribe", version: LOCAL_SPEECH_PROTOCOL_VERSION, requestId: "in-process" });
           });
-          loadedModelId = modelId;
-          if (willLoad) emitState({ modelId, state: "ready" });
+          load.succeed();
           return result.text;
         } catch (error) {
-          // Only a pending load has a visible state to settle.
-          if (willLoad) emitState({ modelId, state: "failed", error: errorMessage(error) });
+          // Only a pending load has a visible state to settle; a user cancel
+          // settles it as unloaded, never as a failure.
+          load.fail(error, { aborted: signal?.aborted === true });
           throw error;
         }
       }),
