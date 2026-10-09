@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Download, Github, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
+import { Progress } from "../ui-primitives";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
@@ -234,19 +235,11 @@ export function AboutSettings() {
           ) : (
           <div className="flex flex-col items-end gap-2 max-[540px]:items-start">
             {updateSnapshot.status === "downloading" && updateSnapshot.percent !== null ? (
-              <div
-                className="h-1 w-full max-w-48 overflow-hidden rounded-full bg-control"
-                role="progressbar"
-                aria-label="Update download progress"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.floor(updateSnapshot.percent)}
-              >
-                <div
-                  className="h-full rounded-full bg-accent transition-[width] duration-150"
-                  style={{ width: `${updateSnapshot.percent}%` }}
-                />
-              </div>
+              <Progress
+                className="max-w-48"
+                label="Update download progress"
+                value={updateSnapshot.percent}
+              />
             ) : null}
             <Button
               size="small"

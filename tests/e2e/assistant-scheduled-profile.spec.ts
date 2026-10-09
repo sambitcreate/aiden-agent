@@ -35,17 +35,17 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   await expect(taskSearch).toBeFocused();
   await expect(clearTaskSearch).toHaveCount(0);
   await expect(page.getByText("No matching tasks", { exact: true })).toHaveCount(0);
-  await page.getByRole("tab", { name: "Active", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Active", exact: true })).toHaveAttribute(
-    "aria-selected",
+  await page.getByRole("radio", { name: "Active", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Active", exact: true })).toHaveAttribute(
+    "aria-checked",
     "true",
   );
-  await page.getByRole("tab", { name: "Paused", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Paused", exact: true })).toHaveAttribute(
-    "aria-selected",
+  await page.getByRole("radio", { name: "Paused", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Paused", exact: true })).toHaveAttribute(
+    "aria-checked",
     "true",
   );
-  await page.getByRole("tab", { name: "All", exact: true }).click();
+  await page.getByRole("radio", { name: "All", exact: true }).click();
   const createWithAiden = page.getByRole("button", { name: "Create with Aiden", exact: true });
   await expect(createWithAiden).toBeEnabled();
   await createWithAiden.click();

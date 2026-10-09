@@ -38,6 +38,7 @@ import {
   toast,
   type BadgeColor,
 } from "./ui";
+import { Segmented } from "./ui-primitives";
 import { ScheduledTaskEditor } from "./scheduled-task-editor";
 import { requestAssistantAutomationComposer } from "../lib/assistant-dock";
 import { scheduleApi } from "../lib/ipc";
@@ -572,44 +573,15 @@ export function ScheduledTasksView() {
                     </Button>
                   ) : null}
                 </div>
-                <div
-                  role="tablist"
+                <Segmented
                   aria-label="Scheduled task status"
-                  className="flex rounded-control bg-control p-0.5"
-                >
-                  {TASK_TABS.map((value, index) => (
-                    <Button
-                      role="tab"
-                      aria-selected={tab === value}
-                      tabIndex={tab === value ? 0 : -1}
-                      key={value}
-                      size="small"
-                      variant={tab === value ? "filled" : "transparent"}
-                      onClick={() => setTab(value)}
-                      onKeyDown={(event) => {
-                        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-                          return;
-                        }
-                        event.preventDefault();
-                        const nextIndex =
-                          event.key === "Home"
-                            ? 0
-                            : event.key === "End"
-                              ? TASK_TABS.length - 1
-                              : (index + (event.key === "ArrowRight" ? 1 : -1) + TASK_TABS.length) %
-                                TASK_TABS.length;
-                        setTab(TASK_TABS[nextIndex] ?? "all");
-                        const tabs =
-                          event.currentTarget.parentElement?.querySelectorAll<HTMLElement>(
-                            '[role="tab"]',
-                          );
-                        tabs?.[nextIndex]?.focus();
-                      }}
-                    >
-                      {value === "all" ? "All" : value === "active" ? "Active" : "Paused"}
-                    </Button>
-                  ))}
-                </div>
+                  value={tab}
+                  onValueChange={setTab}
+                  options={TASK_TABS.map((value) => ({
+                    value,
+                    label: value === "all" ? "All" : value === "active" ? "Active" : "Paused",
+                  }))}
+                />
               </div>
 
               {tasks.isLoading ? (
