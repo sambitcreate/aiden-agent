@@ -836,7 +836,8 @@ export function SidebarListItem({
       ) : null}
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {trailing !== undefined && trailing !== null ? (
-        <span className="flex shrink-0 items-center">{trailing}</span>
+        // Hidden when every trailing child renders nothing, so no stray gap.
+        <span className="flex shrink-0 items-center gap-1 empty:hidden">{trailing}</span>
       ) : null}
     </button>
   );

@@ -64,6 +64,27 @@ export function piCredentialGrantIdentity(credential: Credential): unknown {
   );
 }
 
+/**
+ * Aiden-owned id stamped on every explicit OAuth sign-in. Token-only OAuth
+ * credentials (Anthropic, xAI, Kimi) carry no account field, so without it a
+ * sign-in to a different account would look like the same grant.
+ */
+const AIDEN_GRANT_ID_FIELD = "aidenGrantId";
+
+/** The credential an explicit sign-in commits: a fresh grant even if it looks like the old one. */
+export function piCredentialWithFreshGrant(credential: Credential): Credential {
+  if (credential.type !== "oauth") return credential;
+  return { ...credential, [AIDEN_GRANT_ID_FIELD]: randomUUID() } as Credential;
+}
+
+/** A refresh rebuilds the credential from scratch; keep the grant id it replaced. */
+function carryPiCredentialGrant(current: Credential | undefined, next: Credential): Credential {
+  if (current?.type !== "oauth" || next.type !== "oauth") return next;
+  const grantId = (current as Record<string, unknown>)[AIDEN_GRANT_ID_FIELD];
+  if (typeof grantId !== "string" || AIDEN_GRANT_ID_FIELD in next) return next;
+  return { ...next, [AIDEN_GRANT_ID_FIELD]: grantId } as Credential;
+}
+
 function samePiCredentialGrant(left: Credential | undefined, right: Credential | undefined): boolean {
   if (left === undefined || right === undefined) return left === right;
   return JSON.stringify(piCredentialGrantIdentity(left)) === JSON.stringify(piCredentialGrantIdentity(right));
@@ -360,9 +381,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
           options?.signal?.throwIfAborted();
           const current = await this.read(providerId, options);
           options?.signal?.throwIfAborted();
-          const next = await modifier(current);
+          const modified = await modifier(current);
           options?.signal?.throwIfAborted();
-          if (next === undefined) return current;
+          if (modified === undefined) return current;
+          const next = carryPiCredentialGrant(current, modified);
           const encrypted = await this.encrypt(next);
           options?.signal?.throwIfAborted();
           const documentMutex = await this.mutex("document");

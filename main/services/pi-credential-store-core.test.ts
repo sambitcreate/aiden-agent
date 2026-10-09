@@ -6,6 +6,8 @@ import { afterEach, test } from "node:test";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import {
   EncryptedPiCredentialStore,
+  piCredentialGrantIdentity,
+  piCredentialWithFreshGrant,
   type CredentialCipher,
   type PiCredentialWriteChange,
 } from "./pi-credential-store-core.js";
@@ -511,4 +513,26 @@ test("a Pi OAuth refresh publishes as the same grant, so a running Bot lease sur
   await store.delete(base.id);
   assert.deepEqual(changes, [true, false, true, true]);
   assert.throws(() => turn.assertCurrent());
+});
+
+test("an explicit sign-in to a token-only OAuth account is a new grant, and refreshes keep it", async () => {
+  const { file } = await fixture();
+  const changes: boolean[] = [];
+  const store = new EncryptedPiCredentialStore({
+    filePath: () => file,
+    cipher: cipher(),
+    beforeWritePublish: ({ grantChanged }: PiCredentialWriteChange) => changes.push(grantChanged),
+  });
+  const signature = async () => JSON.stringify(piCredentialGrantIdentity((await store.read("anthropic"))!));
+  // Token-only credentials (no account field), as Anthropic returns them.
+  await store.modify("anthropic", async () => piCredentialWithFreshGrant(oauth("account-a")));
+  const accountA = await signature();
+
+  // Pi rebuilds the credential on refresh and drops fields it does not know.
+  await store.modify("anthropic", async () => oauth("refreshed-a", "rotated-a"));
+  assert.equal(await signature(), accountA);
+
+  await store.modify("anthropic", async () => piCredentialWithFreshGrant(oauth("account-b")));
+  assert.notEqual(await signature(), accountA);
+  assert.deepEqual(changes, [true, false, true]);
 });

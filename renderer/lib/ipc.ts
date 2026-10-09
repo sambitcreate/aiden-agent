@@ -177,6 +177,7 @@ import type {
   ChatPullRequestPendingCreate,
   ChatPullRequestRef,
   ChatPullRequestView,
+  ChatSidebarPullRequests,
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import {
@@ -1009,6 +1010,9 @@ export const pullRequestsApi = {
       "pullRequests:current",
       chatId,
     ),
+  /** Cache-only: each listed chat's best linked PR and dismissed refs, for sidebar rows. */
+  sidebar: (chatIds: readonly string[]) =>
+    invoke<Record<string, ChatSidebarPullRequests>>("pullRequests:sidebar", chatIds),
   candidates: (chatId: string, workspaceId?: string) =>
     invoke<ChatPullRequestCandidatesResult>("pullRequests:candidates", chatId, workspaceId),
   link: (chatId: string, input: { url: string }) =>
