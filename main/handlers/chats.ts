@@ -25,6 +25,7 @@ import {
 } from "../services/workspace-operation-registry.js";
 import { asString, createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
 import { closeDeviceSessionsForChat } from "./devices.js";
+import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
@@ -493,6 +494,15 @@ export function registerChatHistoryHandlers(): void {
       return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
     },
   );
+
+  ipcMain.handle("chats:updateUiVisualState", async (event, input: unknown) => {
+    rendererDocumentOwner(
+      event,
+      () => new Error("Saving a visual's state requires the active application document."),
+    );
+    const update = parseUiVisualStateUpdate(input);
+    return chatStore.updateUiVisualState(update.chatId, update.messageId, update.visualId, update.state);
+  });
 
   ipcMain.handle(
     "chats:exportHtmlArtifact",

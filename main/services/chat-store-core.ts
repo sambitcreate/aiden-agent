@@ -36,7 +36,7 @@ import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
-import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
+import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
@@ -1605,6 +1605,30 @@ export function createChatStore(
             throw new Error("The renderer document is no longer active.");
         });
         return chat;
+      });
+    },
+
+    /**
+     * Remember a native visual's local state (tabs, filters, sliders) so it
+     * survives a reload. Returns false when the visual is not on that
+     * assistant message or the state does not validate.
+     */
+    async updateUiVisualState(
+      chatId: string,
+      messageId: string,
+      visualId: string,
+      state: Record<string, unknown>,
+    ): Promise<boolean> {
+      return shared([chatId], false, async () => {
+        const chat = await readChat(chatId, "owner");
+        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "assistant");
+        const current = message?.uiVisuals?.find((visual) => visual.id === visualId);
+        if (!chat || !message || !current) return false;
+        const next = parseChatUiVisualV1({ ...current, state });
+        if (!next) return false;
+        message.uiVisuals = message.uiVisuals!.map((visual) => (visual.id === visualId ? next : visual));
+        await writeChat(chat);
+        return true;
       });
     },
 
