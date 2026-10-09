@@ -39,9 +39,6 @@ const desktopProviderLogoDirectory = fileURLToPath(
 const iosAssetCatalogDirectory = fileURLToPath(
   new URL("../ios/AidenOnTheGo/Resources/Assets.xcassets/", import.meta.url),
 );
-const desktopOnboardingDirectory = fileURLToPath(
-  new URL("../renderer/assets/onboarding/", import.meta.url),
-);
 
 const appSourcePaths = [
   "AidenOnTheGo/AidenOnTheGoApp.swift",
@@ -393,24 +390,6 @@ test("iOS bundles every reviewed Aiden provider logo", async () => {
         readFile(`${iosAssetCatalogDirectory}ProviderLogo-${slug}.imageset/${slug}.svg`),
       ]);
       assert.deepEqual(iosArtwork, desktopArtwork, `${slug} artwork diverged from Aiden Agent`);
-    }),
-  );
-});
-
-test("iOS onboarding reuses the reviewed Mac feature artwork byte for byte", async () => {
-  const artworkPairs = [
-    ["aiden-workspace.png", "OnboardingBuild.imageset/onboarding-build.png"],
-    ["features/model-freedom.png", "OnboardingExtend.imageset/onboarding-extend.png"],
-    ["features/scheduled-automations.png", "OnboardingControl.imageset/onboarding-control.png"],
-  ];
-
-  await Promise.all(
-    artworkPairs.map(async ([desktopPath, iosPath]) => {
-      const [desktopArtwork, iosArtwork] = await Promise.all([
-        readFile(`${desktopOnboardingDirectory}${desktopPath}`),
-        readFile(`${iosAssetCatalogDirectory}${iosPath}`),
-      ]);
-      assert.deepEqual(iosArtwork, desktopArtwork, `${iosPath} diverged from Aiden Agent`);
     }),
   );
 });

@@ -12,7 +12,7 @@ Narrow opt-in specialist layered on existing Computer Use. NOT a replacement age
 - **Controller**: `executeFormFillBatch` — fresh exact-window observation per row, reacquire by token+index+role+label, set_value via brokered driver, re-read verified, stop-on-first-error, per-row results (filled/already_satisfied/needs_review/failed/not_attempted).
 - **Approval UX**: `form-fill-batch` details kind → `FormFillApproval` card (target app/window, doc name+hash prefix, per-row label→value+source line, deselect checkboxes, "This will not submit the form."). Renderer guard `isFormFillBatchApprovalDetails` fails closed. Deselections flow back via `chat:approve` options → `approvals.decide` payload → `takeDecisionPayload` → `authorize`. Confirm label "Fill N fields"; deny "Cancel". iOS remote approval contract carries no details — no mobile change needed.
 - **Settings**: Settings → Computer Use → "Form fill specialist" switch (default off) + model state row (Not downloaded/Downloading/Preparing/Ready/Update required/Error/Unsupported) with Download/Cancel/Retry/Remove. `formFillSpecialistEnabled` in AppSettings.
-- **Onboarding**: `formFill` bento tile in "control" group + `features/form-fill.png` (1024² RGBA).
+- **Onboarding**: the `formFill` tile is not advertised while the specialist is blocked. Its old `features/form-fill.png` was deleted with the rest of the PNG art (2026-10-09); a returning tile needs code-drawn art (see `.memory/onboarding-art.md`).
 
 ## Invariants
 

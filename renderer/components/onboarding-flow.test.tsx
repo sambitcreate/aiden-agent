@@ -11,6 +11,9 @@ import {
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider.js";
 import type { Provider } from "../lib/types.js";
+import { BOT_AVATAR_COLORS } from "../shared/bots.js";
+import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery.js";
+import { FEATURE_ART } from "./onboarding-art/feature-art.js";
 
 const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8");
 
@@ -27,35 +30,6 @@ test("OpenAI onboarding discloses login identity and waits for an available auth
   assert.equal(calls, 0, "rendering onboarding must never start login");
 });
 const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
-const featureAssetPaths = [
-  "aiden-workspace.png",
-  "features/gemini-live.png",
-  "features/bots.png",
-  "features/attachments-vision.png",
-  "features/command-palette.png",
-  "features/computer-use.png",
-  "features/browser.png",
-  "features/files-editor.png",
-  "features/git-workflows.png",
-  "features/mcp-connectors.png",
-  "features/tool-scripts.png",
-  "features/model-freedom.png",
-  "features/model-pad.png",
-  "features/native-subagents.png",
-  "features/permissions.png",
-  "features/review-diffs.png",
-  "features/scheduled-automations.png",
-  "features/skills.png",
-  "features/terminal.png",
-  "features/themes-accessibility.png",
-  "features/thinking-controls.png",
-  "features/telegram-remote-control.png",
-  "features/aiden-on-the-go.png",
-  "features/usage-profile.png",
-  "features/voice-dictation.png",
-  "features/web-search.png",
-  "features/workspaces-worktrees.png",
-] as const;
 
 function sourceSection(startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -65,8 +39,21 @@ function sourceSection(startMarker: string, endMarker: string): string {
   return source.slice(start, end);
 }
 
-const providerPresentation = sourceSection("const providerChoices", "type FeatureGroupId");
-const featurePresentation = sourceSection("const featureBentos", "const FEATURE_LAYOUTS");
+const providerPresentation = sourceSection("const providerChoices", "function OnboardingDialogShell");
+/** The gallery as rendered, and as the reader sees its text. */
+const galleryMarkup = renderToStaticMarkup(<OnboardingFeatureGallery features={onboardingFeatures} />);
+const featurePresentation = galleryMarkup
+  .replace(/<[^>]+>/gu, " ")
+  .replace(/&amp;/gu, "&")
+  .replace(/&quot;/gu, '"')
+  .replace(/&#x27;/gu, "'")
+  .replace(/\s+/gu, " ");
+const galleryTiles = galleryMarkup.match(/<article\b[\s\S]*?<\/article>/gu) ?? [];
+function tileMarkup(id: string): string {
+  const tile = galleryTiles.find((markup) => markup.includes(`data-onboarding-feature="${id}"`));
+  assert.ok(tile, `missing tour tile ${id}`);
+  return tile;
+}
 
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
   assert.match(source, /resources\/app-icon\.png/u);
@@ -323,22 +310,24 @@ test("onboarding presentation stays compact and free of decorative gradients", (
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
-  assert.match(source, /Queue follow-ups, edit them, or steer the next response/u);
-  assert.match(source, /data-onboarding-bento/u);
-  assert.match(source, /data-onboarding-feature-count=\{visibleFeatureBentos\.length\}/u);
-  assert.match(source, /FEATURE_LAYOUTS[\s\S]*?col-span-4 row-span-2/u);
-  assert.match(source, /group-hover:opacity-100/u);
-  assert.match(source, /group-focus:opacity-100/u);
+  assert.match(source, /<OnboardingFeatureGallery features=\{visibleFeatureBentos\} \/>/u);
+  assert.match(featurePresentation, /Queue follow-ups, edit them, or steer the next response/u);
+  assert.match(galleryMarkup, new RegExp(`data-onboarding-feature-count="${onboardingFeatures.length}"`, "u"));
+  for (const hero of onboardingFeatures.filter((feature) => feature.size === "hero")) {
+    assert.match(tileMarkup(hero.id), /^<article [^>]*class="[^"]*col-span-4 row-span-2/u, hero.id);
+  }
+  assert.match(galleryMarkup, /group-hover:opacity-100/u);
+  assert.match(galleryMarkup, /group-focus:opacity-100/u);
   assert.match(
-    source,
+    featurePresentation,
     /Use Command-K or \/ for app commands, and \$ to attach a reusable skill\./u,
   );
   assert.match(
-    source,
+    featurePresentation,
     /Skills can allow automatic use, explicit attachment with \$, or both\. Turn all skills off anytime in Settings → Skills\./u,
   );
   assert.match(
-    source,
+    featurePresentation,
     /Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline\./u,
   );
   assert.match(
@@ -352,7 +341,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
     "Choose and extend",
     "Automate and stay in control",
   ]) {
-    assert.match(source, new RegExp(group, "u"));
+    assert.match(featurePresentation, new RegExp(group, "u"));
   }
   for (const title of [
     "Workspace Agent",
@@ -405,30 +394,33 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
-test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 27);
-  assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
-  assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
-  assert.ok(featureAssetPaths.includes("features/bots.png"));
-  assert.equal(new Set(featureAssetPaths).size, featureAssetPaths.length);
-  for (const assetPath of featureAssetPaths) {
-    const illustration = readFileSync(
-      new URL(`../assets/onboarding/${assetPath}`, import.meta.url),
-    );
-    assert.deepEqual(
-      [...illustration.subarray(0, 8)],
-      [137, 80, 78, 71, 13, 10, 26, 10],
-      assetPath,
-    );
-    assert.equal(illustration.readUInt32BE(16), 1024, assetPath);
-    assert.equal(illustration.readUInt32BE(20), 1024, assetPath);
-    assert.equal(illustration[25], 6, assetPath);
+test("every tour tile draws its own themed illustration without raster assets", () => {
+  const ids = onboardingFeatures.map((feature) => feature.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual(new Set(Object.keys(FEATURE_ART)), new Set(ids), "every tile has art and no art is orphaned");
+  assert.equal(galleryTiles.length, onboardingFeatures.length);
+  for (const group of ["create", "extend", "control"] as const) {
+    let previousTint: string | undefined;
+    for (const feature of onboardingFeatures.filter((item) => item.group === group)) {
+      const tile = tileMarkup(feature.id);
+      assert.match(tile, new RegExp(`<div aria-hidden="true" class="oa-art" data-onboarding-art="${feature.id}"`, "u"));
+      assert.doesNotMatch(
+        tile,
+        /<img\b|<picture\b|url\([^)]*\.(?:png|jpe?g|webp|gif|avif)\b|data:image\/(?!svg)/iu,
+        `${feature.id} must not load raster art`,
+      );
+      const tint = /--oa-tint:var\(--bot-avatar-([a-z]+)\)/u.exec(tile)?.[1];
+      assert.ok(tint && (BOT_AVATAR_COLORS as readonly string[]).includes(tint), `${feature.id} tint ${tint}`);
+      assert.notEqual(tint, previousTint, `${feature.id} repeats its neighbour's tint`);
+      previousTint = tint;
+    }
   }
 });
 
 test("project guidance keeps the feature bento current as Aiden evolves", () => {
   assert.match(agentsInstructions, /feature-tour bento gallery/u);
-  assert.match(agentsInstructions, /1024 × 1024 transparent PNG/u);
+  assert.match(agentsInstructions, /code-drawn illustration/u);
+  assert.doesNotMatch(agentsInstructions, /transparent PNG/u);
 });
 
 test("primary AI choices include custom setup without opening advanced providers", () => {
@@ -446,19 +438,20 @@ test("primary AI choices include custom setup without opening advanced providers
 
 
 test("MCP onboarding discloses service-supplied tool guidance", () => {
-  assert.match(source, /Connected services may also provide guidance for using those tools\./u);
+  assert.match(featurePresentation, /Connected services may also provide guidance for using those tools\./u);
 });
 
 test("MCP tour explains connected-service resource reads", () => {
-  assert.match(readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8"), /read the resources they share/);
+  assert.match(featurePresentation, /read the resources they share/u);
 });
 
 test("blocked form filling is not advertised as a shipped tour feature", () => {
-  assert.doesNotMatch(featurePresentation, /id: "formFill"/u);
+  assert.doesNotMatch(galleryMarkup, /data-onboarding-feature="formFill"/u);
+  assert.doesNotMatch(featurePresentation, /form fill/iu);
 });
 
 test("workspace tour discloses AGENTS instruction loading and refresh", () => {
-  assert.match(source, /global and workspace AGENTS\.md guidance, refreshing it between model turns/);
+  assert.match(featurePresentation, /global and workspace AGENTS\.md guidance, refreshing it between model turns/u);
 });
 
 
@@ -473,7 +466,7 @@ test("provider onboarding explains separate opt-in and cloud speech privacy with
 });
 
 test("feature tour introduces native folder browsing and source previews", () => {
-  assert.match(source, /On your phone, expand folders on demand and preview source before editing\./u);
+  assert.match(featurePresentation, /On your phone, expand folders on demand and preview source before editing\./u);
 });
 
 

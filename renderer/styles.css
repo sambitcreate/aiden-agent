@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Onboarding feature-tour art (code-drawn tiles; see renderer/components/onboarding-art). */
+@import "./components/onboarding-art/onboarding-art.css";
 
 /* The Environment browser follows the app's quiet, compact workbench chrome. */
 .browser-panel { display: flex; height: 100%; min-width: 0; min-height: 0; flex-direction: column; color: var(--text-primary); background: var(--surface-popover); }
